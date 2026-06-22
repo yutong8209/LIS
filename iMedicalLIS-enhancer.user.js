@@ -839,6 +839,7 @@
 
             const status = String(r.Status || r.ReportStatus || '');
             if (status === '3' || status === '4') return; // 已审核不计入
+            if (status === '0') return; // 待排样不计入结果不完整
             const complete = String(r.IsComplete || '');
             if (complete !== '1') {
                 wsMachineCounts[mdr].incomplete++;
@@ -887,6 +888,7 @@
             d = d.filter(r => {
                 const status = String(r.Status || r.ReportStatus || '');
                 if (status === '3' || status === '4') return false;
+                if (status === '0') return false; // 待排样不显示在结果不完整中
                 const complete = String(r.IsComplete || '');
                 return complete !== '1';
             });
