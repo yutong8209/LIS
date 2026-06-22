@@ -1,0 +1,39 @@
+﻿# Temp scripts
+*.py
+!serve.py
+!browser_control.py
+!image-reader.py
+!image-reader-hook.py
+!mcp-image-reader/server.py
+!browser-act-ocr/server.py
+
+# IDE
+.claude/
+.codex/
+CLAUDE.md
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+
+# Large data files
+*_files/
+
+# Logs
+mcp.log
+*/mcp.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Misc
+mimo.exe
+patch*.txt
+test.user.js

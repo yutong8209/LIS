@@ -1,0 +1,52 @@
+# AGENTS.md
+
+## What this is
+
+A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Tampermonkey userscript for a hospital LIS at `http://192.168.31.111:9111/iMedicalLIS/*` (via nginx proxy) or `http://10.0.29.100/iMedicalLIS/*` (direct). Supporting scripts provide screenshot and browser automation.
+
+## Key files
+
+| File | Purpose |
+|---|---|
+| `iMedicalLIS-enhancer.user.js` | Main userscript. Report review automation, batch approve, hotkeys, result classification. |
+| `serve.py` / `serve.js` | Local HTTP server on `localhost:8765` serving the userscript for Tampermonkey auto-update. |
+| `start_serve_mac.command` | Mac startup script — double-click or add to Login Items. |
+| `browser_control.py` | CLI for screenshot, click, type, key — outputs JSON. |
+| `image-reader.py` | CLI to read local image metadata (path, format, size). |
+| `image-reader-hook.py` | Stdin hook that detects image paths in text and prints info. |
+| `mcp-image-reader/` | MCP server: `read_image`, `describe_image` tools. |
+| `browser-act-ocr/` | MCP server wrapping `browser-act` for screenshots. |
+
+## Commands
+
+```bash
+# Dev server (serves userscript for Tampermonkey)
+python3 ~/脚本/serve.py
+# or: node ~/脚本/serve.js
+
+# Screenshot from desktop (returns base64)
+python3 ~/脚本/browser_control.py screenshot
+
+# Read image metadata
+python3 ~/脚本/image-reader.py "/path/to/image.png"
+```
+
+## Dependencies & setup
+
+- **Python packages**: `pillow`, `mss`, `pyautogui`
+- **browser-act**: `uv tool install browser-act-cli --python 3.12`
+- **MCP config**: each MCP server has its own `config.json` in its subdirectory.
+
+## Coding conventions
+
+- All scripts use UTF-8.
+- Comments and UI strings are in **Chinese (简体中文)**. Match this.
+- `browser_control.py` and MCP servers output **JSON** — preserve this contract.
+- The userscript targets `192.168.31.111:9111` (nginx proxy) and `10.0.29.100` (direct). Do not change host/port without confirming.
+- Userscript version is in the `@version` header. Bump on meaningful changes.
+
+## Gotchas
+
+- `browser_control.py` uses `mss` for screenshots (not pyautogui) — captures full primary monitor.
+- `pyautogui.typewrite()` only handles ASCII — Chinese input needs a different approach.
+- No test suite, no lint, no typecheck. Verify changes by running the scripts manually.
