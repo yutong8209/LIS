@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.28.0
+// @version      6.28.1
 // @description  报告审核增强 — 安全批量审核 + 快捷键快速审核 + 结果分类 + 历史结果展示（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1977,22 +1977,17 @@
             subtitleEl.innerHTML = `<span>${getStatusText(specimen.Status || specimen.ReportStatus)}</span> · 检验号: ${specimen.Labno || '-'} · 流水号: ${specimen.EpisodeNo || '-'} · ${specimen.TestSetDesc || ''} · 仪器: ${specimen._mn || '-'} · ${specimen.AcceptDT || ''}`;
         }
         const detailExtra = document.getElementById('lis-detail-extra');
-        // 立即从分类缓存填充患者信息（不等网络）
-        const _cached = wsClassifiedCache[specimen.ReportDR];
-        if (_cached && _cached.row) {
-            const _cr = _cached.row;
-            const _parts = [];
-            if (_cr.Sex) _parts.push(_cr.Sex);
-            if (_cr.Age) _parts.push(_cr.Age + (_cr.AgeUnit || ''));
-            if (_cr.Location) _parts.push(_cr.Location);
-            if (_cr.Ward) _parts.push(_cr.Ward);
-            if (_cr.BedNo) _parts.push('床' + _cr.BedNo);
-            if (_cr.Specimen) _parts.push(_cr.Specimen);
-            if (_cr.Doctor) _parts.push(_cr.Doctor);
-            if (_parts.length) detailExtra.textContent = _parts.join(' · ');
-        } else if (detailExtra) {
-            detailExtra.textContent = '加载中...';
-        }
+        // 立即填充患者信息（优先缓存，回退到 specimen 本身）
+        const _cr = (wsClassifiedCache[specimen.ReportDR] || {}).row || specimen;
+        const _parts = [];
+        if (_cr.Sex) _parts.push(_cr.Sex);
+        if (_cr.Age) _parts.push(_cr.Age + (_cr.AgeUnit || ''));
+        if (_cr.Location) _parts.push(_cr.Location);
+        if (_cr.Ward) _parts.push(_cr.Ward);
+        if (_cr.BedNo) _parts.push('床' + _cr.BedNo);
+        if (_cr.Specimen) _parts.push(_cr.Specimen);
+        if (_cr.Doctor) _parts.push(_cr.Doctor);
+        if (detailExtra) detailExtra.textContent = _parts.length ? _parts.join(' · ') : '加载中...';
 
         // 信息栏（紧凑状态条）
         const info = document.getElementById('lis-detail-info');
