@@ -15,7 +15,6 @@ A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Ta
 | `image-reader.py` | CLI to read local image metadata (path, format, size). |
 | `image-reader-hook.py` | Stdin hook that detects image paths in text and prints info. |
 | `mcp-image-reader/` | MCP server: `read_image`, `describe_image` tools. |
-| `browser-act-ocr/` | MCP server wrapping `browser-act` for screenshots. |
 
 ## Commands
 
@@ -34,7 +33,6 @@ python3 ~/脚本/image-reader.py "/path/to/image.png"
 ## Dependencies & setup
 
 - **Python packages**: `pillow`, `mss`, `pyautogui`
-- **browser-act**: `uv tool install browser-act-cli --python 3.12`
 - **MCP config**: each MCP server has its own `config.json` in its subdirectory.
 
 ## Coding conventions
