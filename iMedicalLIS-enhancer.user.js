@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.27.2
+// @version      6.27.3
 // @description  报告审核增强 — 安全批量审核 + 快捷键快速审核 + 结果分类 + 历史结果展示（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -981,16 +981,14 @@
         let h = '<div class="ws-wg-row">';
         WG.forEach(w => {
             const c = wgCounts[w.dr] || {total:0};
-            const attention = (wgCounts[w.dr]?.normalReady||0) + (wgCounts[w.dr]?.abnormalReady||0);
             h += `<button class="ws-wg-tab ${wsActiveWG===w.dr?'on':''}" data-wg="${w.dr}">
-                ${w.icon} ${w.name} <span class="mach-cnt">${attention || c.total}</span>
+                ${w.icon} ${w.name} <span class="mach-cnt">${c.total}</span>
             </button>`;
         });
         // 全部工作组
-        const allAttention = WG.reduce((s,w) => s + (wgCounts[w.dr]?.normalReady||0) + (wgCounts[w.dr]?.abnormalReady||0), 0);
         const allTotal = WG.reduce((s,w) => s + (wgCounts[w.dr]?.total||0), 0);
         h += `<button class="ws-wg-tab ${!wsActiveWG?'on':''}" data-wg="">
-            全部 <span class="mach-cnt">${allAttention || allTotal}</span>
+            全部 <span class="mach-cnt">${allTotal}</span>
         </button>`;
         h += '</div>';
 
@@ -1007,16 +1005,15 @@
             });
         }
         h += `<button class="ws-mach-tab ${!wsActiveMachine?'on':''}" data-m="">
-            全部仪器 <span class="mach-cnt">${ac.normalReady + ac.abnormalReady || ac.total}</span>
+            全部仪器 <span class="mach-cnt">${ac.total}</span>
         </button>`;
 
         // 筛选当前工作组的仪器
         const wgMachines = wsMachines.filter(m => !wsActiveWG || m._wg === wsActiveWG);
         wgMachines.forEach(m => {
             const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-            const mAttention = c.normalReady + c.abnormalReady;
             h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${m.RowID}">
-                ${m.CName||m.Name} <span class="mach-cnt">${mAttention || c.total}</span>
+                ${m.CName||m.Name} <span class="mach-cnt">${c.total}</span>
             </button>`;
         });
         h += '</div>';
@@ -1797,7 +1794,10 @@
         detailPanel.id = 'lis-detail-panel';
         detailPanel.innerHTML = `
             <div id="lis-detail-hd">
-                <h4>📋 标本详情</h4>
+                <div style="flex:1;min-width:0">
+                    <h4 id="lis-detail-title" style="margin:0;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📋 标本详情</h4>
+                    <div id="lis-detail-subtitle" style="font-size:11px;color:rgba(255,255,255,.7);margin-top:3px"></div>
+                </div>
                 <button class="detail-close" id="lis-detail-close">✕</button>
             </div>
             <div id="lis-detail-info"></div>
@@ -1847,25 +1847,24 @@
         detailSourceIndex = (sourceIndex !== undefined) ? sourceIndex : -1;
 
         // 更新标题
-        const hd = document.getElementById('lis-detail-hd');
-        if (hd) {
-            hd.querySelector('h4').textContent = `📋 ${specimen.PatName || '未知'} - ${specimen.Labno || ''}`;
+        const titleEl = document.getElementById('lis-detail-title');
+        if (titleEl) {
+            titleEl.textContent = `📋 ${specimen.PatName || '未知'}`;
+        }
+        const subtitleEl = document.getElementById('lis-detail-subtitle');
+        if (subtitleEl) {
+            subtitleEl.textContent = `检验号: ${specimen.Labno || '-'} · 流水号: ${specimen.EpisodeNo || '-'} · ${specimen.TestSetDesc || ''}`;
         }
 
         // 更新基本信息
         const info = document.getElementById('lis-detail-info');
         if (info) {
             info.innerHTML = `
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;padding:2px 0">
-                    <span style="font-weight:700;font-size:14px;color:#2c3e50">${specimen.PatName || '-'}</span>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;padding:2px 0">
                     <span style="color:#7f8c8d">${getStatusText(specimen.Status || specimen.ReportStatus)}</span>
                     <span style="color:#95a5a6">|</span>
-                    <span>检验号: <b>${specimen.Labno || '-'}</b></span>
-                    <span>流水号: <b>${specimen.EpisodeNo || '-'}</b></span>
-                    <span style="color:#95a5a6">|</span>
-                    <span>${specimen.TestSetDesc || '-'}</span>
-                    <span style="color:#95a5a6">|</span>
                     <span>仪器: ${specimen._mn || '-'}</span>
+                    <span style="color:#95a5a6">|</span>
                     <span>${specimen.AcceptDT || ''}</span>
                 </div>
                 <div id="lis-detail-patient" style="font-size:11px;color:#555;padding-top:2px;line-height:1.6"></div>
@@ -2541,6 +2540,19 @@
                     if (info.Diagnose) patientHTML += '<br><span style="color:#e65100">🏥 ' + info.Diagnose + '</span>';
                     if (info.Remark) patientHTML += '<span style="color:#666;margin-left:8px">📝 ' + info.Remark + '</span>';
                     patientEl.innerHTML = patientHTML;
+                }
+
+                // 更新深色头部的副标题（加入患者摘要信息）
+                const subEl = document.getElementById('lis-detail-subtitle');
+                if (subEl) {
+                    const subParts = [];
+                    if (info.Age) subParts.push(info.Age + (info.AgeUnit || ''));
+                    if (info.Location) subParts.push(info.Location);
+                    if (info.Ward) subParts.push(info.Ward);
+                    if (info.BedNo) subParts.push('床' + info.BedNo);
+                    if (info.Specimen) subParts.push(info.Specimen);
+                    if (info.Diagnose) subParts.push(info.Diagnose);
+                    subEl.textContent = subParts.join(' · ');
                 }
 
                 // 异常警告（内联）
