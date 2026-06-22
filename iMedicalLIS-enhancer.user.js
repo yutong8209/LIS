@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.27.6
+// @version      6.28.0
 // @description  报告审核增强 — 安全批量审核 + 快捷键快速审核 + 结果分类 + 历史结果展示（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -112,7 +112,7 @@
 #lis-qbar .qb-x:hover{opacity:1;background:rgba(255,255,255,.1)}
 
 /* --- 全屏工作台 --- */
-#lis-ws{position:fixed!important;inset:0!important;z-index:100000!important;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);display:none}
+#lis-ws{position:fixed!important;inset:0!important;z-index:100000!important;background:rgba(0,0,0,.55);/* backdrop-filter:blur(3px) removed for perf */;display:none}
 #lis-ws.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
 #lis-ws-hd{background:#faf6ef;padding:8px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0!important;border-bottom:1px solid #e8ecf1;min-height:0}
 #lis-ws-hd h3{margin:0;font-size:14px;white-space:nowrap;color:#2c3e50;font-weight:700}
@@ -135,8 +135,8 @@
 #lis-ws-body th::after{content:' ⇅';font-size:10px;opacity:.5}
 #lis-ws-body th.sort-asc::after{content:' ↑';opacity:1}
 #lis-ws-body th.sort-desc::after{content:' ↓';opacity:1}
-#lis-ws-body td{padding:8px 12px;border-bottom:1px solid #f0f0f0;white-space:nowrap;transition:all .15s}
-#lis-ws-body tr{cursor:pointer;transition:all .2s}
+#lis-ws-body td{padding:8px 12px;border-bottom:1px solid #f0f0f0;white-space:nowrap;transition:background .15s}
+#lis-ws-body tr{cursor:pointer;transition:background .2s}
 #lis-ws-body tbody tr:nth-child(even){background:#fafbfc}
 #lis-ws-body tbody tr:nth-child(odd){background:#fff}
 #lis-ws-body tr:hover{background:#e8f4fd;box-shadow:inset 0 0 0 1px #b3d4fc}
@@ -318,7 +318,7 @@
 /* --- 待审速览 --- */
 .ws-audit-bar{background:linear-gradient(180deg,#f8f9fa,#fff);padding:10px 20px;border-bottom:2px solid #3498db;display:flex;align-items:center;gap:8px;flex-shrink:0;box-shadow:0 2px 4px rgba(0,0,0,.05)}
 .ws-audit-bar .ab-label{font-size:12px;color:#555;font-weight:600;margin-right:4px;white-space:nowrap}
-.ws-audit-bar .ab-btn{padding:6px 14px;border-radius:6px;border:2px solid #dee2e6;background:#fff;cursor:pointer;font-size:12px;font-weight:600;transition:all .2s;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.ws-audit-bar .ab-btn{padding:6px 14px;border-radius:6px;border:2px solid #dee2e6;background:#fff;cursor:pointer;font-size:12px;font-weight:600;transition:background .2s;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.05)}
 .ws-audit-bar .ab-btn:hover{border-color:#3498db;background:#eaf2f8;transform:translateY(-1px);box-shadow:0 2px 6px rgba(0,0,0,.1)}
 .ws-audit-bar .ab-btn.on{border-color:#3498db;background:linear-gradient(135deg,#3498db,#2980b9);color:#fff;box-shadow:0 2px 8px rgba(52,152,219,.3)}
 .ws-audit-bar .ab-btn.ready{border-color:#27ae60;color:#27ae60}
@@ -343,7 +343,7 @@
 
 
 
-#lis-detail-body{flex:1!important;overflow-y:scroll!important;overflow-x:hidden!important;padding:16px 20px;min-height:0!important;max-height:calc(100vh - 120px)!important;position:relative;overscroll-behavior:contain}
+#lis-detail-body{flex:1!important;overflow-y:scroll!important;overflow-x:hidden!important;padding:16px 20px;min-height:0!important;max-height:calc(100vh - 120px)!important;position:relative;overscroll-behavior:contain;contain:content}
 #lis-detail-body .result-section{margin-bottom:20px}
 #lis-detail-body .result-section h5{margin:0 0 12px;color:#2c3e50;font-size:14px;padding-bottom:8px;border-bottom:2px solid #3498db}
 .result-table{width:100%;border-collapse:collapse;font-size:12px}
@@ -364,7 +364,7 @@
 .result-table .hist-tag.nodate{background:#f5f5f5;color:#999;border-left:3px solid #bbb}
 .result-table .hist-date{font-size:9px;color:#999;display:block;margin-top:-1px}
 #lis-detail-footer{padding:12px 20px;background:#f8f9fa;border-top:1px solid #eee;display:flex;gap:10px;justify-content:flex-end;flex-shrink:0}
-#lis-detail-footer button{padding:8px 16px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+#lis-detail-footer button{padding:8px 16px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:background .2s}
 #lis-detail-footer .btn-audit{background:#27ae60;color:#fff}
 #lis-detail-footer .btn-audit:hover{background:#1e8449}
 #lis-detail-footer .btn-close{background:#95a5a6;color:#fff}
@@ -675,6 +675,40 @@
     let wsLoading = false;
     let wsMachineCounts = {}; // { machineDR: {total, normalReady, abnormalReady, incomplete} }
 
+    // --- 性能优化：缓存 ---
+    let _detailLRU = new Map(); // 详情结果 LRU 缓存，最多 50 条
+    const _DETAIL_LRU_MAX = 50;
+    let _filteredCache = null;   // filteredData() 结果缓存
+    let _filteredCacheKey = '';  // 缓存键
+    let _countsCache = null;    // 统一计数缓存
+    let _countsCacheKey = '';    // 计数缓存键
+
+    function invalidateCaches() {
+        _filteredCache = null;
+        _filteredCacheKey = '';
+        _countsCache = null;
+        _countsCacheKey = '';
+    }
+
+    function detailLRUGet(key) {
+        if (_detailLRU.has(key)) {
+            const v = _detailLRU.get(key);
+            _detailLRU.delete(key);
+            _detailLRU.set(key, v);
+            return v;
+        }
+        return null;
+    }
+
+    function detailLRUSet(key, val) {
+        if (_detailLRU.has(key)) _detailLRU.delete(key);
+        if (_detailLRU.size >= _DETAIL_LRU_MAX) {
+            const first = _detailLRU.keys().next().value;
+            _detailLRU.delete(first);
+        }
+        _detailLRU.set(key, val);
+    }
+
     // 打开工作台
     function openWS() {
         // 防重入：如果已打开，不做任何操作
@@ -768,10 +802,10 @@
 
         wsLoading = false;
         if (qi) qi.textContent = `${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
+        invalidateCaches();
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
-        // 后台分类（不阻塞渲染）
         classifyAllSpecimens();
         
         // 更新CA认证状态
@@ -860,6 +894,9 @@
 
     // --- 过滤 & 排序 ---
     function filteredData() {
+        // 缓存检查
+        const ck = wsActiveWG + '|' + wsActiveMachine + '|' + wsCategory + '|' + wsSearchQuery + '|' + (wsSort.field + wsSort.asc);
+        if (_filteredCache && _filteredCacheKey === ck) return _filteredCache;
         let d = wsData;
         // 工作组过滤
         if (wsActiveWG) d = d.filter(r => r._wg === wsActiveWG);
@@ -920,10 +957,75 @@
             return asc ? va.localeCompare(vb,'zh') : vb.localeCompare(va,'zh');
         });
 
-        // 调试：打印过滤结果
         dbg('过滤后数据量:', d.length, '分类:', wsCategory);
-
+        _filteredCache = d;
+        _filteredCacheKey = ck;
         return d;
+    }
+
+    // --- 统一计数：一次遍历产出工作组计数 + 分类计数 ---
+    function calcUnifiedCounts() {
+        const ck = wsData.length + '|' + wsActiveWG + '|' + wsActiveMachine;
+        if (_countsCache && _countsCacheKey === ck) return _countsCache;
+
+        // 工作组计数
+        const wgCounts = {};
+        WG.forEach(w => { wgCounts[w.dr] = {total:0, normalReady:0, abnormalReady:0, incomplete:0}; });
+        // 分类计数（基于当前过滤）
+        let normalCount = 0, abnormalCount = 0, incompleteCount = 0, pendingCount = 0;
+        // 全部仪器汇总
+        const machCounts = {};
+        machCounts['_all'] = {total:0, normalReady:0, abnormalReady:0, incomplete:0};
+
+        wsData.forEach(r => {
+            // 工作组计数
+            const wg = r._wg;
+            if (wgCounts[wg]) {
+                wgCounts[wg].total++;
+            }
+            // 仪器计数
+            const mdr = r._mdr || '_unknown';
+            if (!machCounts[mdr]) machCounts[mdr] = {total:0, normalReady:0, abnormalReady:0, incomplete:0};
+            machCounts[mdr].total++;
+            machCounts['_all'].total++;
+
+            const status = String(r.Status || r.ReportStatus || '');
+            if (status === '0') { pendingCount++; return; }
+            if (status === '3' || status === '4') return;
+            const complete = String(r.IsComplete || '');
+
+            // 工作组的 normalReady/abnormalReady
+            if (wgCounts[wg]) {
+                if (complete !== '1') { wgCounts[wg].incomplete++; }
+                else {
+                    const cached = wsClassifiedCache[r.ReportDR];
+                    if (cached && (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL')) wgCounts[wg].abnormalReady++;
+                    else wgCounts[wg].normalReady++;
+                }
+            }
+            // 仪器的 normalReady/abnormalReady/incomplete
+            if (complete !== '1') {
+                machCounts[mdr].incomplete++;
+                machCounts['_all'].incomplete++;
+                incompleteCount++;
+                return;
+            }
+            const cached = wsClassifiedCache[r.ReportDR];
+            if (cached && (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL')) {
+                machCounts[mdr].abnormalReady++;
+                machCounts['_all'].abnormalReady++;
+                abnormalCount++;
+            } else {
+                machCounts[mdr].normalReady++;
+                machCounts['_all'].normalReady++;
+                normalCount++;
+            }
+        });
+
+        const result = { wgCounts, machCounts, normalCount, abnormalCount, incompleteCount, pendingCount };
+        _countsCache = result;
+        _countsCacheKey = ck;
+        return result;
     }
 
     // --- 渲染：头部（简化版）---
@@ -1545,38 +1647,56 @@
     }
 
     // --- 通用表格事件绑定 ---
+    // 事件委托：在 body 上监听，减少逐元素绑定
     function _bindTableEvents(body, data, source) {
-        // 全选
-        const chka = document.getElementById('lis-ws-chka');
-        if (chka) chka.addEventListener('change', () => {
-            body.querySelectorAll('.lis-ws-ck').forEach(c => {
-                if (chka.checked) wsChecked.add(c.dataset.rdr); else wsChecked.delete(c.dataset.rdr);
-                c.checked = chka.checked;
-            });
-        });
+        // 移除旧的委托监听器
+        if (body._delegatedHandler) {
+            body.removeEventListener('click', body._delegatedHandler.click);
+            body.removeEventListener('change', body._delegatedHandler.change);
+            body.removeEventListener('dblclick', body._delegatedHandler.dblclick);
+        }
 
-        // 单选
-        body.querySelectorAll('.lis-ws-ck').forEach(c => c.addEventListener('change', () => {
-            if (c.checked) wsChecked.add(c.dataset.rdr); else wsChecked.delete(c.dataset.rdr);
-            c.closest('tr').classList.toggle('sel', c.checked);
-        }));
+        const handlers = {};
 
-        // 行点击 → 详情
-        body.querySelectorAll('tr[data-rdr]').forEach(tr => tr.addEventListener('click', e => {
+        // click 委托：行点击 → 详情
+        handlers.click = e => {
+            const tr = e.target.closest('tr[data-rdr]');
+            if (!tr) return;
             if (e.target.closest('input[type="checkbox"]')) return;
-            // 高亮当前行
-            body.querySelectorAll('tr').forEach(r => r.classList.remove('active-row'));
+            body.querySelectorAll('tr.active-row').forEach(r => r.classList.remove('active-row'));
             tr.classList.add('active-row');
             const i = parseInt(tr.dataset.i);
             if (i >= 0 && i < data.length) openDetailPanel(data[i], source || 'all', i);
-        }));
+        };
 
-        // 双击 → 原生界面
-        body.querySelectorAll('tr[data-rdr]').forEach(tr => tr.addEventListener('dblclick', e => {
+        // change 委托：checkbox 选中
+        handlers.change = e => {
+            if (e.target.id === 'lis-ws-chka') {
+                body.querySelectorAll('.lis-ws-ck').forEach(c => {
+                    if (e.target.checked) wsChecked.add(c.dataset.rdr); else wsChecked.delete(c.dataset.rdr);
+                    c.checked = e.target.checked;
+                });
+                return;
+            }
+            if (e.target.classList.contains('lis-ws-ck')) {
+                if (e.target.checked) wsChecked.add(e.target.dataset.rdr); else wsChecked.delete(e.target.dataset.rdr);
+                e.target.closest('tr').classList.toggle('sel', e.target.checked);
+            }
+        };
+
+        // dblclick 委托：双击 → 原生界面
+        handlers.dblclick = e => {
+            const tr = e.target.closest('tr[data-rdr]');
+            if (!tr) return;
             if (e.target.closest('input[type="checkbox"]')) return;
             const i = parseInt(tr.dataset.i);
             if (i >= 0 && i < data.length) navigateToSpecimen(data[i]);
-        }));
+        };
+
+        body.addEventListener('click', handlers.click);
+        body.addEventListener('change', handlers.change);
+        body.addEventListener('dblclick', handlers.dblclick);
+        body._delegatedHandler = handlers;
     }
 
     // --- 确认并批量审核 ---
@@ -1857,7 +1977,22 @@
             subtitleEl.innerHTML = `<span>${getStatusText(specimen.Status || specimen.ReportStatus)}</span> · 检验号: ${specimen.Labno || '-'} · 流水号: ${specimen.EpisodeNo || '-'} · ${specimen.TestSetDesc || ''} · 仪器: ${specimen._mn || '-'} · ${specimen.AcceptDT || ''}`;
         }
         const detailExtra = document.getElementById('lis-detail-extra');
-        if (detailExtra) detailExtra.textContent = '加载中...';
+        // 立即从分类缓存填充患者信息（不等网络）
+        const _cached = wsClassifiedCache[specimen.ReportDR];
+        if (_cached && _cached.row) {
+            const _cr = _cached.row;
+            const _parts = [];
+            if (_cr.Sex) _parts.push(_cr.Sex);
+            if (_cr.Age) _parts.push(_cr.Age + (_cr.AgeUnit || ''));
+            if (_cr.Location) _parts.push(_cr.Location);
+            if (_cr.Ward) _parts.push(_cr.Ward);
+            if (_cr.BedNo) _parts.push('床' + _cr.BedNo);
+            if (_cr.Specimen) _parts.push(_cr.Specimen);
+            if (_cr.Doctor) _parts.push(_cr.Doctor);
+            if (_parts.length) detailExtra.textContent = _parts.join(' · ');
+        } else if (detailExtra) {
+            detailExtra.textContent = '加载中...';
+        }
 
         // 信息栏（紧凑状态条）
         const info = document.getElementById('lis-detail-info');
@@ -2279,12 +2414,19 @@
     }
 
     async function loadDetailResults(specimen) {
-        console.log('[LIS-DEBUG] loadDetailResults', specimen.ReportDR);
         const body = document.getElementById('lis-detail-body');
-        if (!body) { console.error('[LIS-DEBUG] body not found!'); return; }
+        if (!body) return;
+        const rdr = specimen.ReportDR || '';
+
+        // LRU 缓存命中
+        const cached = detailLRUGet(rdr);
+        if (cached) {
+            dbg('详情缓存命中:', rdr);
+            body.innerHTML = cached.html;
+            return;
+        }
 
         try {
-            // 获取标本所属工作组的 SessionStr
             const ss = buildSS(specimen._wg || wgDR());
 
             // 注意：原始系统使用 Status 字段，不是 ReportStatus
@@ -2327,71 +2469,66 @@
                 dbg('=== 诊断结束 ===');
             }
 
-            // Fallback: 如果所有项目的 PreResult 都为空，尝试用不同参数重新查询
-            const allPreEmpty = itemInfo.every(item => {
-                const items = parsePreResult(item);
-                return items.length === 0;
-            });
+            // 并行 fallback: 检查历史结果是否为空，同时发起备用查询
+            const allPreEmpty = itemInfo.every(item => parsePreResult(item).length === 0);
             if (allPreEmpty && itemInfo.length > 0) {
-                dbg('所有 PreResult 为空，尝试备用参数查询历史...');
-                // 尝试1: 设置 P3 为空（不限状态）
-                try {
-                    const p2 = new URLSearchParams();
-                    p2.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
-                    p2.set('QueryName', 'GetReportInfoAll');
-                    p2.set('FunModul', 'MTHD');
-                    p2.set('P0', specimen.ReportDR || '');
-                    p2.set('P1', specimen.MachineParameterDR || '');
-                    p2.set('P2', specimen.WorkGroupMachineDR || '');
-                    p2.set('P3', ''); // 空状态
-                    p2.set('P4', specimen.EpisodeNo || '');
-                    p2.set('P5', specimen.TransmitDate || '');
-                    p2.set('P14', ss);
-                    const data2 = await fetchJ(CSP + '?' + p2.toString());
+                dbg('所有 PreResult 为空，并行尝试备用查询...');
+                const fallbackPromises = [];
+                // 备用查询1: 空状态参数
+                const p2 = new URLSearchParams();
+                p2.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
+                p2.set('QueryName', 'GetReportInfoAll');
+                p2.set('FunModul', 'MTHD');
+                p2.set('P0', specimen.ReportDR || '');
+                p2.set('P1', specimen.MachineParameterDR || '');
+                p2.set('P2', specimen.WorkGroupMachineDR || '');
+                p2.set('P3', '');
+                p2.set('P4', specimen.EpisodeNo || '');
+                p2.set('P5', specimen.TransmitDate || '');
+                p2.set('P14', ss);
+                fallbackPromises.push(fetchJ(CSP + '?' + p2.toString()).catch(() => null));
+                // 备用查询2: GetPatientPreResult
+                const episodeNo = specimen.EpisodeNo || (labInfo.length > 0 ? labInfo[0].EpisodeNo : '');
+                const regNo = specimen.RegNo || (labInfo.length > 0 ? labInfo[0].RegNo : '');
+                if (episodeNo || regNo) {
+                    const pH = new URLSearchParams();
+                    pH.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
+                    pH.set('QueryName', 'GetPatientPreResult');
+                    pH.set('FunModul', 'MTHD');
+                    pH.set('P0', specimen.ReportDR || '');
+                    pH.set('P1', episodeNo);
+                    pH.set('P2', regNo);
+                    pH.set('P14', ss);
+                    fallbackPromises.push(fetchJ(CSP + '?' + pH.toString()).catch(() => null));
+                } else {
+                    fallbackPromises.push(Promise.resolve(null));
+                }
+                // 并行执行
+                const [data2, histData] = await Promise.all(fallbackPromises);
+                // 合并备用查询1结果
+                if (data2) {
                     const itemInfo2 = (data2 && data2.ItemInfo) ? data2.ItemInfo : [];
                     if (itemInfo2.length > 0 && parsePreResult(itemInfo2[0]).length > 0) {
-                        dbg('备用参数(空状态)返回了历史结果');
                         itemInfo = itemInfo2;
                     }
-                } catch(e) { dbg('备用查询失败:', e); }
-            }
-
-            // Fallback2: 尝试 GetPatientPreResult 查询
-            if (allPreEmpty && itemInfo.length > 0 && itemInfo.every(item => parsePreResult(item).length === 0)) {
-                try {
-                    const episodeNo = specimen.EpisodeNo || (labInfo.length > 0 ? labInfo[0].EpisodeNo : '');
-                    const regNo = specimen.RegNo || (labInfo.length > 0 ? labInfo[0].RegNo : '');
-                    if (episodeNo || regNo) {
-                        dbg('尝试 GetPatientPreResult:', episodeNo || regNo);
-                        const pH = new URLSearchParams();
-                        pH.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
-                        pH.set('QueryName', 'GetPatientPreResult');
-                        pH.set('FunModul', 'MTHD');
-                        pH.set('P0', specimen.ReportDR || '');
-                        pH.set('P1', episodeNo);
-                        pH.set('P2', regNo);
-                        pH.set('P14', ss);
-                        const histData = await fetchJ(CSP + '?' + pH.toString());
-                        if (histData && histData.length > 0) {
-                            dbg('GetPatientPreResult 返回数据:', histData.length, '条');
-                            // 把历史数据合并到 itemInfo
-                            const histMap = {};
-                            for (const h of histData) {
-                                const key = h.TestCodeDR || h.TCCode || h.CName;
-                                if (key) {
-                                    if (!histMap[key]) histMap[key] = [];
-                                    histMap[key].push(h);
-                                }
-                            }
-                            for (const item of itemInfo) {
-                                const key = item.TestCodeDR || item.TCCode || item.CName;
-                                if (histMap[key] && histMap[key].length > 0) {
-                                    item.PreResult = histMap[key];
-                                }
-                            }
+                }
+                // 合并备用查询2结果
+                if (histData && histData.length > 0) {
+                    const histMap = {};
+                    for (const h of histData) {
+                        const key = h.TestCodeDR || h.TCCode || h.CName;
+                        if (key) {
+                            if (!histMap[key]) histMap[key] = [];
+                            histMap[key].push(h);
                         }
                     }
-                } catch(e) { dbg('GetPatientPreResult 失败:', e); }
+                    for (const item of itemInfo) {
+                        const key = item.TestCodeDR || item.TCCode || item.CName;
+                        if (histMap[key] && histMap[key].length > 0) {
+                            item.PreResult = histMap[key];
+                        }
+                    }
+                }
             }
 
             if (itemInfo.length === 0) {
@@ -2556,6 +2693,8 @@
             }
 
             body.innerHTML = html;
+            // 存入 LRU 缓存
+            detailLRUSet(rdr, { html, ts: Date.now() });
 
         } catch (e) {
             dbg('加载详细结果失败:', e);
@@ -4155,6 +4294,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
             });
             // 每批完成后更新计数和标签
+            invalidateCaches();
             calcMachineCounts();
             renderWSCategoryBar();
             await new Promise(r => setTimeout(r, 50)); // 让 UI 有机会更新
