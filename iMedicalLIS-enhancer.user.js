@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.28.3
+// @version      6.28.4
 // @description  报告审核增强 + 质控图面板 — 批量审核 + L-J质控图 + 质控数据编辑（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -982,7 +982,11 @@
                 if (status === '3' || status === '4') return false;
                 if (status === '0') return false; // 待排样不显示在结果不完整中
                 const complete = String(r.IsComplete || '');
-                return complete !== '1';
+                if (complete !== '1') return true;
+                // IsComplete='1' 但分类为 UNCERTAIN 的也算不完整（与 renderWSCategoryBar 计数逻辑一致）
+                const cached = wsClassifiedCache[r.ReportDR];
+                if (!cached) return false; // 未分类的不算不完整
+                return cached.status !== 'NORMAL' && cached.status !== 'ABNORMAL' && cached.status !== 'CRITICAL';
             });
         } else if (wsCategory === 'pending') {
             d = d.filter(r => {
@@ -1054,6 +1058,7 @@
                 else {
                     const cached = wsClassifiedCache[r.ReportDR];
                     if (cached && (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL')) wgCounts[wg].abnormalReady++;
+                    else if (cached && cached.status !== 'NORMAL') wgCounts[wg].incomplete++; // UNCERTAIN 算不完整
                     else wgCounts[wg].normalReady++;
                 }
             }
@@ -1069,6 +1074,11 @@
                 machCounts[mdr].abnormalReady++;
                 machCounts['_all'].abnormalReady++;
                 abnormalCount++;
+            } else if (cached && cached.status !== 'NORMAL') {
+                // UNCERTAIN 算不完整（与 renderWSCategoryBar 计数逻辑一致）
+                machCounts[mdr].incomplete++;
+                machCounts['_all'].incomplete++;
+                incompleteCount++;
             } else {
                 machCounts[mdr].normalReady++;
                 machCounts['_all'].normalReady++;
