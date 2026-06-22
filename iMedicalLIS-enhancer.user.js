@@ -1,8 +1,8 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.28.1
-// @description  报告审核增强 — 安全批量审核 + 快捷键快速审核 + 结果分类 + 历史结果展示（纯本地运行，无任何上传）
+// @version      7.0.0
+// @description  报告审核增强 + 质控图面板 — 批量审核 + L-J质控图 + 质控数据编辑（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -270,31 +270,68 @@
 @keyframes lis-sp{to{transform:rotate(360deg)}}
 
 
-/* --- QC 质控面板 --- */
-#lis-qc-badge{position:absolute;top:-4px;left:-4px;background:#e74c3c;color:#fff;border-radius:10px;padding:1px 5px;font-size:10px;min-width:14px;text-align:center;display:none;font-weight:bold}
-.ws-qc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;padding:16px}
-.qc-card{background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:14px;transition:.2s;cursor:pointer}
-.qc-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.1);transform:translateY(-1px)}
-.qc-card.loss{border-left:4px solid #e74c3c;background:#fff5f5}
-.qc-card.warn{border-left:4px solid #f39c12;background:#fffde7}
-.qc-card.ok{border-left:4px solid #27ae60}
-.qc-card .qc-mach{font-size:13px;font-weight:700;color:#2c3e50;margin-bottom:6px}
-.qc-card .qc-item{font-size:12px;color:#555;margin-bottom:2px}
-.qc-card .qc-time{font-size:11px;color:#999}
-.qc-card .qc-rule{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-top:4px}
-.qc-rule.loss{background:#ffcdd2;color:#c62828}.qc-rule.warn{background:#fff9c4;color:#f57f17}
-.qc-quick{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px;background:#f8f9fa;border-bottom:1px solid #e0e0e0}
-.qc-quick a{padding:5px 12px;border-radius:4px;background:#fff;border:1px solid #ddd;font-size:12px;text-decoration:none;color:#333;transition:.2s}
-.qc-quick a:hover{background:#e3f2fd;border-color:#3498db;color:#2980b9}
-.qc-quick a.primary{background:#3498db;color:#fff;border-color:#3498db}
-.qc-quick a.primary:hover{background:#2980b9}
-.qc-summary{padding:12px 16px;display:flex;gap:16px;align-items:center;background:#fff;border-bottom:1px solid #e0e0e0}
-.qc-summary .qc-s-item{display:flex;align-items:center;gap:6px;font-size:13px}
-.qc-summary .qc-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
-.qc-export-bar{padding:8px 16px;background:#f0f0f0;border-top:1px solid #ddd;display:flex;gap:8px;align-items:center}
-.qc-export-bar button{padding:4px 12px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
-.qc-export-bar button:hover{background:#e3f2fd}
-
+/* --- 质控面板 v7 --- */
+#lis-qc-fab{position:fixed;bottom:152px;right:20px;z-index:99999;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#00b894,#00cec9);color:#fff;border:none;cursor:pointer;font-size:11px;font-weight:700;box-shadow:0 4px 14px rgba(0,184,148,.5);transition:transform .3s,box-shadow .3s;display:flex;align-items:center;justify-content:center;flex-direction:column;line-height:1.1;user-select:none}
+#lis-qc-fab:hover{transform:scale(1.1);box-shadow:0 6px 20px rgba(0,184,148,.6)}
+#lis-qc-fab .fab-icon{font-size:20px}
+#lis-qc-fab .fab-label{font-size:8px;letter-spacing:.5px}
+#lis-qc-panel{position:fixed!important;inset:0!important;z-index:100005!important;background:#f5f0e8;display:none;flex-direction:column;font-family:'Microsoft YaHei','Segoe UI',sans-serif}
+#lis-qc-panel.show{display:flex!important}
+.qc-toolbar{background:#2c3e50;color:#fff;padding:8px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0}
+.qc-toolbar h3{margin:0;font-size:14px;font-weight:700;white-space:nowrap}
+.qc-toolbar .qc-tb-sep{width:1px;height:20px;background:rgba(255,255,255,.3)}
+.qc-toolbar label{font-size:11px;color:rgba(255,255,255,.7);white-space:nowrap}
+.qc-toolbar select,.qc-toolbar input[type=date]{padding:4px 8px;border:1px solid rgba(255,255,255,.2);border-radius:4px;font-size:12px;background:rgba(255,255,255,.1);color:#fff;outline:none}
+.qc-toolbar select option{background:#2c3e50;color:#fff}
+.qc-toolbar input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1)}
+.qc-toolbar .qc-tb-btn{padding:4px 12px;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;transition:.15s}
+.qc-toolbar .qc-tb-btn:hover{filter:brightness(1.15)}
+.qc-toolbar .qc-tb-btn.btn-primary{background:#3498db;color:#fff}
+.qc-toolbar .qc-tb-btn.btn-success{background:#27ae60;color:#fff}
+.qc-toolbar .qc-tb-btn.btn-warning{background:#e67e22;color:#fff}
+.qc-toolbar .qc-tb-close{margin-left:auto;background:none;border:none;color:rgba(255,255,255,.7);cursor:pointer;font-size:18px;padding:4px 8px;border-radius:4px}
+.qc-toolbar .qc-tb-close:hover{color:#fff;background:rgba(255,255,255,.1)}
+.qc-main{flex:1;display:flex;overflow:hidden;min-height:0}
+.qc-sidebar{width:240px;min-width:200px;background:#fff;border-right:1px solid #e0e0e0;display:flex;flex-direction:column;flex-shrink:0}
+.qc-sidebar-hd{padding:10px 12px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:6px}
+.qc-sidebar-hd input{flex:1;padding:5px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;outline:none}
+.qc-sidebar-hd input:focus{border-color:#3498db}
+.qc-item-list{flex:1;overflow-y:auto;padding:4px 0}
+.qc-item{padding:8px 12px;cursor:pointer;border-left:3px solid transparent;transition:.15s;font-size:12px}
+.qc-item:hover{background:#f0f7ff}
+.qc-item.active{background:#e3f2fd;border-left-color:#3498db;font-weight:600}
+.qc-item .qi-name{font-weight:600;color:#2c3e50;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qc-item .qi-mat{font-size:11px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qc-item .qi-level{font-size:10px;color:#fff;background:#9b59b6;border-radius:3px;padding:1px 5px;display:inline-block;margin-top:2px}
+.qc-content{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.qc-chart-wrap{flex:1;position:relative;min-height:300px;background:#fff;border-bottom:1px solid #e0e0e0}
+.qc-chart-wrap canvas{display:block;width:100%;height:100%}
+.qc-chart-tooltip{position:absolute;background:rgba(44,62,80,.92);color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;pointer-events:none;display:none;z-index:10;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.qc-chart-tooltip .tt-title{font-weight:700;margin-bottom:4px}
+.qc-chart-tooltip .tt-row{display:flex;justify-content:space-between;gap:12px}
+.qc-stats-bar{display:flex;gap:16px;padding:8px 16px;background:#f8f9fa;border-bottom:1px solid #e0e0e0;flex-shrink:0;flex-wrap:wrap;align-items:center}
+.qc-stats-bar .stat-item{font-size:11px;color:#555;display:flex;align-items:center;gap:4px}
+.qc-stats-bar .stat-item b{color:#2c3e50}
+.qc-stats-bar .stat-item .stat-label{color:#999}
+.qc-data-wrap{height:200px;min-height:120px;overflow:auto;flex-shrink:0;background:#fff}
+.qc-data-wrap table{width:100%;border-collapse:collapse;font-size:12px}
+.qc-data-wrap th{position:sticky;top:0;background:#3d566e;color:#ecf0f1;padding:6px 10px;text-align:left;font-weight:600;white-space:nowrap;z-index:1}
+.qc-data-wrap td{padding:5px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
+.qc-data-wrap tbody tr:hover{background:#e8f4fd}
+.qc-data-wrap tbody tr:nth-child(even){background:#fafbfc}
+.qc-data-wrap td[contenteditable=true]{background:#fff9c4;outline:2px solid #f39c12;border-radius:2px}
+.qc-data-wrap .status-ok{color:#27ae60;font-weight:600}
+.qc-data-wrap .status-warn{color:#e67e22;font-weight:600}
+.qc-data-wrap .status-loss{color:#e74c3c;font-weight:600}
+.qc-data-wrap .status-ns{color:#999}
+.qc-level-bar{display:flex;gap:4px;align-items:center;padding:0 12px}
+.qc-level-btn{padding:3px 10px;border:1px solid rgba(255,255,255,.3);border-radius:3px;background:transparent;color:rgba(255,255,255,.7);cursor:pointer;font-size:11px;transition:.15s}
+.qc-level-btn.on{background:rgba(255,255,255,.2);color:#fff;border-color:#fff}
+.qc-level-btn:hover{color:#fff}
+.qc-empty-msg{text-align:center;padding:60px 20px;color:#95a5a6;font-size:14px}
+.qc-empty-msg .ico{font-size:48px;margin-bottom:12px;display:block}
+.qc-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.8);z-index:5;font-size:13px;color:#666}
+.qc-iframe-fallback{flex:1;border:none;width:100%;height:100%}
     
 /* --- 登录页优化 --- */
 #lis-login-box{position:fixed;top:50%;right:40px;transform:translateY(-50%);z-index:99999;background:rgba(255,255,255,.97);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.15);padding:20px 24px;width:300px;font-family:'Microsoft YaHei',sans-serif}
@@ -894,8 +931,10 @@
 
     // --- 过滤 & 排序 ---
     function filteredData() {
+        // 读取当前搜索框值（不能用旧的 wsSearchQuery）
+        const _q = ($('#lis-ws-search') || {}).value || '';
         // 缓存检查
-        const ck = wsActiveWG + '|' + wsActiveMachine + '|' + wsCategory + '|' + wsSearchQuery + '|' + (wsSort.field + wsSort.asc);
+        const ck = wsActiveWG + '|' + wsActiveMachine + '|' + wsCategory + '|' + _q + '|' + (wsSort.field + wsSort.asc);
         if (_filteredCache && _filteredCacheKey === ck) return _filteredCache;
         let d = wsData;
         // 工作组过滤
@@ -938,9 +977,8 @@
         }
         // 'all' = 不过滤分类
         // 搜索
-        const q = ($('#lis-ws-search') || {}).value || '';
-        if (q) {
-            const ql = q.toLowerCase();
+        if (_q) {
+            const ql = _q.toLowerCase();
             d = d.filter(r =>
                 (r.PatName||'').toLowerCase().includes(ql) ||
                 (r.Labno||'').toLowerCase().includes(ql) ||
@@ -949,7 +987,7 @@
                 (r.TestSetDesc||'').toLowerCase().includes(ql)
             );
         }
-        wsSearchQuery = q; // 保存搜索词用于高亮
+        wsSearchQuery = _q; // 保存搜索词用于高亮
         // 排序
         const {field, asc} = wsSort;
         d.sort((a,b) => {
@@ -1037,6 +1075,7 @@
             <input type="text" class="ws-search" id="lis-ws-search" placeholder="🔍 搜索姓名/检验号/流水号..." />
             <div class="ws-acts">
                 <button id="lis-ws-ca" style="background:#9b59b6;color:#fff;border-radius:6px" title="CA认证">🔑 CA认证</button>
+                <button id="lis-ws-qc" style="background:#00b894;color:#fff;border-radius:6px" title="质控面板">📊</button>
                 <button id="lis-ws-refresh" style="background:#3498db;color:#fff;border-radius:6px">🔄</button>
                 <button id="lis-ws-pwd" style="background:#f39c12;color:#fff;border-radius:6px" title="密码">🔐</button>
                 <button id="lis-ws-close" style="background:#e74c3c;color:#fff;border-radius:6px">✕</button>
@@ -1046,6 +1085,11 @@
         
         // 初始检查CA状态
         updateCAStatus();
+        document.getElementById('lis-ws-qc').addEventListener('click', () => {
+            closeWS();
+            if (!_qcPanelEl) createQCPanel();
+            openQCPanel();
+        });
         document.getElementById('lis-ws-refresh').addEventListener('click', () => {
             dbg('刷新按钮被点击');
             loadWSData();
@@ -1212,6 +1256,7 @@
 
         // 分类标签事件
         bar.querySelectorAll('.cat-tab').forEach(b => b.addEventListener('click', () => {
+            invalidateCaches();
             wsCategory = b.dataset.cat;
             wsAbnormalIndex = -1;
             // 不清空 wsChecked，保留用户勾选
@@ -3140,193 +3185,1099 @@ function fillNativeLoginForm(creds, lastWG) {
         }));
     }
 
-    function filterQCByImmune(data) {
-        // 如果能匹配到免疫组的仪器名，只显示免疫组的
-        const immune = getImmuneMachines();
-        if (immune.length === 0) return data;
-        const immuneNames = immune.map(m => m.name.toLowerCase());
-        const filtered = data.filter(r => {
-            const mp = (r.MachineParameter || '').toLowerCase();
-            return immuneNames.some(n => mp.includes(n) || n.includes(mp));
-        });
-        // 如果过滤后没有数据（可能是名称不匹配），返回全部
-        return filtered.length > 0 ? filtered : data;
-    }
+    // ============================================================
+    //  模块 D：质控面板 v7（独立 L-J 质控图）
+    // ============================================================
 
-    function renderQCPanel() {
-        const body = document.getElementById('lis-ws-body');
-        const isImmune = wgDR() === '4';
+    const _qcAPI = {
+        config: null,
+        QC_CSP: BASE + '/csp/jquery.easyui.dhcclassjson.csp',
+        QC_ASHX: BASE + '/sys/ashx/ashBTQualityControl.ashx',
+        init() {
+            try {
+                const raw = localStorage.getItem('LIS_QC_API_Config');
+                if (raw) this.config = JSON.parse(raw);
+            } catch(e) {}
+        },
+        saveConfig() {
+            try { localStorage.setItem('LIS_QC_API_Config', JSON.stringify(this.config)); } catch(e) {}
+        },
+        async loadQCItemTree(wgDR) {
+            // 尝试通过 CSP 加载质控项目树
+            try {
+                const ss = buildSS(wgDR);
+                const p = new URLSearchParams();
+                p.set('ClassName', 'LIS.WS.BLL.QC.DHCRPQCSet');
+                p.set('QueryName', 'QryQCSetByWGM');
+                p.set('FunModul', 'JSON');
+                p.set('P0', wgDR);
+                p.set('P14', ss);
+                const data = await fetchJ(this.QC_CSP + '?' + p.toString());
+                if (data && data.rows && data.rows.length > 0) return data.rows;
+            } catch(e) { dbg('[QC] loadQCItemTree CSP 失败:', e.message); }
 
-        // 快捷入口
-        const syssession = uid() + '-' + wgDR();
-        const qcUrl = (page) => `${BASE}/login/form/Index.aspx?SysCode=lis&SYSSessionID=${syssession}&SysVetion=8.3.4&HosCode=#`;
+            // 回退：尝试 ashx 方式
+            try {
+                const data = await fetchJ(this.QC_ASHX + '?Method=GetQCSetByWorkGroup&WorkGroupDR=' + wgDR);
+                if (data && data.rows && data.rows.length > 0) return data.rows;
+                if (Array.isArray(data) && data.length > 0) return data;
+            } catch(e) { dbg('[QC] loadQCItemTree ashx 失败:', e.message); }
 
-        let h = '<div class="qc-quick">';
-        h += '<a class="primary" href="' + BASE + '/qc/form/frmQCMonitor.aspx" target="_blank">📊 质控监控总览</a>';
-        h += '<a href="' + BASE + '/qc/form/frmQCDrawDay.aspx" target="_blank">📅 日间质控</a>';
-        h += '<a href="' + BASE + '/qc/form/frmQCDrawLJ.aspx" target="_blank">📈 L-J图</a>';
-        h += '<a href="' + BASE + '/qc/form/frmQCDrawZ.aspx" target="_blank">📉 Z分数图</a>';
-        h += '<a href="' + BASE + '/qc/form/frmQCDataInputNew.aspx" target="_blank">✏️ 质控数据录入</a>';
-        h += '<a href="' + BASE + '/qc/form/frmQCDataView.aspx" target="_blank">🔍 质控数据查询</a>';
-        h += '<a href="' + BASE + '/qc/form/frmQCDrawYouDen.aspx" target="_blank">🎯 优顿图</a>';
-        h += '<a href="' + BASE + '/qc/form/frmQCStatYearData.aspx" target="_blank">📋 年度统计</a>';
-        h += '</div>';
+            return [];
+        },
+        async loadQCData(params) {
+            // params: { InstrumentCode, MaterialCode, TcCode, Level, StartDate, EndDate }
+            try {
+                const p = new URLSearchParams();
+                p.set('ClassName', 'LIS.WS.BLL.QC.DHCRPQCData');
+                p.set('QueryName', 'QryQCDataForChart');
+                p.set('FunModul', 'JSON');
+                p.set('P0', params.InstrumentCode || '');
+                p.set('P1', params.MaterialCode || '');
+                p.set('P2', params.TcCode || '');
+                p.set('P3', params.Level || '1');
+                p.set('P4', params.StartDate || '');
+                p.set('P5', params.EndDate || '');
+                const data = await fetchJ(this.QC_CSP + '?' + p.toString());
+                if (data && data.rows) return data.rows;
+                if (Array.isArray(data)) return data;
+            } catch(e) { dbg('[QC] loadQCData CSP 失败:', e.message); }
 
-        // 数据区
-        h += '<div id="lis-qc-content"><div class="ws-empty"><div class="ico">⏳</div>正在加载质控数据...</div></div>';
-        body.innerHTML = h;
+            // 回退 ashx
+            try {
+                const p2 = new URLSearchParams();
+                p2.set('Method', 'GetQCData');
+                p2.set('InstrumentCode', params.InstrumentCode || '');
+                p2.set('MaterialCode', params.MaterialCode || '');
+                p2.set('TcCode', params.TcCode || '');
+                p2.set('Level', params.Level || '1');
+                p2.set('StartDate', params.StartDate || '');
+                p2.set('EndDate', params.EndDate || '');
+                const data = await fetchJ(this.QC_ASHX + '?' + p2.toString());
+                if (data && data.rows) return data.rows;
+                if (Array.isArray(data)) return data;
+            } catch(e) { dbg('[QC] loadQCData ashx 失败:', e.message); }
 
-        // 加载数据
-        loadQCContent();
-    }
-
-    async function loadQCContent() {
-        const content = document.getElementById('lis-qc-content');
-        if (!content) return;
-
-        // QC 数据加载（暂未实现）
-        const data = [];
-
-        // 汇总
-        const losses = data.filter(r => {
-            const rule = (r.QCRule || '').toLowerCase();
-            return rule.includes('失控') || rule.includes('loss');
-        });
-        const warnings = data.filter(r => {
-            const rule = (r.QCRule || '').toLowerCase();
-            return rule.includes('警告') || rule.includes('warn');
-        });
-
-        let h = '';
-
-        // 汇总栏
-        h += '<div class="qc-summary">';
-        h += `<div class="qc-s-item"><span class="qc-dot" style="background:#e74c3c"></span>失控: <b>${losses.length}</b></div>`;
-        h += `<div class="qc-s-item"><span class="qc-dot" style="background:#f39c12"></span>警告: <b>${warnings.length}</b></div>`;
-        h += `<div class="qc-s-item"><span class="qc-dot" style="background:#27ae60"></span>总记录: <b>${data.length}</b></div>`;
-        h += `<span style="margin-left:auto;font-size:11px;color:#999">数据时间: ${new Date().toLocaleString()}</span>`;
-        h += '</div>';
-
-        if (data.length === 0) {
-            h += '<div class="ws-empty"><div class="ico">✅</div>今日质控无异常</div>';
-        } else {
-            h += '<div class="ws-qc-grid">';
-            data.forEach(r => {
-                const isLoss = (r.QCRule||'').includes('失控') || (r.QCRule||'').includes('loss');
-                const isWarn = (r.QCRule||'').includes('警告') || (r.QCRule||'').includes('warn');
-                const cls = isLoss ? 'loss' : isWarn ? 'warn' : 'ok';
-                const ruleCls = isLoss ? 'loss' : isWarn ? 'warn' : '';
-
-                h += `<div class="qc-card ${cls}" data-mach="${r.MachineParameter||''}" data-tc="${r.TestCode||''}" data-rule="${r.QCRule||''}" data-result="${r.Result||''}" data-time="${r.TestTime||''}">`;
-                h += `<div class="qc-mach">🔬 ${r.MachineParameter || '未知仪器'}</div>`;
-                h += `<div class="qc-item">📋 项目: <b>${r.TestCode || ''}</b></div>`;
-                h += `<div class="qc-item">📊 结果: ${r.Result || ''}</div>`;
-                h += `<div class="qc-time">🕐 ${r.TestTime || ''}</div>`;
-                if (r.QCRule) h += `<span class="qc-rule ${ruleCls}">${r.QCRule}</span>`;
-                h += '</div>';
-            });
-            h += '</div>';
-        }
-
-        // 导出栏
-        h += '<div class="qc-export-bar">';
-        h += '<button id="qc-export-csv">📥 导出 CSV</button>';
-        h += '<button id="qc-export-json">📥 导出 JSON</button>';
-        h += '<button id="qc-refresh">🔄 刷新</button>';
-        h += '</div>';
-
-        content.innerHTML = h;
-
-        // 更新 badge
-        updateQCBadge(losses.length, warnings.length);
-
-        // 事件
-        const csvBtn = document.getElementById('qc-export-csv');
-        if (csvBtn) csvBtn.addEventListener('click', () => exportQCData('csv', data));
-        const jsonBtn = document.getElementById('qc-export-json');
-        if (jsonBtn) jsonBtn.addEventListener('click', () => exportQCData('json', data));
-        const refreshBtn = document.getElementById('qc-refresh');
-        if (refreshBtn) refreshBtn.addEventListener('click', loadQCContent);
-
-        // 卡片点击 → 打开对应的 QC 图表
-        content.querySelectorAll('.qc-card').forEach(card => card.addEventListener('click', () => {
-            const mach = card.dataset.mach;
-            const tc = card.dataset.tc;
-            openQCChart(mach, tc);
-        }));
-    }
-
-    function updateQCBadge(lossCount, warnCount) {
-        const badge = document.getElementById('lis-qc-badge');
-        if (!badge) return;
-        const total = lossCount + warnCount;
-        if (total > 0) {
-            badge.textContent = total;
-            badge.style.display = 'block';
-            badge.style.background = lossCount > 0 ? '#e74c3c' : '#f39c12';
-        } else {
-            badge.style.display = 'none';
-        }
-    }
-
-    function openQCChart(machineName, testCode) {
-        // 尝试找到对应的仪器和项目信息
-        const immune = getImmuneMachines();
-        let machineDR = '';
-        for (const m of immune) {
-            if (m.name.toLowerCase().includes((machineName||'').toLowerCase()) ||
-                (machineName||'').toLowerCase().includes(m.name.toLowerCase())) {
-                machineDR = m.dr;
-                break;
+            return [];
+        },
+        async saveQCData(params) {
+            try {
+                const p = new URLSearchParams();
+                p.set('ClassName', 'LIS.WS.BLL.QC.DHCRPQCData');
+                p.set('QueryName', 'UpdateQCData');
+                p.set('FunModul', 'JSON');
+                p.set('P0', params.InstrumentCode || '');
+                p.set('P1', params.MaterialCode || '');
+                p.set('P2', params.TcCode || '');
+                p.set('P3', params.Level || '1');
+                p.set('P4', params.Date || '');
+                p.set('P5', params.Result || '');
+                p.set('P6', params.QCID || '');
+                const data = await fetchJ(this.QC_CSP + '?' + p.toString());
+                return data;
+            } catch(e) {
+                dbg('[QC] saveQCData 失败:', e.message);
+                return null;
             }
         }
+    };
 
-        const startDate = (() => { const d=new Date(); d.setDate(d.getDate()-30); return d.toISOString().split('T')[0]; })();
-        const endDate = today();
+    // --- 质控面板状态 ---
+    let _qcPanelEl = null;
+    let _qcState = {
+        open: false,
+        machines: [],
+        activeMachine: '',
+        items: [],
+        activeItem: null,
+        activeLevel: 1,
+        data: [],
+        stats: null,
+        startDate: (() => { const d=new Date(); d.setDate(d.getDate()-30); return d.toISOString().split('T')[0]; })(),
+        endDate: today(),
+        searchQuery: '',
+        pendingChanges: new Map(),
+        chartCanvas: null,
+        hoveredPoint: null
+    };
 
-        // 打开质控监控页面（最通用的方式）
-        const url = BASE + '/qc/form/frmQCMonitor.aspx?StartDate=' + startDate + '&EndDate=' + endDate;
-        window.open(url, '_blank');
+    // --- 初始化质控面板 ---
+    function initQCPanel() {
+        _qcAPI.init();
+        createQCFab();
     }
 
-    function exportQCData(format, data) {
-        if (!data || data.length === 0) {
-            toast('无数据可导出', 'w');
+    function createQCFab() {
+        if (document.getElementById('lis-qc-fab')) return;
+        const fab = document.createElement('button');
+        fab.id = 'lis-qc-fab';
+        fab.innerHTML = '<span class="fab-icon">📊</span><span class="fab-label">QC</span>';
+        fab.title = '打开质控面板';
+        fab.addEventListener('click', () => {
+            if (!_qcPanelEl) createQCPanel();
+            openQCPanel();
+        });
+        document.body.appendChild(fab);
+    }
+
+    function createQCPanel() {
+        if (_qcPanelEl) return _qcPanelEl;
+        _qcPanelEl = document.createElement('div');
+        _qcPanelEl.id = 'lis-qc-panel';
+        _qcPanelEl.innerHTML = `
+            <div class="qc-toolbar">
+                <h3>📊 质控面板</h3>
+                <span class="qc-tb-sep"></span>
+                <label>工作组:</label>
+                <select id="qc-wg-sel"></select>
+                <label>仪器:</label>
+                <select id="qc-mach-sel"><option value="">加载中...</option></select>
+                <span class="qc-tb-sep"></span>
+                <label>开始:</label>
+                <input type="date" id="qc-start-date">
+                <label>结束:</label>
+                <input type="date" id="qc-end-date">
+                <div class="qc-level-bar" id="qc-level-bar"></div>
+                <span class="qc-tb-sep"></span>
+                <button class="qc-tb-btn btn-primary" id="qc-btn-refresh">🔄 刷新</button>
+                <button class="qc-tb-btn btn-success" id="qc-btn-save" style="display:none">💾 保存修改</button>
+                <button class="qc-tb-btn btn-warning" id="qc-btn-fallback">🌐 嵌入模式</button>
+                <button class="qc-tb-close" id="qc-btn-close">✕</button>
+            </div>
+            <div class="qc-main">
+                <div class="qc-sidebar">
+                    <div class="qc-sidebar-hd">
+                        <input type="text" id="qc-search" placeholder="🔍 搜索项目...">
+                    </div>
+                    <div class="qc-item-list" id="qc-item-list">
+                        <div class="qc-empty-msg"><span class="ico">📋</span>请先选择仪器</div>
+                    </div>
+                </div>
+                <div class="qc-content">
+                    <div class="qc-stats-bar" id="qc-stats-bar"></div>
+                    <div class="qc-chart-wrap" id="qc-chart-wrap">
+                        <canvas id="qc-chart-canvas"></canvas>
+                        <div class="qc-chart-tooltip" id="qc-chart-tooltip"></div>
+                        <div class="qc-empty-msg" id="qc-chart-empty" style="position:absolute;inset:0"><span class="ico">📈</span>选择项目后显示 L-J 质控图</div>
+                    </div>
+                    <div class="qc-data-wrap" id="qc-data-wrap">
+                        <div class="qc-empty-msg" id="qc-data-empty"><span class="ico">📋</span>选择项目后显示质控数据</div>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(_qcPanelEl);
+
+        // 工具栏事件
+        document.getElementById('qc-btn-close').addEventListener('click', closeQCPanel);
+        document.getElementById('qc-btn-refresh').addEventListener('click', refreshQCPanel);
+        document.getElementById('qc-btn-save').addEventListener('click', saveQCPendingChanges);
+        document.getElementById('qc-btn-fallback').addEventListener('click', openQCFallbackMode);
+        document.getElementById('qc-start-date').value = _qcState.startDate;
+        document.getElementById('qc-end-date').value = _qcState.endDate;
+        document.getElementById('qc-start-date').addEventListener('change', e => { _qcState.startDate = e.target.value; if (_qcState.activeItem) loadAndRenderQCData(); });
+        document.getElementById('qc-end-date').addEventListener('change', e => { _qcState.endDate = e.target.value; if (_qcState.activeItem) loadAndRenderQCData(); });
+
+        // 工作组选择
+        const wgSel = document.getElementById('qc-wg-sel');
+        WG.forEach(w => {
+            const opt = document.createElement('option');
+            opt.value = w.dr; opt.textContent = w.icon + ' ' + w.name;
+            wgSel.appendChild(opt);
+        });
+        wgSel.value = wgDR() || '4';
+        wgSel.addEventListener('change', async () => {
+            _qcState.activeMachine = '';
+            _qcState.items = [];
+            _qcState.activeItem = null;
+            _qcState.data = [];
+            _qcState.stats = null;
+            _qcState.pendingChanges.clear();
+            updateSaveBtn();
+            renderQCItemList();
+            await loadQCMachines(wgSel.value);
+        });
+
+        // 仪器选择
+        document.getElementById('qc-mach-sel').addEventListener('change', async (e) => {
+            _qcState.activeMachine = e.target.value;
+            _qcState.activeItem = null;
+            _qcState.data = [];
+            _qcState.stats = null;
+            _qcState.pendingChanges.clear();
+            updateSaveBtn();
+            if (_qcState.activeMachine) {
+                await loadQCItemTree();
+            } else {
+                _qcState.items = [];
+                renderQCItemList();
+            }
+        });
+
+        // 搜索
+        document.getElementById('qc-search').addEventListener('input', (e) => {
+            _qcState.searchQuery = e.target.value.toLowerCase();
+            renderQCItemList();
+        });
+
+        // Chart resize
+        const ro = new ResizeObserver(() => { if (_qcState.stats) renderLJChart(); });
+        ro.observe(document.getElementById('qc-chart-wrap'));
+
+        // Chart hover
+        const chartWrap = document.getElementById('qc-chart-wrap');
+        chartWrap.addEventListener('mousemove', handleChartHover);
+        chartWrap.addEventListener('mouseleave', () => {
+            _qcState.hoveredPoint = null;
+            const tt = document.getElementById('qc-chart-tooltip');
+            if (tt) tt.style.display = 'none';
+        });
+
+        return _qcPanelEl;
+    }
+
+    function openQCPanel() {
+        if (!_qcPanelEl) createQCPanel();
+        _qcState.open = true;
+        _qcPanelEl.classList.add('show');
+        document.body.style.overflow = 'hidden';
+        // 加载仪器
+        loadQCMachines(document.getElementById('qc-wg-sel').value);
+    }
+
+    function closeQCPanel() {
+        _qcState.open = false;
+        if (_qcPanelEl) _qcPanelEl.classList.remove('show');
+        document.body.style.overflow = '';
+    }
+
+    async function loadQCMachines(wgDR) {
+        const sel = document.getElementById('qc-mach-sel');
+        sel.innerHTML = '<option value="">加载中...</option>';
+        try {
+            const machines = await loadMachines(wgDR);
+            _qcState.machines = machines;
+            sel.innerHTML = '<option value="">全部仪器</option>';
+            machines.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.RowID;
+                opt.textContent = m.CName || m.Name || m.RowID;
+                sel.appendChild(opt);
+            });
+            sel.value = _qcState.activeMachine;
+        } catch(e) {
+            sel.innerHTML = '<option value="">加载失败</option>';
+            dbg('[QC] loadMachines 失败:', e);
+        }
+    }
+
+    async function loadQCItemTree() {
+        const listEl = document.getElementById('qc-item-list');
+        listEl.innerHTML = '<div class="qc-empty-msg"><span class="ico">⏳</span>加载质控项目...</div>';
+        const wgSel = document.getElementById('qc-wg-sel');
+        const wgDR = wgSel.value;
+        const machDR = _qcState.activeMachine;
+
+        let items = await _qcAPI.loadQCItemTree(wgDR);
+
+        // 如果 API 加载失败，尝试从质控页面 iframe 提取
+        if (!items || items.length === 0) {
+            dbg('[QC] API 加载项目列表失败，尝试 iframe 方式');
+            items = await discoverQCItemsViaIframe(wgDR, machDR);
+        }
+
+        // 如果还是没有，尝试通过解析质控数据查询页面
+        if (!items || items.length === 0) {
+            items = await discoverQCItemsViaDataView(wgDR, machDR);
+        }
+
+        _qcState.items = items || [];
+        renderQCItemList();
+    }
+
+    async function discoverQCItemsViaIframe(wgDR, machDR) {
+        return new Promise((resolve) => {
+            const iframe = document.createElement('iframe');
+            iframe.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px';
+            iframe.src = BASE + '/qc/form/frmQCDrawLJ.aspx?MenuDR=159&NotIndependent=1';
+            document.body.appendChild(iframe);
+
+            let resolved = false;
+            const timeout = setTimeout(() => {
+                if (!resolved) { resolved = true; iframe.remove(); resolve([]); }
+            }, 15000);
+
+            iframe.onload = () => {
+                try {
+                    const doc = iframe.contentDocument || iframe.contentWindow.document;
+                    // 尝试从页面中提取质控项目信息
+                    const scripts = doc.querySelectorAll('script');
+                    let items = [];
+                    scripts.forEach(s => {
+                        const text = s.textContent || '';
+                        // 查找质控项目数据
+                        const match = text.match(/var\s+qcItems?\s*=\s*(\[[\s\S]*?\]);/);
+                        if (match) {
+                            try { items = JSON.parse(match[1]); } catch(e) {}
+                        }
+                    });
+
+                    // 如果没有找到 JS 变量，尝试从 datagrid 提取
+                    if (items.length === 0) {
+                        try {
+                            const jq = iframe.contentWindow.jQuery;
+                            if (jq && jq.fn.datagrid) {
+                                const rows = jq('.datagrid-body').find('tr');
+                                rows.each(function() {
+                                    const cells = jq(this).find('td');
+                                    if (cells.length >= 3) {
+                                        items.push({
+                                            name: cells.eq(0).text().trim(),
+                                            abbr: cells.eq(1).text().trim(),
+                                            material: cells.eq(2).text().trim(),
+                                            code: cells.eq(3) ? cells.eq(3).text().trim() : ''
+                                        });
+                                    }
+                                });
+                            }
+                        } catch(e) {}
+                    }
+
+                    // 也尝试从全局变量中提取
+                    if (items.length === 0) {
+                        try {
+                            const win = iframe.contentWindow;
+                            const vars = ['qcSetData', 'qcItems', 'itemData', 'QryData'];
+                            for (const v of vars) {
+                                if (win[v] && Array.isArray(win[v]) && win[v].length > 0) {
+                                    items = win[v];
+                                    break;
+                                }
+                            }
+                        } catch(e) {}
+                    }
+
+                    resolved = true;
+                    clearTimeout(timeout);
+                    iframe.remove();
+                    resolve(items);
+                } catch(e) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    iframe.remove();
+                    resolve([]);
+                }
+            };
+        });
+    }
+
+    async function discoverQCItemsViaDataView(wgDR, machDR) {
+        // 尝试通过质控数据查询页面发现项目
+        return new Promise((resolve) => {
+            const iframe = document.createElement('iframe');
+            iframe.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px';
+            iframe.src = BASE + '/qc/form/frmQCDataView.aspx';
+            document.body.appendChild(iframe);
+
+            let resolved = false;
+            const timeout = setTimeout(() => {
+                if (!resolved) { resolved = true; iframe.remove(); resolve([]); }
+            }, 15000);
+
+            iframe.onload = () => {
+                try {
+                    const doc = iframe.contentDocument || iframe.contentWindow.document;
+                    const win = iframe.contentWindow;
+
+                    // 尝试从全局变量中提取
+                    let items = [];
+                    const vars = ['qcItems', 'itemData', 'TcData', 'instrumentItems'];
+                    for (const v of vars) {
+                        if (win[v] && Array.isArray(win[v]) && win[v].length > 0) {
+                            items = win[v];
+                            break;
+                        }
+                    }
+
+                    // 尝试从 datagrid 提取
+                    if (items.length === 0) {
+                        try {
+                            const jq = win.jQuery;
+                            if (jq) {
+                                const grids = jq('.datagrid-fbody, .datagrid-body');
+                                grids.each(function() {
+                                    const rows = jq(this).find('tr');
+                                    rows.each(function() {
+                                        const cells = jq(this).find('td');
+                                        if (cells.length >= 2) {
+                                            items.push({
+                                                name: cells.eq(0).text().trim(),
+                                                code: cells.eq(1) ? cells.eq(1).text().trim() : ''
+                                            });
+                                        }
+                                    });
+                                });
+                            }
+                        } catch(e) {}
+                    }
+
+                    resolved = true;
+                    clearTimeout(timeout);
+                    iframe.remove();
+                    resolve(items);
+                } catch(e) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    iframe.remove();
+                    resolve([]);
+                }
+            };
+        });
+    }
+
+    function renderQCItemList() {
+        const listEl = document.getElementById('qc-item-list');
+        if (!_qcState.items || _qcState.items.length === 0) {
+            listEl.innerHTML = '<div class="qc-empty-msg"><span class="ico">📋</span>暂无质控项目</div>';
             return;
         }
 
-        let content, filename, mimeType;
+        const q = _qcState.searchQuery;
+        const filtered = q ? _qcState.items.filter(item => {
+            const name = (item.name || item.TCName || item.TestCodeDesc || item.CName || '').toLowerCase();
+            const mat = (item.material || item.MaterialName || '').toLowerCase();
+            const code = (item.code || item.TcCode || item.TestCode || '').toLowerCase();
+            return name.includes(q) || mat.includes(q) || code.includes(q);
+        }) : _qcState.items;
 
-        if (format === 'csv') {
-            const headers = ['仪器', '时间', '项目', '失控规则', '结果'];
-            const rows = data.map(r => [
-                r.MachineParameter || '',
-                r.TestTime || '',
-                r.TestCode || '',
-                r.QCRule || '',
-                r.Result || ''
-            ]);
-            // BOM for Excel UTF-8 compatibility
-            content = '\uFEFF' + headers.join(',') + '\n' + rows.map(r => r.map(c => '"' + c.replace(/"/g, '""') + '"').join(',')).join('\n');
-            filename = 'QC_' + today() + '.csv';
-            mimeType = 'text/csv;charset=utf-8';
-        } else {
-            content = JSON.stringify(data, null, 2);
-            filename = 'QC_' + today() + '.json';
-            mimeType = 'application/json';
+        if (filtered.length === 0) {
+            listEl.innerHTML = '<div class="qc-empty-msg"><span class="ico">🔍</span>无匹配项目</div>';
+            return;
         }
 
-        const blob = new Blob([content], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-        toast('已导出 ' + filename);
+        let h = '';
+        filtered.forEach((item, idx) => {
+            const name = item.name || item.TCName || item.TestCodeDesc || item.CName || '未知项目';
+            const mat = item.material || item.MaterialName || '';
+            const code = item.code || item.TcCode || item.TestCode || '';
+            const levels = item.levels || item.LevelCount || 1;
+            const isActive = _qcState.activeItem && (
+                (_qcState.activeItem.TcCode || _qcState.activeItem.code) === (item.TcCode || item.code)
+            );
+            h += `<div class="qc-item ${isActive ? 'active' : ''}" data-idx="${idx}" data-code="${code}" title="${name}">`;
+            h += `<div class="qi-name">${name}</div>`;
+            if (mat) h += `<div class="qi-mat">${mat}</div>`;
+            h += '</div>';
+        });
+        listEl.innerHTML = h;
+
+        listEl.querySelectorAll('.qc-item').forEach(el => {
+            el.addEventListener('click', () => {
+                const idx = parseInt(el.dataset.idx);
+                selectQCItem(filtered[idx]);
+            });
+        });
     }
 
+    function selectQCItem(item) {
+        _qcState.activeItem = item;
+        _qcState.activeLevel = 1;
+        _qcState.pendingChanges.clear();
+        updateSaveBtn();
+        renderQCItemList();
+        renderLevelBar(item);
+        loadAndRenderQCData();
+    }
 
+    function renderLevelBar(item) {
+        const bar = document.getElementById('qc-level-bar');
+        const levels = item.levels || item.LevelCount || 1;
+        if (levels <= 1) { bar.innerHTML = ''; return; }
+        let h = '';
+        for (let i = 1; i <= levels; i++) {
+            h += `<button class="qc-level-btn ${_qcState.activeLevel === i ? 'on' : ''}" data-level="${i}">L${i}</button>`;
+        }
+        bar.innerHTML = h;
+        bar.querySelectorAll('.qc-level-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                _qcState.activeLevel = parseInt(btn.dataset.level);
+                _qcState.pendingChanges.clear();
+                updateSaveBtn();
+                renderLevelBar(item);
+                loadAndRenderQCData();
+            });
+        });
+    }
+
+    async function loadAndRenderQCData() {
+        if (!_qcState.activeItem) return;
+        const item = _qcState.activeItem;
+        const chartEmpty = document.getElementById('qc-chart-empty');
+        const dataEmpty = document.getElementById('qc-data-empty');
+        if (chartEmpty) chartEmpty.style.display = 'none';
+        if (dataEmpty) dataEmpty.style.display = 'none';
+
+        // 显示加载中
+        const chartWrap = document.getElementById('qc-chart-wrap');
+        let loadingEl = chartWrap.querySelector('.qc-loading');
+        if (!loadingEl) {
+            loadingEl = document.createElement('div');
+            loadingEl.className = 'qc-loading';
+            loadingEl.textContent = '⏳ 加载质控数据...';
+            chartWrap.appendChild(loadingEl);
+        }
+
+        const params = {
+            InstrumentCode: item.InstrumentCode || item.MachineDR || _qcState.activeMachine || '',
+            MaterialCode: item.MaterialCode || item.MatDR || '',
+            TcCode: item.TcCode || item.code || item.TestCode || '',
+            Level: _qcState.activeLevel,
+            StartDate: _qcState.startDate,
+            EndDate: _qcState.endDate
+        };
+
+        dbg('[QC] 加载数据:', params);
+        const data = await _qcAPI.loadQCData(params);
+
+        if (loadingEl) loadingEl.remove();
+
+        if (!data || data.length === 0) {
+            document.getElementById('qc-chart-empty').style.display = '';
+            document.getElementById('qc-chart-empty').innerHTML = '<span class="ico">📭</span>该时间段无质控数据';
+            document.getElementById('qc-data-empty').style.display = '';
+            document.getElementById('qc-data-empty').innerHTML = '<span class="ico">📭</span>无质控数据';
+            _qcState.data = [];
+            _qcState.stats = null;
+            renderQCStatsBar();
+            return;
+        }
+
+        // 标准化数据格式
+        _qcState.data = data.map(r => ({
+            date: r.QCDate || r.Date || r.TestDate || '',
+            result: parseFloat(r.Result || r.QCResult || r.Value || 0),
+            target: parseFloat(r.Target || r.Mean || r靶值 || 0),
+            sd: parseFloat(r.SD || r.StandardDeviation || 0),
+            level: r.Level || r.QCLevel || _qcState.activeLevel,
+            id: r.RowID || r.QCID || r.ID || '',
+            rule: r.QCRule || r.Rule || '',
+            material: r.MaterialName || r.MatName || '',
+            tcName: r.TCName || r.TestCodeDesc || item.name || ''
+        }));
+
+        // 计算统计量
+        calcQCStats();
+        renderQCStatsBar();
+        renderLJChart();
+        renderQCDataTable();
+    }
+
+    function calcQCStats() {
+        const data = _qcState.data;
+        if (!data || data.length === 0) { _qcState.stats = null; return; }
+
+        const values = data.map(d => d.result).filter(v => !isNaN(v) && v !== 0);
+        if (values.length === 0) { _qcState.stats = null; return; }
+
+        const mean = values.reduce((s, v) => s + v, 0) / values.length;
+        const variance = values.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / (values.length - 1 || 1);
+        const sd = Math.sqrt(variance);
+        const cv = mean !== 0 ? (sd / mean * 100) : 0;
+
+        // 使用第一个数据点的设定靶值和标准差（如果有）
+        const firstTarget = data[0].target;
+        const firstSD = data[0].sd;
+        const useTarget = firstTarget > 0 ? firstTarget : mean;
+        const useSD = firstSD > 0 ? firstSD : sd;
+
+        _qcState.stats = {
+            target: useTarget,
+            sd: useSD,
+            cv: firstTarget > 0 && firstSD > 0 ? (firstSD / firstTarget * 100) : cv,
+            calcMean: mean,
+            calcSD: sd,
+            calcCV: cv,
+            count: values.length,
+            min: Math.min(...values),
+            max: Math.max(...values),
+            range: Math.max(...values) - Math.min(...values)
+        };
+    }
+
+    function renderQCStatsBar() {
+        const bar = document.getElementById('qc-stats-bar');
+        if (!_qcState.stats) { bar.innerHTML = ''; return; }
+        const s = _qcState.stats;
+        bar.innerHTML = `
+            <div class="stat-item"><span class="stat-label">靶值:</span> <b>${s.target.toFixed(3)}</b></div>
+            <div class="stat-item"><span class="stat-label">SD:</span> <b>${s.sd.toFixed(3)}</b></div>
+            <div class="stat-item"><span class="stat-label">CV%:</span> <b>${s.cv.toFixed(2)}%</b></div>
+            <div class="stat-item"><span class="stat-label">计算均值:</span> <b>${s.calcMean.toFixed(3)}</b></div>
+            <div class="stat-item"><span class="stat-label">计算SD:</span> <b>${s.calcSD.toFixed(3)}</b></div>
+            <div class="stat-item"><span class="stat-label">计算CV%:</span> <b>${s.calcCV.toFixed(2)}%</b></div>
+            <div class="stat-item"><span class="stat-label">数据点:</span> <b>${s.count}</b></div>
+            <div class="stat-item"><span class="stat-label">范围:</span> <b>${s.min.toFixed(2)} ~ ${s.max.toFixed(2)}</b></div>`;
+    }
+
+    // ==================== L-J 图 Canvas 渲染 ====================
+    const _qcChart = {
+        padding: { top: 40, right: 30, bottom: 50, left: 60 },
+        colors: {
+            bg: '#ffffff',
+            grid: '#f0f0f0',
+            axis: '#333333',
+            target: '#27ae60',
+            sd1: '#3498db',
+            sd2: '#e67e22',
+            sd3: '#e74c3c',
+            pointOk: '#27ae60',
+            pointWarn: '#e67e22',
+            pointLoss: '#e74c3c',
+            text: '#555555',
+            textLight: '#999999'
+        }
+    };
+
+    function renderLJChart() {
+        const canvas = document.getElementById('qc-chart-canvas');
+        if (!canvas || !_qcState.stats || !_qcState.data.length) return;
+
+        const wrap = document.getElementById('qc-chart-wrap');
+        const rect = wrap.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const w = rect.width;
+        const h = rect.height;
+
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        _qcChart.drawGrid(ctx, w, h);
+        _qcChart.drawSDLines(ctx, w, h);
+        _qcChart.drawDataPoints(ctx, w, h);
+        _qcChart.drawTitle(ctx, w);
+    }
+
+    _qcChart.drawGrid = function(ctx, w, h) {
+        const p = this.padding;
+        const cw = w - p.left - p.right;
+        const ch = h - p.top - p.bottom;
+
+        // 背景
+        ctx.fillStyle = this.colors.bg;
+        ctx.fillRect(0, 0, w, h);
+
+        // 网格线
+        ctx.strokeStyle = this.colors.grid;
+        ctx.lineWidth = 0.5;
+
+        // 水平网格线（10条）
+        for (let i = 0; i <= 10; i++) {
+            const y = p.top + (ch / 10) * i;
+            ctx.beginPath();
+            ctx.moveTo(p.left, y);
+            ctx.lineTo(p.left + cw, y);
+            ctx.stroke();
+        }
+
+        // 垂直网格线
+        const data = _qcState.data;
+        const dayCount = data.length;
+        const step = Math.max(1, Math.ceil(dayCount / 20));
+        for (let i = 0; i < dayCount; i += step) {
+            const x = p.left + (cw / (dayCount - 1 || 1)) * i;
+            ctx.beginPath();
+            ctx.moveTo(x, p.top);
+            ctx.lineTo(x, p.top + ch);
+            ctx.stroke();
+        }
+
+        // 坐标轴
+        ctx.strokeStyle = this.colors.axis;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(p.left, p.top);
+        ctx.lineTo(p.left, p.top + ch);
+        ctx.lineTo(p.left + cw, p.top + ch);
+        ctx.stroke();
+
+        // X 轴标签（日期）
+        ctx.fillStyle = this.colors.textLight;
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        for (let i = 0; i < dayCount; i += step) {
+            const x = p.left + (cw / (dayCount - 1 || 1)) * i;
+            const dateStr = data[i].date || '';
+            const label = dateStr.length >= 10 ? dateStr.substring(8, 10) : (i + 1).toString();
+            ctx.fillText(label, x, p.top + ch + 16);
+        }
+
+        // Y 轴刻度
+        const stats = _qcState.stats;
+        if (stats) {
+            const yMin = stats.target - 4 * stats.sd;
+            const yMax = stats.target + 4 * stats.sd;
+            ctx.textAlign = 'right';
+            ctx.fillStyle = this.colors.text;
+            for (let i = 0; i <= 8; i++) {
+                const val = yMin + (yMax - yMin) * (1 - i / 8);
+                const y = p.top + (ch / 8) * i;
+                ctx.fillText(val.toFixed(2), p.left - 6, y + 3);
+            }
+        }
+
+        // X 轴标题
+        ctx.fillStyle = this.colors.text;
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('日期', p.left + cw / 2, p.top + ch + 35);
+
+        // Y 轴标题
+        ctx.save();
+        ctx.translate(15, p.top + ch / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText('浓度', 0, 0);
+        ctx.restore();
+    };
+
+    _qcChart.drawSDLines = function(ctx, w, h) {
+        const p = this.padding;
+        const cw = w - p.left - p.right;
+        const ch = h - p.top - p.bottom;
+        const stats = _qcState.stats;
+        if (!stats || stats.sd === 0) return;
+
+        const yMin = stats.target - 4 * stats.sd;
+        const yMax = stats.target + 4 * stats.sd;
+        const range = yMax - yMin;
+
+        const yScale = (val) => p.top + ch * (1 - (val - yMin) / range);
+
+        // 绘制 SD 区域背景
+        // ±2SD 区域（浅黄色警告区）
+        ctx.fillStyle = 'rgba(241, 196, 15, 0.06)';
+        ctx.fillRect(p.left, yScale(stats.target + 2 * stats.sd), cw, yScale(stats.target - 2 * stats.sd) - yScale(stats.target + 2 * stats.sd));
+
+        // ±1SD 区域（浅绿色正常区）
+        ctx.fillStyle = 'rgba(46, 204, 113, 0.08)';
+        ctx.fillRect(p.left, yScale(stats.target + stats.sd), cw, yScale(stats.target - stats.sd) - yScale(stats.target + stats.sd));
+
+        const drawLine = (val, color, dash, label) => {
+            const y = yScale(val);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = val === stats.target ? 2 : 1;
+            ctx.setLineDash(dash);
+            ctx.beginPath();
+            ctx.moveTo(p.left, y);
+            ctx.lineTo(p.left + cw, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 标签
+            ctx.fillStyle = color;
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillText(label, p.left + cw + 28, y + 3);
+        };
+
+        drawLine(stats.target + 3 * stats.sd, this.colors.sd3, [6, 3], '+3SD');
+        drawLine(stats.target + 2 * stats.sd, this.colors.sd2, [6, 3], '+2SD');
+        drawLine(stats.target + stats.sd, this.colors.sd1, [4, 4], '+1SD');
+        drawLine(stats.target, this.colors.target, [], '靶值');
+        drawLine(stats.target - stats.sd, this.colors.sd1, [4, 4], '-1SD');
+        drawLine(stats.target - 2 * stats.sd, this.colors.sd2, [6, 3], '-2SD');
+        drawLine(stats.target - 3 * stats.sd, this.colors.sd3, [6, 3], '-3SD');
+    };
+
+    _qcChart.drawDataPoints = function(ctx, w, h) {
+        const p = this.padding;
+        const cw = w - p.left - p.right;
+        const ch = h - p.top - p.bottom;
+        const stats = _qcState.stats;
+        const data = _qcState.data;
+        if (!stats || !data.length || stats.sd === 0) return;
+
+        const yMin = stats.target - 4 * stats.sd;
+        const yMax = stats.target + 4 * stats.sd;
+        const range = yMax - yMin;
+
+        const yScale = (val) => p.top + ch * (1 - (val - yMin) / range);
+        const xScale = (i) => p.left + (cw / (data.length - 1 || 1)) * i;
+
+        // 连线
+        ctx.strokeStyle = 'rgba(52, 152, 219, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        data.forEach((d, i) => {
+            const x = xScale(i);
+            const y = yScale(d.result);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        // 数据点
+        data.forEach((d, i) => {
+            const x = xScale(i);
+            const y = yScale(d.result);
+            const deviation = Math.abs(d.result - stats.target) / stats.sd;
+
+            let color = this.colors.pointOk;
+            let radius = 4;
+            if (deviation >= 3) { color = this.colors.pointLoss; radius = 6; }
+            else if (deviation >= 2) { color = this.colors.pointWarn; radius = 5; }
+            else if (deviation >= 1) { radius = 4; }
+
+            // 检查 pending changes
+            const key = d.date + '|' + d.id;
+            if (_qcState.pendingChanges.has(key)) {
+                color = '#9b59b6'; // 紫色表示已修改
+                radius = 6;
+            }
+
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 白色边框
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+        });
+
+        // 存储坐标映射用于悬停检测
+        this._pointCoords = data.map((d, i) => ({
+            x: xScale(i),
+            y: yScale(d.result),
+            data: d,
+            index: i
+        }));
+    };
+
+    _qcChart.drawTitle = function(ctx, w) {
+        if (!_qcState.activeItem) return;
+        const item = _qcState.activeItem;
+        const name = item.name || item.TCName || item.TestCodeDesc || '';
+        const mat = item.material || item.MaterialName || '';
+        const title = name + (mat ? ' — ' + mat : '') + '  ' + _qcState.startDate + ' 至 ' + _qcState.endDate;
+
+        ctx.fillStyle = '#2c3e50';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(title, w / 2, 20);
+    };
+
+    function handleChartHover(e) {
+        const canvas = document.getElementById('qc-chart-canvas');
+        if (!canvas || !_qcChart._pointCoords) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        const threshold = 15;
+        let closest = null;
+        let minDist = Infinity;
+
+        for (const pt of _qcChart._pointCoords) {
+            const dist = Math.sqrt(Math.pow(mx - pt.x, 2) + Math.pow(my - pt.y, 2));
+            if (dist < threshold && dist < minDist) {
+                minDist = dist;
+                closest = pt;
+            }
+        }
+
+        const tt = document.getElementById('qc-chart-tooltip');
+        if (!closest) {
+            _qcState.hoveredPoint = null;
+            tt.style.display = 'none';
+            return;
+        }
+
+        _qcState.hoveredPoint = closest;
+        const d = closest.data;
+        const stats = _qcState.stats;
+        const deviation = stats ? ((d.result - stats.target) / stats.sd).toFixed(2) : '--';
+        const statusText = Math.abs(parseFloat(deviation)) >= 3 ? '🔴 失控' :
+                          Math.abs(parseFloat(deviation)) >= 2 ? '🟡 警告' :
+                          Math.abs(parseFloat(deviation)) >= 1 ? '🔵 关注' : '🟢 正常';
+
+        tt.innerHTML = `
+            <div class="tt-title">${d.date || '未知日期'}</div>
+            <div class="tt-row"><span>结果:</span><b>${d.result.toFixed(3)}</b></div>
+            <div class="tt-row"><span>靶值:</span><span>${stats ? stats.target.toFixed(3) : '--'}</span></div>
+            <div class="tt-row"><span>偏差(SD):</span><span>${deviation}</span></div>
+            <div class="tt-row"><span>状态:</span><span>${statusText}</span></div>
+            ${d.rule ? '<div class="tt-row"><span>规则:</span><span>' + d.rule + '</span></div>' : ''}
+            ${_qcState.pendingChanges.has(d.date + '|' + d.id) ? '<div class="tt-row"><span style="color:#9b59b6">✏️ 已修改</span></div>' : ''}`;
+
+        // 定位
+        let tx = closest.x + 15;
+        let ty = closest.y - 10;
+        const wrapRect = document.getElementById('qc-chart-wrap').getBoundingClientRect();
+        if (tx + 180 > wrapRect.width) tx = closest.x - 185;
+        if (ty < 0) ty = 10;
+        tt.style.left = tx + 'px';
+        tt.style.top = ty + 'px';
+        tt.style.display = 'block';
+    }
+
+    // ==================== 可编辑数据表 ====================
+    function renderQCDataTable() {
+        const wrap = document.getElementById('qc-data-wrap');
+        const data = _qcState.data;
+        const stats = _qcState.stats;
+
+        if (!data || data.length === 0) {
+            wrap.innerHTML = '<div class="qc-empty-msg" id="qc-data-empty"><span class="ico">📋</span>无质控数据</div>';
+            return;
+        }
+
+        let h = '<table><thead><tr>';
+        h += '<th>日期</th><th>结果</th><th>靶值</th><th>SD</th><th>偏差(SD)</th><th>CV%</th><th>状态</th><th>质控规则</th>';
+        h += '</tr></thead><tbody>';
+
+        data.forEach((d, i) => {
+            const deviation = stats && stats.sd > 0 ? (d.result - stats.target) / stats.sd : 0;
+            const absDev = Math.abs(deviation);
+            let statusCls = 'status-ok';
+            let statusText = '正常';
+            if (absDev >= 3) { statusCls = 'status-loss'; statusText = '失控'; }
+            else if (absDev >= 2) { statusCls = 'status-warn'; statusText = '警告'; }
+            else if (absDev >= 1) { statusCls = 'status-warn'; statusText = '关注'; }
+
+            const key = d.date + '|' + d.id;
+            const isModified = _qcState.pendingChanges.has(key);
+
+            h += `<tr data-idx="${i}" ${isModified ? 'style="background:#f3e5f5"' : ''}>`;
+            h += `<td>${d.date || ''}</td>`;
+            h += `<td class="qc-editable" data-idx="${i}" data-field="result" title="双击编辑">${isModified ? '✏️ ' : ''}${d.result.toFixed(3)}</td>`;
+            h += `<td>${stats ? stats.target.toFixed(3) : '--'}</td>`;
+            h += `<td>${stats ? stats.sd.toFixed(3) : '--'}</td>`;
+            h += `<td>${deviation.toFixed(2)}</td>`;
+            h += `<td>${stats && stats.target ? (d.result / stats.target * 100 - 100).toFixed(2) : '--'}%</td>`;
+            h += `<td class="${statusCls}">${statusText}</td>`;
+            h += `<td>${d.rule || ''}</td>`;
+            h += '</tr>';
+        });
+
+        h += '</tbody></table>';
+        wrap.innerHTML = h;
+
+        // 双击编辑
+        wrap.querySelectorAll('.qc-editable').forEach(td => {
+            td.addEventListener('dblclick', () => {
+                const idx = parseInt(td.dataset.idx);
+                const field = td.dataset.field;
+                const currentVal = _qcState.data[idx][field];
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = '0.001';
+                input.value = currentVal;
+                input.style.cssText = 'width:80px;padding:2px 4px;border:1px solid #3498db;border-radius:3px;font-size:12px';
+                td.textContent = '';
+                td.appendChild(input);
+                input.focus();
+                input.select();
+
+                const commit = () => {
+                    const newVal = parseFloat(input.value);
+                    if (!isNaN(newVal) && newVal !== currentVal) {
+                        const key = _qcState.data[idx].date + '|' + _qcState.data[idx].id;
+                        _qcState.pendingChanges.set(key, {
+                            ..._qcState.data[idx],
+                            result: newVal,
+                            originalResult: currentVal
+                        });
+                        _qcState.data[idx].result = newVal;
+                        updateSaveBtn();
+                    }
+                    calcQCStats();
+                    renderQCStatsBar();
+                    renderLJChart();
+                    renderQCDataTable();
+                };
+
+                input.addEventListener('blur', commit);
+                input.addEventListener('keydown', (ke) => {
+                    if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
+                    if (ke.key === 'Escape') { input.value = currentVal; input.blur(); }
+                });
+            });
+        });
+    }
+
+    function updateSaveBtn() {
+        const btn = document.getElementById('qc-btn-save');
+        if (btn) {
+            const count = _qcState.pendingChanges.size;
+            if (count > 0) {
+                btn.style.display = '';
+                btn.textContent = '💾 保存修改 (' + count + ')';
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+    }
+
+    async function saveQCPendingChanges() {
+        if (_qcState.pendingChanges.size === 0) return;
+        const changes = Array.from(_qcState.pendingChanges.values());
+        let success = 0;
+        let fail = 0;
+
+        for (const chg of changes) {
+            const params = {
+                InstrumentCode: _qcState.activeItem?.InstrumentCode || '',
+                MaterialCode: _qcState.activeItem?.MaterialCode || '',
+                TcCode: chg.id || _qcState.activeItem?.TcCode || '',
+                Level: _qcState.activeLevel,
+                Date: chg.date,
+                Result: chg.result.toString(),
+                QCID: chg.id || ''
+            };
+            const result = await _qcAPI.saveQCData(params);
+            if (result) success++; else fail++;
+        }
+
+        _qcState.pendingChanges.clear();
+        updateSaveBtn();
+        renderQCDataTable();
+        renderLJChart();
+
+        if (fail === 0) {
+            toast('✅ 成功保存 ' + success + ' 条质控结果');
+        } else {
+            toast('⚠️ 保存完成：' + success + ' 成功，' + fail + ' 失败', 'w');
+        }
+    }
+
+    function openQCFallbackMode() {
+        // 降级模式：嵌入原始质控页面
+        if (!_qcPanelEl) createQCPanel();
+        const content = document.querySelector('.qc-content');
+        if (!content) return;
+
+        const wgDR = document.getElementById('qc-wg-sel').value;
+        const machDR = _qcState.activeMachine;
+        const url = BASE + '/qc/form/frmQCDrawLJ.aspx?MenuDR=159&NotIndependent=1';
+
+        content.innerHTML = `<iframe class="qc-iframe-fallback" src="${url}" id="qc-iframe"></iframe>`;
+    }
+
+    function refreshQCPanel() {
+        if (_qcState.activeItem) {
+            loadAndRenderQCData();
+        } else if (_qcState.activeMachine) {
+            loadQCItemTree();
+        }
+    }
+
+    // ============================================================
     // ============================================================
     //  模块 C2：报告处理页增强工具栏（审核流程优化核心）
     // ============================================================
@@ -5292,7 +6243,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v4.0.0');
+        dbg('iMedicalLIS 增强助手 v7.0.0');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
@@ -5320,6 +6271,7 @@ function fillNativeLoginForm(creds, lastWG) {
         createWS();
         checkNavigateTarget();
         initReportEnhance();
+        initQCPanel();
 
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
     }
