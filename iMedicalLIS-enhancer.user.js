@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.27.5
+// @version      6.27.6
 // @description  报告审核增强 — 安全批量审核 + 快捷键快速审核 + 结果分类 + 历史结果展示（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -2517,28 +2517,20 @@
                     } catch(e) {}
                 }
 
-                // 患者信息填充到顶部信息栏
-                const patientParts = [];
-                if (info.Sex) patientParts.push(info.Sex);
-                if (info.Age) patientParts.push(info.Age + (info.AgeUnit || ''));
-                if (info.Location) patientParts.push(info.Location);
-                if (info.Ward) patientParts.push(info.Ward);
-                if (info.BedNo) patientParts.push('床' + info.BedNo);
-                if (info.Specimen) patientParts.push(info.Specimen);
-                if (info.Doctor) patientParts.push(info.Doctor);
-                if (timeDelta) patientParts.push('采→收 ' + timeDelta);
-
-                // 更新深色头部的副标题（患者信息集中在头部显示）（加入患者摘要信息）
-                const subEl = document.getElementById('lis-detail-subtitle');
-                if (subEl) {
-                    const subParts = [];
-                    if (info.Age) subParts.push(info.Age + (info.AgeUnit || ''));
-                    if (info.Location) subParts.push(info.Location);
-                    if (info.Ward) subParts.push(info.Ward);
-                    if (info.BedNo) subParts.push('床' + info.BedNo);
-                    if (info.Specimen) subParts.push(info.Specimen);
-                    if (info.Diagnose) subParts.push(info.Diagnose);
-                    subEl.textContent = subParts.join(' · ');
+                // 更新深色头部患者详情行
+                const extraEl = document.getElementById('lis-detail-extra');
+                if (extraEl) {
+                    const parts = [];
+                    if (info.Sex) parts.push(info.Sex);
+                    if (info.Age) parts.push(info.Age + (info.AgeUnit || ''));
+                    if (info.Location) parts.push(info.Location);
+                    if (info.Ward) parts.push(info.Ward);
+                    if (info.BedNo) parts.push('床' + info.BedNo);
+                    if (info.Specimen) parts.push(info.Specimen);
+                    if (info.Doctor) parts.push(info.Doctor);
+                    let extraText = parts.join(' · ');
+                    if (info.Diagnose) extraText += ' · 🏥 ' + info.Diagnose;
+                    extraEl.textContent = extraText;
                 }
 
                 // 异常警告（内联）
