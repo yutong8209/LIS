@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.0.0
+// @version      6.28.2
 // @description  报告审核增强 + 质控图面板 — 批量审核 + L-J质控图 + 质控数据编辑（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
