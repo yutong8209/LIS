@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.26.4
+// @version      6.27.0
 // @description  报告审核增强 — 安全批量审核 + 快捷键快速审核 + 结果分类 + 历史结果展示（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1145,6 +1145,14 @@
                         const cached = wsClassifiedCache[r.ReportDR];
                         return cached && cached.status === 'NORMAL';
                     }).map(r => ({ status: 'NORMAL', items: [], row: r, reportDR: r.ReportDR }));
+                    if (normalData.length === 0) {
+                        if (wsClassifying) {
+                            showToast('标本正在分类中，请稍候再试', 'warning');
+                        } else {
+                            showToast('没有可审核的正常标本', 'warning');
+                        }
+                        return;
+                    }
                     dbg('一键批审:', normalData.length, '个标本');
                     confirmAndBatchAudit(normalData);
                 } catch(e) {
@@ -3275,6 +3283,22 @@ function fillNativeLoginForm(creds, lastWG) {
     // --- 状态 ---
     let _toolbarVisible = false;
     let _auditInProgress = false;
+    let _auditLockTs = 0;
+    const AUDIT_LOCK_TIMEOUT = 60000; // 60秒自动释放卡死的锁
+    function acquireAuditLock(tag) {
+        if (_auditInProgress && (Date.now() - _auditLockTs > AUDIT_LOCK_TIMEOUT)) {
+            dbg('审核锁超时自动释放 (held by', tag, ')');
+            _auditInProgress = false;
+        }
+        if (_auditInProgress) return false;
+        _auditInProgress = true;
+        _auditLockTs = Date.now();
+        return true;
+    }
+    function releaseAuditLock() {
+        _auditInProgress = false;
+        _auditLockTs = 0;
+    }
 
     // --- 检测是否在报告处理页面 ---
     function isReportPageActive() {
@@ -3739,11 +3763,18 @@ function fillNativeLoginForm(creds, lastWG) {
         // 点击按钮
         jq(btn).click();
 
-        // 等待一下看是否弹出对话框
-        await sleep(400);
+        // 轮询等待对话框出现（最多 2 秒，每 200ms 检查一次）
+        let statusText = '';
+        for (let poll = 0; poll < 10; poll++) {
+            await sleep(200);
+            statusText = getAuditStatusText(iframeWin);
+            if (statusText && statusText.indexOf('未登录') !== -1) break;
+            // 检查是否有 EasyUI 弹窗出现
+            const hasDialog = doc.querySelector('.window:not([style*="display: none"]), .messager-window:not([style*="display: none"])');
+            if (hasDialog) break;
+        }
 
         // 检查是否有"审核用户未登录"提示
-        const statusText = getAuditStatusText(iframeWin);
         if (statusText && statusText.indexOf('未登录') !== -1) {
             dbg('检测到审核用户未登录，尝试自动登录...');
             showToast('审核用户未登录，正在自动登录...', 'warning');
@@ -3895,34 +3926,15 @@ function fillNativeLoginForm(creds, lastWG) {
                 await sleep(500);
             }
 
-            // 尝试选中第一行
-            const dg = jq('#dgWorkList');
-            if (dg.length) {
-                try {
-                    const rows = dg.datagrid('getRows');
-                    if (rows && rows.length > 0) dg.datagrid('selectRow', 0);
-                } catch(e) {}
-            }
-
-            // 点击审核按钺触发CA窗口
-            const auditBtn = iframeWin.document.getElementById('btn_ReportAuth') || document.getElementById('btn_ReportAuth');
-            if (!auditBtn) { if (caBtn) { caBtn.textContent = '🔑 CA认证'; caBtn.style.background = '#9b59b6'; } return false; }
-
-            jq(auditBtn).click();
-            await sleep(1000);
-
-            // 检查CA窗口
+            // 检查CA窗口是否已经打开（不点击审核按钮，避免副作用）
             let caWin = jq('#win_CAUserLogin');
-            let waited = 0;
-            while ((!caWin.length || !caWin.is(':visible')) && waited < 3000) {
-                await sleep(300); waited += 300; caWin = jq('#win_CAUserLogin');
-            }
-
             let result = false;
             if (caWin.length && caWin.is(':visible')) {
+                // CA 窗口已打开，直接处理登录
                 result = await handleCALogin(iframeWin);
             } else {
-                result = true; // 没有CA窗口 = 已认证
+                // 没有CA窗口 = 已认证（或需要在审核时才弹出）
+                result = true;
             }
 
             if (result) {
@@ -4435,22 +4447,23 @@ function fillNativeLoginForm(creds, lastWG) {
 
     // --- 快速审核当前标本 ---
     async function quickAuditCurrent() {
-        if (_auditInProgress) return;
+        if (!acquireAuditLock('quickAudit')) return;
 
         const selected = getNativeSelectedRow();
         if (!selected) {
+            releaseAuditLock();
             showToast('请先选择一个标本', 'warning');
             return;
         }
 
         const pwd = loadPwd();
         if (!pwd) {
+            releaseAuditLock();
             showToast('请先设置审核密码（点击 🔐 按钮）', 'warning');
             openPwdDlg();
             return;
         }
 
-        _auditInProgress = true;
         const btn = document.getElementById('lis-tb-quick');
         if (btn) { btn.disabled = true; btn.textContent = '⏳ 审核中...'; }
 
@@ -4487,7 +4500,7 @@ function fillNativeLoginForm(creds, lastWG) {
             dbg('快速审核失败:', e);
             showToast('审核失败: ' + e.message, 'error');
         } finally {
-            _auditInProgress = false;
+            releaseAuditLock();
             if (btn) { btn.disabled = false; btn.textContent = '⚡ 审核'; }
         }
     }
@@ -4550,7 +4563,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
     // --- 批量审核对话框 ---
     async function showBatchAuditDialog() {
-        if (_auditInProgress) return;
+        if (!acquireAuditLock('showBatchDialog')) return;
 
         const pwd = loadPwd();
         if (!pwd) {
@@ -4580,6 +4593,8 @@ function fillNativeLoginForm(creds, lastWG) {
         const abnormalSpecimens = results.filter(r => r.status === 'ABNORMAL');
         const uncertainSpecimens = results.filter(r => r.status === 'UNCERTAIN');
 
+        // 释放锁（对话框会自己管理审核锁）
+        releaseAuditLock();
         // 创建确认对话框
         showAuditConfirmDialog(normalSpecimens, abnormalSpecimens, uncertainSpecimens);
     }
@@ -4737,10 +4752,8 @@ function fillNativeLoginForm(creds, lastWG) {
     // --- 执行批量审核（使用原生审核按钮，安全）---
     async function executeBatchAudit(normalSpecimens) {
         if (normalSpecimens.length === 0) return;
+        if (!acquireAuditLock('batchAudit')) { showToast('正在审核中，请稍候', 'warning'); return; }
         await ensureCAAuthenticated();
-        if (_auditInProgress) { showToast('正在审核中，请稍候', 'warning'); return; }
-
-        _auditInProgress = true;
 
         // 显示进度条
         const progress = document.createElement('div');
@@ -4761,7 +4774,7 @@ function fillNativeLoginForm(creds, lastWG) {
             }
             if (!iframeWin) {
                 showToast('❌ 未找到报告处理页面', 'error');
-                _auditInProgress = false;
+                releaseAuditLock();
                 progress.remove();
                 return;
             }
@@ -4784,7 +4797,7 @@ function fillNativeLoginForm(creds, lastWG) {
             if (!jq || !me) {
                 showToast('报告页面未就绪，请稍后重试', 'error');
                 dbg('批审失败: jq=', !!jq, 'me=', !!me);
-                _auditInProgress = false;
+                releaseAuditLock();
                 progress.remove();
                 return;
             }
@@ -4931,29 +4944,34 @@ function fillNativeLoginForm(creds, lastWG) {
                         // 等待行选中后表单加载
                         await new Promise(r => setTimeout(r, 300));
 
-                        // 点击原生审核按钮（自动处理 CA、不完整提示等）
-                        const auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth');
+                        // 点击原生审核按钮（自动处理 CA、不完整提示等）— 带 10 秒超时
+                        const auditResult = await Promise.race([
+                            clickNativeAuditButton(iframeWin, 'btn_ReportAuth'),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('审核超时(10s)')), 10000))
+                        ]);
                         if (auditResult === 'incomplete') {
                             dbg('批审跳过: 结果不完整', row.PatName);
                             skipCount++;
                         } else if (auditResult) {
                             successCount++;
                             dbg('批审成功:', row.PatName, 'ReportDR:', reportDR);
-                            // 审核成功后等待 datagrid 刷新
-                            await new Promise(r => setTimeout(r, 300));
-                            // 重新获取 iframe 引用（可能已刷新）
-                            iframeWin = getReportIframeWin();
-                            if (iframeWin) {
-                                jq = iframeWin.jQuery || iframeWin.$;
-                                me = iframeWin.me;
-                            }
                         } else {
                             failCount++;
                             dbg('批审失败:', row.PatName);
                         }
                     } catch(e) {
                         failCount++;
-                        dbg('批量审核异常:', row.PatName, e);
+                        dbg('批审异常:', row.PatName, e.message);
+                    } finally {
+                        // 无论成功失败，都刷新 iframe 引用
+                        await new Promise(r => setTimeout(r, 300));
+                        try {
+                            iframeWin = getReportIframeWin();
+                            if (iframeWin) {
+                                jq = iframeWin.jQuery || iframeWin.$;
+                                me = iframeWin.me;
+                            }
+                        } catch(e) {}
                     }
                 }
             }
@@ -4980,7 +4998,7 @@ function fillNativeLoginForm(creds, lastWG) {
             dbg('批量审核失败:', e);
             showToast('审核失败: ' + e.message, 'error');
         } finally {
-            _auditInProgress = false;
+            releaseAuditLock();
             // 确保进度条被清理（如果 try 中途 return）
             setTimeout(() => {
                 const p = document.getElementById('lis-audit-progress');
