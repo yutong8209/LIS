@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.27.1
+// @version      6.27.2
 // @description  报告审核增强 — 安全批量审核 + 快捷键快速审核 + 结果分类 + 历史结果展示（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1856,7 +1856,7 @@
         const info = document.getElementById('lis-detail-info');
         if (info) {
             info.innerHTML = `
-                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;padding:2px 0">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;padding:2px 0">
                     <span style="font-weight:700;font-size:14px;color:#2c3e50">${specimen.PatName || '-'}</span>
                     <span style="color:#7f8c8d">${getStatusText(specimen.Status || specimen.ReportStatus)}</span>
                     <span style="color:#95a5a6">|</span>
@@ -1868,6 +1868,7 @@
                     <span>仪器: ${specimen._mn || '-'}</span>
                     <span>${specimen.AcceptDT || ''}</span>
                 </div>
+                <div id="lis-detail-patient" style="font-size:11px;color:#555;padding-top:2px;line-height:1.6"></div>
             `;
         }
 
@@ -2523,23 +2524,24 @@
                     } catch(e) {}
                 }
 
-                // 患者基本信息一行展示
-                const parts = [];
-                if (info.Sex) parts.push(info.Sex);
-                if (info.Age) parts.push(info.Age + (info.AgeUnit || ''));
-                if (info.Location) parts.push(info.Location);
-                if (info.Ward) parts.push(info.Ward);
-                if (info.BedNo) parts.push('床' + info.BedNo);
-                if (info.Specimen) parts.push(info.Specimen);
-                if (info.Doctor) parts.push(info.Doctor);
-                if (timeDelta) parts.push('采→收 ' + timeDelta);
+                // 患者信息填充到顶部信息栏
+                const patientParts = [];
+                if (info.Sex) patientParts.push(info.Sex);
+                if (info.Age) patientParts.push(info.Age + (info.AgeUnit || ''));
+                if (info.Location) patientParts.push(info.Location);
+                if (info.Ward) patientParts.push(info.Ward);
+                if (info.BedNo) patientParts.push('床' + info.BedNo);
+                if (info.Specimen) patientParts.push(info.Specimen);
+                if (info.Doctor) patientParts.push(info.Doctor);
+                if (timeDelta) patientParts.push('采→收 ' + timeDelta);
 
-                html += '<div style="margin-top:12px;padding:8px 10px;background:#f8f9fa;border-radius:6px;font-size:11px;color:#555;line-height:1.8">';
-                html += '<span style="font-weight:600;color:#333">📋 ' + (info.PatName || '') + '</span> ';
-                html += parts.join(' · ');
-                if (info.Diagnose) html += '<br><span style="color:#e65100">🏥 ' + info.Diagnose + '</span>';
-                if (info.Remark) html += '<br><span style="color:#666">📝 ' + info.Remark + '</span>';
-                html += '</div>';
+                const patientEl = document.getElementById('lis-detail-patient');
+                if (patientEl) {
+                    let patientHTML = patientParts.join(' · ');
+                    if (info.Diagnose) patientHTML += '<br><span style="color:#e65100">🏥 ' + info.Diagnose + '</span>';
+                    if (info.Remark) patientHTML += '<span style="color:#666;margin-left:8px">📝 ' + info.Remark + '</span>';
+                    patientEl.innerHTML = patientHTML;
+                }
 
                 // 异常警告（内联）
                 if (critItems > 0) {
