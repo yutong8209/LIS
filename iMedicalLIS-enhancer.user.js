@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.27.3
+// @version      6.27.4
 // @description  报告审核增强 — 安全批量审核 + 快捷键快速审核 + 结果分类 + 历史结果展示（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1057,7 +1057,7 @@
         filtered.forEach(r => {
             const status = String(r.Status || r.ReportStatus || '');
             // 待排样：Status = '0'
-            if (status === '0') pendingCount++;
+            if (status === '0') { pendingCount++; return; } // 待排样单独分类
             if (status === '3' || status === '4') return; // 已审核的不算
             const complete = String(r.IsComplete || '');
             if (complete !== '1') { incompleteCount++; return; }
@@ -1867,7 +1867,7 @@
                     <span style="color:#95a5a6">|</span>
                     <span>${specimen.AcceptDT || ''}</span>
                 </div>
-                <div id="lis-detail-patient" style="font-size:11px;color:#555;padding-top:2px;line-height:1.6"></div>
+                <div style="font-size:11px;color:#666;padding-top:1px"></div>
             `;
         }
 
@@ -2534,15 +2534,7 @@
                 if (info.Doctor) patientParts.push(info.Doctor);
                 if (timeDelta) patientParts.push('采→收 ' + timeDelta);
 
-                const patientEl = document.getElementById('lis-detail-patient');
-                if (patientEl) {
-                    let patientHTML = patientParts.join(' · ');
-                    if (info.Diagnose) patientHTML += '<br><span style="color:#e65100">🏥 ' + info.Diagnose + '</span>';
-                    if (info.Remark) patientHTML += '<span style="color:#666;margin-left:8px">📝 ' + info.Remark + '</span>';
-                    patientEl.innerHTML = patientHTML;
-                }
-
-                // 更新深色头部的副标题（加入患者摘要信息）
+                // 更新深色头部的副标题（患者信息集中在头部显示）（加入患者摘要信息）
                 const subEl = document.getElementById('lis-detail-subtitle');
                 if (subEl) {
                     const subParts = [];
