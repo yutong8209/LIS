@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.28.2
+// @version      6.28.3
 // @description  报告审核增强 + 质控图面板 — 批量审核 + L-J质控图 + 质控数据编辑（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -804,33 +804,49 @@
         const allData = [];
         const allMachines = [];
 
-        for (const w of targetWGs) {
+        // 并行加载所有工作组
+        const wgResults = await Promise.all(targetWGs.map(async (w) => {
             let machines;
             try {
                 machines = await loadMachines(w.dr);
             } catch(e) { machines = []; }
 
             const ss = buildSS(w.dr);
-            for (const m of machines) {
-                if (!m.RowID) continue;
+            const wgData = [];
+            const wgMachines = [];
+
+            // 并行加载该工作组下所有仪器
+            const machineResults = await Promise.all(machines.filter(m => m.RowID).map(async (m) => {
+                const result = { rows: [], pending: [], machine: m };
                 try {
-                    const rows = await loadWL(m.RowID, ss);
-                    rows.forEach(r => {
-                        r._wg = w.dr; r._wgn = w.name; r._wgc = w.color; r._wgi = w.icon;
-                        r._mn = m.CName || m.Name || m.RowID; r._mdr = m.RowID;
-                    });
-                    allData.push(...rows);
-                    allMachines.push({ ...m, _wg: w.dr, _wgn: w.name, _wgc: w.color, _wgi: w.icon });
+                    result.rows = await loadWL(m.RowID, ss);
                     try {
-                        const pendingRows = await loadPendingForMachine(m.RowID, ss);
-                        pendingRows.forEach(r => {
-                            r._wg = w.dr; r._wgn = w.name; r._wgc = w.color; r._wgi = w.icon;
-                            r._mn = m.CName || m.Name || m.RowID; r._mdr = m.RowID;
-                        });
-                        allData.push(...pendingRows);
+                        result.pending = await loadPendingForMachine(m.RowID, ss);
                     } catch(e) {}
                 } catch(e) {}
+                return result;
+            }));
+
+            for (const mr of machineResults) {
+                const m = mr.machine;
+                mr.rows.forEach(r => {
+                    r._wg = w.dr; r._wgn = w.name; r._wgc = w.color; r._wgi = w.icon;
+                    r._mn = m.CName || m.Name || m.RowID; r._mdr = m.RowID;
+                });
+                mr.pending.forEach(r => {
+                    r._wg = w.dr; r._wgn = w.name; r._wgc = w.color; r._wgi = w.icon;
+                    r._mn = m.CName || m.Name || m.RowID; r._mdr = m.RowID;
+                });
+                wgData.push(...mr.rows, ...mr.pending);
+                wgMachines.push({ ...m, _wg: w.dr, _wgn: w.name, _wgc: w.color, _wgi: w.icon });
             }
+
+            return { data: wgData, machines: wgMachines };
+        }));
+
+        for (const r of wgResults) {
+            allData.push(...r.data);
+            allMachines.push(...r.machines);
         }
 
         wsData = allData;
@@ -1168,6 +1184,7 @@
 
         // 工作组标签事件
         tabs.querySelectorAll('.ws-wg-tab').forEach(b => b.addEventListener('click', () => {
+            invalidateCaches();
             wsActiveWG = b.dataset.wg;
             wsActiveMachine = '';
             wsAbnormalIndex = -1;
@@ -1179,6 +1196,7 @@
 
         // 仪器标签事件
         tabs.querySelectorAll('.ws-mach-tab').forEach(b => b.addEventListener('click', () => {
+            invalidateCaches();
             wsActiveMachine = b.dataset.m;
             wsAbnormalIndex = -1;
             wsChecked.clear();
