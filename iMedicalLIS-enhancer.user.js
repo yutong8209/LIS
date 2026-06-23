@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.6.3
+// @version      7.6.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -147,42 +147,43 @@
 #lis-qbar .qb-x:hover{opacity:1;background:rgba(255,255,255,.1)}
 
 /* --- 全屏工作台 --- */
-#lis-ws{position:fixed!important;inset:0!important;z-index:100000!important;background:rgba(0,0,0,.55);/* backdrop-filter:blur(3px) removed for perf */;display:none}
+#lis-ws{position:fixed!important;inset:0!important;z-index:100000!important;background:#eef2f6;display:none;color:#1f2933;font-family:'Microsoft YaHei','Segoe UI',sans-serif}
 #lis-ws.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
-#lis-ws-hd{background:#faf6ef;padding:8px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0!important;border-bottom:1px solid #e8ecf1;min-height:0}
-#lis-ws-hd h3{margin:0;font-size:14px;white-space:nowrap;color:#2c3e50;font-weight:700}
-#lis-ws-hd .ws-tabs{display:flex;gap:4px}
-#lis-ws-hd .ws-tab{padding:4px 14px;border-radius:4px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#fff;cursor:pointer;font-size:12px;font-weight:600;transition:.2s}
-#lis-ws-hd .ws-tab.on{background:rgba(255,255,255,.2);border-color:#fff}
-#lis-ws-hd .ws-filt{display:flex;gap:4px;flex-wrap:wrap}
-#lis-ws-hd .ws-fb{padding:3px 10px;border-radius:3px;border:1px solid rgba(255,255,255,.3);background:transparent;color:#fff;cursor:pointer;font-size:11px;transition:.2s}
-#lis-ws-hd .ws-fb.on{background:#fdf9f3;color:#2c3e50}
-#lis-ws-hd .ws-search{padding:5px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;width:160px;outline:none;transition:.2s}
-#lis-ws-hd .ws-acts{display:flex;gap:4px;margin-left:auto}
-#lis-ws-hd .ws-acts button{padding:4px 10px;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;transition:.2s;opacity:.85}
+#lis-ws-hd{background:#fff;padding:8px 14px;display:flex;align-items:center;gap:12px;flex-shrink:0!important;border-bottom:1px solid #d7dee8;box-shadow:0 1px 0 rgba(31,41,51,.04)}
+#lis-ws-hd .ws-title{display:flex;align-items:center;gap:8px;min-width:128px}
+#lis-ws-hd .ws-title-dot{width:9px;height:24px;border-radius:2px;background:#168276;display:inline-block}
+#lis-ws-hd h3{margin:0;font-size:15px;line-height:1;color:#17212b;font-weight:700;white-space:nowrap;letter-spacing:0}
+#lis-ws-hd .ws-search-wrap{position:relative;flex:0 1 360px;min-width:220px}
+#lis-ws-hd .ws-search-wrap::before{content:'⌕';position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#6b7785;font-size:14px}
+#lis-ws-hd .ws-search{width:100%;box-sizing:border-box;padding:7px 10px 7px 30px;border:1px solid #cbd5df;border-radius:6px;font-size:12px;outline:none;background:#f9fbfd;color:#1f2933;transition:border-color .15s,background .15s}
+#lis-ws-hd .ws-search:focus{background:#fff;border-color:#168276;box-shadow:0 0 0 2px rgba(22,130,118,.12)}
+#lis-ws-hd .ws-acts{display:flex;gap:6px;margin-left:auto;align-items:center}
+#lis-ws-hd .ws-icon-btn{width:30px;height:30px;border:1px solid #cbd5df;border-radius:6px;background:#fff;color:#354657;cursor:pointer;font-size:14px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s,color .15s}
+#lis-ws-hd .ws-icon-btn:hover{background:#f2f6f8;border-color:#168276;color:#0f6f65}
+#lis-ws-hd .ws-icon-btn.danger:hover{border-color:#c62828;color:#c62828;background:#fff5f5}
 
 /* --- 数据表 --- */
-#lis-ws-body{flex:1!important;overflow-y:auto!important;overflow-x:hidden;background:#fff;font-family:'Microsoft YaHei','Segoe UI',sans-serif;min-height:0!important;position:relative;z-index:1}
-#lis-ws-body table{width:100%;border-collapse:collapse;font-size:13px;height:fit-content}
+#lis-ws-body{flex:1!important;overflow:auto!important;background:#f7f9fb;font-family:'Microsoft YaHei','Segoe UI',sans-serif;min-height:0!important;position:relative;z-index:1;padding:0 10px 10px}
+#lis-ws-body table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;background:#fff;border:1px solid #dce3eb;border-radius:6px;overflow:hidden}
 #lis-ws-body thead{position:sticky;top:0;z-index:2}
-#lis-ws-body th{background:linear-gradient(180deg,#3d566e,#2c3e50);color:#ecf0f1;padding:10px 12px;text-align:left;font-weight:600;white-space:nowrap;cursor:pointer;user-select:none;border-bottom:2px solid #1a252f;transition:background .2s}
-#lis-ws-body th:hover{background:#4a6785}
-#lis-ws-body th::after{content:' ⇅';font-size:10px;opacity:.5}
+#lis-ws-body th{background:#edf2f7;color:#334155;padding:7px 9px;text-align:left;font-weight:700;white-space:nowrap;cursor:pointer;user-select:none;border-bottom:1px solid #d7dee8;transition:background .15s}
+#lis-ws-body th:hover{background:#e3ebf3}
+#lis-ws-body th::after{content:' ⇅';font-size:10px;opacity:.42}
 #lis-ws-body th.sort-asc::after{content:' ↑';opacity:1}
 #lis-ws-body th.sort-desc::after{content:' ↓';opacity:1}
-#lis-ws-body td{padding:8px 12px;border-bottom:1px solid #f0f0f0;white-space:nowrap;transition:background .15s}
-#lis-ws-body tr{cursor:pointer;transition:background .2s}
-#lis-ws-body tbody tr:nth-child(even){background:#fafbfc}
+#lis-ws-body td{padding:6px 9px;border-bottom:1px solid #edf1f5;white-space:nowrap;transition:background .12s;vertical-align:middle}
+#lis-ws-body tr{cursor:pointer;transition:background .12s}
+#lis-ws-body tbody tr:nth-child(even){background:#fbfcfd}
 #lis-ws-body tbody tr:nth-child(odd){background:#fff}
-#lis-ws-body tr:hover{background:#e8f4fd;box-shadow:inset 0 0 0 1px #b3d4fc}
-#lis-ws-body tr.sel{background:#d4efdf;box-shadow:inset 0 0 0 2px #27ae60}
-#lis-ws-body tr:hover{background:#e8f4fd;box-shadow:inset 0 0 0 1px #b3d4fc}
-#lis-ws-body tr.active-row{background:#e3f2fd;box-shadow:inset 0 0 0 2px #2196f3;border-left:4px solid #1565c0}
-#lis-ws-body tr.st-1{background:#fffde7;border-left:3px solid #f39c12}
-#lis-ws-body tr.st-2{background:#e3f2fd;border-left:3px solid #2196f3}
-#lis-ws-body tr.st-3{background:#e8f5e9;border-left:3px solid #4caf50}
-#lis-ws-body tr.st-4{background:#f3e5f5;border-left:3px solid #9c27b0}
-#lis-ws-body tr.st-5{background:#f5f5f5;color:#bbb;border-left:3px solid #9e9e9e}
+#lis-ws-body tbody tr:last-child td{border-bottom:none}
+#lis-ws-body tr:hover{background:#eef7f5}
+#lis-ws-body tr.sel{background:#e6f4ef;box-shadow:inset 3px 0 0 #168276}
+#lis-ws-body tr.active-row{background:#e8f1fb;box-shadow:inset 3px 0 0 #2f6fb3}
+#lis-ws-body tr.st-1{box-shadow:inset 3px 0 0 #d89000}
+#lis-ws-body tr.st-2{box-shadow:inset 3px 0 0 #2f6fb3}
+#lis-ws-body tr.st-3{box-shadow:inset 3px 0 0 #168276}
+#lis-ws-body tr.st-4{box-shadow:inset 3px 0 0 #8a5db7}
+#lis-ws-body tr.st-5{color:#8a97a6;box-shadow:inset 3px 0 0 #9aa5b1}
 .wg-tag{display:inline-block;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.2)}
 .st-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
 .st-1t{background:#fff3e0;color:#e65100}.st-2t{background:#e3f2fd;color:#1565c0}.st-3t{background:#e8f5e9;color:#2e7d32}.st-4t{background:#f3e5f5;color:#7b1fa2}.st-5t{background:#eeeeee;color:#9e9e9e}
@@ -191,53 +192,56 @@
 .lis-highlight{background:#fff176;border-radius:2px;padding:0 2px}
 
 /* --- 底部 --- */
-#lis-ws-ft{background:#ecf0f1;padding:6px 20px;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#7f8c8d;flex-shrink:0!important}
+#lis-ws-ft{background:#fff;padding:5px 14px;display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#6b7785;flex-shrink:0!important;border-top:1px solid #d7dee8}
 
 /* --- 仪器标签栏 --- */
-#lis-ws-tabs{background:#f5f0e8;padding:6px 16px;display:flex;flex-direction:column;gap:0;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid #e8ecf1}
+#lis-ws-tabs{background:#fff;padding:7px 14px 6px;display:flex;flex-direction:column;gap:6px;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid #d7dee8}
 #lis-ws-tabs::-webkit-scrollbar{display:none}
-.ws-wg-row{display:flex;align-items:center;gap:6px;padding-bottom:5px;border-bottom:1px solid #e8ecf1}
-.ws-mach-row{display:flex;align-items:center;gap:5px;padding-top:5px;overflow-x:auto;scrollbar-width:none}
+.ws-wg-row,.ws-mach-row{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none}
+.ws-wg-row{padding-bottom:6px;border-bottom:1px solid #edf1f5}
 .ws-mach-row::-webkit-scrollbar{display:none}
-.ws-wg-tab{padding:4px 14px;border-radius:16px;border:1px solid #dee2e6;background:#fff;color:#555;cursor:pointer;font-size:12px;font-weight:600;transition:.2s;white-space:nowrap;display:flex;align-items:center;gap:5px}
-.ws-wg-tab:hover{background:#eaf2fb;border-color:#b3d4fc;color:#2c3e50}
-.ws-wg-tab.on{background:#3498db;border-color:#3498db;color:#fff;font-weight:700}
-.ws-mach-tab{padding:3px 12px;border-radius:14px;border:1px solid #dee2e6;background:#fff;color:#666;cursor:pointer;font-size:11px;font-weight:500;transition:.2s;white-space:nowrap;display:flex;align-items:center;gap:4px}
-.ws-mach-tab:hover{background:#eaf2fb;border-color:#b3d4fc;color:#2c3e50}
-.ws-mach-tab.on{background:#2c3e50;border-color:#2c3e50;color:#fff;font-weight:600}
-.ws-mach-tab .mach-cnt{background:#eef1f5;color:#666;border-radius:10px;padding:0 6px;font-size:9px;min-width:16px;text-align:center;line-height:1.6}
-.ws-mach-tab.on .mach-cnt{background:rgba(255,255,255,.25);color:#fff}
+.ws-wg-tab,.ws-mach-tab{border:1px solid #d7dee8;background:#fff;color:#334155;cursor:pointer;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:6px;letter-spacing:0}
+.ws-wg-tab{padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700}
+.ws-wg-tab:hover,.ws-mach-tab:hover{background:#f2f8f7;border-color:#7ebbb3}
+.ws-wg-tab.on{background:#168276;border-color:#168276;color:#fff}
+.ws-mach-tab{padding:4px 9px;border-radius:5px;font-size:11px;font-weight:600}
+.ws-mach-tab.on{background:#34495e;border-color:#34495e;color:#fff}
+.ws-tab-name{overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.mach-cnt{background:#eef2f6;color:#475569;border-radius:10px;padding:0 6px;font-size:10px;min-width:16px;text-align:center;line-height:1.55;font-weight:700}
+.ws-wg-tab.on .mach-cnt,.ws-mach-tab.on .mach-cnt{background:rgba(255,255,255,.22);color:#fff}
+.ws-tab-split{display:inline-flex;gap:3px;color:#6b7785;font-weight:700}
+.ws-wg-tab.on .ws-tab-split{color:rgba(255,255,255,.82)}
 
 /* --- 分类标签栏 --- */
-#lis-ws-bar{background:#faf6ef;padding:5px 16px;display:flex;align-items:center;gap:6px;border-bottom:1px solid #e8ecf1;flex-shrink:0!important;font-size:12px;flex-wrap:wrap;position:relative;z-index:3}
-.cat-tab{padding:4px 12px;border-radius:14px;border:1px solid #dee2e6;background:#fff;cursor:pointer;font-size:11px;font-weight:600;transition:.2s;white-space:nowrap;display:flex;align-items:center;gap:4px}
-.cat-tab:hover{border-color:#3498db;background:#eaf2f8}
-.cat-tab.on{border-color:#3498db;background:linear-gradient(135deg,#3498db,#2980b9);color:#fff;box-shadow:0 2px 8px rgba(52,152,219,.25)}
-.cat-tab .cat-cnt{border-radius:8px;padding:0 6px;font-size:10px;min-width:16px;text-align:center;line-height:1.6}
-.cat-tab.on .cat-cnt{background:rgba(255,255,255,.25);color:#fff}
-.cat-tab:not(.on) .cat-cnt{background:#f0f0f0;color:#666}
-.cat-tab.cat-normal .cat-cnt{background:#e8f5e9;color:#2e7d32}
-.cat-tab.cat-abnormal .cat-cnt{background:#fce4ec;color:#c62828}
-.cat-tab.cat-incomplete .cat-cnt{background:#fff3e0;color:#e65100}
-.cat-tab.cat-pending .cat-cnt{background:#e3f2fd;color:#1565c0}
+#lis-ws-bar{background:#f7f9fb;padding:7px 14px;display:flex;align-items:center;gap:6px;border-bottom:1px solid #d7dee8;flex-shrink:0!important;font-size:12px;flex-wrap:wrap;position:relative;z-index:3}
+.cat-tab{padding:5px 10px;border-radius:6px;border:1px solid #d7dee8;background:#fff;cursor:pointer;font-size:11px;font-weight:700;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:6px;color:#334155}
+.cat-tab:hover{border-color:#7ebbb3;background:#f2f8f7}
+.cat-tab.on{border-color:#168276;background:#168276;color:#fff}
+.cat-tab .cat-cnt{border-radius:10px;padding:0 7px;font-size:10px;min-width:16px;text-align:center;line-height:1.6;font-weight:800}
+.cat-tab.on .cat-cnt{background:rgba(255,255,255,.22);color:#fff}
+.cat-tab:not(.on) .cat-cnt{background:#eef2f6;color:#475569}
+.cat-tab.cat-normal:not(.on) .cat-cnt{background:#e6f4ef;color:#0f6f65}
+.cat-tab.cat-abnormal:not(.on) .cat-cnt{background:#fde8e8;color:#b91c1c}
+.cat-tab.cat-incomplete:not(.on) .cat-cnt{background:#fff2d7;color:#9a5b00}
+.cat-tab.cat-pending:not(.on) .cat-cnt{background:#e7f0fb;color:#235a96}
 .cat-sep{width:1px;height:24px;background:#dee2e6;margin:0 4px}
 .cat-right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.cat-stats{color:#7f8c8d;font-size:11px}
+.cat-stats{color:#6b7785;font-size:11px}
 
 /* --- 一键批审横幅 --- */
-.ws-normal-banner{background:linear-gradient(135deg,#e8f5e9,#c8e6c9);border:1px solid #a5d6a7;border-radius:8px;padding:12px 20px;margin:12px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
-.ws-normal-banner .nb-text{font-size:14px;font-weight:600;color:#2e7d32;flex:1}
-.ws-normal-banner .nb-btn,.nb-btn{padding:8px 24px;border:none;border-radius:6px;background:linear-gradient(135deg,#27ae60,#2ecc71);color:#fff;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 3px 10px rgba(39,174,96,.3);transition:.2s;white-space:nowrap}
-.ws-normal-banner .nb-btn:hover,.nb-btn:hover{transform:translateY(-1px);box-shadow:0 5px 15px rgba(39,174,96,.4)}
-.ws-normal-banner .nb-btn:active,.nb-btn:active{transform:translateY(0)}
+.ws-normal-banner{background:#fff;border:1px solid #cfe3df;border-left:4px solid #168276;border-radius:6px;padding:8px 12px;margin:10px 0;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.ws-normal-banner .nb-text{font-size:13px;font-weight:700;color:#0f6f65;flex:1}
+.ws-normal-banner .nb-btn,.nb-btn{padding:7px 14px;border:none;border-radius:6px;background:#168276;color:#fff;font-size:12px;font-weight:800;cursor:pointer;transition:background .15s;white-space:nowrap;box-shadow:none}
+.ws-normal-banner .nb-btn:hover,.nb-btn:hover{background:#0f6f65}
+.ws-normal-banner .nb-btn:active,.nb-btn:active{filter:brightness(.95)}
 
 /* --- 异常标本卡片 --- */
-.ws-abnormal-list{padding:8px 12px;display:flex;flex-direction:column;gap:5px;overflow-y:auto;flex:1}
-.ws-abnormal-card{background:#fff;border:1px solid #e0e0e0;border-left:3px solid #e74c3c;border-radius:5px;padding:8px 12px;cursor:pointer;transition:.15s;display:flex;align-items:center;gap:10px}
-.ws-abnormal-card:hover{background:#f8f9fa;border-color:#bbb}
-.ws-abnormal-card.focused{border-left:4px solid #1565c0;background:#e3f2fd;box-shadow:0 2px 8px rgba(33,150,243,.2)}
-.ws-abnormal-card.has-critical{border-left:3px solid #c62828;background:#fff5f5}
-.ws-abnormal-card.has-critical.focused{border-left:4px solid #c62828;background:#ffebee;box-shadow:0 2px 8px rgba(198,40,40,.2)}
+.ws-abnormal-list{padding:10px 0;display:flex;flex-direction:column;gap:5px;overflow-y:auto;flex:1}
+.ws-abnormal-card{background:#fff;border:1px solid #dce3eb;border-left:4px solid #d14b4b;border-radius:6px;padding:7px 10px;cursor:pointer;transition:background .12s,border-color .12s;display:flex;align-items:center;gap:10px}
+.ws-abnormal-card:hover{background:#fffafa;border-color:#e4b3b3}
+.ws-abnormal-card.focused{border-left-color:#2f6fb3;background:#eef6ff;box-shadow:0 0 0 1px rgba(47,111,179,.12)}
+.ws-abnormal-card.has-critical{border-left-color:#b91c1c;background:#fff7f7}
+.ws-abnormal-card.has-critical.focused{border-left-color:#b91c1c;background:#ffeded;box-shadow:0 0 0 1px rgba(185,28,28,.14)}
 .ab-card-top{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
 .ab-card-name{font-size:14px;font-weight:600;color:#2c3e50;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
 .ab-card-no{font-size:12px;color:#888;white-space:nowrap}
@@ -251,21 +255,21 @@
 .ab-card-item.infection-warning{background:#fff3e0;color:#e65100;font-weight:700}
 .ab-card-item.uncertain{background:#f5f5f5;color:#757575}
 .ab-card-hint{font-size:11px;color:#bbb;white-space:nowrap;margin-left:auto}
-.ws-abnormal-hint{background:#e3f2fd;border-radius:5px;padding:6px 12px;margin:0 12px;font-size:12px;color:#1565c0;display:flex;align-items:center;gap:6px}
-.ws-abnormal-hint kbd{background:#fff;border:1px solid #bbdefb;border-radius:3px;padding:1px 5px;font-size:11px;font-family:monospace}
+.ws-abnormal-hint{background:#fff;border:1px solid #d7dee8;border-left:4px solid #2f6fb3;border-radius:6px;padding:7px 10px;margin:10px 0 0;font-size:12px;color:#334155;display:flex;align-items:center;gap:6px}
+.ws-abnormal-hint kbd{background:#f7f9fb;border:1px solid #cbd5df;border-radius:3px;padding:1px 5px;font-size:11px;font-family:monospace}
 
 /* --- 不完整提示 --- */
-.ws-incomplete-banner{background:#fff3e0;border:1px solid #ffe0b2;border-radius:8px;padding:10px 20px;margin:12px 16px;font-size:13px;color:#e65100;font-weight:600}
+.ws-incomplete-banner{background:#fff;border:1px solid #f1d3a2;border-left:4px solid #d89000;border-radius:6px;padding:8px 12px;margin:10px 0;font-size:13px;color:#8a5600;font-weight:700}
 
 /* --- 分类加载中 --- */
 .ws-category-loading{text-align:center;padding:40px;color:#999;font-size:14px}
 .ws-category-loading .cat-prog{font-size:12px;color:#bbb;margin-top:8px}
 
 /* --- 确保内容可滚动 --- */
-#lis-ws-body::-webkit-scrollbar{width:10px}
-#lis-ws-body::-webkit-scrollbar-track{background:#f1f1f1;border-radius:5px}
-#lis-ws-body::-webkit-scrollbar-thumb{background:#888;border-radius:5px}
-#lis-ws-body::-webkit-scrollbar-thumb:hover{background:#555}
+#lis-ws-body::-webkit-scrollbar{width:9px;height:9px}
+#lis-ws-body::-webkit-scrollbar-track{background:#edf1f5}
+#lis-ws-body::-webkit-scrollbar-thumb{background:#b4c0cc;border-radius:5px}
+#lis-ws-body::-webkit-scrollbar-thumb:hover{background:#8f9aa7}
 #lis-ws-body table{min-height:0}
 
 /* --- 批审面板 --- */
@@ -387,19 +391,22 @@
     /* --- 响应式 --- */
 @media(max-width:1200px){
   #lis-ws-hd{flex-wrap:wrap;padding:6px 12px;gap:6px}
-  #lis-ws-hd .ws-search{width:140px}
+  #lis-ws-hd .ws-search-wrap{flex:1 1 260px;min-width:180px}
   #lis-ws-bar{padding:4px 12px}
 }
 @media(max-width:900px){
   #lis-ws-hd h3{font-size:14px}
-  #lis-ws-hd .ws-tab{padding:3px 8px;font-size:11px}
-  #lis-ws-hd .ws-fb{padding:2px 6px;font-size:10px}
+  .ws-wg-tab{padding:4px 8px;font-size:11px}
+  .ws-mach-tab,.cat-tab{padding:4px 7px;font-size:10px}
+  .ws-tab-name{max-width:112px}
   #lis-ws-body th,#lis-ws-body td{padding:6px 8px}
   #lis-ws-body{font-size:12px}
 }
 @media(max-width:700px){
   #lis-ws-hd{flex-direction:column;align-items:flex-start;padding:6px 10px}
-  #lis-ws-hd .ws-acts{margin-left:0;margin-top:8px}
+  #lis-ws-hd .ws-title{min-width:0}
+  #lis-ws-hd .ws-search-wrap{width:100%;min-width:0;flex:auto}
+  #lis-ws-hd .ws-acts{margin-left:0}
   #lis-ws-bar{flex-wrap:wrap}
   #lis-ws-body{font-size:11px}
 }
@@ -746,6 +753,7 @@
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
+        updateWSFooter();
         loadWSData();
         startWSRefresh();
     }
@@ -833,6 +841,7 @@
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
+        updateWSFooter();
         classifyAllSpecimens();
         
         // 更新CA认证状态
@@ -1076,13 +1085,14 @@
         const hd = $('#lis-ws-hd');
         hd.style.flexShrink = '0';
         hd.innerHTML = `
-            <h3>🔬 工作台</h3>
-            <input type="text" class="ws-search" id="lis-ws-search" placeholder="🔍 搜索姓名/检验号/流水号..." />
+            <div class="ws-title"><span class="ws-title-dot"></span><h3>审核工作台</h3></div>
+            <div class="ws-search-wrap">
+                <input type="text" class="ws-search" id="lis-ws-search" placeholder="姓名 / 检验号 / 流水号" />
+            </div>
             <div class="ws-acts">
-
-                <button id="lis-ws-refresh" style="background:#3498db;color:#fff;border-radius:6px">🔄</button>
-                <button id="lis-ws-pwd" style="background:#f39c12;color:#fff;border-radius:6px" title="密码">🔐</button>
-                <button id="lis-ws-close" style="background:#e74c3c;color:#fff;border-radius:6px">✕</button>
+                <button class="ws-icon-btn" id="lis-ws-refresh" title="刷新">↻</button>
+                <button class="ws-icon-btn" id="lis-ws-pwd" title="CA密码">钥</button>
+                <button class="ws-icon-btn danger" id="lis-ws-close" title="关闭">×</button>
             </div>`;
 
 
@@ -1126,13 +1136,19 @@
         WG.forEach(w => {
             const c = wgCounts[w.dr] || {total:0};
             h += `<button class="ws-wg-tab ${wsActiveWG===w.dr?'on':''}" data-wg="${w.dr}">
-                ${w.icon} ${w.name} <span class="mach-cnt">${c.total}</span>
+                <span class="ws-tab-name">${w.name}</span>
+                <span class="ws-tab-split"><span>${c.normalReady || 0}</span>/<span>${c.abnormalReady || 0}</span></span>
+                <span class="mach-cnt">${c.total}</span>
             </button>`;
         });
         // 全部工作组
         const allTotal = WG.reduce((s,w) => s + (wgCounts[w.dr]?.total||0), 0);
+        const allNormal = WG.reduce((s,w) => s + (wgCounts[w.dr]?.normalReady||0), 0);
+        const allAbnormal = WG.reduce((s,w) => s + (wgCounts[w.dr]?.abnormalReady||0), 0);
         h += `<button class="ws-wg-tab ${!wsActiveWG?'on':''}" data-wg="">
-            全部 <span class="mach-cnt">${allTotal}</span>
+            <span class="ws-tab-name">全部</span>
+            <span class="ws-tab-split"><span>${allNormal}</span>/<span>${allAbnormal}</span></span>
+            <span class="mach-cnt">${allTotal}</span>
         </button>`;
         h += '</div>';
 
@@ -1149,7 +1165,8 @@
             });
         }
         h += `<button class="ws-mach-tab ${!wsActiveMachine?'on':''}" data-m="">
-            全部仪器 <span class="mach-cnt">${ac.total}</span>
+            <span class="ws-tab-name">全部仪器</span>
+            <span class="mach-cnt">${ac.total}</span>
         </button>`;
 
         // 筛选当前工作组的仪器
@@ -1157,7 +1174,8 @@
         wgMachines.forEach(m => {
             const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
             h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${m.RowID}">
-                ${m.CName||m.Name} <span class="mach-cnt">${c.total}</span>
+                <span class="ws-tab-name">${m.CName||m.Name}</span>
+                <span class="mach-cnt">${c.total}</span>
             </button>`;
         });
         h += '</div>';
@@ -1255,6 +1273,7 @@
         h += '</div>';
 
         bar.innerHTML = h;
+        updateWSFooter({ visible: fd.length, total: totalCount, normal: normalCount, abnormal: abnormalCount, incomplete: incompleteCount, pending: pendingCount });
 
         // 分类标签事件
         bar.querySelectorAll('.cat-tab').forEach(b => b.addEventListener('click', () => {
@@ -1318,7 +1337,7 @@
     function renderWSTable() {
         const body = $('#lis-ws-body');
         // 强制 flex 和滚动（LIS 系统 CSS 会覆盖）
-        body.style.cssText = 'flex:1!important;overflow-y:auto!important;min-height:0!important;position:relative';
+        body.style.cssText = 'flex:1!important;overflow:auto!important;min-height:0!important;position:relative';
         // 移除旧的异常视图键盘监听
         if (_abnormalKeyHandler) {
             document.removeEventListener('keydown', _abnormalKeyHandler);
@@ -1337,6 +1356,21 @@
             case 'incomplete': renderIncompleteView(data, body); break;
             default:         renderAllView(data, body); break;
         }
+    }
+
+    function updateWSFooter(counts) {
+        const ft = document.getElementById('lis-ws-ft-stat');
+        if (!ft) return;
+        if (!counts) {
+            counts = { visible: filteredData().length, total: wsData.length };
+        }
+        const groupName = wsActiveWG ? ((WG_MAP[wsActiveWG] || {}).name || wsActiveWG) : '全部工作组';
+        const machineName = wsActiveMachine ? ((wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).CName || (wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).Name || '当前仪器') : '全部仪器';
+        const parts = [`${groupName}`, `${machineName}`, `${counts.visible}/${counts.total || 0}条`];
+        if (typeof counts.normal === 'number') parts.push(`正常${counts.normal}`);
+        if (typeof counts.abnormal === 'number') parts.push(`异常${counts.abnormal}`);
+        if (wsLoading) parts.push('刷新中');
+        ft.textContent = parts.join(' · ');
     }
 
     // --- 正常可审视图 ---
@@ -3057,8 +3091,8 @@
             <div id="lis-ws-bar"></div>
             <div id="lis-ws-body"></div>
             <div id="lis-ws-ft">
-                <span>🔒 数据仅在本地处理 | 行点击 → 详情</span>
-                <span>Enter=审核异常 | ↑↓=移动 | Esc=关闭</span>
+                <span>本地工作台</span>
+                <span id="lis-ws-ft-stat"></span>
             </div>`;
         document.body.appendChild(ws);
 
