@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.6.2
+// @version      7.6.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -38,7 +38,7 @@
     const WG_MAP = {}; WG.forEach(w => WG_MAP[w.dr] = w);
 
     const REFRESH = 30000;
-    const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist' };
+    const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist' };
 
     // ==================== 工具 ====================
     const $  = s => document.querySelector(s);
@@ -57,7 +57,7 @@
     const loadPwd = () => { try { const v=localStorage.getItem(K.pwd); return v?decPwd(v):''; } catch(e){ return ''; } };
     const saveCAPwd = p => { try { localStorage.setItem(K.caPwd, encPwd(p)); } catch(e){} };
     const loadCAPwd = () => { try { const v=localStorage.getItem(K.caPwd); return v?decPwd(v):''; } catch(e){ return ''; } };
-    const saveCAAuth = () => { try { localStorage.setItem(K.caAuth, JSON.stringify({ time: Date.now(), wg: wgDR() })); } catch(e){} };
+    const saveCAAuth = (dr) => { try { localStorage.setItem(K.caAuth, JSON.stringify({ time: Date.now(), wg: dr || wgDR() })); } catch(e){} };
     const loadCAAuth = () => { try { const v=localStorage.getItem(K.caAuth); if(!v) return null; const o=JSON.parse(v); return o; } catch(e){ return null; } };
     const clearCAAuth = () => { try { localStorage.removeItem(K.caAuth); } catch(e){} };
     // 通过原生 setter 设置 input 值（兼容 EasyUI/React 等框架）
@@ -1572,8 +1572,11 @@
             const curDR = wgDR();
             const spDR = specimen._wg || '';
             if (spDR && curDR && spDR !== curDR) {
+                const queue = makeAuditQueue([{ status: 'NORMAL', items: [], row: specimen, reportDR: specimen.ReportDR }], 'single');
+                saveAuditQueue(queue);
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
-                showToast(`标本属于${wgName}，请先切换工作组`, 'warning');
+                showToast(`切换到${wgName}继续审核`, 'warning');
+                switchWG(spDR);
                 return;
             }
 
@@ -1951,6 +1954,88 @@
         }
     }
 
+    function saveAuditQueue(queue) {
+        try {
+            localStorage.setItem(K.auditQueue, JSON.stringify({ ...queue, time: Date.now() }));
+        } catch(e) {}
+    }
+
+    function loadAuditQueue() {
+        try {
+            const raw = localStorage.getItem(K.auditQueue);
+            if (!raw) return null;
+            const q = JSON.parse(raw);
+            if (!q || !q.items || Date.now() - q.time > 10 * 60 * 1000) {
+                localStorage.removeItem(K.auditQueue);
+                return null;
+            }
+            return q;
+        } catch(e) { return null; }
+    }
+
+    function clearAuditQueue() {
+        try { localStorage.removeItem(K.auditQueue); } catch(e) {}
+    }
+
+    function makeAuditQueue(specimens, mode) {
+        const items = [];
+        specimens.forEach(sp => {
+            const row = sp.row || sp;
+            const reportDR = sp.reportDR || row.ReportDR;
+            if (!reportDR || !row) return;
+            items.push({
+                reportDR: String(reportDR),
+                wg: row._wg || wgDR(),
+                mdr: row._mdr || row.WorkGroupMachineDR || '',
+                labno: row.Labno || '',
+                name: row.PatName || '',
+                testSet: row.TestSetDesc || '',
+                row
+            });
+        });
+        items.sort((a, b) => {
+            const wgCmp = String(a.wg || '').localeCompare(String(b.wg || ''), 'zh');
+            if (wgCmp) return wgCmp;
+            const mCmp = String(a.mdr || '').localeCompare(String(b.mdr || ''), 'zh');
+            if (mCmp) return mCmp;
+            return String(a.labno || '').localeCompare(String(b.labno || ''), 'zh');
+        });
+        return { mode: mode || 'batch', items, done: [], failed: [], skipped: [], current: 0 };
+    }
+
+    function currentQueueItem(queue) {
+        if (!queue || !queue.items) return null;
+        while (queue.current < queue.items.length) {
+            const it = queue.items[queue.current];
+            if (it && !it.done) return it;
+            queue.current++;
+        }
+        return null;
+    }
+
+    async function ensureAuditQueueWorkGroup(queue) {
+        const item = currentQueueItem(queue);
+        if (!item) return true;
+        const curDR = wgDR();
+        if (!item.wg || item.wg === curDR) return true;
+        saveAuditQueue(queue);
+        const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
+        showToast('切换到' + wgName + '继续审核...', 'warning');
+        switchWG(item.wg);
+        return false;
+    }
+
+    function checkAuditQueueResume() {
+        const queue = loadAuditQueue();
+        if (!queue) return;
+        setTimeout(() => {
+            continueAuditQueue(queue).catch(e => {
+                dbg('恢复审核队列失败:', e);
+                showToast('恢复审核队列失败: ' + e.message, 'error');
+            });
+        }, 2000);
+    }
+
     // --- F5 快捷键审核选中标本 ---
     function auditSelectedSpecimens() {
         if (wsChecked.size === 0) {
@@ -2283,9 +2368,11 @@
             const curDR = wgDR();
             const spDR = specimen._wg || '';
             if (spDR && curDR && spDR !== curDR) {
+                const queue = makeAuditQueue([{ status: 'NORMAL', items: [], row: specimen, reportDR: specimen.ReportDR }], 'single');
+                saveAuditQueue(queue);
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
-                showToast(`标本属于${wgName}，请先切换工作组`, 'warning');
-                dbg('工作组不匹配: 标本=', spDR, '当前=', curDR);
+                showToast(`切换到${wgName}继续审核`, 'warning');
+                switchWG(spDR);
                 return;
             }
 
@@ -3940,18 +4027,6 @@ function fillNativeLoginForm(creds, lastWG) {
         const timeoutMs = options.timeoutMs || (isAudit ? 15000 : 8000);
         const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : isAudit;
 
-        // 同步已存在的审核登录信息，不再伪造登录状态。
-        if (isAudit && me && (!me.IsAuthLogin || !me.AuthUserDR || me.AuthUserDR.length === 0)) {
-            try {
-                const auInfo = sessionStorage.getItem('AuInfo');
-                if (auInfo) {
-                    me.AuthUserDR = auInfo.split('^')[0];
-                    me.IsAuthLogin = 1;
-                    dbg('已同步审核登录状态: AuthUserDR=' + me.AuthUserDR);
-                }
-            } catch(e) {}
-        }
-
         // 记录当前选中行的 ReportDR（用于检测审核成功）
         let targetReportDR = '';
         try {
@@ -3978,17 +4053,15 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
             } catch(e) {}
 
-            // 检查审核登录窗口，自动填写后重试按钮动作
+            // 工作台审核只走原生审核按钮 + CA/capping；审核登录窗口不是有效认证链路。
             try {
                 const authWin = doc.querySelector('#win_AuthLogin, #win_EntryLogin');
                 if (authWin && authWin.style.display !== 'none') {
                     const vis = jq(authWin);
                     if (vis.length && vis.is(':visible')) {
-                        dbg('检测到审核登录窗口，尝试自动登录');
-                        const loginOK = await handleAuditLogin(iframeWin, jq);
-                        if (!loginOK) return false;
-                        await sleep(200);
-                        jq(btn).click();
+                        dbg('检测到审核登录窗口，停止自动审核');
+                        showToast('出现审核登录窗口，请关闭后用原生审核按钮重新触发 CA', 'warning');
+                        return false;
                     }
                 }
             } catch(e) {}
@@ -4062,7 +4135,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
         // 本地缓存检查（1小时内有效）
         const cached = loadCAAuth();
-        if (cached && (Date.now() - cached.time < 3600000)) {
+        if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) {
             dbg('CA: 使用本地缓存');
             return true;
         }
@@ -4769,14 +4842,6 @@ function fillNativeLoginForm(creds, lastWG) {
             return;
         }
 
-        const pwd = loadPwd();
-        if (!pwd) {
-            releaseAuditLock();
-            showToast('请先设置审核密码（点击 🔐 按钮）', 'warning');
-            openPwdDlg();
-            return;
-        }
-
         const btn = document.getElementById('lis-tb-quick');
         if (btn) { btn.disabled = true; btn.textContent = '⏳ 审核中...'; }
 
@@ -4878,13 +4943,6 @@ function fillNativeLoginForm(creds, lastWG) {
     async function showBatchAuditDialog() {
         if (!acquireAuditLock('showBatchDialog')) return;
         try {
-            const pwd = loadPwd();
-            if (!pwd) {
-                showToast('请先设置审核密码（点击 🔐 按钮）', 'warning');
-                openPwdDlg();
-                return;
-            }
-
             const eligible = getAuditEligibleRows();
             if (eligible.length === 0) {
                 showToast('没有待审核的标本', 'success');
@@ -5071,10 +5129,19 @@ function fillNativeLoginForm(creds, lastWG) {
     // --- 执行批量审核（逐行审核）---
     async function executeBatchAudit(normalSpecimens) {
         if (normalSpecimens.length === 0) return;
+        const queue = makeAuditQueue(normalSpecimens, 'batch');
+        if (queue.items.length === 0) { showToast('没有可审核的标本', 'warning'); return; }
+        await continueAuditQueue(queue);
+    }
+
+    async function continueAuditQueue(queue) {
+        if (!queue || !queue.items || queue.items.length === 0) return;
         if (!acquireAuditLock('batchAudit')) { showToast('正在审核中，请稍候', 'warning'); return; }
 
         // 显示进度条
-        const progress = document.createElement('div');
+        let progress = document.getElementById('lis-audit-progress');
+        if (progress) progress.remove();
+        progress = document.createElement('div');
         progress.id = 'lis-audit-progress';
         progress.innerHTML = `
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
@@ -5082,13 +5149,16 @@ function fillNativeLoginForm(creds, lastWG) {
                 <button id="lis-batch-stop" style="padding:2px 12px;font-size:12px;border:1px solid #e74c3c;background:#fff;color:#e74c3c;border-radius:4px;cursor:pointer">⏹ 停止</button>
             </div>
             <div class="prog-bar"><div class="prog-fill" id="lis-prog-fill" style="width:0%"></div></div>
-            <div class="prog-text" id="lis-prog-text">0 / ${normalSpecimens.length}</div>
+            <div class="prog-text" id="lis-prog-text">0 / ${queue.items.length}</div>
         `;
         setTimeout(() => { const stopBtn = document.getElementById('lis-batch-stop'); if (stopBtn) stopBtn.onclick = () => { _batchAbort = true; stopBtn.textContent = '正在停止...'; stopBtn.disabled = true; }; }, 50);
         document.body.appendChild(progress);
         progress.classList.add('show');
 
         try {
+            const sameWG = await ensureAuditQueueWorkGroup(queue);
+            if (!sameWG) { progress.remove(); return; }
+
             let iframeWin = getReportIframeWin();
             if (!iframeWin) {
                 showToast('正在加载报告页面...', 'warning');
@@ -5115,152 +5185,92 @@ function fillNativeLoginForm(creds, lastWG) {
                 releaseAuditLock(); progress.remove(); return;
             }
 
-            // 构建白名单
-            const allowedReportDRs = new Set();
-            for (const sp of normalSpecimens) {
-                const rdr = sp.reportDR || (sp.row && sp.row.ReportDR);
-                if (rdr) allowedReportDRs.add(String(rdr));
-            }
-            dbg('批审白名单:', allowedReportDRs.size, '个 ReportDR');
-
-            // 同步已存在的审核登录信息，不伪造登录状态。
-            if (me && (!me.IsAuthLogin || !me.AuthUserDR || me.AuthUserDR.length === 0)) {
-                try {
-                    const auInfo = sessionStorage.getItem('AuInfo');
-                    if (auInfo) {
-                        me.AuthUserDR = auInfo.split('^')[0];
-                        me.IsAuthLogin = 1;
-                        dbg('批审: 已同步审核登录状态 AuthUserDR=' + me.AuthUserDR);
-                    }
-                } catch(e) {}
-            }
-
-            closeCAWindow(iframeWin);
-
-            // 按仪器分组
-            const groups = {};
-            for (const sp of normalSpecimens) {
-                const row = sp.row || {};
-                const mdr = row._mdr || row.WorkGroupMachineDR || '';
-                if (!groups[mdr]) groups[mdr] = [];
-                groups[mdr].push(sp);
-            }
-            const machineKeys = Object.keys(groups);
-            dbg('批审分组:', machineKeys.length, '个仪器', machineKeys);
-
-            let successCount = 0, failCount = 0, skipCount = 0;
-            let globalIdx = 0;
-            const totalCount = normalSpecimens.length;
+            let successCount = queue.done.length, failCount = queue.failed.length, skipCount = queue.skipped.length;
+            const totalCount = queue.items.length;
+            let queuePausedForSwitch = false;
             _batchAbort = false;
 
-            for (const mdr of machineKeys) {
-                const group = groups[mdr];
+            while (queue.current < queue.items.length) {
+                if (_batchAbort) { dbg('批审被用户中止'); saveAuditQueue(queue); break; }
+
+                const item = currentQueueItem(queue);
+                if (!item) break;
+
+                if (item.wg && item.wg !== wgDR()) {
+                    saveAuditQueue(queue);
+                    const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
+                    showToast('切换到' + wgName + '继续审核...', 'warning');
+                    queuePausedForSwitch = true;
+                    switchWG(item.wg);
+                    break;
+                }
 
                 // 切换仪器
-                if (machineKeys.length > 1 || group[0].row._mdr) {
-                    dbg('切换到仪器:', mdr);
+                if (item.mdr) {
                     try {
-                        if (me.WorkGroupMachineDR !== undefined) me.WorkGroupMachineDR = mdr;
-                        try { jq('#cmb_WorkGroupMachine').combogrid('setValue', mdr); } catch(e) {}
+                        if (me.WorkGroupMachineDR !== undefined) me.WorkGroupMachineDR = item.mdr;
+                        try { jq('#cmb_WorkGroupMachine').combogrid('setValue', item.mdr); } catch(e) {}
                         const dateStr = jq('#dt_wlReportDate').length ?
                             (jq('#dt_wlReportDate').datebox('getValue') || today()) : today();
-                        const findStr = '&WorkGroupMachineDR=' + mdr + '&ReportStatus=&SttAccDate=' + dateStr;
+                        const findStr = '&WorkGroupMachineDR=' + item.mdr + '&ReportStatus=&SttAccDate=' + dateStr;
                         if (typeof iframeWin.ShowWorkList === 'function') iframeWin.ShowWorkList(findStr);
                         else if (typeof iframeWin.FindFast === 'function') iframeWin.FindFast(findStr);
-                        await new Promise(r => setTimeout(r, 1200));
+                        await sleep(900);
                         iframeWin = getReportIframeWin();
                         if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
-                        if (jq) {
-                            for (let w = 0; w < 3; w++) {
-                                try { const testRows = jq('#dgWorkList').datagrid('getRows'); if (testRows && testRows.length > 0) break; } catch(e) {}
-                                await new Promise(r => setTimeout(r, 500));
-                            }
-                        }
-                    } catch(e) { dbg('切换仪器失败:', mdr, e); }
+                    } catch(e) { dbg('切换仪器失败:', item.mdr, e); }
                 }
 
-                if (!jq) continue;
+                const fill2 = document.getElementById('lis-prog-fill');
+                const text2 = document.getElementById('lis-prog-text');
+                if (fill2) fill2.style.width = (queue.current / totalCount * 100) + '%';
+                if (text2) text2.textContent = `${queue.current + 1} / ${totalCount} - ${item.name || item.labno || item.reportDR}`;
 
-                // 收集可勾选的行索引
-                const checkIndices = [];
-                let localSkip = 0;
-                for (const specimen of group) {
-                    const reportDR = specimen.reportDR || (specimen.row && specimen.row.ReportDR);
-                    const row = specimen.row || {};
-                    if (!reportDR || !allowedReportDRs.has(String(reportDR))) { localSkip++; continue; }
-                    const cached = wsClassifiedCache[reportDR];
-                    if (cached && cached.status === 'CRITICAL') { localSkip++; continue; }
-                    const complete = String(row.IsComplete || '');
-                    if (complete !== '1') { localSkip++; dbg('批审跳过: IsComplete≠1', row.PatName, 'IsComplete=', complete); continue; }
-                    const status = String(row.Status || row.ReportStatus || '');
-                    if (status === '3' || status === '4') { localSkip++; dbg('批审跳过: 已审核', row.PatName, 'Status=', status); continue; }
-
-                    // 在 datagrid 中找到该行
-                    try {
-                        const selectors = ['#dgWorkList', '#dg', '#dgReport', '.datagrid-f'];
-                        let found = false;
-                        for (const sel of selectors) {
-                            const el = jq(sel);
-                            if (!el.length || !el.datagrid) continue;
-                            const rows = el.datagrid('getRows');
-                            if (!rows || rows.length === 0) continue;
-                            for (let i = 0; i < rows.length; i++) {
-                                if (String(rows[i].ReportDR) === String(reportDR)) {
-                                    checkIndices.push({ index: i, selector: sel, specimen });
-                                    found = true; break;
-                                }
-                            }
-                            if (found) break;
-                        }
-                        if (!found) { localSkip++; dbg('批审跳过: 原生列表中未找到', row.PatName); }
-                    } catch(e) { localSkip++; }
-                }
-                skipCount += localSkip;
-
-                if (checkIndices.length === 0) continue;
-
-                for (let gi = 0; gi < checkIndices.length; gi++) {
-                    // 检查中止标志
-                    if (_batchAbort) { dbg('批审被用户中止'); break; }
-
-                    const item = checkIndices[gi];
-                    const specimen = item.specimen;
-                    const reportDR = specimen.reportDR || (specimen.row && specimen.row.ReportDR);
-                    const row = specimen.row || {};
-
-                    // 更新全局进度
-                    globalIdx++;
-                    const fill2 = document.getElementById('lis-prog-fill');
-                    const text2 = document.getElementById('lis-prog-text');
-                    if (fill2) fill2.style.width = (globalIdx / totalCount * 100) + '%';
-                    if (text2) text2.textContent = `${globalIdx} / ${totalCount} - ${row.PatName || ''}`;
-
-                    try {
-                        if (!jq || !me) {
-                            iframeWin = getReportIframeWin();
-                            if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
-                        }
-                        if (!jq || !me) { skipCount++; continue; }
-
-                        const selected = selectNativeRowByReportDR(iframeWin, reportDR);
-                        if (!selected) { skipCount++; continue; }
-                        const detailReady = await waitReportDetailReady(iframeWin, reportDR, 5000);
-                        if (!detailReady) { skipCount++; dbg('批审跳过: 详情未加载完成', row.PatName); continue; }
-
-                        // 带中止支持的审核（超时后不会继续并行执行）
-                        let timedOut = false;
-                        const auditResult = await Promise.race([
-                            clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 20000 }).then(r => { if (!timedOut) return r; }),
-                            new Promise((_, rej) => setTimeout(() => { timedOut = true; rej(new Error('审核超时(30s)')); }, 30000))
-                        ]);
-                        if (auditResult === 'incomplete') { skipCount++; }
-                        else if (auditResult) { successCount++; }
-                        else { failCount++; }
-                    } catch(e) { failCount++; dbg('逐行审核异常:', row.PatName, e.message); }
-                    finally {
-                        await new Promise(r => setTimeout(r, 200));
-                        try { iframeWin = getReportIframeWin(); if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; } } catch(e) {}
+                try {
+                    if (!jq || !me) {
+                        iframeWin = getReportIframeWin();
+                        if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
                     }
+                    if (!jq || !me) {
+                        queue.failed.push({ ...item, reason: '页面未就绪' });
+                        failCount++; queue.current++; saveAuditQueue(queue); continue;
+                    }
+
+                    const selected = selectNativeRowByReportDR(iframeWin, item.reportDR);
+                    if (!selected) {
+                        queue.skipped.push({ ...item, reason: '原生列表未找到' });
+                        skipCount++; queue.current++; saveAuditQueue(queue); continue;
+                    }
+                    const detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 6000);
+                    if (!detailReady) {
+                        queue.skipped.push({ ...item, reason: '详情未加载完成' });
+                        skipCount++; queue.current++; saveAuditQueue(queue); continue;
+                    }
+
+                    let timedOut = false;
+                    const auditResult = await Promise.race([
+                        clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 25000 }).then(r => { if (!timedOut) return r; }),
+                        new Promise((_, rej) => setTimeout(() => { timedOut = true; rej(new Error('审核超时(35s)')); }, 35000))
+                    ]);
+                    if (auditResult === 'incomplete') {
+                        queue.skipped.push({ ...item, reason: '结果不完整' });
+                        skipCount++;
+                    } else if (auditResult) {
+                        queue.done.push(item);
+                        successCount++;
+                    } else {
+                        queue.failed.push({ ...item, reason: '审核未确认成功' });
+                        failCount++;
+                    }
+                } catch(e) {
+                    queue.failed.push({ ...item, reason: e.message });
+                    failCount++;
+                    dbg('逐行审核异常:', item.name, e.message);
+                } finally {
+                    queue.current++;
+                    saveAuditQueue(queue);
+                    await sleep(120);
+                    try { iframeWin = getReportIframeWin(); if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; } } catch(e) {}
                 }
             }
 
@@ -5269,6 +5279,12 @@ function fillNativeLoginForm(creds, lastWG) {
             if (fill) fill.style.width = '100%';
             if (text) text.textContent = `完成: ${successCount} 成功, ${failCount} 失败, ${skipCount} 跳过`;
 
+            if (queuePausedForSwitch) {
+                if (text) text.textContent = '正在切换工作组，稍后自动继续...';
+                return;
+            }
+
+            if (queue.current >= queue.items.length) clearAuditQueue();
             if (successCount > 0) {
                 const skipMsg = skipCount > 0 ? `，跳过 ${skipCount} 个` : '';
                 const failMsg = failCount > 0 ? `，${failCount} 个失败` : '';
@@ -5441,7 +5457,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.5.3');
+        dbg('iMedicalLIS 增强助手 v7.6.3');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
@@ -5468,6 +5484,7 @@ function fillNativeLoginForm(creds, lastWG) {
         // initQBar(); // 已禁用：不需要顶部快速切换条
         createWS();
         checkNavigateTarget();
+        checkAuditQueueResume();
         initReportEnhance();
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
     }
