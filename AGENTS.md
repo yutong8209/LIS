@@ -48,3 +48,7 @@ python3 ~/脚本/image-reader.py "/path/to/image.png"
 - `browser_control.py` uses `mss` for screenshots (not pyautogui) — captures full primary monitor.
 - `pyautogui.typewrite()` only handles ASCII — Chinese input needs a different approach.
 - No test suite, no lint, no typecheck. Verify changes by running the scripts manually.
+
+## Key files (续)
+
+| `lis_proxy.py` | 反向代理 & 代码缓存器 — 自动抓取 LIS 前端代码到本地 `cache/` 目录 |

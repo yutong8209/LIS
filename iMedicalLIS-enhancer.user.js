@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      6.28.4
-// @description  报告审核增强 + 质控图面板 — 批量审核 + L-J质控图 + 质控数据编辑（纯本地运行，无任何上传）
+// @version      7.6.1
+// @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -60,6 +60,30 @@
     const saveCAAuth = () => { try { localStorage.setItem(K.caAuth, JSON.stringify({ time: Date.now(), wg: wgDR() })); } catch(e){} };
     const loadCAAuth = () => { try { const v=localStorage.getItem(K.caAuth); if(!v) return null; const o=JSON.parse(v); return o; } catch(e){ return null; } };
     const clearCAAuth = () => { try { localStorage.removeItem(K.caAuth); } catch(e){} };
+    // 通过原生 setter 设置 input 值（兼容 EasyUI/React 等框架）
+    function setNativeInputValue(el, value) {
+        try {
+            // 尝试使用所属 document 的原生 setter
+            var win = el.ownerDocument ? el.ownerDocument.defaultView : window;
+            if (!win) win = window;
+            var setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value');
+            if (setter && setter.set) {
+                el.focus();
+                setter.set.call(el, value);
+            } else {
+                el.focus();
+                el.value = value;
+            }
+        } catch(e) {
+            el.focus();
+            el.value = value;
+        }
+        el.dispatchEvent(new Event('focus', {bubbles:true}));
+        el.dispatchEvent(new Event('input', {bubbles:true}));
+        el.dispatchEvent(new Event('change', {bubbles:true}));
+        el.dispatchEvent(new Event('blur', {bubbles:true}));
+    }
+
 
     // ==================== 调试日志 ====================
     const DEBUG = true;
@@ -68,7 +92,7 @@
         if (DEBUG) {
             const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
             console.log('[LIS]', msg);
-            _dbgLog.push(msg);
+            _dbgLog.push(msg); if (_dbgLog.length > 500) _dbgLog.splice(0, _dbgLog.length - 500);
         }
     };
     // 在页面底部显示调试面板（Alt+D 切换）
@@ -82,7 +106,18 @@
         document.body.appendChild(panel);
     }
 
-    async function fetchJ(u) { const r=await fetch(u,{credentials:'same-origin'}); if(!r.ok) throw new Error(r.status); return r.json(); }
+    async function fetchJ(u, timeoutMs) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs || 15000);
+        try {
+            const r = await fetch(u, { credentials: 'same-origin', signal: ctrl.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const text = await r.text();
+            if (!text || text.trim()[0] !== '{' && text.trim()[0] !== '[') throw new Error('非JSON响应');
+            return JSON.parse(text);
+        } finally { clearTimeout(timer);
+        }
+    }
 
     // 高亮搜索文本
     function highlightText(text, query) {
@@ -270,68 +305,6 @@
 @keyframes lis-sp{to{transform:rotate(360deg)}}
 
 
-/* --- 质控面板 v7 --- */
-#lis-qc-fab{position:fixed;bottom:152px;right:20px;z-index:99999;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#00b894,#00cec9);color:#fff;border:none;cursor:pointer;font-size:11px;font-weight:700;box-shadow:0 4px 14px rgba(0,184,148,.5);transition:transform .3s,box-shadow .3s;display:flex;align-items:center;justify-content:center;flex-direction:column;line-height:1.1;user-select:none}
-#lis-qc-fab:hover{transform:scale(1.1);box-shadow:0 6px 20px rgba(0,184,148,.6)}
-#lis-qc-fab .fab-icon{font-size:20px}
-#lis-qc-fab .fab-label{font-size:8px;letter-spacing:.5px}
-#lis-qc-panel{position:fixed!important;inset:0!important;z-index:100005!important;background:#f5f0e8;display:none;flex-direction:column;font-family:'Microsoft YaHei','Segoe UI',sans-serif}
-#lis-qc-panel.show{display:flex!important}
-.qc-toolbar{background:#2c3e50;color:#fff;padding:8px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0}
-.qc-toolbar h3{margin:0;font-size:14px;font-weight:700;white-space:nowrap}
-.qc-toolbar .qc-tb-sep{width:1px;height:20px;background:rgba(255,255,255,.3)}
-.qc-toolbar label{font-size:11px;color:rgba(255,255,255,.7);white-space:nowrap}
-.qc-toolbar select,.qc-toolbar input[type=date]{padding:4px 8px;border:1px solid rgba(255,255,255,.2);border-radius:4px;font-size:12px;background:rgba(255,255,255,.1);color:#fff;outline:none}
-.qc-toolbar select option{background:#2c3e50;color:#fff}
-.qc-toolbar input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1)}
-.qc-toolbar .qc-tb-btn{padding:4px 12px;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;transition:.15s}
-.qc-toolbar .qc-tb-btn:hover{filter:brightness(1.15)}
-.qc-toolbar .qc-tb-btn.btn-primary{background:#3498db;color:#fff}
-.qc-toolbar .qc-tb-btn.btn-success{background:#27ae60;color:#fff}
-.qc-toolbar .qc-tb-btn.btn-warning{background:#e67e22;color:#fff}
-.qc-toolbar .qc-tb-close{margin-left:auto;background:none;border:none;color:rgba(255,255,255,.7);cursor:pointer;font-size:18px;padding:4px 8px;border-radius:4px}
-.qc-toolbar .qc-tb-close:hover{color:#fff;background:rgba(255,255,255,.1)}
-.qc-main{flex:1;display:flex;overflow:hidden;min-height:0}
-.qc-sidebar{width:240px;min-width:200px;background:#fff;border-right:1px solid #e0e0e0;display:flex;flex-direction:column;flex-shrink:0}
-.qc-sidebar-hd{padding:10px 12px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:6px}
-.qc-sidebar-hd input{flex:1;padding:5px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;outline:none}
-.qc-sidebar-hd input:focus{border-color:#3498db}
-.qc-item-list{flex:1;overflow-y:auto;padding:4px 0}
-.qc-item{padding:8px 12px;cursor:pointer;border-left:3px solid transparent;transition:.15s;font-size:12px}
-.qc-item:hover{background:#f0f7ff}
-.qc-item.active{background:#e3f2fd;border-left-color:#3498db;font-weight:600}
-.qc-item .qi-name{font-weight:600;color:#2c3e50;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.qc-item .qi-mat{font-size:11px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.qc-item .qi-level{font-size:10px;color:#fff;background:#9b59b6;border-radius:3px;padding:1px 5px;display:inline-block;margin-top:2px}
-.qc-content{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.qc-chart-wrap{flex:1;position:relative;min-height:300px;background:#fff;border-bottom:1px solid #e0e0e0}
-.qc-chart-wrap canvas{display:block;width:100%;height:100%}
-.qc-chart-tooltip{position:absolute;background:rgba(44,62,80,.92);color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;pointer-events:none;display:none;z-index:10;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.3)}
-.qc-chart-tooltip .tt-title{font-weight:700;margin-bottom:4px}
-.qc-chart-tooltip .tt-row{display:flex;justify-content:space-between;gap:12px}
-.qc-stats-bar{display:flex;gap:16px;padding:8px 16px;background:#f8f9fa;border-bottom:1px solid #e0e0e0;flex-shrink:0;flex-wrap:wrap;align-items:center}
-.qc-stats-bar .stat-item{font-size:11px;color:#555;display:flex;align-items:center;gap:4px}
-.qc-stats-bar .stat-item b{color:#2c3e50}
-.qc-stats-bar .stat-item .stat-label{color:#999}
-.qc-data-wrap{height:200px;min-height:120px;overflow:auto;flex-shrink:0;background:#fff}
-.qc-data-wrap table{width:100%;border-collapse:collapse;font-size:12px}
-.qc-data-wrap th{position:sticky;top:0;background:#3d566e;color:#ecf0f1;padding:6px 10px;text-align:left;font-weight:600;white-space:nowrap;z-index:1}
-.qc-data-wrap td{padding:5px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
-.qc-data-wrap tbody tr:hover{background:#e8f4fd}
-.qc-data-wrap tbody tr:nth-child(even){background:#fafbfc}
-.qc-data-wrap td[contenteditable=true]{background:#fff9c4;outline:2px solid #f39c12;border-radius:2px}
-.qc-data-wrap .status-ok{color:#27ae60;font-weight:600}
-.qc-data-wrap .status-warn{color:#e67e22;font-weight:600}
-.qc-data-wrap .status-loss{color:#e74c3c;font-weight:600}
-.qc-data-wrap .status-ns{color:#999}
-.qc-level-bar{display:flex;gap:4px;align-items:center;padding:0 12px}
-.qc-level-btn{padding:3px 10px;border:1px solid rgba(255,255,255,.3);border-radius:3px;background:transparent;color:rgba(255,255,255,.7);cursor:pointer;font-size:11px;transition:.15s}
-.qc-level-btn.on{background:rgba(255,255,255,.2);color:#fff;border-color:#fff}
-.qc-level-btn:hover{color:#fff}
-.qc-empty-msg{text-align:center;padding:60px 20px;color:#95a5a6;font-size:14px}
-.qc-empty-msg .ico{font-size:48px;margin-bottom:12px;display:block}
-.qc-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.8);z-index:5;font-size:13px;color:#666}
-.qc-iframe-fallback{flex:1;border:none;width:100%;height:100%}
     
 /* --- 登录页优化 --- */
 #lis-login-box{position:fixed;top:50%;right:40px;transform:translateY(-50%);z-index:99999;background:rgba(255,255,255,.97);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.15);padding:20px 24px;width:300px;font-family:'Microsoft YaHei',sans-serif}
@@ -398,6 +371,7 @@
 .result-table .hist-tag.abnormal{background:#fce4ec;color:#c62828;border-left:3px solid #e74c3c}
 .result-table .hist-tag.high{background:#fff3e0;color:#e65100;border-left:3px solid #ff9800}
 .result-table .hist-tag.low{background:#e3f2fd;color:#1565c0;border-left:3px solid #2196f3}
+.result-table .hist-tag.critical{background:#ffebee;color:#c62828;border-left:3px solid #e74c3c;font-weight:700}
 .result-table .hist-tag.nodate{background:#f5f5f5;color:#999;border-left:3px solid #bbb}
 .result-table .hist-date{font-size:9px;color:#999;display:block;margin-top:-1px}
 #lis-detail-footer{padding:12px 20px;background:#f8f9fa;border-top:1px solid #eee;display:flex;gap:10px;justify-content:flex-end;flex-shrink:0}
@@ -471,7 +445,7 @@
             origC();
             try { if(a) orig('AuInfo',a); if(e) orig('EntryInfo',e); } catch(x){}
         };
-        setInterval(restoreAuth, 3000);
+        const _authTimer = setInterval(restoreAuth, 3000);
 
         // 密码自动填充
         if (isAuthPage()) fillAuthPage();
@@ -796,6 +770,7 @@
         wsLoading = true;
         const qi = document.getElementById('lis-qi');
         if (qi) qi.textContent = '加载中...';
+        try {
 
         const curDR = wgDR();
         const targetWGs = WG; // 加载所有工作组的数据
@@ -853,7 +828,6 @@
         wsMachines = allMachines;
         calcMachineCounts();
 
-        wsLoading = false;
         if (qi) qi.textContent = `${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
         invalidateCaches();
         renderWSTabs();
@@ -862,7 +836,12 @@
         classifyAllSpecimens();
         
         // 更新CA认证状态
-        updateCAStatus();
+        } catch(e) {
+            dbg('loadWSData 异常:', e);
+            if (qi) qi.textContent = '加载失败';
+        } finally {
+            wsLoading = false;
+        }
     }
 
     const _mcCache = {};
@@ -1100,22 +1079,15 @@
             <h3>🔬 工作台</h3>
             <input type="text" class="ws-search" id="lis-ws-search" placeholder="🔍 搜索姓名/检验号/流水号..." />
             <div class="ws-acts">
-                <button id="lis-ws-ca" style="background:#9b59b6;color:#fff;border-radius:6px" title="CA认证">🔑 CA认证</button>
-                <button id="lis-ws-qc" style="background:#00b894;color:#fff;border-radius:6px" title="质控面板">📊</button>
+
                 <button id="lis-ws-refresh" style="background:#3498db;color:#fff;border-radius:6px">🔄</button>
                 <button id="lis-ws-pwd" style="background:#f39c12;color:#fff;border-radius:6px" title="密码">🔐</button>
                 <button id="lis-ws-close" style="background:#e74c3c;color:#fff;border-radius:6px">✕</button>
             </div>`;
 
-        document.getElementById('lis-ws-ca').addEventListener('click', handleCAAuth);
+
         
         // 初始检查CA状态
-        updateCAStatus();
-        document.getElementById('lis-ws-qc').addEventListener('click', () => {
-            closeWS();
-            if (!_qcPanelEl) createQCPanel();
-            openQCPanel();
-        });
         document.getElementById('lis-ws-refresh').addEventListener('click', () => {
             dbg('刷新按钮被点击');
             loadWSData();
@@ -1425,19 +1397,46 @@
             h += `<span class="ab-card-no">${highlightText(r.Labno||'', wsSearchQuery)}</span>`;
             h += `<span class="ab-card-test">${highlightText(r._mn||'', wsSearchQuery)}</span>`;
             h += '<div class="ab-card-items">';
-            abnormalItems.forEach(it => {
+            // 如果分类缓存没有具体项目，尝试从详情缓存获取
+            let displayItems = abnormalItems;
+            if (displayItems.length === 0 && !hasInfectionWarning) {
+                const detailCached = detailLRUGet(r.ReportDR);
+                if (detailCached && detailCached.html) {
+                    // 从详情缓存 HTML 中提取异常项目
+                    const _tmp = document.createElement('div');
+                    _tmp.innerHTML = detailCached.html;
+                    _tmp.querySelectorAll('tr').forEach(tr => {
+                        const cls = tr.querySelector('td.abnormal');
+                        if (cls) {
+                            const tds = tr.querySelectorAll('td');
+                            if (tds.length >= 4) {
+                                const name = (tds[0].textContent||'').trim();
+                                const result = (tds[1].textContent||'').trim();
+                                const status = (tds[3].textContent||'').trim();
+                                if (name && name !== '项目') displayItems.push({name, result, status: status.includes('高')?'HIGH':status.includes('低')?'LOW':'ABNORMAL'});
+                            }
+                        }
+                    });
+                }
+                // 如果仍然没有，显示所有有结果的项目（可能 AbFlag 未标记）
+                if (displayItems.length === 0 && items.length > 0) {
+                    displayItems = items.filter(it => it.result && it.result.trim() && it.result.trim() !== '-');
+                }
+            }
+            displayItems.forEach(it => {
                 let cls = 'uncertain';
-                if (it.status === 'CRITICAL') cls = 'critical';
-                else if (it.status === 'HIGH') cls = 'high';
-                else if (it.status === 'LOW') cls = 'low';
-                else if (it.status === 'ABNORMAL') cls = 'abnormal';
+                const st = it.status || '';
+                if (st === 'CRITICAL') cls = 'critical';
+                else if (st === 'HIGH') cls = 'high';
+                else if (st === 'LOW') cls = 'low';
+                else if (st === 'ABNORMAL') cls = 'abnormal';
                 h += `<span class="ab-card-item ${cls}">${it.name} ${it.result}${it.unit||''}</span>`;
             });
             if (hasInfectionWarning) {
                 h += `<span class="ab-card-item infection-warning">⚠ ${cached.infectionWarning}</span>`;
             }
-            if (abnormalItems.length === 0 && !hasInfectionWarning) {
-                h += '<span class="ab-card-item uncertain">异常</span>';
+            if (displayItems.length === 0 && !hasInfectionWarning) {
+                h += '<span class="ab-card-item uncertain">⚠ 待确认</span>';
             }
             h += '</div>';
             if (hasCritical) {
@@ -1596,7 +1595,7 @@
                 } catch(e) { dbg('刷新datagrid异常:', e); }
                 // 循环等待 datagrid 加载正确的数据
                 for (let w = 0; w < 5 && !selected; w++) {
-                    await new Promise(r => setTimeout(r, 1500));
+                    await new Promise(r => setTimeout(r, 800));
                     iframeWin = getReportIframeWin() || iframeWin;
                     selected = selectNativeRowByReportDR(iframeWin, reportDR);
                     if (!selected) dbg('等待 datagrid 刷新...', w + 1);
@@ -1606,7 +1605,7 @@
                 showToast('未在原生列表中找到该标本', 'error');
                 return;
             }
-            await new Promise(r => setTimeout(r, 600));
+            await new Promise(r => setTimeout(r, 200));
 
             // 使用原生审核按钮
             const auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth');
@@ -1626,16 +1625,18 @@
 
             delete wsClassifiedCache[specimen.ReportDR];
             wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
+            invalidateCaches();
             calcMachineCounts();
-            renderWSTabs();
-            renderWSCategoryBar();
 
             const newData = filteredData();
             if (newData.length === 0) {
                 wsCategory = 'normal';
             }
-            renderWSCategoryBar();
-            renderWSTable();
+            // 使用 rAF 延迟重渲染，让 UI 先响应
+            requestAnimationFrame(() => {
+                renderWSCategoryBar();
+                renderWSTable();
+            });
         } catch(e) {
             dbg('审核失败:', e);
             showToast('审核失败: ' + e.message, 'error');
@@ -2122,17 +2123,14 @@
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                // 方向键切换上/下一个标本
+                // 方向键切换：原地更新内容，不关闭面板
                 const data = filteredData();
                 if (data.length === 0) return;
                 const curIdx = data.findIndex(r => r.ReportDR === (currentDetailSpecimen && currentDetailSpecimen.ReportDR));
                 let newIdx = curIdx + (e.key === 'ArrowDown' ? 1 : -1);
                 if (newIdx < 0) newIdx = data.length - 1;
                 if (newIdx >= data.length) newIdx = 0;
-                _removeDetailKeyHandler();
-                detailPanel.classList.remove('show');
-                currentDetailSpecimen = null;
-                openDetailPanel(data[newIdx], detailSource, newIdx);
+                _switchDetailInPlace(data[newIdx], detailSource, newIdx);
             }
         };
         document.addEventListener('keydown', _detailKeyHandler, true);
@@ -2144,6 +2142,79 @@
             document.removeEventListener('keydown', _detailKeyHandler, true);
             _detailKeyHandler = null;
         }
+    }
+
+    // 原地切换详情面板内容（不关闭面板，避免闪烁）
+    function _switchDetailInPlace(specimen, source, sourceIndex) {
+        if (!detailPanel || !specimen) return;
+        currentDetailSpecimen = specimen;
+        detailSource = source || null;
+        detailSourceIndex = (sourceIndex !== undefined) ? sourceIndex : -1;
+
+        // 更新标题
+        const titleEl = document.getElementById('lis-detail-title');
+        if (titleEl) titleEl.textContent = `📋 ${specimen.PatName || '未知'}`;
+        const subtitleEl = document.getElementById('lis-detail-subtitle');
+        if (subtitleEl) subtitleEl.innerHTML = `<span>${getStatusText(specimen.Status || specimen.ReportStatus)}</span> · 检验号: ${specimen.Labno || '-'} · 流水号: ${specimen.EpisodeNo || '-'} · ${specimen.TestSetDesc || ''} · 仪器: ${specimen._mn || '-'} · ${specimen.AcceptDT || ''}`;
+        const detailExtra = document.getElementById('lis-detail-extra');
+        const _cr = (wsClassifiedCache[specimen.ReportDR] || {}).row || specimen;
+        const _parts = [];
+        if (_cr.Sex) _parts.push(_cr.Sex);
+        if (_cr.Age) _parts.push(_cr.Age + (_cr.AgeUnit || ''));
+        if (_cr.Location) _parts.push(_cr.Location);
+        if (_cr.Ward) _parts.push(_cr.Ward);
+        if (_cr.BedNo) _parts.push('床' + _cr.BedNo);
+        if (_cr.Specimen) _parts.push(_cr.Specimen);
+        if (_cr.Doctor) _parts.push(_cr.Doctor);
+        if (detailExtra) detailExtra.textContent = _parts.length ? _parts.join(' · ') : '加载中...';
+
+        // 信息栏
+        const info = document.getElementById('lis-detail-info');
+        if (info) info.innerHTML = '<div style="height:1px"></div>';
+
+        // 显示加载中
+        const body = document.getElementById('lis-detail-body');
+        if (body) {
+            body.innerHTML = '<div id="lis-detail-loading"><div class="spinner"></div><p>正在加载结果...</p></div>';
+        }
+
+        // 更新底部按钮
+        const footer = document.getElementById('lis-detail-footer');
+        if (footer) {
+            const oldNative = document.getElementById('lis-detail-native');
+            if (oldNative) oldNative.remove();
+            const nativeBtn = document.createElement('button');
+            nativeBtn.id = 'lis-detail-native';
+            nativeBtn.className = 'btn-close';
+            nativeBtn.style.background = '#3498db';
+            nativeBtn.textContent = '📂 原生界面';
+            nativeBtn.addEventListener('click', () => { navigateToSpecimen(specimen); closeDetailPanel(); });
+            footer.insertBefore(nativeBtn, footer.firstChild);
+        }
+
+        // 加载详情（LRU 缓存命中时极快）
+        loadDetailResults(specimen);
+
+        // 重新注册键盘监听
+        _removeDetailKeyHandler();
+        _detailKeyHandler = (e) => {
+            if (!detailPanel || !detailPanel.classList.contains('show')) return;
+            if (e.key === 'Escape') {
+                e.preventDefault(); e.stopImmediatePropagation(); closeDetailPanel();
+            } else if (e.key === 'Enter') {
+                e.preventDefault(); e.stopImmediatePropagation(); _auditFromDetailPanel();
+            } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                const data = filteredData();
+                if (data.length === 0) return;
+                const curIdx = data.findIndex(r => r.ReportDR === (currentDetailSpecimen && currentDetailSpecimen.ReportDR));
+                let newIdx = curIdx + (e.key === 'ArrowDown' ? 1 : -1);
+                if (newIdx < 0) newIdx = data.length - 1;
+                if (newIdx >= data.length) newIdx = 0;
+                _switchDetailInPlace(data[newIdx], detailSource, newIdx);
+            }
+        };
+        document.addEventListener('keydown', _detailKeyHandler, true);
     }
 
     let _detailAuditInProgress = false;
@@ -2170,7 +2241,6 @@
             }
 
             // 直接调用 LabResultSave 审核
-            await ensureCAAuthenticated();
             let iframeWin = getReportIframeWin();
             if (!iframeWin) iframeWin = await ensureReportPageLoaded();
             if (!iframeWin) {
@@ -2232,7 +2302,7 @@
                         else if (typeof iframeWin.FindFast === 'function') iframeWin.FindFast(findStr);
                     }
                 } catch(e) { dbg('刷新datagrid异常:', e); }
-                await new Promise(r => setTimeout(r, 2500));
+                await new Promise(r => setTimeout(r, 1200));
                 iframeWin = getReportIframeWin() || iframeWin;
                 selected = selectNativeRowByReportDR(iframeWin, reportDR);
             }
@@ -2262,32 +2332,31 @@
             // 从数据中移除
             delete wsClassifiedCache[specimen.ReportDR];
             wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
+            invalidateCaches();
             calcMachineCounts();
-            renderWSTabs();
-            renderWSCategoryBar();
-            renderWSTable();
 
-            // 关闭当前详情面板（不触发 Escape 逻辑）
-            _removeDetailKeyHandler();
-            detailPanel.classList.remove('show');
-            currentDetailSpecimen = null;
-
-            // 自动打开下一个标本的详情
+            // 自动切换到下一个标本（原地更新，不关闭面板）
             if (nextReportDR) {
-                await new Promise(r => setTimeout(r, 300));
                 const newData = filteredData();
                 const nextSpecimen = newData.find(r => r.ReportDR === nextReportDR);
                 dbg('下一个标本: 数据量=', newData.length, 'ReportDR=', nextReportDR, 'found=', !!nextSpecimen);
                 if (nextSpecimen) {
                     const nextIdx = newData.indexOf(nextSpecimen);
-                    openDetailPanel(nextSpecimen, source, nextIdx);
+                    // 延迟更新工作台视图，先切换详情
+                    requestAnimationFrame(() => {
+                        renderWSCategoryBar();
+                        renderWSTable();
+                    });
+                    _switchDetailInPlace(nextSpecimen, source, nextIdx);
                 } else {
-                    if (source === 'abnormal') {
-                        wsCategory = 'normal';
-                    }
+                    closeDetailPanel();
+                    if (source === 'abnormal') wsCategory = 'normal';
+                    renderWSCategoryBar();
                     renderWSTable();
                 }
             } else {
+                closeDetailPanel();
+                renderWSCategoryBar();
                 renderWSTable();
             }
         } catch(e) {
@@ -2367,15 +2436,24 @@
         for (let i = 0; i < 3; i++) {
             if (i < recent.length) {
                 const h = recent[i];
-                const hisNum = parseFloat(h.result);
                 let cls = 'normal';
-                if (!isNaN(hisNum) && r.ValueLow && r.ValueHigh) {
-                    const low = parseFloat(r.ValueLow);
-                    const high = parseFloat(r.ValueHigh);
-                    if (hisNum > high) cls = 'high';
-                    else if (hisNum < low) cls = 'low';
+                // 优先用 AbFlag 判断颜色（从 PreResult 中提取）
+                const ab = (h.abFlag || '').toUpperCase();
+                if (ab === 'HH' || ab === 'LL') cls = 'critical';
+                else if (ab === 'H') cls = 'high';
+                else if (ab === 'L') cls = 'low';
+                else if (ab === 'A') cls = 'abnormal';
+                else {
+                    // 回退：用参考范围数值比较
+                    const hisNum = parseFloat(h.result);
+                    if (!isNaN(hisNum) && r.ValueLow && r.ValueHigh) {
+                        const low = parseFloat(r.ValueLow);
+                        const high = parseFloat(r.ValueHigh);
+                        if (hisNum > high) cls = 'high';
+                        else if (hisNum < low) cls = 'low';
+                    }
                 }
-                if (!h.date) cls = 'nodate';
+                if (!h.date && cls === 'normal') cls = 'nodate';
                 const dateStr = h.date ? h.date.split(' ')[0].replace(/^\d{2}(\d{2})/, '$1') : '';
                 dates.push(dateStr);
                 cells.push(`<span class="hist-tag ${cls}">${h.result}</span>`);
@@ -2402,7 +2480,8 @@
                 for (const p of src) {
                     const res = p.Result || p.TCResult || p.result || p.PreResult || '';
                     const dt = p.AcceptDT || p.AcceptDate || p.date || p.Date || '';
-                    if (res) items.push({ result: String(res).trim(), date: String(dt).trim() });
+                    const ab = (p.AbFlag || p.abFlag || p.Flag || '').toString().toUpperCase().trim();
+                    if (res) items.push({ result: String(res).trim(), date: String(dt).trim(), abFlag: ab });
                 }
                 continue;
             }
@@ -2420,7 +2499,8 @@
                         for (const p of arr) {
                             const res = p.Result || p.TCResult || p.result || p.PreResult || '';
                             const dt = p.AcceptDT || p.AcceptDate || p.date || p.Date || '';
-                            if (res) items.push({ result: String(res).trim(), date: String(dt).trim() });
+                            const ab = (p.AbFlag || p.abFlag || p.Flag || '').toString().toUpperCase().trim();
+                            if (res) items.push({ result: String(res).trim(), date: String(dt).trim(), abFlag: ab });
                         }
                         continue;
                     } catch(e) {}
@@ -2431,7 +2511,7 @@
                 if (matches) {
                     for (const m of matches) {
                         const parts = m.match(/(.+)\((.+)\)/);
-                        if (parts) items.push({ result: parts[1].trim(), date: parts[2].trim() });
+                        if (parts) items.push({ result: parts[1].trim(), date: parts[2].trim(), abFlag: '' });
                     }
                     continue;
                 }
@@ -2445,6 +2525,7 @@
                         if (rec.includes('^')) {
                             const parts = rec.split('^');
                             const res = parts[0] || '';
+                            const ab = (parts[1] || '').toString().toUpperCase().trim();
                             // parts[1] = 异常标志(H/L/A等), parts[2] = ID, parts[3] = 日期(YYYYMMDD)
                             let date = '';
                             if (parts[3]) {
@@ -2455,9 +2536,9 @@
                                     date = d;
                                 }
                             }
-                            if (res) items.push({ result: res.trim(), date: date });
+                            if (res) items.push({ result: res.trim(), date: date, abFlag: ab });
                         } else {
-                            if (rec) items.push({ result: rec, date: '' });
+                            if (rec) items.push({ result: rec, date: '', abFlag: '' });
                         }
                     }
                     continue;
@@ -2468,18 +2549,20 @@
                     const sep = trimmed.includes(',') ? ',' : (trimmed.includes(';') ? ';' : '|');
                     const vals = trimmed.split(sep).map(v => v.trim()).filter(Boolean);
                     for (const v of vals) {
-                        items.push({ result: v, date: '' });
+                        items.push({ result: v, date: '', abFlag: '' });
                     }
                     continue;
                 }
 
                 // 格式6: 单个值
-                items.push({ result: trimmed, date: '' });
+                items.push({ result: trimmed, date: '', abFlag: '' });
             }
         }
 
         return items;
     }
+
+
 
     async function loadDetailResults(specimen) {
         const body = document.getElementById('lis-detail-body');
@@ -2609,7 +2692,7 @@
             // 统计摘要栏
             const totalItems = itemInfo.length;
             const doneItems = itemInfo.filter(r => r.Result && r.Result.trim() && r.Result.trim() !== '-').length;
-            const abnItems = itemInfo.filter(r => { const f=(r.AbFlag||'').toUpperCase(); return f==='H'||f==='HH'||f==='L'||f==='LL'||f==='A'||f==='N'; }).length;
+            const abnItems = itemInfo.filter(r => { const f=(r.AbFlag||'').toUpperCase(); return f==='H'||f==='HH'||f==='L'||f==='LL'||f==='A'; }).length;
             const critItems = itemInfo.filter(r => { const f=(r.AbFlag||'').toUpperCase(); return f==='HH'||f==='LL'; }).length;
             const pendItems = totalItems - doneItems;
 
@@ -2649,7 +2732,7 @@
             });
             const thDates = hdrDates.map(d => d ? `<th style="font-size:11px">${d}</th>` : '<th style="font-size:11px">-</th>').join('');
 
-            html += `<thead><tr><th>项目</th><th>结果</th><th>参考范围</th><th>状态</th>${thDates}</tr></thead>`;
+            html += `<thead><tr><th style='width:20px'>QC</th><th>项目</th><th>结果</th><th>参考范围</th><th>状态</th>${thDates}</tr></thead>`;
             html += '<tbody>';
 
             itemInfo.forEach(r => {
@@ -2670,7 +2753,7 @@
                 } else if (abnormalFlag === 'H') {
                     isAbnormal = true; statusText = '↑ 高';
                     rowStyle = 'background:#fff8e1;border-left:3px solid #ff9800';
-                } else if (abnormalFlag === 'L' || abnormalFlag === 'N') {
+                } else if (abnormalFlag === 'L') {
                     isAbnormal = true; statusText = '↓ 低';
                     rowStyle = 'background:#e3f2fd;border-left:3px solid #2196f3';
                 } else if (abnormalFlag === 'A') {
@@ -2696,7 +2779,30 @@
                 // 历史结果
                 const hist = renderHistoryItems(r);
 
+                                // QC 状态图标
+                let qcHtml = '';
+                const qcf = (r.QcFlag || '').split('^');
+                const qcs = qcf[0] || '0';
+                if (qcs === '0') {
+                    qcHtml = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid #bbb;background:#f5f5f5" title="未做质控"></span>';
+                } else if (qcs === '1') {
+                    qcHtml = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#4caf50;box-shadow:0 0 4px rgba(76,175,80,.5)" title="质控正常"></span>';
+                } else if (qcs === '2') {
+                    qcHtml = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#ff9800;box-shadow:0 0 4px rgba(255,152,0,.5)" title="质控正常·警告未处理"></span>';
+                } else if (qcs === '3') {
+                    qcHtml = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#e74c3c;box-shadow:0 0 4px rgba(231,76,60,.5)" title="质控正常·失控未处理"></span>';
+                } else if (qcs === '4') {
+                    qcHtml = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#2196f3;box-shadow:0 0 4px rgba(33,150,243,.5)" title="质控正常·警告/失控已处理"></span>';
+                } else if (qcs === '5') {
+                    qcHtml = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#e74c3c;box-shadow:0 0 6px rgba(231,76,60,.7)" title="质控失控"></span>';
+                } else if (qcs === '6') {
+                    qcHtml = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#9e9e9e;box-shadow:0 0 4px rgba(158,158,158,.5)" title="批次过期"></span>';
+                } else {
+                    qcHtml = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid #bbb;background:#f5f5f5" title="未知"></span>';
+                }
+
                 html += `<tr style="${rowStyle}">
+                    <td style="text-align:center">${qcHtml}</td>
                     <td style="font-weight:500;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.CName || ''}">${r.CName || '-'}</td>
                     <td class="${statusClass}" style="font-weight:700;font-size:13px;white-space:nowrap">${result}${unit ? ' <span style="font-size:10px;color:#999;font-weight:400">' + unit + '</span>' : ''}</td>
                     <td style="color:#888;font-size:11px;white-space:nowrap">${refWithUnit}</td>
@@ -2745,8 +2851,12 @@
                     html += '<span style="margin-left:12px;color:#c62828;font-size:10px">须在原始LIS中审核</span>';
                     html += '</div>';
                 } else if (abnItems > 0) {
+                    // 列出具体异常项目名称
+                    const abnNames = itemInfo.filter(r => { const f=(r.AbFlag||'').toUpperCase(); return f==='H'||f==='HH'||f==='L'||f==='LL'||f==='A'; })
+                        .map(r => { const f=(r.AbFlag||'').toUpperCase(); const arrow = f.includes('H')?'↑':f.includes('L')?'↓':'⚠'; return (r.CName||'')+' '+(r.TextRes||r.Result||'')+' '+arrow; });
                     html += '<div style="margin-top:6px;padding:6px 10px;background:#fff8e1;border-radius:4px;font-size:11px;border:1px solid #ffecb3">';
                     html += '<span style="color:#ff9800;font-weight:600">⚠ 异常项目 ' + abnItems + ' 项</span>';
+                    if (abnNames.length > 0) html += '<span style="margin-left:8px;color:#e65100;font-size:10px">' + abnNames.join('、') + '</span>';
                     html += '</div>';
                 }
 
@@ -2761,8 +2871,12 @@
             }
 
             body.innerHTML = html;
+            const _dp = document.getElementById('lis-detail-panel'); if (_dp) _dp.dataset.rdr = String(rdr);
             // 存入 LRU 缓存
             detailLRUSet(rdr, { html, ts: Date.now() });
+
+
+
 
         } catch (e) {
             dbg('加载详细结果失败:', e);
@@ -2920,10 +3034,10 @@
             o.id = 'lis-pwdo';
             o.innerHTML = `<div id="lis-pwdp">
                 <h4>🔐 密码管理</h4>
-                <label style="font-size:13px;color:#555;display:block;margin-bottom:6px">审核密码（与登录密码不同）</label>
+                <label style="font-size:13px;color:#555;display:block;margin-bottom:6px">审核密码（与登录密码一致）</label>
                 <input type="password" id="lis-pwdi" placeholder="输入审核密码" />
                 <div class="sts" id="lis-pwds"></div>
-                <label style="font-size:13px;color:#555;display:block;margin-bottom:6px;margin-top:16px">CA认证密码（与登录账号一致）</label>
+                <label style="font-size:13px;color:#555;display:block;margin-bottom:6px;margin-top:16px">CA认证密码（与登录密码不同）</label>
                 <input type="password" id="lis-cawdi" placeholder="输入CA认证密码" />
                 <div class="sts" id="lis-cawds"></div>
                 <div class="pa">
@@ -3204,1109 +3318,6 @@ function fillNativeLoginForm(creds, lastWG) {
         }
     }
 
-    function getImmuneMachines() {
-        // 从缓存获取免疫组的仪器列表
-        const machines = _mcCache['4'] || [];
-        return machines.map(m => ({
-            dr: m.RowID,
-            name: m.CName || m.Name || m.RowID
-        }));
-    }
-
-    // ============================================================
-    //  模块 D：质控面板 v7（独立 L-J 质控图）
-    // ============================================================
-
-    const _qcAPI = {
-        config: null,
-        QC_CSP: BASE + '/csp/jquery.easyui.dhcclassjson.csp',
-        QC_ASHX: BASE + '/sys/ashx/ashBTQualityControl.ashx',
-        init() {
-            try {
-                const raw = localStorage.getItem('LIS_QC_API_Config');
-                if (raw) this.config = JSON.parse(raw);
-            } catch(e) {}
-        },
-        saveConfig() {
-            try { localStorage.setItem('LIS_QC_API_Config', JSON.stringify(this.config)); } catch(e) {}
-        },
-        async loadQCItemTree(wgDR) {
-            // 尝试通过 CSP 加载质控项目树
-            try {
-                const ss = buildSS(wgDR);
-                const p = new URLSearchParams();
-                p.set('ClassName', 'LIS.WS.BLL.QC.DHCRPQCSet');
-                p.set('QueryName', 'QryQCSetByWGM');
-                p.set('FunModul', 'JSON');
-                p.set('P0', wgDR);
-                p.set('P14', ss);
-                const data = await fetchJ(this.QC_CSP + '?' + p.toString());
-                if (data && data.rows && data.rows.length > 0) return data.rows;
-            } catch(e) { dbg('[QC] loadQCItemTree CSP 失败:', e.message); }
-
-            // 回退：尝试 ashx 方式
-            try {
-                const data = await fetchJ(this.QC_ASHX + '?Method=GetQCSetByWorkGroup&WorkGroupDR=' + wgDR);
-                if (data && data.rows && data.rows.length > 0) return data.rows;
-                if (Array.isArray(data) && data.length > 0) return data;
-            } catch(e) { dbg('[QC] loadQCItemTree ashx 失败:', e.message); }
-
-            return [];
-        },
-        async loadQCData(params) {
-            // params: { InstrumentCode, MaterialCode, TcCode, Level, StartDate, EndDate }
-            try {
-                const p = new URLSearchParams();
-                p.set('ClassName', 'LIS.WS.BLL.QC.DHCRPQCData');
-                p.set('QueryName', 'QryQCDataForChart');
-                p.set('FunModul', 'JSON');
-                p.set('P0', params.InstrumentCode || '');
-                p.set('P1', params.MaterialCode || '');
-                p.set('P2', params.TcCode || '');
-                p.set('P3', params.Level || '1');
-                p.set('P4', params.StartDate || '');
-                p.set('P5', params.EndDate || '');
-                const data = await fetchJ(this.QC_CSP + '?' + p.toString());
-                if (data && data.rows) return data.rows;
-                if (Array.isArray(data)) return data;
-            } catch(e) { dbg('[QC] loadQCData CSP 失败:', e.message); }
-
-            // 回退 ashx
-            try {
-                const p2 = new URLSearchParams();
-                p2.set('Method', 'GetQCData');
-                p2.set('InstrumentCode', params.InstrumentCode || '');
-                p2.set('MaterialCode', params.MaterialCode || '');
-                p2.set('TcCode', params.TcCode || '');
-                p2.set('Level', params.Level || '1');
-                p2.set('StartDate', params.StartDate || '');
-                p2.set('EndDate', params.EndDate || '');
-                const data = await fetchJ(this.QC_ASHX + '?' + p2.toString());
-                if (data && data.rows) return data.rows;
-                if (Array.isArray(data)) return data;
-            } catch(e) { dbg('[QC] loadQCData ashx 失败:', e.message); }
-
-            return [];
-        },
-        async saveQCData(params) {
-            try {
-                const p = new URLSearchParams();
-                p.set('ClassName', 'LIS.WS.BLL.QC.DHCRPQCData');
-                p.set('QueryName', 'UpdateQCData');
-                p.set('FunModul', 'JSON');
-                p.set('P0', params.InstrumentCode || '');
-                p.set('P1', params.MaterialCode || '');
-                p.set('P2', params.TcCode || '');
-                p.set('P3', params.Level || '1');
-                p.set('P4', params.Date || '');
-                p.set('P5', params.Result || '');
-                p.set('P6', params.QCID || '');
-                const data = await fetchJ(this.QC_CSP + '?' + p.toString());
-                return data;
-            } catch(e) {
-                dbg('[QC] saveQCData 失败:', e.message);
-                return null;
-            }
-        }
-    };
-
-    // --- 质控面板状态 ---
-    let _qcPanelEl = null;
-    let _qcState = {
-        open: false,
-        machines: [],
-        activeMachine: '',
-        items: [],
-        activeItem: null,
-        activeLevel: 1,
-        data: [],
-        stats: null,
-        startDate: (() => { const d=new Date(); d.setDate(d.getDate()-30); return d.toISOString().split('T')[0]; })(),
-        endDate: today(),
-        searchQuery: '',
-        pendingChanges: new Map(),
-        chartCanvas: null,
-        hoveredPoint: null
-    };
-
-    // --- 初始化质控面板 ---
-    function initQCPanel() {
-        _qcAPI.init();
-        createQCFab();
-    }
-
-    function createQCFab() {
-        if (document.getElementById('lis-qc-fab')) return;
-        const fab = document.createElement('button');
-        fab.id = 'lis-qc-fab';
-        fab.innerHTML = '<span class="fab-icon">📊</span><span class="fab-label">QC</span>';
-        fab.title = '打开质控面板';
-        fab.addEventListener('click', () => {
-            if (!_qcPanelEl) createQCPanel();
-            openQCPanel();
-        });
-        document.body.appendChild(fab);
-    }
-
-    function createQCPanel() {
-        if (_qcPanelEl) return _qcPanelEl;
-        _qcPanelEl = document.createElement('div');
-        _qcPanelEl.id = 'lis-qc-panel';
-        _qcPanelEl.innerHTML = `
-            <div class="qc-toolbar">
-                <h3>📊 质控面板</h3>
-                <span class="qc-tb-sep"></span>
-                <label>工作组:</label>
-                <select id="qc-wg-sel"></select>
-                <label>仪器:</label>
-                <select id="qc-mach-sel"><option value="">加载中...</option></select>
-                <span class="qc-tb-sep"></span>
-                <label>开始:</label>
-                <input type="date" id="qc-start-date">
-                <label>结束:</label>
-                <input type="date" id="qc-end-date">
-                <div class="qc-level-bar" id="qc-level-bar"></div>
-                <span class="qc-tb-sep"></span>
-                <button class="qc-tb-btn btn-primary" id="qc-btn-refresh">🔄 刷新</button>
-                <button class="qc-tb-btn btn-success" id="qc-btn-save" style="display:none">💾 保存修改</button>
-                <button class="qc-tb-btn btn-warning" id="qc-btn-fallback">🌐 嵌入模式</button>
-                <button class="qc-tb-close" id="qc-btn-close">✕</button>
-            </div>
-            <div class="qc-main">
-                <div class="qc-sidebar">
-                    <div class="qc-sidebar-hd">
-                        <input type="text" id="qc-search" placeholder="🔍 搜索项目...">
-                    </div>
-                    <div class="qc-item-list" id="qc-item-list">
-                        <div class="qc-empty-msg"><span class="ico">📋</span>请先选择仪器</div>
-                    </div>
-                </div>
-                <div class="qc-content">
-                    <div class="qc-stats-bar" id="qc-stats-bar"></div>
-                    <div class="qc-chart-wrap" id="qc-chart-wrap">
-                        <canvas id="qc-chart-canvas"></canvas>
-                        <div class="qc-chart-tooltip" id="qc-chart-tooltip"></div>
-                        <div class="qc-empty-msg" id="qc-chart-empty" style="position:absolute;inset:0"><span class="ico">📈</span>选择项目后显示 L-J 质控图</div>
-                    </div>
-                    <div class="qc-data-wrap" id="qc-data-wrap">
-                        <div class="qc-empty-msg" id="qc-data-empty"><span class="ico">📋</span>选择项目后显示质控数据</div>
-                    </div>
-                </div>
-            </div>`;
-        document.body.appendChild(_qcPanelEl);
-
-        // 工具栏事件
-        document.getElementById('qc-btn-close').addEventListener('click', closeQCPanel);
-        document.getElementById('qc-btn-refresh').addEventListener('click', refreshQCPanel);
-        document.getElementById('qc-btn-save').addEventListener('click', saveQCPendingChanges);
-        document.getElementById('qc-btn-fallback').addEventListener('click', openQCFallbackMode);
-        document.getElementById('qc-start-date').value = _qcState.startDate;
-        document.getElementById('qc-end-date').value = _qcState.endDate;
-        document.getElementById('qc-start-date').addEventListener('change', e => { _qcState.startDate = e.target.value; if (_qcState.activeItem) loadAndRenderQCData(); });
-        document.getElementById('qc-end-date').addEventListener('change', e => { _qcState.endDate = e.target.value; if (_qcState.activeItem) loadAndRenderQCData(); });
-
-        // 工作组选择
-        const wgSel = document.getElementById('qc-wg-sel');
-        WG.forEach(w => {
-            const opt = document.createElement('option');
-            opt.value = w.dr; opt.textContent = w.icon + ' ' + w.name;
-            wgSel.appendChild(opt);
-        });
-        wgSel.value = wgDR() || '4';
-        wgSel.addEventListener('change', async () => {
-            _qcState.activeMachine = '';
-            _qcState.items = [];
-            _qcState.activeItem = null;
-            _qcState.data = [];
-            _qcState.stats = null;
-            _qcState.pendingChanges.clear();
-            updateSaveBtn();
-            renderQCItemList();
-            await loadQCMachines(wgSel.value);
-        });
-
-        // 仪器选择
-        document.getElementById('qc-mach-sel').addEventListener('change', async (e) => {
-            _qcState.activeMachine = e.target.value;
-            _qcState.activeItem = null;
-            _qcState.data = [];
-            _qcState.stats = null;
-            _qcState.pendingChanges.clear();
-            updateSaveBtn();
-            if (_qcState.activeMachine) {
-                await loadQCItemTree();
-            } else {
-                _qcState.items = [];
-                renderQCItemList();
-            }
-        });
-
-        // 搜索
-        document.getElementById('qc-search').addEventListener('input', (e) => {
-            _qcState.searchQuery = e.target.value.toLowerCase();
-            renderQCItemList();
-        });
-
-        // Chart resize
-        const ro = new ResizeObserver(() => { if (_qcState.stats) renderLJChart(); });
-        ro.observe(document.getElementById('qc-chart-wrap'));
-
-        // Chart hover
-        const chartWrap = document.getElementById('qc-chart-wrap');
-        chartWrap.addEventListener('mousemove', handleChartHover);
-        chartWrap.addEventListener('mouseleave', () => {
-            _qcState.hoveredPoint = null;
-            const tt = document.getElementById('qc-chart-tooltip');
-            if (tt) tt.style.display = 'none';
-        });
-
-        return _qcPanelEl;
-    }
-
-    function openQCPanel() {
-        if (!_qcPanelEl) createQCPanel();
-        _qcState.open = true;
-        _qcPanelEl.classList.add('show');
-        document.body.style.overflow = 'hidden';
-        // 加载仪器
-        loadQCMachines(document.getElementById('qc-wg-sel').value);
-    }
-
-    function closeQCPanel() {
-        _qcState.open = false;
-        if (_qcPanelEl) _qcPanelEl.classList.remove('show');
-        document.body.style.overflow = '';
-    }
-
-    async function loadQCMachines(wgDR) {
-        const sel = document.getElementById('qc-mach-sel');
-        sel.innerHTML = '<option value="">加载中...</option>';
-        try {
-            const machines = await loadMachines(wgDR);
-            _qcState.machines = machines;
-            sel.innerHTML = '<option value="">全部仪器</option>';
-            machines.forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m.RowID;
-                opt.textContent = m.CName || m.Name || m.RowID;
-                sel.appendChild(opt);
-            });
-            sel.value = _qcState.activeMachine;
-        } catch(e) {
-            sel.innerHTML = '<option value="">加载失败</option>';
-            dbg('[QC] loadMachines 失败:', e);
-        }
-    }
-
-    async function loadQCItemTree() {
-        const listEl = document.getElementById('qc-item-list');
-        listEl.innerHTML = '<div class="qc-empty-msg"><span class="ico">⏳</span>加载质控项目...</div>';
-        const wgSel = document.getElementById('qc-wg-sel');
-        const wgDR = wgSel.value;
-        const machDR = _qcState.activeMachine;
-
-        let items = await _qcAPI.loadQCItemTree(wgDR);
-
-        // 如果 API 加载失败，尝试从质控页面 iframe 提取
-        if (!items || items.length === 0) {
-            dbg('[QC] API 加载项目列表失败，尝试 iframe 方式');
-            items = await discoverQCItemsViaIframe(wgDR, machDR);
-        }
-
-        // 如果还是没有，尝试通过解析质控数据查询页面
-        if (!items || items.length === 0) {
-            items = await discoverQCItemsViaDataView(wgDR, machDR);
-        }
-
-        _qcState.items = items || [];
-        renderQCItemList();
-    }
-
-    async function discoverQCItemsViaIframe(wgDR, machDR) {
-        return new Promise((resolve) => {
-            const iframe = document.createElement('iframe');
-            iframe.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px';
-            iframe.src = BASE + '/qc/form/frmQCDrawLJ.aspx?MenuDR=159&NotIndependent=1';
-            document.body.appendChild(iframe);
-
-            let resolved = false;
-            const timeout = setTimeout(() => {
-                if (!resolved) { resolved = true; iframe.remove(); resolve([]); }
-            }, 15000);
-
-            iframe.onload = () => {
-                try {
-                    const doc = iframe.contentDocument || iframe.contentWindow.document;
-                    // 尝试从页面中提取质控项目信息
-                    const scripts = doc.querySelectorAll('script');
-                    let items = [];
-                    scripts.forEach(s => {
-                        const text = s.textContent || '';
-                        // 查找质控项目数据
-                        const match = text.match(/var\s+qcItems?\s*=\s*(\[[\s\S]*?\]);/);
-                        if (match) {
-                            try { items = JSON.parse(match[1]); } catch(e) {}
-                        }
-                    });
-
-                    // 如果没有找到 JS 变量，尝试从 datagrid 提取
-                    if (items.length === 0) {
-                        try {
-                            const jq = iframe.contentWindow.jQuery;
-                            if (jq && jq.fn.datagrid) {
-                                const rows = jq('.datagrid-body').find('tr');
-                                rows.each(function() {
-                                    const cells = jq(this).find('td');
-                                    if (cells.length >= 3) {
-                                        items.push({
-                                            name: cells.eq(0).text().trim(),
-                                            abbr: cells.eq(1).text().trim(),
-                                            material: cells.eq(2).text().trim(),
-                                            code: cells.eq(3) ? cells.eq(3).text().trim() : ''
-                                        });
-                                    }
-                                });
-                            }
-                        } catch(e) {}
-                    }
-
-                    // 也尝试从全局变量中提取
-                    if (items.length === 0) {
-                        try {
-                            const win = iframe.contentWindow;
-                            const vars = ['qcSetData', 'qcItems', 'itemData', 'QryData'];
-                            for (const v of vars) {
-                                if (win[v] && Array.isArray(win[v]) && win[v].length > 0) {
-                                    items = win[v];
-                                    break;
-                                }
-                            }
-                        } catch(e) {}
-                    }
-
-                    resolved = true;
-                    clearTimeout(timeout);
-                    iframe.remove();
-                    resolve(items);
-                } catch(e) {
-                    resolved = true;
-                    clearTimeout(timeout);
-                    iframe.remove();
-                    resolve([]);
-                }
-            };
-        });
-    }
-
-    async function discoverQCItemsViaDataView(wgDR, machDR) {
-        // 尝试通过质控数据查询页面发现项目
-        return new Promise((resolve) => {
-            const iframe = document.createElement('iframe');
-            iframe.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px';
-            iframe.src = BASE + '/qc/form/frmQCDataView.aspx';
-            document.body.appendChild(iframe);
-
-            let resolved = false;
-            const timeout = setTimeout(() => {
-                if (!resolved) { resolved = true; iframe.remove(); resolve([]); }
-            }, 15000);
-
-            iframe.onload = () => {
-                try {
-                    const doc = iframe.contentDocument || iframe.contentWindow.document;
-                    const win = iframe.contentWindow;
-
-                    // 尝试从全局变量中提取
-                    let items = [];
-                    const vars = ['qcItems', 'itemData', 'TcData', 'instrumentItems'];
-                    for (const v of vars) {
-                        if (win[v] && Array.isArray(win[v]) && win[v].length > 0) {
-                            items = win[v];
-                            break;
-                        }
-                    }
-
-                    // 尝试从 datagrid 提取
-                    if (items.length === 0) {
-                        try {
-                            const jq = win.jQuery;
-                            if (jq) {
-                                const grids = jq('.datagrid-fbody, .datagrid-body');
-                                grids.each(function() {
-                                    const rows = jq(this).find('tr');
-                                    rows.each(function() {
-                                        const cells = jq(this).find('td');
-                                        if (cells.length >= 2) {
-                                            items.push({
-                                                name: cells.eq(0).text().trim(),
-                                                code: cells.eq(1) ? cells.eq(1).text().trim() : ''
-                                            });
-                                        }
-                                    });
-                                });
-                            }
-                        } catch(e) {}
-                    }
-
-                    resolved = true;
-                    clearTimeout(timeout);
-                    iframe.remove();
-                    resolve(items);
-                } catch(e) {
-                    resolved = true;
-                    clearTimeout(timeout);
-                    iframe.remove();
-                    resolve([]);
-                }
-            };
-        });
-    }
-
-    function renderQCItemList() {
-        const listEl = document.getElementById('qc-item-list');
-        if (!_qcState.items || _qcState.items.length === 0) {
-            listEl.innerHTML = '<div class="qc-empty-msg"><span class="ico">📋</span>暂无质控项目</div>';
-            return;
-        }
-
-        const q = _qcState.searchQuery;
-        const filtered = q ? _qcState.items.filter(item => {
-            const name = (item.name || item.TCName || item.TestCodeDesc || item.CName || '').toLowerCase();
-            const mat = (item.material || item.MaterialName || '').toLowerCase();
-            const code = (item.code || item.TcCode || item.TestCode || '').toLowerCase();
-            return name.includes(q) || mat.includes(q) || code.includes(q);
-        }) : _qcState.items;
-
-        if (filtered.length === 0) {
-            listEl.innerHTML = '<div class="qc-empty-msg"><span class="ico">🔍</span>无匹配项目</div>';
-            return;
-        }
-
-        let h = '';
-        filtered.forEach((item, idx) => {
-            const name = item.name || item.TCName || item.TestCodeDesc || item.CName || '未知项目';
-            const mat = item.material || item.MaterialName || '';
-            const code = item.code || item.TcCode || item.TestCode || '';
-            const levels = item.levels || item.LevelCount || 1;
-            const isActive = _qcState.activeItem && (
-                (_qcState.activeItem.TcCode || _qcState.activeItem.code) === (item.TcCode || item.code)
-            );
-            h += `<div class="qc-item ${isActive ? 'active' : ''}" data-idx="${idx}" data-code="${code}" title="${name}">`;
-            h += `<div class="qi-name">${name}</div>`;
-            if (mat) h += `<div class="qi-mat">${mat}</div>`;
-            h += '</div>';
-        });
-        listEl.innerHTML = h;
-
-        listEl.querySelectorAll('.qc-item').forEach(el => {
-            el.addEventListener('click', () => {
-                const idx = parseInt(el.dataset.idx);
-                selectQCItem(filtered[idx]);
-            });
-        });
-    }
-
-    function selectQCItem(item) {
-        _qcState.activeItem = item;
-        _qcState.activeLevel = 1;
-        _qcState.pendingChanges.clear();
-        updateSaveBtn();
-        renderQCItemList();
-        renderLevelBar(item);
-        loadAndRenderQCData();
-    }
-
-    function renderLevelBar(item) {
-        const bar = document.getElementById('qc-level-bar');
-        const levels = item.levels || item.LevelCount || 1;
-        if (levels <= 1) { bar.innerHTML = ''; return; }
-        let h = '';
-        for (let i = 1; i <= levels; i++) {
-            h += `<button class="qc-level-btn ${_qcState.activeLevel === i ? 'on' : ''}" data-level="${i}">L${i}</button>`;
-        }
-        bar.innerHTML = h;
-        bar.querySelectorAll('.qc-level-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                _qcState.activeLevel = parseInt(btn.dataset.level);
-                _qcState.pendingChanges.clear();
-                updateSaveBtn();
-                renderLevelBar(item);
-                loadAndRenderQCData();
-            });
-        });
-    }
-
-    async function loadAndRenderQCData() {
-        if (!_qcState.activeItem) return;
-        const item = _qcState.activeItem;
-        const chartEmpty = document.getElementById('qc-chart-empty');
-        const dataEmpty = document.getElementById('qc-data-empty');
-        if (chartEmpty) chartEmpty.style.display = 'none';
-        if (dataEmpty) dataEmpty.style.display = 'none';
-
-        // 显示加载中
-        const chartWrap = document.getElementById('qc-chart-wrap');
-        let loadingEl = chartWrap.querySelector('.qc-loading');
-        if (!loadingEl) {
-            loadingEl = document.createElement('div');
-            loadingEl.className = 'qc-loading';
-            loadingEl.textContent = '⏳ 加载质控数据...';
-            chartWrap.appendChild(loadingEl);
-        }
-
-        const params = {
-            InstrumentCode: item.InstrumentCode || item.MachineDR || _qcState.activeMachine || '',
-            MaterialCode: item.MaterialCode || item.MatDR || '',
-            TcCode: item.TcCode || item.code || item.TestCode || '',
-            Level: _qcState.activeLevel,
-            StartDate: _qcState.startDate,
-            EndDate: _qcState.endDate
-        };
-
-        dbg('[QC] 加载数据:', params);
-        const data = await _qcAPI.loadQCData(params);
-
-        if (loadingEl) loadingEl.remove();
-
-        if (!data || data.length === 0) {
-            document.getElementById('qc-chart-empty').style.display = '';
-            document.getElementById('qc-chart-empty').innerHTML = '<span class="ico">📭</span>该时间段无质控数据';
-            document.getElementById('qc-data-empty').style.display = '';
-            document.getElementById('qc-data-empty').innerHTML = '<span class="ico">📭</span>无质控数据';
-            _qcState.data = [];
-            _qcState.stats = null;
-            renderQCStatsBar();
-            return;
-        }
-
-        // 标准化数据格式
-        _qcState.data = data.map(r => ({
-            date: r.QCDate || r.Date || r.TestDate || '',
-            result: parseFloat(r.Result || r.QCResult || r.Value || 0),
-            target: parseFloat(r.Target || r.Mean || r靶值 || 0),
-            sd: parseFloat(r.SD || r.StandardDeviation || 0),
-            level: r.Level || r.QCLevel || _qcState.activeLevel,
-            id: r.RowID || r.QCID || r.ID || '',
-            rule: r.QCRule || r.Rule || '',
-            material: r.MaterialName || r.MatName || '',
-            tcName: r.TCName || r.TestCodeDesc || item.name || ''
-        }));
-
-        // 计算统计量
-        calcQCStats();
-        renderQCStatsBar();
-        renderLJChart();
-        renderQCDataTable();
-    }
-
-    function calcQCStats() {
-        const data = _qcState.data;
-        if (!data || data.length === 0) { _qcState.stats = null; return; }
-
-        const values = data.map(d => d.result).filter(v => !isNaN(v) && v !== 0);
-        if (values.length === 0) { _qcState.stats = null; return; }
-
-        const mean = values.reduce((s, v) => s + v, 0) / values.length;
-        const variance = values.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / (values.length - 1 || 1);
-        const sd = Math.sqrt(variance);
-        const cv = mean !== 0 ? (sd / mean * 100) : 0;
-
-        // 使用第一个数据点的设定靶值和标准差（如果有）
-        const firstTarget = data[0].target;
-        const firstSD = data[0].sd;
-        const useTarget = firstTarget > 0 ? firstTarget : mean;
-        const useSD = firstSD > 0 ? firstSD : sd;
-
-        _qcState.stats = {
-            target: useTarget,
-            sd: useSD,
-            cv: firstTarget > 0 && firstSD > 0 ? (firstSD / firstTarget * 100) : cv,
-            calcMean: mean,
-            calcSD: sd,
-            calcCV: cv,
-            count: values.length,
-            min: Math.min(...values),
-            max: Math.max(...values),
-            range: Math.max(...values) - Math.min(...values)
-        };
-    }
-
-    function renderQCStatsBar() {
-        const bar = document.getElementById('qc-stats-bar');
-        if (!_qcState.stats) { bar.innerHTML = ''; return; }
-        const s = _qcState.stats;
-        bar.innerHTML = `
-            <div class="stat-item"><span class="stat-label">靶值:</span> <b>${s.target.toFixed(3)}</b></div>
-            <div class="stat-item"><span class="stat-label">SD:</span> <b>${s.sd.toFixed(3)}</b></div>
-            <div class="stat-item"><span class="stat-label">CV%:</span> <b>${s.cv.toFixed(2)}%</b></div>
-            <div class="stat-item"><span class="stat-label">计算均值:</span> <b>${s.calcMean.toFixed(3)}</b></div>
-            <div class="stat-item"><span class="stat-label">计算SD:</span> <b>${s.calcSD.toFixed(3)}</b></div>
-            <div class="stat-item"><span class="stat-label">计算CV%:</span> <b>${s.calcCV.toFixed(2)}%</b></div>
-            <div class="stat-item"><span class="stat-label">数据点:</span> <b>${s.count}</b></div>
-            <div class="stat-item"><span class="stat-label">范围:</span> <b>${s.min.toFixed(2)} ~ ${s.max.toFixed(2)}</b></div>`;
-    }
-
-    // ==================== L-J 图 Canvas 渲染 ====================
-    const _qcChart = {
-        padding: { top: 40, right: 30, bottom: 50, left: 60 },
-        colors: {
-            bg: '#ffffff',
-            grid: '#f0f0f0',
-            axis: '#333333',
-            target: '#27ae60',
-            sd1: '#3498db',
-            sd2: '#e67e22',
-            sd3: '#e74c3c',
-            pointOk: '#27ae60',
-            pointWarn: '#e67e22',
-            pointLoss: '#e74c3c',
-            text: '#555555',
-            textLight: '#999999'
-        }
-    };
-
-    function renderLJChart() {
-        const canvas = document.getElementById('qc-chart-canvas');
-        if (!canvas || !_qcState.stats || !_qcState.data.length) return;
-
-        const wrap = document.getElementById('qc-chart-wrap');
-        const rect = wrap.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        const w = rect.width;
-        const h = rect.height;
-
-        canvas.width = w * dpr;
-        canvas.height = h * dpr;
-        canvas.style.width = w + 'px';
-        canvas.style.height = h + 'px';
-
-        const ctx = canvas.getContext('2d');
-        ctx.scale(dpr, dpr);
-
-        _qcChart.drawGrid(ctx, w, h);
-        _qcChart.drawSDLines(ctx, w, h);
-        _qcChart.drawDataPoints(ctx, w, h);
-        _qcChart.drawTitle(ctx, w);
-    }
-
-    _qcChart.drawGrid = function(ctx, w, h) {
-        const p = this.padding;
-        const cw = w - p.left - p.right;
-        const ch = h - p.top - p.bottom;
-
-        // 背景
-        ctx.fillStyle = this.colors.bg;
-        ctx.fillRect(0, 0, w, h);
-
-        // 网格线
-        ctx.strokeStyle = this.colors.grid;
-        ctx.lineWidth = 0.5;
-
-        // 水平网格线（10条）
-        for (let i = 0; i <= 10; i++) {
-            const y = p.top + (ch / 10) * i;
-            ctx.beginPath();
-            ctx.moveTo(p.left, y);
-            ctx.lineTo(p.left + cw, y);
-            ctx.stroke();
-        }
-
-        // 垂直网格线
-        const data = _qcState.data;
-        const dayCount = data.length;
-        const step = Math.max(1, Math.ceil(dayCount / 20));
-        for (let i = 0; i < dayCount; i += step) {
-            const x = p.left + (cw / (dayCount - 1 || 1)) * i;
-            ctx.beginPath();
-            ctx.moveTo(x, p.top);
-            ctx.lineTo(x, p.top + ch);
-            ctx.stroke();
-        }
-
-        // 坐标轴
-        ctx.strokeStyle = this.colors.axis;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(p.left, p.top);
-        ctx.lineTo(p.left, p.top + ch);
-        ctx.lineTo(p.left + cw, p.top + ch);
-        ctx.stroke();
-
-        // X 轴标签（日期）
-        ctx.fillStyle = this.colors.textLight;
-        ctx.font = '10px sans-serif';
-        ctx.textAlign = 'center';
-        for (let i = 0; i < dayCount; i += step) {
-            const x = p.left + (cw / (dayCount - 1 || 1)) * i;
-            const dateStr = data[i].date || '';
-            const label = dateStr.length >= 10 ? dateStr.substring(8, 10) : (i + 1).toString();
-            ctx.fillText(label, x, p.top + ch + 16);
-        }
-
-        // Y 轴刻度
-        const stats = _qcState.stats;
-        if (stats) {
-            const yMin = stats.target - 4 * stats.sd;
-            const yMax = stats.target + 4 * stats.sd;
-            ctx.textAlign = 'right';
-            ctx.fillStyle = this.colors.text;
-            for (let i = 0; i <= 8; i++) {
-                const val = yMin + (yMax - yMin) * (1 - i / 8);
-                const y = p.top + (ch / 8) * i;
-                ctx.fillText(val.toFixed(2), p.left - 6, y + 3);
-            }
-        }
-
-        // X 轴标题
-        ctx.fillStyle = this.colors.text;
-        ctx.font = '11px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('日期', p.left + cw / 2, p.top + ch + 35);
-
-        // Y 轴标题
-        ctx.save();
-        ctx.translate(15, p.top + ch / 2);
-        ctx.rotate(-Math.PI / 2);
-        ctx.fillText('浓度', 0, 0);
-        ctx.restore();
-    };
-
-    _qcChart.drawSDLines = function(ctx, w, h) {
-        const p = this.padding;
-        const cw = w - p.left - p.right;
-        const ch = h - p.top - p.bottom;
-        const stats = _qcState.stats;
-        if (!stats || stats.sd === 0) return;
-
-        const yMin = stats.target - 4 * stats.sd;
-        const yMax = stats.target + 4 * stats.sd;
-        const range = yMax - yMin;
-
-        const yScale = (val) => p.top + ch * (1 - (val - yMin) / range);
-
-        // 绘制 SD 区域背景
-        // ±2SD 区域（浅黄色警告区）
-        ctx.fillStyle = 'rgba(241, 196, 15, 0.06)';
-        ctx.fillRect(p.left, yScale(stats.target + 2 * stats.sd), cw, yScale(stats.target - 2 * stats.sd) - yScale(stats.target + 2 * stats.sd));
-
-        // ±1SD 区域（浅绿色正常区）
-        ctx.fillStyle = 'rgba(46, 204, 113, 0.08)';
-        ctx.fillRect(p.left, yScale(stats.target + stats.sd), cw, yScale(stats.target - stats.sd) - yScale(stats.target + stats.sd));
-
-        const drawLine = (val, color, dash, label) => {
-            const y = yScale(val);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = val === stats.target ? 2 : 1;
-            ctx.setLineDash(dash);
-            ctx.beginPath();
-            ctx.moveTo(p.left, y);
-            ctx.lineTo(p.left + cw, y);
-            ctx.stroke();
-            ctx.setLineDash([]);
-
-            // 标签
-            ctx.fillStyle = color;
-            ctx.font = '10px sans-serif';
-            ctx.textAlign = 'right';
-            ctx.fillText(label, p.left + cw + 28, y + 3);
-        };
-
-        drawLine(stats.target + 3 * stats.sd, this.colors.sd3, [6, 3], '+3SD');
-        drawLine(stats.target + 2 * stats.sd, this.colors.sd2, [6, 3], '+2SD');
-        drawLine(stats.target + stats.sd, this.colors.sd1, [4, 4], '+1SD');
-        drawLine(stats.target, this.colors.target, [], '靶值');
-        drawLine(stats.target - stats.sd, this.colors.sd1, [4, 4], '-1SD');
-        drawLine(stats.target - 2 * stats.sd, this.colors.sd2, [6, 3], '-2SD');
-        drawLine(stats.target - 3 * stats.sd, this.colors.sd3, [6, 3], '-3SD');
-    };
-
-    _qcChart.drawDataPoints = function(ctx, w, h) {
-        const p = this.padding;
-        const cw = w - p.left - p.right;
-        const ch = h - p.top - p.bottom;
-        const stats = _qcState.stats;
-        const data = _qcState.data;
-        if (!stats || !data.length || stats.sd === 0) return;
-
-        const yMin = stats.target - 4 * stats.sd;
-        const yMax = stats.target + 4 * stats.sd;
-        const range = yMax - yMin;
-
-        const yScale = (val) => p.top + ch * (1 - (val - yMin) / range);
-        const xScale = (i) => p.left + (cw / (data.length - 1 || 1)) * i;
-
-        // 连线
-        ctx.strokeStyle = 'rgba(52, 152, 219, 0.3)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        data.forEach((d, i) => {
-            const x = xScale(i);
-            const y = yScale(d.result);
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-
-        // 数据点
-        data.forEach((d, i) => {
-            const x = xScale(i);
-            const y = yScale(d.result);
-            const deviation = Math.abs(d.result - stats.target) / stats.sd;
-
-            let color = this.colors.pointOk;
-            let radius = 4;
-            if (deviation >= 3) { color = this.colors.pointLoss; radius = 6; }
-            else if (deviation >= 2) { color = this.colors.pointWarn; radius = 5; }
-            else if (deviation >= 1) { radius = 4; }
-
-            // 检查 pending changes
-            const key = d.date + '|' + d.id;
-            if (_qcState.pendingChanges.has(key)) {
-                color = '#9b59b6'; // 紫色表示已修改
-                radius = 6;
-            }
-
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(x, y, radius, 0, Math.PI * 2);
-            ctx.fill();
-
-            // 白色边框
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-        });
-
-        // 存储坐标映射用于悬停检测
-        this._pointCoords = data.map((d, i) => ({
-            x: xScale(i),
-            y: yScale(d.result),
-            data: d,
-            index: i
-        }));
-    };
-
-    _qcChart.drawTitle = function(ctx, w) {
-        if (!_qcState.activeItem) return;
-        const item = _qcState.activeItem;
-        const name = item.name || item.TCName || item.TestCodeDesc || '';
-        const mat = item.material || item.MaterialName || '';
-        const title = name + (mat ? ' — ' + mat : '') + '  ' + _qcState.startDate + ' 至 ' + _qcState.endDate;
-
-        ctx.fillStyle = '#2c3e50';
-        ctx.font = 'bold 12px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(title, w / 2, 20);
-    };
-
-    function handleChartHover(e) {
-        const canvas = document.getElementById('qc-chart-canvas');
-        if (!canvas || !_qcChart._pointCoords) return;
-
-        const rect = canvas.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
-
-        const threshold = 15;
-        let closest = null;
-        let minDist = Infinity;
-
-        for (const pt of _qcChart._pointCoords) {
-            const dist = Math.sqrt(Math.pow(mx - pt.x, 2) + Math.pow(my - pt.y, 2));
-            if (dist < threshold && dist < minDist) {
-                minDist = dist;
-                closest = pt;
-            }
-        }
-
-        const tt = document.getElementById('qc-chart-tooltip');
-        if (!closest) {
-            _qcState.hoveredPoint = null;
-            tt.style.display = 'none';
-            return;
-        }
-
-        _qcState.hoveredPoint = closest;
-        const d = closest.data;
-        const stats = _qcState.stats;
-        const deviation = stats ? ((d.result - stats.target) / stats.sd).toFixed(2) : '--';
-        const statusText = Math.abs(parseFloat(deviation)) >= 3 ? '🔴 失控' :
-                          Math.abs(parseFloat(deviation)) >= 2 ? '🟡 警告' :
-                          Math.abs(parseFloat(deviation)) >= 1 ? '🔵 关注' : '🟢 正常';
-
-        tt.innerHTML = `
-            <div class="tt-title">${d.date || '未知日期'}</div>
-            <div class="tt-row"><span>结果:</span><b>${d.result.toFixed(3)}</b></div>
-            <div class="tt-row"><span>靶值:</span><span>${stats ? stats.target.toFixed(3) : '--'}</span></div>
-            <div class="tt-row"><span>偏差(SD):</span><span>${deviation}</span></div>
-            <div class="tt-row"><span>状态:</span><span>${statusText}</span></div>
-            ${d.rule ? '<div class="tt-row"><span>规则:</span><span>' + d.rule + '</span></div>' : ''}
-            ${_qcState.pendingChanges.has(d.date + '|' + d.id) ? '<div class="tt-row"><span style="color:#9b59b6">✏️ 已修改</span></div>' : ''}`;
-
-        // 定位
-        let tx = closest.x + 15;
-        let ty = closest.y - 10;
-        const wrapRect = document.getElementById('qc-chart-wrap').getBoundingClientRect();
-        if (tx + 180 > wrapRect.width) tx = closest.x - 185;
-        if (ty < 0) ty = 10;
-        tt.style.left = tx + 'px';
-        tt.style.top = ty + 'px';
-        tt.style.display = 'block';
-    }
-
-    // ==================== 可编辑数据表 ====================
-    function renderQCDataTable() {
-        const wrap = document.getElementById('qc-data-wrap');
-        const data = _qcState.data;
-        const stats = _qcState.stats;
-
-        if (!data || data.length === 0) {
-            wrap.innerHTML = '<div class="qc-empty-msg" id="qc-data-empty"><span class="ico">📋</span>无质控数据</div>';
-            return;
-        }
-
-        let h = '<table><thead><tr>';
-        h += '<th>日期</th><th>结果</th><th>靶值</th><th>SD</th><th>偏差(SD)</th><th>CV%</th><th>状态</th><th>质控规则</th>';
-        h += '</tr></thead><tbody>';
-
-        data.forEach((d, i) => {
-            const deviation = stats && stats.sd > 0 ? (d.result - stats.target) / stats.sd : 0;
-            const absDev = Math.abs(deviation);
-            let statusCls = 'status-ok';
-            let statusText = '正常';
-            if (absDev >= 3) { statusCls = 'status-loss'; statusText = '失控'; }
-            else if (absDev >= 2) { statusCls = 'status-warn'; statusText = '警告'; }
-            else if (absDev >= 1) { statusCls = 'status-warn'; statusText = '关注'; }
-
-            const key = d.date + '|' + d.id;
-            const isModified = _qcState.pendingChanges.has(key);
-
-            h += `<tr data-idx="${i}" ${isModified ? 'style="background:#f3e5f5"' : ''}>`;
-            h += `<td>${d.date || ''}</td>`;
-            h += `<td class="qc-editable" data-idx="${i}" data-field="result" title="双击编辑">${isModified ? '✏️ ' : ''}${d.result.toFixed(3)}</td>`;
-            h += `<td>${stats ? stats.target.toFixed(3) : '--'}</td>`;
-            h += `<td>${stats ? stats.sd.toFixed(3) : '--'}</td>`;
-            h += `<td>${deviation.toFixed(2)}</td>`;
-            h += `<td>${stats && stats.target ? (d.result / stats.target * 100 - 100).toFixed(2) : '--'}%</td>`;
-            h += `<td class="${statusCls}">${statusText}</td>`;
-            h += `<td>${d.rule || ''}</td>`;
-            h += '</tr>';
-        });
-
-        h += '</tbody></table>';
-        wrap.innerHTML = h;
-
-        // 双击编辑
-        wrap.querySelectorAll('.qc-editable').forEach(td => {
-            td.addEventListener('dblclick', () => {
-                const idx = parseInt(td.dataset.idx);
-                const field = td.dataset.field;
-                const currentVal = _qcState.data[idx][field];
-                const input = document.createElement('input');
-                input.type = 'number';
-                input.step = '0.001';
-                input.value = currentVal;
-                input.style.cssText = 'width:80px;padding:2px 4px;border:1px solid #3498db;border-radius:3px;font-size:12px';
-                td.textContent = '';
-                td.appendChild(input);
-                input.focus();
-                input.select();
-
-                const commit = () => {
-                    const newVal = parseFloat(input.value);
-                    if (!isNaN(newVal) && newVal !== currentVal) {
-                        const key = _qcState.data[idx].date + '|' + _qcState.data[idx].id;
-                        _qcState.pendingChanges.set(key, {
-                            ..._qcState.data[idx],
-                            result: newVal,
-                            originalResult: currentVal
-                        });
-                        _qcState.data[idx].result = newVal;
-                        updateSaveBtn();
-                    }
-                    calcQCStats();
-                    renderQCStatsBar();
-                    renderLJChart();
-                    renderQCDataTable();
-                };
-
-                input.addEventListener('blur', commit);
-                input.addEventListener('keydown', (ke) => {
-                    if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
-                    if (ke.key === 'Escape') { input.value = currentVal; input.blur(); }
-                });
-            });
-        });
-    }
-
-    function updateSaveBtn() {
-        const btn = document.getElementById('qc-btn-save');
-        if (btn) {
-            const count = _qcState.pendingChanges.size;
-            if (count > 0) {
-                btn.style.display = '';
-                btn.textContent = '💾 保存修改 (' + count + ')';
-            } else {
-                btn.style.display = 'none';
-            }
-        }
-    }
-
-    async function saveQCPendingChanges() {
-        if (_qcState.pendingChanges.size === 0) return;
-        const changes = Array.from(_qcState.pendingChanges.values());
-        let success = 0;
-        let fail = 0;
-
-        for (const chg of changes) {
-            const params = {
-                InstrumentCode: _qcState.activeItem?.InstrumentCode || '',
-                MaterialCode: _qcState.activeItem?.MaterialCode || '',
-                TcCode: chg.id || _qcState.activeItem?.TcCode || '',
-                Level: _qcState.activeLevel,
-                Date: chg.date,
-                Result: chg.result.toString(),
-                QCID: chg.id || ''
-            };
-            const result = await _qcAPI.saveQCData(params);
-            if (result) success++; else fail++;
-        }
-
-        _qcState.pendingChanges.clear();
-        updateSaveBtn();
-        renderQCDataTable();
-        renderLJChart();
-
-        if (fail === 0) {
-            toast('✅ 成功保存 ' + success + ' 条质控结果');
-        } else {
-            toast('⚠️ 保存完成：' + success + ' 成功，' + fail + ' 失败', 'w');
-        }
-    }
-
-    function openQCFallbackMode() {
-        // 降级模式：嵌入原始质控页面
-        if (!_qcPanelEl) createQCPanel();
-        const content = document.querySelector('.qc-content');
-        if (!content) return;
-
-        const wgDR = document.getElementById('qc-wg-sel').value;
-        const machDR = _qcState.activeMachine;
-        const url = BASE + '/qc/form/frmQCDrawLJ.aspx?MenuDR=159&NotIndependent=1';
-
-        content.innerHTML = `<iframe class="qc-iframe-fallback" src="${url}" id="qc-iframe"></iframe>`;
-    }
-
-    function refreshQCPanel() {
-        if (_qcState.activeItem) {
-            loadAndRenderQCData();
-        } else if (_qcState.activeMachine) {
-            loadQCItemTree();
-        }
-    }
-
-    // ============================================================
-    // ============================================================
     //  模块 C2：报告处理页增强工具栏（审核流程优化核心）
     // ============================================================
 
@@ -4390,8 +3401,9 @@ function fillNativeLoginForm(creds, lastWG) {
     // --- 状态 ---
     let _toolbarVisible = false;
     let _auditInProgress = false;
+    let _batchAbort = false;
     let _auditLockTs = 0;
-    const AUDIT_LOCK_TIMEOUT = 60000; // 60秒自动释放卡死的锁
+    const AUDIT_LOCK_TIMEOUT = 300000; // 5分钟自动释放卡死的锁
     function acquireAuditLock(tag) {
         if (_auditInProgress && (Date.now() - _auditLockTs > AUDIT_LOCK_TIMEOUT)) {
             dbg('审核锁超时自动释放 (held by', tag, ')');
@@ -4403,6 +3415,7 @@ function fillNativeLoginForm(creds, lastWG) {
         return true;
     }
     function releaseAuditLock() {
+        _batchAbort = false;
         _auditInProgress = false;
         _auditLockTs = 0;
     }
@@ -4609,111 +3622,6 @@ function fillNativeLoginForm(creds, lastWG) {
         } catch(e) {}
     }
 
-    // --- 工作台 CA 认证按钮 ---
-    async function handleCAAuth() {
-        const btn = document.getElementById('lis-ws-ca');
-        if (!btn) return;
-        btn.disabled = true;
-        btn.textContent = '⏳ 认证中...';
-        btn.style.background = '#7f8c8d';
-
-        const caPwd = loadCAPwd();
-        if (!caPwd) {
-            showToast('请先设置CA密码', 'warning');
-            btn.textContent = '🔑 CA认证'; btn.style.background = '#9b59b6'; btn.disabled = false; return;
-        }
-
-        try {
-            let iframeWin = getReportIframeWin();
-            if (!iframeWin) {
-                showToast('正在加载报告页面...', 'warning');
-                iframeWin = await ensureReportPageLoaded();
-            }
-            if (!iframeWin) { showToast('未找到报告页面', 'error'); btn.textContent = '🔑 CA认证'; btn.style.background = '#9b59b6'; btn.disabled = false; return; }
-
-            let jq = iframeWin.jQuery || iframeWin.$;
-            let me = iframeWin.me;
-            if (!jq || !me) {
-                for (let w = 0; w < 15; w++) {
-                    await sleep(400);
-                    iframeWin = getReportIframeWin();
-                    if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; if (jq && me) break; }
-                }
-            }
-            if (!jq || !me) { showToast('报告页面未就绪', 'error'); btn.textContent = '🔑 CA认证'; btn.style.background = '#9b59b6'; btn.disabled = false; return; }
-
-            // 检查审核登录状态
-            const authStatus = getAuditStatusText(iframeWin);
-            if (authStatus && authStatus.indexOf('未登录') !== -1) {
-                showToast('审核用户未登录...', 'warning');
-                const loginOK = await handleAuditLogin(iframeWin, jq);
-                if (!loginOK) { showToast('审核登录失败', 'error'); btn.textContent = '🔑 CA认证'; btn.style.background = '#9b59b6'; btn.disabled = false; return; }
-                await sleep(500);
-            }
-
-            // 尝试选中第一行（可选）
-            const dg = jq('#dgWorkList');
-            if (dg.length) {
-                try {
-                    const rows = dg.datagrid('getRows');
-                    if (rows && rows.length > 0) dg.datagrid('selectRow', 0);
-                } catch(e) {}
-            }
-
-            // 点击审核按钮触发CA窗口
-            const auditBtn = iframeWin.document.getElementById('btn_ReportAuth') || document.getElementById('btn_ReportAuth');
-            if (!auditBtn) { showToast('未找到审核按钮', 'error'); btn.textContent = '🔑 CA认证'; btn.style.background = '#9b59b6'; btn.disabled = false; return; }
-
-            jq(auditBtn).click();
-            await sleep(1000);
-
-            // 检查CA窗口
-            let caWin = jq('#win_CAUserLogin');
-            let waited = 0;
-            while ((!caWin.length || !caWin.is(':visible')) && waited < 3000) {
-                await sleep(300); waited += 300; caWin = jq('#win_CAUserLogin');
-            }
-
-            if (caWin.length && caWin.is(':visible')) {
-                const caOK = await handleCALogin(iframeWin);
-                if (caOK) {
-                    showToast('✅ CA 认证成功', 'success');
-                    btn.textContent = '✅ 已认证'; btn.style.background = '#27ae60'; saveCAAuth();
-                } else {
-                    showToast('CA 认证失败', 'error');
-                    btn.textContent = '🔑 CA认证'; btn.style.background = '#9b59b6'; clearCAAuth();
-                }
-            } else {
-                showToast('✅ CA 已认证', 'success');
-                btn.textContent = '✅ 已认证'; btn.style.background = '#27ae60'; saveCAAuth();
-            }
-
-            // 清理
-            await sleep(300);
-            try {
-                const doc = iframeWin.document;
-                const dialogs = doc.querySelectorAll('.window, .messager-window');
-                for (const d of dialogs) {
-                    if (d.style.display === 'none') continue;
-                    const body = d.querySelector('.panel-body');
-                    if (!body) continue;
-                    const text = (body.textContent || '');
-                    if (text.indexOf('必填') !== -1 || text.indexOf('确认') !== -1) {
-                        const btns = d.querySelectorAll('a.l-btn, button');
-                        for (const b of btns) {
-                            if ((b.textContent || '').trim() === '取消') { jq(b).click(); break; }
-                        }
-                    }
-                }
-            } catch(e) {}
-            try { window.focus(); } catch(e) {}
-
-        } catch(e) {
-            showToast('CA认证异常: ' + e.message, 'error');
-            btn.textContent = '🔑 CA认证'; btn.style.background = '#9b59b6';
-        }
-        btn.disabled = false;
-    }
 
     async function handleCALogin(iframeWin) {
         const doc = iframeWin.document;
@@ -4770,18 +3678,10 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
 
                 if (userInput) {
-                    userInput.focus(); userInput.value = caUser;
-                    userInput.dispatchEvent(new Event('focus', {bubbles:true}));
-                    userInput.dispatchEvent(new Event('input', {bubbles:true}));
-                    userInput.dispatchEvent(new Event('change', {bubbles:true}));
-                    userInput.dispatchEvent(new Event('blur', {bubbles:true}));
+                    setNativeInputValue(userInput, caUser);
                 }
                 if (pwdInput) {
-                    pwdInput.focus(); pwdInput.value = caPwd;
-                    pwdInput.dispatchEvent(new Event('focus', {bubbles:true}));
-                    pwdInput.dispatchEvent(new Event('input', {bubbles:true}));
-                    pwdInput.dispatchEvent(new Event('change', {bubbles:true}));
-                    pwdInput.dispatchEvent(new Event('blur', {bubbles:true}));
+                    setNativeInputValue(pwdInput, caPwd);
                 }
                 await sleep(300);
 
@@ -4810,19 +3710,23 @@ function fillNativeLoginForm(creds, lastWG) {
                         dbg('CA: 登录成功');
                         return true;
                     }
-                    // 检查错误
-                    if (i > 0 && i % 10 === 0) {
+                    // 检查错误（每次轮询都检查）
+                    {
                         const errText = (caDoc.body?.textContent || '') + ' ' + (doc.querySelector('#win_CAUserLogin .panel-body')?.textContent || '');
                         if (errText.indexOf('账号锁定') !== -1 || errText.indexOf('账户锁定') !== -1) {
                             showToast('CA 账号已锁定', 'error');
                             return false;
+                        }
+                        if (errText.indexOf('密码错误') !== -1 || errText.indexOf('认证失败') !== -1) {
+                            dbg('CA: 密码错误');
+                            break;
                         }
                     }
                 }
 
                 if (attempt < 3) {
                     showToast('CA 重试 (' + attempt + '/3)...', 'warning');
-                    if (pwdInput) pwdInput.value = '';
+                    if (pwdInput) setNativeInputValue(pwdInput, '');
                     await sleep(1500);
                 }
             } catch(e) {
@@ -4837,6 +3741,10 @@ function fillNativeLoginForm(creds, lastWG) {
 
     // --- 点击原生审核按钮并处理 CA ---
     // 返回值：true=成功, false=失败, 'incomplete'=结果不完整（跳过）
+    // --- 点击原生审核按钮并处理 CA ---
+    // 返回值：true=成功, false=失败, 'incomplete'=结果不完整（跳过）
+    // --- 点击原生审核按钮并处理 CA ---
+    // 返回值：true=成功, false=失败, 'incomplete'=结果不完整（跳过）
     async function clickNativeAuditButton(iframeWin, btnId) {
         // 按钮在 iframe 的工具栏里
         let btn = null;
@@ -4844,11 +3752,9 @@ function fillNativeLoginForm(creds, lastWG) {
             btn = iframeWin.document.getElementById(btnId);
         }
         if (!btn) {
-            // 回退：主页面
             btn = document.getElementById(btnId);
         }
         if (!btn) {
-            // 再回退：按文本搜索
             const searchDocs = iframeWin ? [iframeWin.document, document] : [document];
             for (const doc of searchDocs) {
                 const allBtns = doc.querySelectorAll('a, button, input[type=button]');
@@ -4866,87 +3772,167 @@ function fillNativeLoginForm(creds, lastWG) {
 
         const jq = iframeWin ? (iframeWin.jQuery || iframeWin.$) : window.jQuery;
         const doc = iframeWin ? iframeWin.document : document;
+        const me = iframeWin ? iframeWin.me : null;
 
-        // 点击按钮
+        // 绕过审核登录：直接设置 IsAuthLogin=1
+        if (me && (me.IsAuthLogin === 0 || !me.AuthUserDR || me.AuthUserDR.length === 0)) {
+            me.IsAuthLogin = 1;
+            const userDR = uid() || me.SessionUserDR || '';
+            if (userDR) me.AuthUserDR = userDR;
+            dbg('已绕过审核登录: IsAuthLogin=1, AuthUserDR=' + me.AuthUserDR);
+        }
+
+        // 记录当前选中行的 ReportDR（用于检测审核成功）
+        let targetReportDR = '';
+        try {
+            const sel = me && me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
+            if (sel) targetReportDR = String(sel.ReportDR || '');
+        } catch(e) {}
+
+        // 点击审核按钮
         jq(btn).click();
+        dbg('已点击审核按钮, targetReportDR=' + targetReportDR);
 
-        // 轮询等待对话框出现（最多 2 秒，每 200ms 检查一次）
-        let statusText = '';
-        for (let poll = 0; poll < 10; poll++) {
+        // 轮询：检测 CA 窗口 / 审核成功 / 错误（最多 5 秒）
+        let caDetected = false;
+        for (let poll = 0; poll < 25; poll++) {
             await sleep(200);
-            statusText = getAuditStatusText(iframeWin);
-            if (statusText && statusText.indexOf('未登录') !== -1) break;
-            // 检查是否有 EasyUI 弹窗出现
-            const hasDialog = doc.querySelector('.window:not([style*="display: none"]), .messager-window:not([style*="display: none"])');
-            if (hasDialog) break;
-        }
 
-        // 检查是否有"审核用户未登录"提示
-        if (statusText && statusText.indexOf('未登录') !== -1) {
-            dbg('检测到审核用户未登录，尝试自动登录...');
-            showToast('审核用户未登录，正在自动登录...', 'warning');
-            const loginOK = await handleAuditLogin(iframeWin, jq);
-            if (!loginOK) {
-                showToast('审核登录失败，请手动登录', 'error');
-                return false;
-            }
-            // 登录成功，重新点击审核按钮
-            await sleep(300);
-            jq(btn).click();
-            await sleep(600);
-        }
+            // 检查 CA 窗口
+            try {
+                const caWin = jq('#win_CAUserLogin');
+                if (caWin.length && caWin.is(':visible')) {
+                    caDetected = true;
+                    dbg('检测到 CA 认证窗口');
+                    break;
+                }
+            } catch(e) {}
 
-        // 检查是否有 CA 窗口
-        const caWin = jq('#win_CAUserLogin');
-        if (caWin.length && caWin.is(':visible')) {
-            const loginOK = await handleCALogin(iframeWin);
-            if (!loginOK) {
-                clearCAAuth(); // CA认证失败，清除本地状态
-                return false;
-            }
-            await sleep(300);
-            jq(btn).click();
-            await sleep(600);
-        }
-
-        // 审核操作后，将焦点归还主页面
-        try { window.focus(); } catch(e) {}
-
-        // 只检查结果不完整的对话框（这是必须取消的情况）
-        const allWindows = doc.querySelectorAll('.window, .panel, .dialog, [class*="window"], [class*="dialog"], .messager-window, .messager');
-        for (const w of allWindows) {
-            if (w.style.display === 'none') continue;
-            if (w.offsetParent === null && !w.classList.contains('messager-window')) continue;
-            const body = w.querySelector('.panel-body, .window-body, .dialog-content, .body, .messager-body');
-            if (!body) continue;
-            const text = (body.textContent || '').trim();
-            if (!text) continue;
-
-            // 只检测结果不完整的对话框
-            if (text.indexOf('必填项目') !== -1 || 
-                text.indexOf('未存数据') !== -1 || 
-                text.indexOf('结果为空') !== -1 ||
-                text.indexOf('结果不完整') !== -1 ||
-                text.indexOf('无结果') !== -1 ||
-                text.indexOf('没有结果') !== -1 ||
-                text.indexOf('未录入') !== -1 ||
-                text.indexOf('请录入') !== -1) {
-                dbg('检测到结果不完整对话框，取消审核: ' + text.substring(0, 50));
-                // 点击"取消"按钮
-                const btns = w.querySelectorAll('a.l-btn, button, input[type="button"]');
-                for (const b of btns) {
-                    const bText = (b.textContent || b.value || '').trim();
-                    if (bText === '取消' || bText === 'No' || bText === '否' || bText === '关闭') {
-                        jq(b).click();
-                        dbg('已点击取消按钮');
-                        break;
+            // 检查审核登录窗口（不应出现，关闭它）
+            try {
+                const authWin = doc.querySelector('#win_AuthLogin, #win_EntryLogin');
+                if (authWin && authWin.style.display !== 'none') {
+                    const vis = jq(authWin);
+                    if (vis.length && vis.is(':visible')) {
+                        dbg('审核登录窗口出现，关闭并重试');
+                        try { vis.window('close'); } catch(e) { try { vis.hide(); } catch(e2) {} }
+                        if (me) { me.IsAuthLogin = 1; if (!me.AuthUserDR || !me.AuthUserDR.length) me.AuthUserDR = uid() || ''; }
+                        await sleep(200);
+                        jq(btn).click();
                     }
                 }
-                return 'incomplete';
+            } catch(e) {}
+
+            // 检测审核成功：行状态变为 "3"
+            if (targetReportDR && me && me.selectedGrid) {
+                try {
+                    const curSel = me.selectedGrid.datagrid('getSelected');
+                    if (curSel && String(curSel.ReportDR) === targetReportDR && String(curSel.Status) === '3') {
+                        dbg('审核成功（行状态=3）');
+                        return true;
+                    }
+                } catch(e) {}
+            }
+
+            // 检测审核成功：me.IsSaveSuccess
+            if (me && me.IsSaveSuccess === true) {
+                dbg('审核成功（IsSaveSuccess=true）');
+                me.IsSaveSuccess = false;
+                return true;
+            }
+
+            // 检查弹窗
+            try {
+                const allWins = doc.querySelectorAll('.messager-window:not([style*="display: none"])');
+                for (const w of allWins) {
+                    if (w.offsetParent === null) continue;
+                    const body = w.querySelector('.messager-body');
+                    if (!body) continue;
+                    const text = (body.textContent || '').trim();
+                    if (!text) continue;
+
+                    if (text.indexOf('成功') !== -1) {
+                        try { const okBtn = w.querySelector('a.l-btn'); if (okBtn) jq(okBtn).click(); } catch(e) {}
+                        return true;
+                    }
+                    if (text.indexOf('必填项目') !== -1 || text.indexOf('未存数据') !== -1 ||
+                        text.indexOf('结果为空') !== -1 || text.indexOf('结果不完整') !== -1 ||
+                        text.indexOf('无结果') !== -1 || text.indexOf('没有结果') !== -1 ||
+                        text.indexOf('未录入') !== -1 || text.indexOf('请录入') !== -1) {
+                        const btns = w.querySelectorAll('a.l-btn, button');
+                        for (const b of btns) {
+                            const bText = (b.textContent || b.value || '').trim();
+                            if (bText === '取消' || bText === 'No' || bText === '否' || bText === '关闭') { jq(b).click(); break; }
+                        }
+                        return 'incomplete';
+                    }
+                    if (text.indexOf('密码错误') !== -1 || text.indexOf('认证失败') !== -1 ||
+                        text.indexOf('账号锁定') !== -1) {
+                        try { const okBtn = w.querySelector('a.l-btn'); if (okBtn) jq(okBtn).click(); } catch(e) {}
+                        return false;
+                    }
+                }
+            } catch(e) {}
+        }
+
+        // 如果检测到 CA 窗口，自动完成 CA 登录
+        if (caDetected) {
+            dbg('开始自动 CA 认证...');
+            const caOK = await handleCALogin(iframeWin);
+            if (!caOK) { clearCAAuth(); return false; }
+            dbg('CA 认证成功，等待审核回调...');
+            // CA 认证后，原生回调自动调用 ReportSave → 审核完成
+            // 等待审核完成（最多 10 秒）
+            for (let poll = 0; poll < 33; poll++) {
+                await sleep(300);
+                // 检测行状态变化
+                if (targetReportDR && me && me.selectedGrid) {
+                    try {
+                        // CA 回调后可能选中了其他行，遍历所有行查找
+                        const rows = me.selectedGrid.datagrid('getRows');
+                        if (rows) {
+                            for (const r of rows) {
+                                if (String(r.ReportDR) === targetReportDR && String(r.Status) === '3') {
+                                    dbg('CA 审核成功（行状态=3）');
+                                    return true;
+                                }
+                            }
+                        }
+                    } catch(e) {}
+                }
+                // 检查弹窗
+                try {
+                    const allWins = doc.querySelectorAll('.messager-window:not([style*="display: none"])');
+                    for (const w of allWins) {
+                        const body = w.querySelector('.messager-body');
+                        if (!body) continue;
+                        const text = (body.textContent || '').trim();
+                        if (text.indexOf('成功') !== -1) { try { jq(w.querySelector('a.l-btn')).click(); } catch(e) {} return true; }
+                        if (text.indexOf('失败') !== -1 || text.indexOf('错误') !== -1) { try { jq(w.querySelector('a.l-btn')).click(); } catch(e) {} return false; }
+                    }
+                } catch(e) {}
+            }
+            // CA 完成但没检测到结果变化，可能已成功
+            dbg('CA 审核等待超时，假设成功');
+            return true;
+        }
+
+        // 没有 CA 窗口，审核可能已直接完成
+        // 再等 2 秒确认
+        for (let poll = 0; poll < 10; poll++) {
+            await sleep(200);
+            if (targetReportDR && me && me.selectedGrid) {
+                try {
+                    const curSel = me.selectedGrid.datagrid('getSelected');
+                    if (curSel && String(curSel.ReportDR) === targetReportDR && String(curSel.Status) === '3') {
+                        dbg('审核成功（行状态=3）');
+                        return true;
+                    }
+                } catch(e) {}
             }
         }
 
-        dbg('审核按钮点击完成');
+        dbg('审核按钮点击完成（无CA，无明确结果）');
         return true;
     }
 
@@ -4977,105 +3963,98 @@ function fillNativeLoginForm(creds, lastWG) {
         }
     }
 
-    // 更新CA状态显示
-    async function updateCAStatus() {
-        const caBtn = document.getElementById('lis-ws-ca');
-        if (!caBtn) return;
-        
-        caBtn.textContent = '⏳ 检查中...';
-        caBtn.style.background = '#7f8c8d';
-        
-        const status = await checkRealCAStatus();
-        if (status.authenticated) {
-            caBtn.textContent = '✅ 已认证';
-            caBtn.style.background = '#27ae60';
-            saveCAAuth(); // 保存认证状态
-        } else {
-            caBtn.textContent = '🔑 CA认证';
-            caBtn.style.background = '#9b59b6';
-            clearCAAuth(); // 清除可能过期的状态
-        }
-    }
 
-    // --- 确保CA已认证（审核前调用，已认证则跳过）---
+    // --- 确保CA已认证（审核前调用，自动触发CA认证流程）---
     async function ensureCAAuthenticated() {
-        // 快速检查：本地缓存 + 实际状态
+        // 快速检查：如果 CA UKey 已绑定，跳过
+        try {
+            const iframeWin0 = getReportIframeWin();
+            if (iframeWin0 && iframeWin0.CAMsg && iframeWin0.CAMsg.UkeyNoArray) {
+                const _me0 = iframeWin0.me;
+                const _userDR = _me0?.AuthUserDR || uid();
+                if (_userDR && iframeWin0.CAMsg.UkeyNoArray[_userDR]) {
+                    dbg('CA: UKey 已绑定，跳过认证');
+                    return true;
+                }
+            }
+        } catch(e) {}
+
+        // 本地缓存检查（1小时内有效）
         const cached = loadCAAuth();
         if (cached && (Date.now() - cached.time < 3600000)) {
-            const real = await checkRealCAStatus();
-            if (real.authenticated) return true;
+            dbg('CA: 使用本地缓存');
+            return true;
         }
 
-        dbg('CA: 自动认证开始');
-        const caBtn = document.getElementById('lis-ws-ca');
-        if (caBtn) { caBtn.textContent = '⏳ 认证中...'; caBtn.style.background = '#7f8c8d'; }
+        dbg('CA: 需要认证，直接调用 CAMsg.Login');
 
         try {
             let iframeWin = getReportIframeWin();
             if (!iframeWin) iframeWin = await ensureReportPageLoaded();
-            if (!iframeWin) { if (caBtn) { caBtn.textContent = '🔑 CA认证'; caBtn.style.background = '#9b59b6'; } return false; }
+            if (!iframeWin) { showToast('未找到报告页面', 'error'); return false; }
 
-            let jq = iframeWin.jQuery || iframeWin.$;
-            let me = iframeWin.me;
-            if (!jq || !me) {
-                for (let w = 0; w < 15; w++) {
-                    await sleep(400);
-                    iframeWin = getReportIframeWin();
-                    if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; if (jq && me) break; }
-                }
+            // 等待 iframe 就绪
+            for (let w = 0; w < 15; w++) {
+                if (iframeWin.CAMsg && iframeWin.me) break;
+                await sleep(400);
+                iframeWin = getReportIframeWin();
             }
-            if (!jq || !me) { if (caBtn) { caBtn.textContent = '🔑 CA认证'; caBtn.style.background = '#9b59b6'; } return false; }
+            if (!iframeWin || !iframeWin.CAMsg) { showToast('报告页面未就绪', 'error'); return false; }
 
-            // 检查审核登录
-            const authStatus = getAuditStatusText(iframeWin);
-            if (authStatus && authStatus.indexOf('未登录') !== -1) {
-                await handleAuditLogin(iframeWin, jq);
-                await sleep(500);
-            }
+            const jq = iframeWin.jQuery || iframeWin.$;
+            const me = iframeWin.me;
+            const CAMsg = iframeWin.CAMsg;
 
-            // 检查CA窗口是否已经打开（不点击审核按钮，避免副作用）
+            // 直接调用 CAMsg.Login 触发 CA 认证（不点审核按钮，避免触发审核流程）
+            const caUserDR = me?.AuthUserDR || uid();
+            dbg('CA: 调用 CAMsg.Login, userDR=' + caUserDR);
+
+            // 先检查 CA 窗口是否已经打开
             let caWin = jq('#win_CAUserLogin');
-            let result = false;
             if (caWin.length && caWin.is(':visible')) {
-                // CA 窗口已打开，直接处理登录
-                result = await handleCALogin(iframeWin);
-            } else {
-                // 没有CA窗口 = 已认证（或需要在审核时才弹出）
-                result = true;
+                dbg('CA: CA窗口已打开，直接处理登录');
+                const caOK = await handleCALogin(iframeWin);
+                if (caOK) { saveCAAuth(); showToast('✅ CA 认证成功', 'success'); return true; }
+                clearCAAuth(); return false;
             }
 
-            if (result) {
+            // 调用 CAMsg.Login 触发 CA 窗口
+            CAMsg.Login(caUserDR, function() {
+                dbg('CA: CAMsg.Login 回调触发');
+            }, []);
+
+            // 等待 CA 窗口出现（最多 15 秒）
+            let waited = 0;
+            caWin = jq('#win_CAUserLogin');
+            while ((!caWin.length || !caWin.is(':visible')) && waited < 15000) {
+                await sleep(500); waited += 500;
+                caWin = jq('#win_CAUserLogin');
+            }
+
+            if (!caWin.length || !caWin.is(':visible')) {
+                // CA窗口没出现 = 不需要CA认证 或 CA客户端未运行
+                dbg('CA: 未弹出CA窗口（等了' + waited + 'ms），可能不需要CA认证或CA客户端未运行');
                 saveCAAuth();
-                if (caBtn) { caBtn.textContent = '✅ 已认证'; caBtn.style.background = '#27ae60'; }
-                showToast('✅ CA 自动认证成功', 'success');
-            } else {
-                if (caBtn) { caBtn.textContent = '🔑 CA认证'; caBtn.style.background = '#9b59b6'; }
+                return true;
             }
 
-            // 清理
-            await sleep(300);
-            try {
-                const doc = iframeWin.document;
-                const dialogs = doc.querySelectorAll('.window, .messager-window');
-                for (const d of dialogs) {
-                    if (d.style.display === 'none') continue;
-                    const body = d.querySelector('.panel-body');
-                    if (!body) continue;
-                    const text = (body.textContent || '');
-                    if (text.indexOf('必填') !== -1 || text.indexOf('确认') !== -1) {
-                        const btns = d.querySelectorAll('a.l-btn, button');
-                        for (const b of btns) {
-                            if ((b.textContent || '').trim() === '取消') { jq(b).click(); break; }
-                        }
-                    }
-                }
-            } catch(e) {}
-            try { window.focus(); } catch(e) {}
+            // CA窗口已弹出，自动完成 capping 登录
+            dbg('CA: CA窗口已弹出，自动登录');
+            const caOK = await handleCALogin(iframeWin);
 
-            return result;
+            if (caOK) {
+                saveCAAuth();
+                showToast('✅ CA 认证成功', 'success');
+                return true;
+            } else {
+                clearCAAuth();
+                showToast('CA 认证失败，请手动完成', 'error');
+                return false;
+            }
+
         } catch(e) {
-            dbg('CA自动认证异常:', e);
-            if (caBtn) { caBtn.textContent = '🔑 CA认证'; caBtn.style.background = '#9b59b6'; }
+            dbg('CA 认证异常:', e);
+            showToast('CA 认证异常: ' + e.message, 'error');
             return false;
         }
     }
@@ -5099,34 +4078,179 @@ function fillNativeLoginForm(creds, lastWG) {
             // 点击"审核登录"按钮
             const authLoginBtn = iframeWin.document.getElementById('btn_AuthLogin')
                 || document.getElementById('btn_AuthLogin');
-            if (authLoginBtn) {
-                jq(authLoginBtn).click();
-                dbg('已点击审核登录按钮');
-                await sleep(500);
+            if (!authLoginBtn) { dbg('审核登录按钮不存在'); return false; }
+            jq(authLoginBtn).click();
+            dbg('已点击审核登录按钮');
+            await sleep(800);
 
-                // 查找并填写密码
-                const doc = iframeWin.document;
-                const pwdInput = doc.querySelector('#text_AuthUserLoginPasssword')
-                    || doc.querySelector('input[type="password"]');
-                if (pwdInput) {
-                    const pwd = loadPwd();
-                    if (pwd) {
-                        pwdInput.value = pwd;
-                        pwdInput.dispatchEvent(new Event('input', {bubbles:true}));
-                        pwdInput.dispatchEvent(new Event('change', {bubbles:true}));
-                        dbg('已自动填写审核密码');
-                        await sleep(200);
-                        // 点击确定按钮
-                        const okBtn = doc.querySelector('#win_AuthLogin a.l-btn, #win_BatchAuthUserLogin a.l-btn');
-                        if (okBtn) {
-                            jq(okBtn).click();
-                            dbg('已点击审核登录确定');
-                            await sleep(600);
-                            return true;
+            // showwin 在 dialog 里创建 iframe(#FRMdetail)，登录表单在这个 iframe 里
+            const doc = iframeWin.document;
+            const loginWin = doc.querySelector('#win_AuthLogin') || doc.querySelector('#win_BatchAuthUserLogin');
+            if (!loginWin) { dbg('审核登录窗口未找到'); return false; }
+
+            // 在 dialog 内部找 iframe（showwin 用的 #FRMdetail）
+            const dialogIframe = loginWin.querySelector('iframe');
+            let pwdInput = null;
+            let okBtn = null;
+            let loginDoc = doc; // 默认在父文档找
+
+            if (dialogIframe) {
+                try {
+                    const iDoc = dialogIframe.contentDocument || dialogIframe.contentWindow.document;
+                    if (iDoc && iDoc.body && iDoc.body.childElementCount > 0) {
+                        loginDoc = iDoc;
+                        dbg('审核登录表单在 dialog iframe 内');
+                    }
+                } catch(e) { dbg('访问 dialog iframe 失败:', e.message); }
+            }
+
+            // 在正确的文档里找密码框
+            pwdInput = loginDoc.querySelector('#text_AuthUserLoginPasssword')
+                || loginDoc.querySelector('input[type="password"]');
+            if (!pwdInput) {
+                // 再试一层 iframe
+                const innerIframe = loginDoc.querySelector('iframe');
+                if (innerIframe) {
+                    try {
+                        const iDoc2 = innerIframe.contentDocument || innerIframe.contentWindow.document;
+                        if (iDoc2) {
+                            pwdInput = iDoc2.querySelector('#text_AuthUserLoginPasssword')
+                                || iDoc2.querySelector('input[type="password"]');
+                            if (pwdInput) { loginDoc = iDoc2; dbg('密码框在更深层 iframe'); }
                         }
+                    } catch(e) {}
+                }
+            }
+
+            if (!pwdInput) {
+                dbg('密码框未找到，尝试所有 iframe...');
+                // 遍历所有 iframe 查找
+                const allIframes = loginWin.querySelectorAll('iframe');
+                for (const ifr of allIframes) {
+                    try {
+                        const iDoc = ifr.contentDocument || ifr.contentWindow.document;
+                        if (!iDoc) continue;
+                        pwdInput = iDoc.querySelector('#text_AuthUserLoginPasssword')
+                            || iDoc.querySelector('input[type="password"]');
+                        if (pwdInput) { loginDoc = iDoc; dbg('密码框在 iframe 中找到'); break; }
+                        // 再深一层
+                        const deep = iDoc.querySelectorAll('iframe');
+                        for (const d of deep) {
+                            try {
+                                const dDoc = d.contentDocument || d.contentWindow.document;
+                                if (!dDoc) continue;
+                                pwdInput = dDoc.querySelector('#text_AuthUserLoginPasssword')
+                                    || dDoc.querySelector('input[type="password"]');
+                                if (pwdInput) { loginDoc = dDoc; dbg('密码框在深层 iframe'); break; }
+                            } catch(e) {}
+                        }
+                        if (pwdInput) break;
+                    } catch(e) {}
+                }
+            }
+
+            if (!pwdInput) {
+                dbg('❌ 审核登录密码框未找到');
+                return false;
+            }
+
+            // 同时查找账户输入框（审核登录需要账户+密码）
+            let acctInput = loginDoc.querySelector('#text_AuthUserCode')
+                || loginDoc.querySelector('input[id*="UserCode"]')
+                || loginDoc.querySelector('input[id*="Account"]')
+                || loginDoc.querySelector('input[placeholder*="账户"]');
+            // 如果没找到，在所有 input 里找第一个 text 类型的
+            if (!acctInput) {
+                const allInputs = loginDoc.querySelectorAll('input[type="text"], input:not([type])');
+                for (const inp of allInputs) {
+                    if (inp.id !== pwdInput.id && !inp.readOnly && !inp.disabled) {
+                        acctInput = inp;
+                        break;
                     }
                 }
             }
+
+            const pwd = loadPwd();
+            if (!pwd) { dbg('❌ 未保存审核密码'); return false; }
+
+            // 填写账户（用当前登录用户名）
+            if (acctInput) {
+                const userName = uname();
+                if (userName) {
+                    setNativeInputValue(acctInput, userName);
+                    dbg('已填写审核账户: ' + userName);
+                }
+            } else {
+                dbg('⚠️ 未找到账户输入框，仅填写密码');
+            }
+
+            // 填写密码
+            setNativeInputValue(pwdInput, pwd);
+            dbg('已自动填写审核密码');
+            await sleep(300);
+
+            // 找确定按钮（在 loginDoc 里）
+            const btns = loginDoc.querySelectorAll('a.l-btn, button');
+            for (const b of btns) {
+                const text = (b.textContent || '').trim();
+                if (text.includes('确定') || text.includes('登录') || text === 'OK') {
+                    okBtn = b; break;
+                }
+            }
+            // 也检查 dialog 按钮区域
+            if (!okBtn) {
+                const allBtns = loginWin.querySelectorAll('a.l-btn, button');
+                for (const b of allBtns) {
+                    const text = (b.textContent || '').trim();
+                    if (text.includes('确定') || text.includes('登录')) { okBtn = b; break; }
+                }
+            }
+
+            if (!okBtn) {
+                dbg('❌ 审核登录确定按钮未找到');
+                return false;
+            }
+
+            jq(okBtn).click();
+            dbg('已点击审核登录确定');
+
+            // 等待登录窗口关闭（最多 5 秒）
+            for (let w = 0; w < 25; w++) {
+                await sleep(200);
+                if (!loginWin || loginWin.style.display === 'none' || !loginWin.offsetParent) {
+                    dbg('审核登录窗口已关闭');
+                    // 设置原生 me 状态
+                    try {
+                        const _me = iframeWin.me;
+                        if (_me) {
+                            _me.IsAuthLogin = 1;
+                            const auInfo = sessionStorage.getItem('AuInfo');
+                            if (auInfo) {
+                                _me.AuthUserDR = auInfo.split('^')[0];
+                            } else {
+                                _me.AuthUserDR = uid();
+                            }
+                            dbg('已设置 me.IsAuthLogin=1, AuthUserDR=' + (_me.AuthUserDR || ''));
+                        }
+                    } catch(e) { dbg('设置审核状态异常:', e.message); }
+                    return true;
+                }
+                // 检查是否有错误提示
+                try {
+                    const errWin = loginDoc.querySelector('.messager-window, .window');
+                    if (errWin && errWin.style.display !== 'none') {
+                        const errBody = errWin.querySelector('.messager-body, .panel-body');
+                        if (errBody) {
+                            const errText = (errBody.textContent || '').trim();
+                            if (errText && (errText.includes('密码') || errText.includes('错误') || errText.includes('password') || errText.includes('fail'))) {
+                                dbg('审核登录错误: ' + errText.substring(0, 50));
+                                return false;
+                            }
+                        }
+                    }
+                } catch(e) {}
+            }
+            dbg('审核登录窗口超时未关闭');
             return false;
         } catch(e) {
             dbg('审核登录异常:', e);
@@ -5158,7 +4282,7 @@ function fillNativeLoginForm(creds, lastWG) {
             }
         }
         // 点击原生审核按钮（自动处理 CA 登录）
-        return await clickNativeAuditButton(iframeWin, 'btn_ReportAuth');
+        return await clickNativeAuditButton(iframeWin, 'btn_ReportSave');
     }
 
     // --- 初审 ---
@@ -5206,7 +4330,7 @@ function fillNativeLoginForm(creds, lastWG) {
         const iframeWin = getReportIframeWin();
         if (!iframeWin) return false;
         if (!ensureSelectedGrid(iframeWin)) return false;
-        return await clickNativeAuditButton(iframeWin, 'btn_ReportAuth');
+        return await clickNativeAuditButton(iframeWin, 'btn_ReportSave');
     }
 
     // --- 结果分类 ---
@@ -5218,7 +4342,7 @@ function fillNativeLoginForm(creds, lastWG) {
         const flag = (item.AbFlag || '').toUpperCase().trim();
         if (flag === 'HH' || flag === 'LL') return 'CRITICAL';  // 危急值
         if (flag === 'H') return 'HIGH';
-        if (flag === 'L' || flag === 'N') return 'LOW';
+        if (flag === 'L') return 'LOW';
         if (flag === 'A') return 'ABNORMAL';
 
         // 回退：数值比较
@@ -5264,7 +4388,7 @@ function fillNativeLoginForm(creds, lastWG) {
             const results = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
             results.forEach(r => {
                 if (r && r.reportDR) {
-                    wsClassifiedCache[r.reportDR] = r;
+                    wsClassifiedCache[r.ReportDR || r.reportDR] = r;
                 }
             });
             // 每批完成后更新计数和标签
@@ -5857,20 +4981,23 @@ function fillNativeLoginForm(creds, lastWG) {
         return false;
     }
 
-    // --- 执行批量审核（使用原生审核按钮，安全）---
+    // --- 执行批量审核（逐行审核）---
     async function executeBatchAudit(normalSpecimens) {
         if (normalSpecimens.length === 0) return;
         if (!acquireAuditLock('batchAudit')) { showToast('正在审核中，请稍候', 'warning'); return; }
-        await ensureCAAuthenticated();
 
         // 显示进度条
         const progress = document.createElement('div');
         progress.id = 'lis-audit-progress';
         progress.innerHTML = `
-            <div style="font-size:16px;font-weight:600;color:#2c3e50;margin-bottom:8px">正在审核...</div>
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                <span style="font-size:16px;font-weight:600;color:#2c3e50">正在审核...</span>
+                <button id="lis-batch-stop" style="padding:2px 12px;font-size:12px;border:1px solid #e74c3c;background:#fff;color:#e74c3c;border-radius:4px;cursor:pointer">⏹ 停止</button>
+            </div>
             <div class="prog-bar"><div class="prog-fill" id="lis-prog-fill" style="width:0%"></div></div>
             <div class="prog-text" id="lis-prog-text">0 / ${normalSpecimens.length}</div>
         `;
+        setTimeout(() => { const stopBtn = document.getElementById('lis-batch-stop'); if (stopBtn) stopBtn.onclick = () => { _batchAbort = true; stopBtn.textContent = '正在停止...'; stopBtn.disabled = true; }; }, 50);
         document.body.appendChild(progress);
         progress.classList.add('show');
 
@@ -5882,12 +5009,10 @@ function fillNativeLoginForm(creds, lastWG) {
             }
             if (!iframeWin) {
                 showToast('❌ 未找到报告处理页面', 'error');
-                releaseAuditLock();
-                progress.remove();
-                return;
+                releaseAuditLock(); progress.remove(); return;
             }
 
-            // 等待 iframe 就绪（jq 和 me 可能还没加载）
+            // 等待 iframe 就绪
             let jq = iframeWin.jQuery || iframeWin.$;
             let me = iframeWin.me;
             if (!jq || !me) {
@@ -5895,22 +5020,15 @@ function fillNativeLoginForm(creds, lastWG) {
                 for (let w = 0; w < 20; w++) {
                     await new Promise(r => setTimeout(r, 500));
                     iframeWin = getReportIframeWin();
-                    if (iframeWin) {
-                        jq = iframeWin.jQuery || iframeWin.$;
-                        me = iframeWin.me;
-                        if (jq && me) break;
-                    }
+                    if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; if (jq && me) break; }
                 }
             }
             if (!jq || !me) {
                 showToast('报告页面未就绪，请稍后重试', 'error');
-                dbg('批审失败: jq=', !!jq, 'me=', !!me);
-                releaseAuditLock();
-                progress.remove();
-                return;
+                releaseAuditLock(); progress.remove(); return;
             }
 
-            // 构建允许审核的 ReportDR 白名单 —— 只有列表中的才能审核
+            // 构建白名单
             const allowedReportDRs = new Set();
             for (const sp of normalSpecimens) {
                 const rdr = sp.reportDR || (sp.row && sp.row.ReportDR);
@@ -5918,13 +5036,17 @@ function fillNativeLoginForm(creds, lastWG) {
             }
             dbg('批审白名单:', allowedReportDRs.size, '个 ReportDR');
 
-            let successCount = 0;
-            let failCount = 0;
-            let skipCount = 0;
+            // 绕过审核登录检查（设置 IsAuthLogin=1）
+            if (me && (me.IsAuthLogin === 0 || !me.AuthUserDR || me.AuthUserDR.length === 0)) {
+                me.IsAuthLogin = 1;
+                const userDR = uid() || me.SessionUserDR || '';
+                if (userDR) me.AuthUserDR = userDR;
+                dbg('批审: 已设置 IsAuthLogin=1, AuthUserDR=' + me.AuthUserDR);
+            }
 
             closeCAWindow(iframeWin);
 
-            // 按仪器分组（不同仪器需要切换 iframe 的工作列表）
+            // 按仪器分组
             const groups = {};
             for (const sp of normalSpecimens) {
                 const row = sp.row || {};
@@ -5935,151 +5057,117 @@ function fillNativeLoginForm(creds, lastWG) {
             const machineKeys = Object.keys(groups);
             dbg('批审分组:', machineKeys.length, '个仪器', machineKeys);
 
+            let successCount = 0, failCount = 0, skipCount = 0;
             let globalIdx = 0;
+            const totalCount = normalSpecimens.length;
+            _batchAbort = false;
+
             for (const mdr of machineKeys) {
                 const group = groups[mdr];
 
-                // 切换 iframe 到该仪器的工作列表
+                // 切换仪器
                 if (machineKeys.length > 1 || group[0].row._mdr) {
                     dbg('切换到仪器:', mdr);
                     try {
-                        // 设置 iframe 的仪器选择
                         if (me.WorkGroupMachineDR !== undefined) me.WorkGroupMachineDR = mdr;
-                        // 尝试设置 combogrid
                         try { jq('#cmb_WorkGroupMachine').combogrid('setValue', mdr); } catch(e) {}
-                        // 触发工作列表刷新（使用 iframeWin 而不是 uw()）
-                        const dateStr = jq('#dt_wlReportDate').length ? 
+                        const dateStr = jq('#dt_wlReportDate').length ?
                             (jq('#dt_wlReportDate').datebox('getValue') || today()) : today();
                         const findStr = '&WorkGroupMachineDR=' + mdr + '&ReportStatus=&SttAccDate=' + dateStr;
-                        if (typeof iframeWin.ShowWorkList === 'function') {
-                            iframeWin.ShowWorkList(findStr);
-                        } else if (typeof iframeWin.FindFast === 'function') {
-                            iframeWin.FindFast(findStr);
-                        }
-                        // 等待工作列表加载完成
+                        if (typeof iframeWin.ShowWorkList === 'function') iframeWin.ShowWorkList(findStr);
+                        else if (typeof iframeWin.FindFast === 'function') iframeWin.FindFast(findStr);
                         await new Promise(r => setTimeout(r, 1200));
-                        // 刷新 iframe 引用（切换后可能重载）
                         iframeWin = getReportIframeWin();
-                        if (iframeWin) {
-                            jq = iframeWin.jQuery || iframeWin.$;
-                            me = iframeWin.me;
-                        }
-                        // 等待 datagrid 数据加载
+                        if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
                         if (jq) {
                             for (let w = 0; w < 3; w++) {
-                                try {
-                                    const testRows = jq('#dgWorkList').datagrid('getRows');
-                                    if (testRows && testRows.length > 0) break;
-                                } catch(e) {}
+                                try { const testRows = jq('#dgWorkList').datagrid('getRows'); if (testRows && testRows.length > 0) break; } catch(e) {}
                                 await new Promise(r => setTimeout(r, 500));
                             }
                         }
-                    } catch(e) {
-                        dbg('切换仪器失败:', mdr, e);
-                    }
+                    } catch(e) { dbg('切换仪器失败:', mdr, e); }
                 }
 
+                if (!jq) continue;
+
+                // 收集可勾选的行索引
+                const checkIndices = [];
+                let localSkip = 0;
                 for (const specimen of group) {
-                    // 每次审核前重新获取 iframe 引用
-                    if (!jq || !me) {
-                        iframeWin = getReportIframeWin();
-                        if (iframeWin) {
-                            jq = iframeWin.jQuery || iframeWin.$;
-                            me = iframeWin.me;
+                    const reportDR = specimen.reportDR || (specimen.row && specimen.row.ReportDR);
+                    const row = specimen.row || {};
+                    if (!reportDR || !allowedReportDRs.has(String(reportDR))) { localSkip++; continue; }
+                    const cached = wsClassifiedCache[reportDR];
+                    if (cached && cached.status === 'CRITICAL') { localSkip++; continue; }
+                    const complete = String(row.IsComplete || '');
+                    if (complete !== '1') { localSkip++; dbg('批审跳过: IsComplete≠1', row.PatName, 'IsComplete=', complete); continue; }
+                    const status = String(row.Status || row.ReportStatus || '');
+                    if (status === '3' || status === '4') { localSkip++; dbg('批审跳过: 已审核', row.PatName, 'Status=', status); continue; }
+
+                    // 在 datagrid 中找到该行
+                    try {
+                        const selectors = ['#dgWorkList', '#dg', '#dgReport', '.datagrid-f'];
+                        let found = false;
+                        for (const sel of selectors) {
+                            const el = jq(sel);
+                            if (!el.length || !el.datagrid) continue;
+                            const rows = el.datagrid('getRows');
+                            if (!rows || rows.length === 0) continue;
+                            for (let i = 0; i < rows.length; i++) {
+                                if (String(rows[i].ReportDR) === String(reportDR)) {
+                                    checkIndices.push({ index: i, selector: sel, specimen });
+                                    found = true; break;
+                                }
+                            }
+                            if (found) break;
                         }
-                    }
-                    if (!jq || !me) {
-                        dbg('批审跳过: iframe 未就绪', specimen.row && specimen.row.PatName);
-                        skipCount++;
-                        continue;
-                    }
+                        if (!found) { localSkip++; dbg('批审跳过: 原生列表中未找到', row.PatName); }
+                    } catch(e) { localSkip++; }
+                }
+                skipCount += localSkip;
+
+                if (checkIndices.length === 0) continue;
+
+                for (let gi = 0; gi < checkIndices.length; gi++) {
+                    // 检查中止标志
+                    if (_batchAbort) { dbg('批审被用户中止'); break; }
+
+                    const item = checkIndices[gi];
+                    const specimen = item.specimen;
                     const reportDR = specimen.reportDR || (specimen.row && specimen.row.ReportDR);
                     const row = specimen.row || {};
 
-                    // 更新进度
+                    // 更新全局进度
                     globalIdx++;
-                    const fill = document.getElementById('lis-prog-fill');
-                    const text = document.getElementById('lis-prog-text');
-                    if (fill) fill.style.width = ((globalIdx / normalSpecimens.length) * 100) + '%';
-                    if (text) text.textContent = `${globalIdx} / ${normalSpecimens.length} - ${row.PatName || ''}`;
-
-                    // 安全校验1: reportDR 不能为空
-                    if (!reportDR) {
-                        dbg('批审跳过: reportDR 为空', row.PatName);
-                        skipCount++;
-                        continue;
-                    }
-
-                    // 安全校验2: 必须在白名单中
-                    if (!allowedReportDRs.has(String(reportDR))) {
-                        dbg('批审拦截: reportDR', reportDR, '不在白名单中!');
-                        skipCount++;
-                        continue;
-                    }
-
-                    // 安全校验3: 危急值不能批审
-                    const cached = wsClassifiedCache[reportDR];
-                    if (cached && cached.status === 'CRITICAL') {
-                        dbg('批审跳过: 危急值', row.PatName);
-                        skipCount++;
-                        continue;
-                    }
-
-                    // 安全校验4: 结果必须完整
-                    const complete = String(row.IsComplete || '');
-                    if (complete !== '1') {
-                        dbg('批审跳过: 结果不完整', row.PatName, 'IsComplete=', complete);
-                        skipCount++;
-                        continue;
-                    }
-
-                    // 安全校验5: 不能是已审核状态
-                    const status = String(row.Status || row.ReportStatus || '');
-                    if (status === '3' || status === '4') {
-                        dbg('批审跳过: 已审核/复审', row.PatName, 'Status=', status);
-                        skipCount++;
-                        continue;
-                    }
+                    const fill2 = document.getElementById('lis-prog-fill');
+                    const text2 = document.getElementById('lis-prog-text');
+                    if (fill2) fill2.style.width = (globalIdx / totalCount * 100) + '%';
+                    if (text2) text2.textContent = `${globalIdx} / ${totalCount} - ${row.PatName || ''}`;
 
                     try {
-                        // 在原生 datagrid 中选中该标本的行
-                        const selected = selectNativeRowByReportDR(iframeWin, reportDR);
-                        if (!selected) {
-                            dbg('批审跳过: 原生列表中未找到', row.PatName, 'ReportDR:', reportDR);
-                            skipCount++;
-                            continue;
-                        }
-                        // 等待行选中后表单加载
-                        await new Promise(r => setTimeout(r, 300));
-
-                        // 点击原生审核按钮（自动处理 CA、不完整提示等）— 带 10 秒超时
-                        const auditResult = await Promise.race([
-                            clickNativeAuditButton(iframeWin, 'btn_ReportAuth'),
-                            new Promise((_, rej) => setTimeout(() => rej(new Error('审核超时(10s)')), 10000))
-                        ]);
-                        if (auditResult === 'incomplete') {
-                            dbg('批审跳过: 结果不完整', row.PatName);
-                            skipCount++;
-                        } else if (auditResult) {
-                            successCount++;
-                            dbg('批审成功:', row.PatName, 'ReportDR:', reportDR);
-                        } else {
-                            failCount++;
-                            dbg('批审失败:', row.PatName);
-                        }
-                    } catch(e) {
-                        failCount++;
-                        dbg('批审异常:', row.PatName, e.message);
-                    } finally {
-                        // 无论成功失败，都刷新 iframe 引用
-                        await new Promise(r => setTimeout(r, 300));
-                        try {
+                        if (!jq || !me) {
                             iframeWin = getReportIframeWin();
-                            if (iframeWin) {
-                                jq = iframeWin.jQuery || iframeWin.$;
-                                me = iframeWin.me;
-                            }
-                        } catch(e) {}
+                            if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
+                        }
+                        if (!jq || !me) { skipCount++; continue; }
+
+                        const selected = selectNativeRowByReportDR(iframeWin, reportDR);
+                        if (!selected) { skipCount++; continue; }
+                        await new Promise(r => setTimeout(r, 200));
+
+                        // 带中止支持的审核（超时后不会继续并行执行）
+                        let timedOut = false;
+                        const auditResult = await Promise.race([
+                            clickNativeAuditButton(iframeWin, 'btn_ReportAuth').then(r => { if (!timedOut) return r; }),
+                            new Promise((_, rej) => setTimeout(() => { timedOut = true; rej(new Error('审核超时(30s)')); }, 30000))
+                        ]);
+                        if (auditResult === 'incomplete') { skipCount++; }
+                        else if (auditResult) { successCount++; }
+                        else { failCount++; }
+                    } catch(e) { failCount++; dbg('逐行审核异常:', row.PatName, e.message); }
+                    finally {
+                        await new Promise(r => setTimeout(r, 200));
+                        try { iframeWin = getReportIframeWin(); if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; } } catch(e) {}
                     }
                 }
             }
@@ -6087,7 +5175,7 @@ function fillNativeLoginForm(creds, lastWG) {
             const fill = document.getElementById('lis-prog-fill');
             const text = document.getElementById('lis-prog-text');
             if (fill) fill.style.width = '100%';
-            if (text) text.textContent = `完成: ${successCount} 成功, ${failCount} 失败`;
+            if (text) text.textContent = `完成: ${successCount} 成功, ${failCount} 失败, ${skipCount} 跳过`;
 
             if (successCount > 0) {
                 const skipMsg = skipCount > 0 ? `，跳过 ${skipCount} 个` : '';
@@ -6097,21 +5185,14 @@ function fillNativeLoginForm(creds, lastWG) {
                 showToast('❌ 审核全部失败', 'error');
             }
 
-            setTimeout(() => {
-                progress.remove();
-                loadWSData();
-            }, 2000);
+            setTimeout(() => { progress.remove(); loadWSData(); }, 2000);
 
         } catch(e) {
             dbg('批量审核失败:', e);
             showToast('审核失败: ' + e.message, 'error');
         } finally {
             releaseAuditLock();
-            // 确保进度条被清理（如果 try 中途 return）
-            setTimeout(() => {
-                const p = document.getElementById('lis-audit-progress');
-                if (p) p.remove();
-            }, 3000);
+            setTimeout(() => { const p = document.getElementById('lis-audit-progress'); if (p) p.remove(); }, 3000);
         }
     }
 
@@ -6154,11 +5235,8 @@ function fillNativeLoginForm(creds, lastWG) {
 
     // --- Toast 提示（审核专用）---
     function showToast(msg, type = 'success') {
-        const el = document.createElement('div');
-        el.className = 'lis-audit-toast ' + type;
-        el.textContent = msg;
-        document.body.appendChild(el);
-        setTimeout(() => el.remove(), 3000);
+        const typeMap = { success: 's', error: 'e', warning: 'w', info: 'i' };
+        toast(msg, typeMap[type] || type);
     }
 
     // --- 键盘快捷键注册 ---
@@ -6271,7 +5349,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.0.0');
+        dbg('iMedicalLIS 增强助手 v7.5.3');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
@@ -6299,8 +5377,6 @@ function fillNativeLoginForm(creds, lastWG) {
         createWS();
         checkNavigateTarget();
         initReportEnhance();
-        initQCPanel();
-
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
     }
 

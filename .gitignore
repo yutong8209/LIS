@@ -34,6 +34,12 @@ __pycache__/
 node_modules/
 
 # Misc
+.DS_Store
+cache/
 mimo.exe
 patch*.txt
 test.user.js
+install.command
+show.js
+start_proxy_mac.command
+test_qc.html
