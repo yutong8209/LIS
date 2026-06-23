@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.6.4
+// @version      7.6.5
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -2135,12 +2135,11 @@
         `;
         document.body.appendChild(detailPanel);
 
-        // 添加遮罩层（点击可关闭详情面板）
+        // 透明层只保留占位，不拦截工作台列表点击；关闭请用按钮或 Esc。
         const overlay = document.createElement('div');
         overlay.id = 'lis-detail-overlay';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:35vw;height:100vh;z-index:100004;display:none;cursor:pointer';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:35vw;height:100vh;z-index:100004;display:none;pointer-events:none';
         document.body.appendChild(overlay);
-        overlay.addEventListener('click', closeDetailPanel);
 
         // 事件绑定
         document.getElementById('lis-detail-close').addEventListener('click', closeDetailPanel);
@@ -2162,6 +2161,13 @@
             document.removeEventListener('keydown', _abnormalKeyHandler);
             _abnormalKeyHandler = null;
         }
+
+        // 面板已打开时直接换内容，避免点击其它样本时先收回再二次点击。
+        if (detailPanel.classList.contains('show')) {
+            _switchDetailInPlace(specimen, source, sourceIndex);
+            return;
+        }
+
         currentDetailSpecimen = specimen;
         detailSource = source || null;
         detailSourceIndex = (sourceIndex !== undefined) ? sourceIndex : -1;
@@ -2208,7 +2214,7 @@
         // 显示面板和遮罩层
         detailPanel.classList.add('show');
         const overlay = document.getElementById('lis-detail-overlay');
-        if (overlay) overlay.style.display = 'block';
+        if (overlay) overlay.style.display = 'none';
 
         // 加载详细结果
         loadDetailResults(specimen);
