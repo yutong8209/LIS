@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.10
+// @version      7.8.11
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -968,7 +968,8 @@
         if (dr in _mcCache) return _mcCache[dr];
         const data = await fetchJ(WGM + '?Method=FindWGMbyWorkGroup&WorkGroupDR=' + dr);
         const rows = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
-        _mcCache[dr] = rows;
+        // 不缓存空结果，避免网络异常后永久返回空
+        if (rows.length > 0) _mcCache[dr] = rows;
         return rows;
     }
 
@@ -1221,6 +1222,7 @@
         // 初始检查CA状态
         document.getElementById('lis-ws-refresh').addEventListener('click', () => {
             dbg('刷新按钮被点击');
+            clearMachineCache(); // 强制重新加载仪器列表
             const btn = document.getElementById('lis-ws-refresh');
             if (btn) btn.classList.add('spinning');
             loadWSData().finally(() => {
@@ -6038,7 +6040,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.10');
+        dbg('iMedicalLIS 增强助手 v7.8.11');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
