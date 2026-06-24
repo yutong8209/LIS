@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.0
+// @version      7.8.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -595,7 +595,7 @@
         if (!tryFill()) {
             const ob = new MutationObserver(() => { if(tryFill()) ob.disconnect(); });
             ob.observe(document.body, {childList:true, subtree:true});
-            setTimeout(() => ob.disconnect(), 10000);
+            setTimeout(() => ob.disconnect(), 60000);
             [500,1000,2000].forEach(t => setTimeout(tryFill, t));
         }
     }
@@ -1580,7 +1580,7 @@
             // 如果分类缓存没有具体项目，尝试从详情缓存获取
             let displayItems = abnormalItems;
             if (displayItems.length === 0 && !hasInfectionWarning) {
-                const detailCached = detailLRUGet(r.ReportDR);
+                const detailCached = detailLRUGet(r.ReportDR); // 需要提升优先级，因为用户可能点击查看
                 if (detailCached && detailCached.html) {
                     // 从详情缓存 HTML 中提取异常项目
                     const _tmp = document.createElement('div');
@@ -5015,7 +5015,7 @@ function fillNativeLoginForm(creds, lastWG) {
             const results = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
             results.forEach(r => {
                 if (r && r.reportDR) {
-                    wsClassifiedCache[r.ReportDR || r.reportDR] = r;
+                    wsClassifiedCache[r.reportDR] = r;
                 }
             });
             // 缓存淘汰
@@ -6038,7 +6038,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.0');
+        dbg('iMedicalLIS 增强助手 v7.8.1');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
