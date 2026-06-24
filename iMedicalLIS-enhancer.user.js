@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.7.0
+// @version      7.7.6
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -770,6 +770,28 @@
         stopWSRefresh();
     }
 
+    function isWSVisible() {
+        const wsEl = document.getElementById('lis-ws');
+        return !!(wsEl && wsEl.classList.contains('show'));
+    }
+
+    function keepWorkbenchOnTop(reason) {
+        const wsEl = document.getElementById('lis-ws');
+        if (!wsEl) return;
+        if (!wsEl.classList.contains('show')) {
+            wsEl.classList.add('show');
+            renderWSHeader();
+            renderWSTabs();
+            renderWSCategoryBar();
+            renderWSTable();
+            updateWSFooter();
+            startWSRefresh();
+        }
+        wsEl.style.cssText = 'display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important;position:fixed!important;inset:0!important;z-index:100000!important';
+        document.body.style.overflow = 'hidden';
+        dbg('[WS] 批审保持工作台置顶: ' + (reason || ''));
+    }
+
     function startWSRefresh() { stopWSRefresh(); wsTimer = setInterval(loadWSData, REFRESH); }
     function stopWSRefresh() { if(wsTimer){clearInterval(wsTimer);wsTimer=null;} }
 
@@ -1422,7 +1444,7 @@
             const cached = wsClassifiedCache[r.ReportDR];
             const items = cached ? cached.items : [];
             const abnormalItems = items.filter(it => it.status !== 'NORMAL');
-            const hasCritical = items.some(it => it.status === 'CRITICAL');
+            const hasCritical = (cached && cached.status === 'CRITICAL') || items.some(it => it.status === 'CRITICAL' || it.critical);
             const hasInfectionWarning = cached && cached.infectionWarning;
             const focused = i === wsAbnormalIndex ? ' focused' : '';
 
@@ -1454,7 +1476,7 @@
                 }
                 // 如果仍然没有，显示所有有结果的项目（可能 AbFlag 未标记）
                 if (displayItems.length === 0 && items.length > 0) {
-                    displayItems = items.filter(it => it.result && it.result.trim() && it.result.trim() !== '-');
+                    displayItems = items.filter(it => !isEmptyResultValue(it, it.result));
                 }
             }
             displayItems.forEach(it => {
@@ -1469,6 +1491,9 @@
             });
             if (hasInfectionWarning) {
                 h += `<span class="ab-card-item infection-warning">⚠ ${cached.infectionWarning}</span>`;
+            }
+            if (hasCritical && !displayItems.some(it => it.status === 'CRITICAL' || it.critical)) {
+                h += '<span class="ab-card-item critical">🚨 危急值</span>';
             }
             if (displayItems.length === 0 && !hasInfectionWarning) {
                 h += '<span class="ab-card-item uncertain">⚠ 待确认</span>';
@@ -1585,11 +1610,11 @@
             let iframeWin = getReportIframeWin();
             if (!iframeWin) {
                 showToast('正在加载报告页面...', 'warning');
-                iframeWin = await ensureReportPageLoaded();
+                iframeWin = await ensureReportPageLoaded({ keepWS: true });
             }
             if (!iframeWin) {
                 await new Promise(r => setTimeout(r, 1000));
-                iframeWin = getReportIframeWin() || await ensureReportPageLoaded();
+                iframeWin = getReportIframeWin() || await ensureReportPageLoaded({ keepWS: true });
             }
             if (!iframeWin) { showToast('报告页面加载失败', 'error'); return; }
 
@@ -1666,7 +1691,7 @@
             }
 
             // 使用原生审核按钮
-            let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 25000 });
+            let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 25000, keepWS: true });
             if (!auditResult) {
                 dbg('异常审核首次未确认，短暂等待原生列表状态...');
                 auditResult = await waitNativeActionResult(iframeWin, reportDR, ['3'], 5000, true);
@@ -2058,7 +2083,7 @@
             if (mCmp) return mCmp;
             return String(a.labno || '').localeCompare(String(b.labno || ''), 'zh');
         });
-        return { mode: mode || 'batch', items, done: [], failed: [], skipped: [], current: 0 };
+        return { mode: mode || 'batch', items, done: [], failed: [], skipped: [], current: 0, keepWS: isWSVisible() };
     }
 
     function currentQueueItem(queue) {
@@ -2087,6 +2112,7 @@
         const queue = loadAuditQueue();
         if (!queue) return;
         setTimeout(() => {
+            if (queue.keepWS) keepWorkbenchOnTop('恢复批审队列');
             continueAuditQueue(queue).catch(e => {
                 dbg('恢复审核队列失败:', e);
                 showToast('恢复审核队列失败: ' + e.message, 'error');
@@ -2137,7 +2163,7 @@
         detailPanel.id = 'lis-detail-panel';
         detailPanel.innerHTML = `
             <div id="lis-detail-hd">
-                <div style="flex:1;min-width:0">
+                <div style="flex:1;min-width:0;padding-right:10px">
                     <h4 id="lis-detail-title" style="margin:0;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📋 标本详情</h4>
                     <div id="lis-detail-subtitle" style="font-size:11px;color:rgba(255,255,255,.7);margin-top:3px"></div>
                     <div id="lis-detail-extra" style="font-size:11px;color:rgba(255,255,255,.6);margin-top:2px"></div>
@@ -2203,20 +2229,12 @@
         }
         const subtitleEl = document.getElementById('lis-detail-subtitle');
         if (subtitleEl) {
-            subtitleEl.innerHTML = `<span>${getStatusText(specimen.Status || specimen.ReportStatus)}</span> · 检验号: ${specimen.Labno || '-'} · 流水号: ${specimen.EpisodeNo || '-'} · ${specimen.TestSetDesc || ''} · 仪器: ${specimen._mn || '-'} · ${specimen.AcceptDT || ''}`;
+            subtitleEl.innerHTML = buildDetailSubtitle(specimen);
         }
         const detailExtra = document.getElementById('lis-detail-extra');
         // 立即填充患者信息（优先缓存，回退到 specimen 本身）
         const _cr = (wsClassifiedCache[specimen.ReportDR] || {}).row || specimen;
-        const _parts = [];
-        if (_cr.Sex) _parts.push(_cr.Sex);
-        if (_cr.Age) _parts.push(_cr.Age + (_cr.AgeUnit || ''));
-        if (_cr.Location) _parts.push(_cr.Location);
-        if (_cr.Ward) _parts.push(_cr.Ward);
-        if (_cr.BedNo) _parts.push('床' + _cr.BedNo);
-        if (_cr.Specimen) _parts.push(_cr.Specimen);
-        if (_cr.Doctor) _parts.push(_cr.Doctor);
-        if (detailExtra) detailExtra.textContent = _parts.length ? _parts.join(' · ') : '加载中...';
+        if (detailExtra) detailExtra.textContent = buildDetailExtraText(_cr, specimen) || '加载中...';
 
         // 信息栏（紧凑状态条）
         const info = document.getElementById('lis-detail-info');
@@ -2299,6 +2317,72 @@
         }
     }
 
+    function formatDetailTimeText(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::\d{2})?/);
+        if (m) return m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5];
+        const mt = raw.match(/^(\d{2}):(\d{2})(?::\d{2})?/);
+        if (mt) return mt[1] + ':' + mt[2];
+        return raw;
+    }
+
+    function detailTimeFrom(info, dtKey, dateKey, timeKey, fallback) {
+        const dt = info && info[dtKey] ? info[dtKey] : '';
+        const date = info && info[dateKey] ? info[dateKey] : '';
+        const time = info && info[timeKey] ? info[timeKey] : '';
+        return formatDetailTimeText(dt || [date, time].filter(Boolean).join(' ') || fallback || '');
+    }
+
+    function formatDetailBedNo(bedNo) {
+        const bed = String(bedNo || '').trim();
+        if (!bed) return '';
+        return /^床/.test(bed) || /床$/.test(bed) ? bed : '床' + bed;
+    }
+
+    function buildDetailExtraText(info, fallback) {
+        const r = info || {};
+        const fb = fallback || {};
+        const parts = [];
+        const sex = r.Sex || r.Species || fb.Sex || fb.Species;
+        const age = r.Age || fb.Age;
+        const ageUnit = r.AgeUnit || fb.AgeUnit || '';
+        const location = r.Location || r.LocationName || fb.Location || fb.LocationName;
+        const ward = r.Ward || r.WardName || fb.Ward || fb.WardName;
+        const admNo = r.AdmNo || fb.AdmNo;
+        const recordNo = r.RecordNo || fb.RecordNo;
+        const regNo = r.RegNo || fb.RegNo;
+        const bed = formatDetailBedNo(r.BedNo || fb.BedNo);
+        const specimen = r.Specimen || r.SpecimenDesc || fb.Specimen || fb.SpecimenDesc;
+        const doctor = r.Doctor || r.DoctorName || fb.Doctor || fb.DoctorName;
+        const diagnose = r.Diagnose || fb.Diagnose;
+        const collectTime = detailTimeFrom(r, 'CollectDT', 'CollectDate', 'CollectTime', fb.CollectDT);
+        const receiveTime = detailTimeFrom(r, 'ReceiveDT', 'ReceiveDate', 'ReceiveTime', fb.ReceiveDT);
+        const acceptTime = detailTimeFrom(r, 'AcceptDT', 'AcceptDate', 'AcceptTime', fb.AcceptDT);
+        const authTime = detailTimeFrom(r, 'AuthDT', 'AuthDate', 'AuthTime', fb.AuthDT);
+
+        if (sex) parts.push(sex);
+        if (age) parts.push(age + ageUnit);
+        if (location) parts.push(location);
+        if (ward) parts.push(ward);
+        if (admNo) parts.push('住院号 ' + admNo);
+        else if (recordNo) parts.push('病案号 ' + recordNo);
+        else if (regNo) parts.push('登记号 ' + regNo);
+        if (bed) parts.push(bed);
+        if (specimen) parts.push(specimen);
+        if (doctor) parts.push(doctor);
+        if (collectTime) parts.push('采集 ' + collectTime);
+        if (receiveTime) parts.push('接收 ' + receiveTime);
+        if (acceptTime) parts.push('核收 ' + acceptTime);
+        if (authTime) parts.push('审核 ' + authTime);
+        if (diagnose) parts.push('🏥 ' + diagnose);
+        return parts.join(' · ');
+    }
+
+    function buildDetailSubtitle(specimen) {
+        return `<span>${getStatusText(specimen.Status || specimen.ReportStatus)}</span> · 检验号: ${specimen.Labno || '-'} · 流水号: ${specimen.EpisodeNo || '-'} · ${specimen.TestSetDesc || ''} · 仪器: ${specimen._mn || '-'}`;
+    }
+
     // 原地切换详情面板内容（不关闭面板，避免闪烁）
     function _switchDetailInPlace(specimen, source, sourceIndex) {
         if (!detailPanel || !specimen) return;
@@ -2310,18 +2394,10 @@
         const titleEl = document.getElementById('lis-detail-title');
         if (titleEl) titleEl.textContent = `📋 ${specimen.PatName || '未知'}`;
         const subtitleEl = document.getElementById('lis-detail-subtitle');
-        if (subtitleEl) subtitleEl.innerHTML = `<span>${getStatusText(specimen.Status || specimen.ReportStatus)}</span> · 检验号: ${specimen.Labno || '-'} · 流水号: ${specimen.EpisodeNo || '-'} · ${specimen.TestSetDesc || ''} · 仪器: ${specimen._mn || '-'} · ${specimen.AcceptDT || ''}`;
+        if (subtitleEl) subtitleEl.innerHTML = buildDetailSubtitle(specimen);
         const detailExtra = document.getElementById('lis-detail-extra');
         const _cr = (wsClassifiedCache[specimen.ReportDR] || {}).row || specimen;
-        const _parts = [];
-        if (_cr.Sex) _parts.push(_cr.Sex);
-        if (_cr.Age) _parts.push(_cr.Age + (_cr.AgeUnit || ''));
-        if (_cr.Location) _parts.push(_cr.Location);
-        if (_cr.Ward) _parts.push(_cr.Ward);
-        if (_cr.BedNo) _parts.push('床' + _cr.BedNo);
-        if (_cr.Specimen) _parts.push(_cr.Specimen);
-        if (_cr.Doctor) _parts.push(_cr.Doctor);
-        if (detailExtra) detailExtra.textContent = _parts.length ? _parts.join(' · ') : '加载中...';
+        if (detailExtra) detailExtra.textContent = buildDetailExtraText(_cr, specimen) || '加载中...';
 
         // 信息栏
         const info = document.getElementById('lis-detail-info');
@@ -2397,7 +2473,7 @@
 
             // 直接调用 LabResultSave 审核
             let iframeWin = getReportIframeWin();
-            if (!iframeWin) iframeWin = await ensureReportPageLoaded();
+            if (!iframeWin) iframeWin = await ensureReportPageLoaded({ keepWS: true });
             if (!iframeWin) {
                 showToast('报告页面未加载', 'error');
                 dbg('详情审核失败: iframeWin 为空');
@@ -2474,7 +2550,7 @@
             }
 
             // 使用原生审核按钮
-            const auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth');
+            const auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { keepWS: true });
             if (auditResult === 'incomplete') {
                 showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
                 return;
@@ -2855,9 +2931,12 @@
 
             // 统计摘要栏
             const totalItems = itemInfo.length;
-            const doneItems = itemInfo.filter(r => r.Result && r.Result.trim() && r.Result.trim() !== '-').length;
-            const abnItems = itemInfo.filter(r => { const f=(r.AbFlag||'').toUpperCase(); return f==='H'||f==='HH'||f==='L'||f==='LL'||f==='A'; }).length;
-            const critItems = itemInfo.filter(r => { const f=(r.AbFlag||'').toUpperCase(); return f==='HH'||f==='LL'; }).length;
+            const doneItems = itemInfo.filter(r => {
+                const v = ((r.TextRes && String(r.TextRes).trim()) ? r.TextRes : (r.Result || '')).trim();
+                return !isEmptyResultValue(r, v);
+            }).length;
+            const abnItems = itemInfo.filter(r => classifyResultItem(r) !== 'NORMAL' && classifyResultItem(r) !== 'UNCERTAIN').length;
+            const critItems = itemInfo.filter(r => isCriticalResultItem(r)).length;
             const pendItems = totalItems - doneItems;
 
             html += '<div style="display:flex;align-items:center;gap:16px;padding:8px 0;font-size:12px;flex-wrap:wrap">';
@@ -2901,18 +2980,23 @@
 
             itemInfo.forEach(r => {
                 const result = (r.TextRes && r.TextRes.trim()) ? r.TextRes.trim() : (r.Result || '-');
-                const unit = r.Unit || '';
+                const unit = r.Unit || r.Units || '';
                 const refRange = r.RefRanges || '-';
                 const abnormalFlag = (r.AbFlag || '').toUpperCase().trim();
 
-                const isEmpty = !r.Result || r.Result.trim() === '' || r.Result.trim() === '-';
+                const rawResult = ((r.TextRes && String(r.TextRes).trim()) ? r.TextRes : (r.Result || '')).trim();
+                const isEmpty = isEmptyResultValue(r, rawResult);
                 let isAbnormal = false, isCritical = false;
                 let statusText = isEmpty ? '⏳ 待检' : '✓';
                 let rowStyle = isEmpty ? 'background:#fafafa;color:#bbb' : '';
 
-                if (abnormalFlag === 'HH' || abnormalFlag === 'LL') {
+                const itemStatus = classifyResultItem(r);
+                const criticalByRange = itemStatus === 'CRITICAL';
+                const panicStatus = compareResultToPanicRange(result, r);
+
+                if (criticalByRange) {
                     isAbnormal = true; isCritical = true;
-                    statusText = abnormalFlag === 'HH' ? '↑↑ 危急' : '↓↓ 危急';
+                    statusText = (abnormalFlag === 'LL' || panicStatus === 'LOW') ? '↓↓ 危急' : '↑↑ 危急';
                     rowStyle = 'background:#fff5f5;border-left:3px solid #e74c3c';
                 } else if (abnormalFlag === 'H') {
                     isAbnormal = true; statusText = '↑ 高';
@@ -2923,6 +3007,15 @@
                 } else if (abnormalFlag === 'A') {
                     isAbnormal = true; statusText = '⚠ 异常';
                     rowStyle = 'background:#fce4ec;border-left:3px solid #e91e63';
+                } else if (itemStatus === 'ABNORMAL') {
+                    isAbnormal = true; statusText = '⚠ 异常';
+                    rowStyle = 'background:#fce4ec;border-left:3px solid #e91e63';
+                } else if (itemStatus === 'HIGH') {
+                    isAbnormal = true; statusText = '↑ 高';
+                    rowStyle = 'background:#fff8e1;border-left:3px solid #ff9800';
+                } else if (itemStatus === 'LOW') {
+                    isAbnormal = true; statusText = '↓ 低';
+                    rowStyle = 'background:#e3f2fd;border-left:3px solid #2196f3';
                 } else if (r.ValueLow && r.ValueHigh) {
                     const rangeStatus = compareResultToRange(result, r.ValueLow, r.ValueHigh);
                     if (rangeStatus === 'HIGH') {
@@ -2995,17 +3088,7 @@
                 // 更新深色头部患者详情行
                 const extraEl = document.getElementById('lis-detail-extra');
                 if (extraEl) {
-                    const parts = [];
-                    if (info.Sex) parts.push(info.Sex);
-                    if (info.Age) parts.push(info.Age + (info.AgeUnit || ''));
-                    if (info.Location) parts.push(info.Location);
-                    if (info.Ward) parts.push(info.Ward);
-                    if (info.BedNo) parts.push('床' + info.BedNo);
-                    if (info.Specimen) parts.push(info.Specimen);
-                    if (info.Doctor) parts.push(info.Doctor);
-                    let extraText = parts.join(' · ');
-                    if (info.Diagnose) extraText += ' · 🏥 ' + info.Diagnose;
-                    extraEl.textContent = extraText;
+                    extraEl.textContent = buildDetailExtraText(info, specimen);
                 }
 
                 // 异常警告（内联）
@@ -3016,8 +3099,14 @@
                     html += '</div>';
                 } else if (abnItems > 0) {
                     // 列出具体异常项目名称
-                    const abnNames = itemInfo.filter(r => { const f=(r.AbFlag||'').toUpperCase(); return f==='H'||f==='HH'||f==='L'||f==='LL'||f==='A'; })
-                        .map(r => { const f=(r.AbFlag||'').toUpperCase(); const arrow = f.includes('H')?'↑':f.includes('L')?'↓':'⚠'; return (r.CName||'')+' '+(r.TextRes||r.Result||'')+' '+arrow; });
+                    const abnNames = itemInfo.filter(r => classifyResultItem(r) !== 'NORMAL' && classifyResultItem(r) !== 'UNCERTAIN')
+                        .map(r => {
+                            const st = classifyResultItem(r);
+                            const arrow = st === 'CRITICAL'
+                                ? (compareResultToPanicRange((r.TextRes && r.TextRes.trim()) ? r.TextRes : r.Result, r) === 'LOW' || String(r.AbFlag || '').toUpperCase() === 'LL' ? '↓↓危急' : '↑↑危急')
+                                : st === 'HIGH' ? '↑' : st === 'LOW' ? '↓' : '⚠';
+                            return (r.CName||'')+' '+(r.TextRes||r.Result||'')+' '+arrow;
+                        });
                     html += '<div style="margin-top:6px;padding:6px 10px;background:#fff8e1;border-radius:4px;font-size:11px;border:1px solid #ffecb3">';
                     html += '<span style="color:#ff9800;font-weight:600">⚠ 异常项目 ' + abnItems + ' 项</span>';
                     if (abnNames.length > 0) html += '<span style="margin-left:8px;color:#e65100;font-size:10px">' + abnNames.join('、') + '</span>';
@@ -3716,7 +3805,7 @@ function fillNativeLoginForm(creds, lastWG) {
     }
 
     // --- 确保报告处理页面已加载（异步版）---
-    function ensureReportPageLoaded() {
+    function ensureReportPageLoaded(options = {}) {
         return new Promise((resolve) => {
             // 已经加载
             const win = getReportIframeWin();
@@ -3740,6 +3829,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 if (w) {
                     clearInterval(interval);
                     dbg('报告处理页面加载完成');
+                    if (options.keepWS) keepWorkbenchOnTop('报告处理页加载完成');
                     resolve(w);
                 } else if (waited >= 15000) {
                     clearInterval(interval);
@@ -4163,6 +4253,7 @@ function fillNativeLoginForm(creds, lastWG) {
             dbg('开始自动 CA 认证...');
             const caOK = await handleCALogin(iframeWin);
             if (!caOK) { clearCAAuth(); return false; }
+            if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
             dbg('CA 认证成功，等待审核回调...');
             // CA 认证后，原生回调自动调用 ReportSave → 审核完成
             const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess);
@@ -4644,9 +4735,95 @@ function fillNativeLoginForm(creds, lastWG) {
         return parseReferenceRange(item.RefRanges || item.RefRange || item.ReferenceRange || '');
     }
 
+    function getItemPanicRangeValues(item) {
+        const low = item.PanicLow || item.CriticalLow || item.CrisisLow || item.DangerLow || '';
+        const high = item.PanicHigh || item.CriticalHigh || item.CrisisHigh || item.DangerHigh || '';
+        return { low, high };
+    }
+
+    function compareResultToPanicRange(result, item) {
+        const range = getItemPanicRangeValues(item || {});
+        if (!range.low && !range.high) return '';
+        return compareResultToRange(result, range.low, range.high);
+    }
+
+    function normalizeQualitativeText(value) {
+        return String(value || '')
+            .toUpperCase()
+            .replace(/[＋﹢]/g, '+')
+            .replace(/[－﹣]/g, '-')
+            .replace(/\s+/g, '')
+            .trim();
+    }
+
+    function isExplicitPositiveText(value) {
+        const r = normalizeQualitativeText(value);
+        if (!r) return false;
+        if (r === '+' || /^\d+\+$/.test(r) || /^\++$/.test(r)) return true;
+        return r.includes('阳性') || r.includes('弱阳') || r.includes('阳性(+)') ||
+            r === 'POSITIVE' || r === 'POS' || r === 'REACTIVE' || r === 'REACT';
+    }
+
+    function isExplicitNegativeText(value) {
+        const r = normalizeQualitativeText(value);
+        if (!r) return false;
+        if (r === '-' || r === 'NEGATIVE' || r === 'NEG' || r === 'NON-REACTIVE' || r === 'NONREACTIVE') return true;
+        return r.includes('阴性') || r === '未见' || r === '未检出' || r === '未检测到';
+    }
+
+    function isNegativeReferenceText(value) {
+        const r = normalizeQualitativeText(value);
+        if (!r) return false;
+        return r.includes('阴性') || r.includes('NEGATIVE') || r.includes('NON-REACTIVE') ||
+            r.includes('NONREACTIVE') || r === '-' || r === 'NEG';
+    }
+
+    function isPositiveReferenceText(value) {
+        const r = normalizeQualitativeText(value);
+        if (!r || isNegativeReferenceText(r)) return false;
+        return r.includes('阳性') || r.includes('POSITIVE') || r.includes('REACTIVE') ||
+            r === '+' || r === 'POS';
+    }
+
+    function compareQualitativeToReference(result, item) {
+        const ref = item.RefRanges || item.RefRange || item.ReferenceRange || item.ValueLow || item.ValueHigh || '';
+        if (!ref) return '';
+        const positive = isExplicitPositiveText(result);
+        const negative = isExplicitNegativeText(result);
+        if (!positive && !negative) return '';
+        const refNegative = isNegativeReferenceText(ref);
+        const refPositive = isPositiveReferenceText(ref);
+        if (refNegative && positive) return 'ABNORMAL';
+        if (refPositive && negative) return 'ABNORMAL';
+        if (refNegative && negative) return 'NORMAL';
+        if (refPositive && positive) return 'NORMAL';
+        return '';
+    }
+
+    function isDashValidNegativeResult(item, result) {
+        if (normalizeQualitativeText(result) !== '-') return false;
+        const ref = item.RefRanges || item.RefRange || item.ReferenceRange || item.ValueLow || item.ValueHigh || '';
+        const format = String(item.ResultFormat || '').toUpperCase();
+        const name = String(item.CName || item.Code || item.Synonym || '').toUpperCase();
+        if (isNegativeReferenceText(ref)) return true;
+        if (format === 'X' || format === 'S' || String(item.IsCheckText || '') === '1') return true;
+        return /尿|URINE|A\/C|ACR|ALB\/CRE|白蛋白|肌酐/.test(name);
+    }
+
+    function isEmptyResultValue(item, result) {
+        const v = String(result == null ? '' : result).trim();
+        if (!v || v === '未检' || v === ' ') return true;
+        if (v === '-') return !isDashValidNegativeResult(item || {}, v);
+        return false;
+    }
+
     function isCriticalResultItem(item) {
         const flag = (item.AbFlag || item.CriticalFlag || item.CrisisFlag || item.DangerFlag || item.PanicFlag || '').toString().toUpperCase().trim();
         if (flag === 'HH' || flag === 'LL' || flag === 'CRITICAL' || flag === 'DANGER' || flag === 'PANIC') return true;
+        if (String(item.IsPanic || item.Panic || '').trim() === '1') return true;
+        const result = (item.TextRes && String(item.TextRes).trim()) ? item.TextRes : item.Result;
+        const panicStatus = compareResultToPanicRange(result, item);
+        if (panicStatus === 'HIGH' || panicStatus === 'LOW') return true;
         const text = [
             item.AbFlagDesc, item.CriticalFlagDesc, item.CrisisFlagDesc, item.DangerFlagDesc,
             item.ResultPrompt, item.Prompt, item.Alert, item.Tips, item.StatusDesc
@@ -4654,16 +4831,29 @@ function fillNativeLoginForm(creds, lastWG) {
         return text.indexOf('危急') !== -1 || text.indexOf('危急值') !== -1;
     }
 
+    function isCriticalSpecimenRow(row) {
+        if (!row) return false;
+        if (String(row.IsPanic || row.Panic || '').trim() === '1') return true;
+        if (row.PanicReportDR) return true;
+        const text = [row.PanicFlag, row.PanicDesc, row.PanicText, row.Alert, row.Tips, row.FlagStr]
+            .map(v => String(v || '')).join(' ');
+        return text.indexOf('危急') !== -1 || text.indexOf('危急值') !== -1;
+    }
+
     function classifyResultItem(item) {
         // 关键：结果为空/缺失 → UNCERTAIN
-        const result = (item.Result || '').trim();
-        if (!result || result === '-' || result === '未检' || result === ' ') return 'UNCERTAIN';
+        const result = ((item.TextRes && String(item.TextRes).trim()) ? item.TextRes : (item.Result || '')).trim();
+        if (isEmptyResultValue(item, result)) return 'UNCERTAIN';
 
         const flag = (item.AbFlag || '').toUpperCase().trim();
         if (isCriticalResultItem(item)) return 'CRITICAL';  // 危急值
         if (flag === 'H') return 'HIGH';
         if (flag === 'L') return 'LOW';
         if (flag === 'A') return 'ABNORMAL';
+
+        const qualitativeStatus = compareQualitativeToReference(result, item);
+        if (qualitativeStatus) return qualitativeStatus;
+        if (isDashValidNegativeResult(item, result)) return 'NORMAL';
 
         // 回退：数值比较
         const range = getItemRangeValues(item);
@@ -4745,12 +4935,20 @@ function fillNativeLoginForm(creds, lastWG) {
 
             const classifications = itemInfo.map(item => ({
                 name: item.CName || '',
-                result: item.Result || '',
-                unit: item.Unit || '',
+                CName: item.CName || '',
+                Code: item.Code || '',
+                Synonym: item.Synonym || '',
+                result: (item.TextRes && String(item.TextRes).trim()) ? item.TextRes : (item.Result || ''),
+                unit: item.Unit || item.Units || '',
                 refRange: item.RefRanges || '',
+                RefRanges: item.RefRanges || item.RefRange || item.ReferenceRange || '',
+                ResultFormat: item.ResultFormat || '',
+                IsCheckText: item.IsCheckText || '',
                 abFlag: item.AbFlag || '',
                 status: classifyResultItem(item),
                 critical: isCriticalResultItem(item),
+                panicLow: item.PanicLow || item.CriticalLow || '',
+                panicHigh: item.PanicHigh || item.CriticalHigh || '',
                 preResult: item.PreResult || null
             }));
 
@@ -4773,11 +4971,11 @@ function fillNativeLoginForm(creds, lastWG) {
             }
 
             const hasAbnormal = classifications.some(c => c.status === 'HIGH' || c.status === 'LOW' || c.status === 'ABNORMAL' || c.status === 'CRITICAL');
-            const hasCritical = classifications.some(c => c.status === 'CRITICAL' || c.critical);
+            const hasCritical = isCriticalSpecimenRow(row) || classifications.some(c => c.status === 'CRITICAL' || c.critical);
             const hasUncertain = classifications.some(c => c.status === 'UNCERTAIN');
             const hasComplete = row.IsComplete === '1';
             // 检查是否有结果为空的项目
-            const hasEmptyResults = classifications.some(c => !c.result || c.result === '-');
+            const hasEmptyResults = classifications.some(c => isEmptyResultValue(c, c.result));
 
             let overallStatus = 'NORMAL';
             if (hasCritical) overallStatus = 'CRITICAL';
@@ -5352,6 +5550,7 @@ function fillNativeLoginForm(creds, lastWG) {
     async function continueAuditQueue(queue) {
         if (!queue || !queue.items || queue.items.length === 0) return;
         if (!acquireAuditLock('batchAudit')) { showToast('正在审核中，请稍候', 'warning'); return; }
+        if (queue.keepWS) keepWorkbenchOnTop('批审开始');
 
         // 显示进度条
         let progress = document.getElementById('lis-audit-progress');
@@ -5377,7 +5576,8 @@ function fillNativeLoginForm(creds, lastWG) {
             let iframeWin = getReportIframeWin();
             if (!iframeWin) {
                 showToast('正在加载报告页面...', 'warning');
-                iframeWin = await ensureReportPageLoaded();
+                iframeWin = await ensureReportPageLoaded({ keepWS: queue.keepWS });
+                if (queue.keepWS) keepWorkbenchOnTop('报告处理页加载完成');
             }
             if (!iframeWin) {
                 showToast('❌ 未找到报告处理页面', 'error');
@@ -5467,9 +5667,10 @@ function fillNativeLoginForm(creds, lastWG) {
 
                     let timedOut = false;
                     const auditResult = await Promise.race([
-                        clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 25000 }).then(r => { if (!timedOut) return r; }),
+                        clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 25000, keepWS: queue.keepWS }).then(r => { if (!timedOut) return r; }),
                         new Promise((_, rej) => setTimeout(() => { timedOut = true; rej(new Error('审核超时(35s)')); }, 35000))
                     ]);
+                    if (queue.keepWS) keepWorkbenchOnTop('单个标本审核后');
                     if (auditResult === 'incomplete') {
                         queue.skipped.push({ ...item, reason: '结果不完整' });
                         skipCount++;
@@ -5511,7 +5712,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 showToast('❌ 审核全部失败', 'error');
             }
 
-            setTimeout(() => { progress.remove(); loadWSData(); }, 2000);
+            setTimeout(() => { if (queue.keepWS) keepWorkbenchOnTop('批审完成'); progress.remove(); loadWSData(); }, 2000);
 
         } catch(e) {
             dbg('批量审核失败:', e);
@@ -5675,7 +5876,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.6.3');
+        dbg('iMedicalLIS 增强助手 v7.7.6');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
