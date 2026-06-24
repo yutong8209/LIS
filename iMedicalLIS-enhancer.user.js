@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.6.9
+// @version      7.7.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1464,7 +1464,8 @@
                 else if (st === 'HIGH') cls = 'high';
                 else if (st === 'LOW') cls = 'low';
                 else if (st === 'ABNORMAL') cls = 'abnormal';
-                h += `<span class="ab-card-item ${cls}">${it.name} ${it.result}${it.unit||''}</span>`;
+                const prefix = st === 'CRITICAL' ? '危急 ' : '';
+                h += `<span class="ab-card-item ${cls}">${prefix}${it.name} ${it.result}${it.unit||''}</span>`;
             });
             if (hasInfectionWarning) {
                 h += `<span class="ab-card-item infection-warning">⚠ ${cached.infectionWarning}</span>`;
@@ -2612,13 +2613,9 @@
                 else if (ab === 'A') cls = 'abnormal';
                 else {
                     // 回退：用参考范围数值比较
-                    const hisNum = parseFloat(h.result);
-                    if (!isNaN(hisNum) && r.ValueLow && r.ValueHigh) {
-                        const low = parseFloat(r.ValueLow);
-                        const high = parseFloat(r.ValueHigh);
-                        if (hisNum > high) cls = 'high';
-                        else if (hisNum < low) cls = 'low';
-                    }
+                    const histStatus = compareResultToRange(h.result, r.ValueLow, r.ValueHigh);
+                    if (histStatus === 'HIGH') cls = 'high';
+                    else if (histStatus === 'LOW') cls = 'low';
                 }
                 if (!h.date && cls === 'normal') cls = 'nodate';
                 const dateStr = h.date ? h.date.split(' ')[0].replace(/^\d{2}(\d{2})/, '$1') : '';
@@ -2927,11 +2924,11 @@
                     isAbnormal = true; statusText = '⚠ 异常';
                     rowStyle = 'background:#fce4ec;border-left:3px solid #e91e63';
                 } else if (r.ValueLow && r.ValueHigh) {
-                    const numResult = parseFloat(result);
-                    const low = parseFloat(r.ValueLow), high = parseFloat(r.ValueHigh);
-                    if (!isNaN(numResult)) {
-                        if (numResult > high) { isAbnormal = true; statusText = '↑ 高'; rowStyle = 'background:#fff8e1;border-left:3px solid #ff9800'; }
-                        else if (numResult < low) { isAbnormal = true; statusText = '↓ 低'; rowStyle = 'background:#e3f2fd;border-left:3px solid #2196f3'; }
+                    const rangeStatus = compareResultToRange(result, r.ValueLow, r.ValueHigh);
+                    if (rangeStatus === 'HIGH') {
+                        isAbnormal = true; statusText = '↑ 高'; rowStyle = 'background:#fff8e1;border-left:3px solid #ff9800';
+                    } else if (rangeStatus === 'LOW') {
+                        isAbnormal = true; statusText = '↓ 低'; rowStyle = 'background:#e3f2fd;border-left:3px solid #2196f3';
                     }
                 }
 
@@ -4582,30 +4579,101 @@ function fillNativeLoginForm(creds, lastWG) {
     }
 
     // --- 结果分类 ---
+    function parseComparableNumber(value) {
+        const raw = String(value == null ? '' : value).trim()
+            .replace(/[＜﹤]/g, '<')
+            .replace(/[＞﹥]/g, '>')
+            .replace(/[≤]/g, '<=')
+            .replace(/[≥]/g, '>=')
+            .replace(/,/g, '');
+        if (!raw) return null;
+        const m = raw.match(/^(<=|>=|<|>)?\s*([-+]?\d+(?:\.\d+)?)/);
+        if (!m) return null;
+        return { op: m[1] || '', value: parseFloat(m[2]), raw };
+    }
+
+    function compareResultToRange(result, lowValue, highValue) {
+        const parsed = parseComparableNumber(result);
+        if (!parsed || isNaN(parsed.value)) return '';
+        const low = parseComparableNumber(lowValue);
+        const high = parseComparableNumber(highValue);
+        const hasLow = low && !isNaN(low.value);
+        const hasHigh = high && !isNaN(high.value);
+
+        if (parsed.op === '<' || parsed.op === '<=') {
+            if (hasLow && parsed.value <= low.value) return 'LOW';
+            if (hasHigh && parsed.value > high.value) return 'HIGH';
+            return 'NORMAL';
+        }
+        if (parsed.op === '>' || parsed.op === '>=') {
+            if (hasHigh && parsed.value >= high.value) return 'HIGH';
+            if (hasLow && parsed.value < low.value) return 'LOW';
+            return 'NORMAL';
+        }
+        if (hasHigh && parsed.value > high.value) return 'HIGH';
+        if (hasLow && parsed.value < low.value) return 'LOW';
+        return 'NORMAL';
+    }
+
+    function parseReferenceRange(refRange) {
+        const raw = String(refRange || '').trim()
+            .replace(/[－–—~～至]/g, '-')
+            .replace(/[＜﹤]/g, '<')
+            .replace(/[＞﹥]/g, '>')
+            .replace(/[≤]/g, '<=')
+            .replace(/[≥]/g, '>=')
+            .replace(/,/g, '');
+        if (!raw) return { low: '', high: '' };
+        let m = raw.match(/([-+]?\d+(?:\.\d+)?)\s*-\s*([-+]?\d+(?:\.\d+)?)/);
+        if (m) return { low: m[1], high: m[2] };
+        m = raw.match(/^(?:<|<=)\s*([-+]?\d+(?:\.\d+)?)/);
+        if (m) return { low: '', high: m[1] };
+        m = raw.match(/^(?:>|>=)\s*([-+]?\d+(?:\.\d+)?)/);
+        if (m) return { low: m[1], high: '' };
+        m = raw.match(/(?:正常|参考)?\s*([-+]?\d+(?:\.\d+)?)\s*以下/);
+        if (m) return { low: '', high: m[1] };
+        m = raw.match(/(?:正常|参考)?\s*([-+]?\d+(?:\.\d+)?)\s*以上/);
+        if (m) return { low: m[1], high: '' };
+        return { low: '', high: '' };
+    }
+
+    function getItemRangeValues(item) {
+        const low = item.ValueLow || item.LowValue || item.RefLow || item.ReferenceLow || '';
+        const high = item.ValueHigh || item.HighValue || item.RefHigh || item.ReferenceHigh || '';
+        if (low || high) return { low, high };
+        return parseReferenceRange(item.RefRanges || item.RefRange || item.ReferenceRange || '');
+    }
+
+    function isCriticalResultItem(item) {
+        const flag = (item.AbFlag || item.CriticalFlag || item.CrisisFlag || item.DangerFlag || item.PanicFlag || '').toString().toUpperCase().trim();
+        if (flag === 'HH' || flag === 'LL' || flag === 'CRITICAL' || flag === 'DANGER' || flag === 'PANIC') return true;
+        const text = [
+            item.AbFlagDesc, item.CriticalFlagDesc, item.CrisisFlagDesc, item.DangerFlagDesc,
+            item.ResultPrompt, item.Prompt, item.Alert, item.Tips, item.StatusDesc
+        ].map(v => String(v || '')).join(' ');
+        return text.indexOf('危急') !== -1 || text.indexOf('危急值') !== -1;
+    }
+
     function classifyResultItem(item) {
         // 关键：结果为空/缺失 → UNCERTAIN
         const result = (item.Result || '').trim();
         if (!result || result === '-' || result === '未检' || result === ' ') return 'UNCERTAIN';
 
         const flag = (item.AbFlag || '').toUpperCase().trim();
-        if (flag === 'HH' || flag === 'LL') return 'CRITICAL';  // 危急值
+        if (isCriticalResultItem(item)) return 'CRITICAL';  // 危急值
         if (flag === 'H') return 'HIGH';
         if (flag === 'L') return 'LOW';
         if (flag === 'A') return 'ABNORMAL';
 
         // 回退：数值比较
-        if (item.ValueLow && item.ValueHigh) {
-            const num = parseFloat(result);
-            const low = parseFloat(item.ValueLow);
-            const high = parseFloat(item.ValueHigh);
-            if (!isNaN(num)) {
-                if (num > high) return 'HIGH';
-                if (num < low) return 'LOW';
-            }
+        const range = getItemRangeValues(item);
+        if (range.low || range.high) {
+            const rangeStatus = compareResultToRange(result, range.low, range.high);
+            if (rangeStatus) return rangeStatus;
         }
 
         // 无法判断（非数值结果等）→ UNCERTAIN
-        if (isNaN(parseFloat(result)) && !flag) {
+        if (!parseComparableNumber(result) && !flag) {
             return 'UNCERTAIN';
         }
 
@@ -4682,6 +4750,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 refRange: item.RefRanges || '',
                 abFlag: item.AbFlag || '',
                 status: classifyResultItem(item),
+                critical: isCriticalResultItem(item),
                 preResult: item.PreResult || null
             }));
 
@@ -4704,13 +4773,15 @@ function fillNativeLoginForm(creds, lastWG) {
             }
 
             const hasAbnormal = classifications.some(c => c.status === 'HIGH' || c.status === 'LOW' || c.status === 'ABNORMAL' || c.status === 'CRITICAL');
+            const hasCritical = classifications.some(c => c.status === 'CRITICAL' || c.critical);
             const hasUncertain = classifications.some(c => c.status === 'UNCERTAIN');
             const hasComplete = row.IsComplete === '1';
             // 检查是否有结果为空的项目
             const hasEmptyResults = classifications.some(c => !c.result || c.result === '-');
 
             let overallStatus = 'NORMAL';
-            if (hasAbnormal) overallStatus = 'ABNORMAL';
+            if (hasCritical) overallStatus = 'CRITICAL';
+            else if (hasAbnormal) overallStatus = 'ABNORMAL';
             else if (hasUncertain || !hasComplete || hasEmptyResults) overallStatus = 'UNCERTAIN';
 
             return {
