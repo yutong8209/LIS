@@ -2911,6 +2911,7 @@
         try {
             // 优先使用分类时缓存的原始数据（同一 API 调用）
             let data, itemInfo, labInfo;
+            const ss = buildSS(specimen._wg || wgDR());
             const classifyCached = _classifyRawCache[rdr];
             if (classifyCached && (Date.now() - classifyCached.ts < 60000)) {
                 dbg('详情命中分类缓存:', rdr);
@@ -2919,7 +2920,6 @@
                 labInfo = (data && data.LabInfo) ? data.LabInfo : [];
                 delete _classifyRawCache[rdr]; // 用完即删
             } else {
-                const ss = buildSS(specimen._wg || wgDR());
                 const statusVal = specimen.Status || specimen.ReportStatus || '';
 
                 const p = new URLSearchParams();
