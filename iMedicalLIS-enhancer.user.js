@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.6.8
+// @version      7.6.9
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -2046,6 +2046,7 @@
                 labno: row.Labno || '',
                 name: row.PatName || '',
                 testSet: row.TestSetDesc || '',
+                retry: 0,
                 row
             });
         });
@@ -5219,6 +5220,56 @@ function fillNativeLoginForm(creds, lastWG) {
         return false;
     }
 
+    async function refreshNativeWorkListForItem(iframeWin, item) {
+        if (!iframeWin || !item) return iframeWin;
+        let jq = iframeWin.jQuery || iframeWin.$;
+        const me = iframeWin.me;
+        if (!jq || !me) return iframeWin;
+        try {
+            if (item.mdr) {
+                if (me.WorkGroupMachineDR !== undefined) me.WorkGroupMachineDR = item.mdr;
+                try { jq('#cmb_WorkGroupMachine').combogrid('setValue', item.mdr); } catch(e) {}
+            }
+            const dateStr = jq('#dt_wlReportDate').length ?
+                (jq('#dt_wlReportDate').datebox('getValue') || jq('#dt_wlReportDate').datebox('getText') || today()) : today();
+            const findStr = '&WorkGroupMachineDR=' + (item.mdr || '') + '&ReportStatus=&SttAccDate=' + dateStr;
+            if (typeof iframeWin.ShowWorkList === 'function') iframeWin.ShowWorkList(findStr);
+            else if (typeof iframeWin.FindFast === 'function') iframeWin.FindFast(item.labno || findStr);
+            await sleep(900);
+        } catch(e) {
+            dbg('刷新原生工作列表异常:', e);
+        }
+        return getReportIframeWin() || iframeWin;
+    }
+
+    async function waitAndSelectNativeRow(iframeWin, item, timeoutMs) {
+        const end = Date.now() + (timeoutMs || 9000);
+        let refreshed = false;
+        while (Date.now() < end) {
+            iframeWin = getReportIframeWin() || iframeWin;
+            if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+                return { ok: true, iframeWin };
+            }
+            if (!refreshed) {
+                refreshed = true;
+                iframeWin = await refreshNativeWorkListForItem(iframeWin, item);
+            }
+            await sleep(350);
+        }
+        return { ok: false, iframeWin };
+    }
+
+    function requeueAuditItem(queue, item, reason) {
+        item.retry = (item.retry || 0) + 1;
+        if (item.retry <= 2) {
+            queue.items.push(item);
+            dbg('批审临时跳过，放回队尾重试:', item.name || item.labno || item.reportDR, reason, 'retry=', item.retry);
+            return true;
+        }
+        queue.skipped.push({ ...item, reason });
+        return false;
+    }
+
     // --- 执行批量审核（逐行审核）---
     async function executeBatchAudit(normalSpecimens) {
         if (normalSpecimens.length === 0) return;
@@ -5279,7 +5330,7 @@ function fillNativeLoginForm(creds, lastWG) {
             }
 
             let successCount = queue.done.length, failCount = queue.failed.length, skipCount = queue.skipped.length;
-            const totalCount = queue.items.length;
+            let totalCount = queue.items.length;
             let queuePausedForSwitch = false;
             _batchAbort = false;
 
@@ -5316,8 +5367,9 @@ function fillNativeLoginForm(creds, lastWG) {
 
                 const fill2 = document.getElementById('lis-prog-fill');
                 const text2 = document.getElementById('lis-prog-text');
+                totalCount = queue.items.length;
                 if (fill2) fill2.style.width = (queue.current / totalCount * 100) + '%';
-                if (text2) text2.textContent = `${queue.current + 1} / ${totalCount} - ${item.name || item.labno || item.reportDR}`;
+                if (text2) text2.textContent = `${queue.current + 1} / ${totalCount} - ${item.name || item.labno || item.reportDR}${item.retry ? '（重试' + item.retry + '）' : ''}`;
 
                 try {
                     if (!jq || !me) {
@@ -5329,15 +5381,17 @@ function fillNativeLoginForm(creds, lastWG) {
                         failCount++; queue.current++; saveAuditQueue(queue); continue;
                     }
 
-                    const selected = selectNativeRowByReportDR(iframeWin, item.reportDR);
-                    if (!selected) {
-                        queue.skipped.push({ ...item, reason: '原生列表未找到' });
-                        skipCount++; queue.current++; saveAuditQueue(queue); continue;
+                    const selectedResult = await waitAndSelectNativeRow(iframeWin, item, 9000);
+                    iframeWin = selectedResult.iframeWin || iframeWin;
+                    if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
+                    if (!selectedResult.ok) {
+                        if (!requeueAuditItem(queue, item, '原生列表未找到')) skipCount++;
+                        queue.current++; saveAuditQueue(queue); continue;
                     }
-                    const detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 6000);
+                    const detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 9000);
                     if (!detailReady) {
-                        queue.skipped.push({ ...item, reason: '详情未加载完成' });
-                        skipCount++; queue.current++; saveAuditQueue(queue); continue;
+                        if (!requeueAuditItem(queue, item, '详情未加载完成')) skipCount++;
+                        queue.current++; saveAuditQueue(queue); continue;
                     }
 
                     let timedOut = false;
