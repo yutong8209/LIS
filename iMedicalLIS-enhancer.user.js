@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.6.5
+// @version      7.6.6
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -209,8 +209,8 @@
 .ws-tab-name{overflow:hidden;text-overflow:ellipsis;max-width:150px}
 .mach-cnt{background:#eef2f6;color:#475569;border-radius:10px;padding:0 6px;font-size:10px;min-width:16px;text-align:center;line-height:1.55;font-weight:700}
 .ws-wg-tab.on .mach-cnt,.ws-mach-tab.on .mach-cnt{background:rgba(255,255,255,.22);color:#fff}
-.ws-tab-split{display:inline-flex;gap:3px;color:#6b7785;font-weight:700}
-.ws-wg-tab.on .ws-tab-split{color:rgba(255,255,255,.82)}
+.ws-tab-stat{display:inline-flex;align-items:center;color:#6b7785;font-size:10px;font-weight:700}
+.ws-wg-tab.on .ws-tab-stat{color:rgba(255,255,255,.82)}
 
 /* --- 分类标签栏 --- */
 #lis-ws-bar{background:#f7f9fb;padding:7px 14px;display:flex;align-items:center;gap:6px;border-bottom:1px solid #d7dee8;flex-shrink:0!important;font-size:12px;flex-wrap:wrap;position:relative;z-index:3}
@@ -1137,8 +1137,9 @@
             const c = wgCounts[w.dr] || {total:0};
             h += `<button class="ws-wg-tab ${wsActiveWG===w.dr?'on':''}" data-wg="${w.dr}">
                 <span class="ws-tab-name">${w.name}</span>
-                <span class="ws-tab-split"><span>${c.normalReady || 0}</span>/<span>${c.abnormalReady || 0}</span></span>
-                <span class="mach-cnt">${c.total}</span>
+                <span class="ws-tab-stat">正常${c.normalReady || 0}</span>
+                <span class="ws-tab-stat">异常${c.abnormalReady || 0}</span>
+                <span class="mach-cnt">总${c.total}</span>
             </button>`;
         });
         // 全部工作组
@@ -1147,8 +1148,9 @@
         const allAbnormal = WG.reduce((s,w) => s + (wgCounts[w.dr]?.abnormalReady||0), 0);
         h += `<button class="ws-wg-tab ${!wsActiveWG?'on':''}" data-wg="">
             <span class="ws-tab-name">全部</span>
-            <span class="ws-tab-split"><span>${allNormal}</span>/<span>${allAbnormal}</span></span>
-            <span class="mach-cnt">${allTotal}</span>
+            <span class="ws-tab-stat">正常${allNormal}</span>
+            <span class="ws-tab-stat">异常${allAbnormal}</span>
+            <span class="mach-cnt">总${allTotal}</span>
         </button>`;
         h += '</div>';
 
@@ -4080,6 +4082,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
         // 轮询：检测 CA 窗口 / 审核登录窗口 / 操作结果
         let caDetected = false;
+        let authLoginDetected = false;
         for (let poll = 0; poll < 20; poll++) {
             await sleep(200);
 
@@ -4099,9 +4102,8 @@ function fillNativeLoginForm(creds, lastWG) {
                 if (authWin && authWin.style.display !== 'none') {
                     const vis = jq(authWin);
                     if (vis.length && vis.is(':visible')) {
-                        dbg('检测到审核登录窗口，停止自动审核');
-                        showToast('出现审核登录窗口，请关闭后用原生审核按钮重新触发 CA', 'warning');
-                        return false;
+                        authLoginDetected = true;
+                        dbg('检测到审核登录窗口，继续等待原生审核结果');
                     }
                 }
             } catch(e) {}
@@ -4126,6 +4128,9 @@ function fillNativeLoginForm(creds, lastWG) {
         const result = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess);
         if (result) return result;
 
+        if (authLoginDetected) {
+            showToast('出现审核登录窗口，请关闭后用原生审核按钮重新触发 CA', 'warning');
+        }
         dbg('原生按钮点击完成，但未确认成功');
         return false;
     }
