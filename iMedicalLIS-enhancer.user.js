@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.6.6
+// @version      7.6.7
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -240,6 +240,7 @@
 .ws-abnormal-card{background:#fff;border:1px solid #dce3eb;border-left:4px solid #d14b4b;border-radius:6px;padding:7px 10px;cursor:pointer;transition:background .12s,border-color .12s;display:flex;align-items:center;gap:10px}
 .ws-abnormal-card:hover{background:#fffafa;border-color:#e4b3b3}
 .ws-abnormal-card.focused{border-left-color:#2f6fb3;background:#eef6ff;box-shadow:0 0 0 1px rgba(47,111,179,.12)}
+.ws-abnormal-card.auditing{border-left-color:#168276;background:#eef7f5;box-shadow:0 0 0 1px rgba(22,130,118,.14)}
 .ws-abnormal-card.has-critical{border-left-color:#b91c1c;background:#fff7f7}
 .ws-abnormal-card.has-critical.focused{border-left-color:#b91c1c;background:#ffeded;box-shadow:0 0 0 1px rgba(185,28,28,.14)}
 .ab-card-top{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
@@ -1510,6 +1511,13 @@
             if (detailPanel && detailPanel.classList.contains('show')) return;
             // 如果详情面板的捕获处理器已处理，跳过
             if (e.defaultPrevented) return;
+            if (_abnormalAuditInProgress) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                return;
+            }
             const curData = filteredData();
             if (e.key === 'ArrowDown' || e.key === 'j') {
                 e.preventDefault();
@@ -1562,6 +1570,15 @@
         dbg('异常列表审核开始:', specimen.PatName);
 
         try {
+            const startIndex = Math.max(0, wsAbnormalIndex);
+            const card = document.querySelector(`.ws-abnormal-card[data-rdr="${String(specimen.ReportDR || '').replace(/"/g, '\\"')}"]`);
+            if (card) {
+                card.classList.add('auditing');
+                const hint = card.querySelector('.ab-card-hint');
+                if (hint) hint.textContent = '正在审核...';
+            }
+            showToast(`正在审核: ${specimen.PatName || specimen.Labno || ''}`, 'warning');
+
             // 安全校验: 危急值不能通过工作台审核
             const cached = wsClassifiedCache[specimen.ReportDR];
             if (cached && cached.status === 'CRITICAL') {
@@ -1653,7 +1670,11 @@
             }
 
             // 使用原生审核按钮
-            const auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth');
+            let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 25000 });
+            if (!auditResult) {
+                dbg('异常审核首次未确认，短暂等待原生列表状态...');
+                auditResult = await waitNativeActionResult(iframeWin, reportDR, ['3'], 5000, true);
+            }
             if (auditResult === 'incomplete') {
                 showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
                 return;
@@ -1676,11 +1697,15 @@
             const newData = filteredData();
             if (newData.length === 0) {
                 wsCategory = 'normal';
+                wsAbnormalIndex = -1;
+            } else {
+                wsAbnormalIndex = Math.min(startIndex, newData.length - 1);
             }
             // 使用 rAF 延迟重渲染，让 UI 先响应
             requestAnimationFrame(() => {
                 renderWSCategoryBar();
                 renderWSTable();
+                if (wsCategory === 'abnormal') _scrollAbnormalFocus();
             });
         } catch(e) {
             dbg('审核失败:', e);
@@ -2526,6 +2551,13 @@
                     if (wsCategory !== 'abnormal') return;
                     if (detailPanel && detailPanel.classList.contains('show')) return;
                     if (e.defaultPrevented) return;
+                    if (_abnormalAuditInProgress) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                        }
+                        return;
+                    }
                     const d = filteredData();
                     if (e.key === 'ArrowDown' || e.key === 'j') {
                         e.preventDefault(); moveAbnormalFocus(1, d);
@@ -3866,8 +3898,8 @@ function fillNativeLoginForm(creds, lastWG) {
                     dbg('原生操作成功（目标行已从列表移除）');
                     return true;
                 }
-                if (found && expectedStatuses.includes(String(found.row.Status || found.row.ReportStatus || ''))) {
-                    dbg('原生操作成功（状态=' + String(found.row.Status || found.row.ReportStatus || '') + '）');
+                if (found && isExpectedNativeStatus(found.row, expectedStatuses)) {
+                    dbg('原生操作成功（状态=' + getNativeStatusValues(found.row).join('/') + '）');
                     return true;
                 }
             }
@@ -3876,7 +3908,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 me.IsSaveSuccess = false;
                 if (!expectedStatuses || expectedStatuses.length === 0) return true;
                 const found = targetReportDR ? findNativeRowByReportDR(iframeWin, targetReportDR) : null;
-                if (!found || expectedStatuses.includes(String(found.row.Status || found.row.ReportStatus || ''))) {
+                if (!found || isExpectedNativeStatus(found.row, expectedStatuses)) {
                     dbg('原生操作成功（IsSaveSuccess）');
                     return true;
                 }
@@ -3886,11 +3918,32 @@ function fillNativeLoginForm(creds, lastWG) {
             if (msg === 'success') {
                 if (!expectedStatuses || expectedStatuses.length === 0 || !targetReportDR) return true;
                 const found = findNativeRowByReportDR(iframeWin, targetReportDR);
-                if (!found || expectedStatuses.includes(String(found.row.Status || found.row.ReportStatus || ''))) return true;
+                if (!found || isExpectedNativeStatus(found.row, expectedStatuses)) return true;
                 continue;
             }
             if (msg === 'incomplete') return 'incomplete';
             if (msg === 'failure') return false;
+        }
+        return false;
+    }
+
+    function getNativeStatusValues(row) {
+        if (!row) return [];
+        return [
+            row.Status, row.ReportStatus, row.StatusDesc, row.ReportStatusDesc,
+            row.AuthStatus, row.AuthFlag, row.State, row.StateDesc
+        ].filter(v => v !== undefined && v !== null).map(v => String(v).trim()).filter(Boolean);
+    }
+
+    function isExpectedNativeStatus(row, expectedStatuses) {
+        const expected = (expectedStatuses || []).map(String);
+        if (!expected.length) return true;
+        const values = getNativeStatusValues(row);
+        if (values.some(v => expected.includes(v))) return true;
+        if (expected.includes('3')) {
+            return values.some(v => (v === '审核' || v === '已审核' || v.indexOf('审核') !== -1) &&
+                v.indexOf('未审核') === -1 && v.indexOf('待审核') === -1 &&
+                v.indexOf('取审') === -1 && v.indexOf('取消') === -1);
         }
         return false;
     }
