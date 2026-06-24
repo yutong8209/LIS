@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.6.7
+// @version      7.6.8
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -913,24 +913,71 @@
             wsMachineCounts[mdr].total++;
             wsMachineCounts['_all'].total++;
 
-            const status = String(r.Status || r.ReportStatus || '');
-            if (status === '3' || status === '4') return; // 已审核不计入
-            if (status === '0') return; // 待排样不计入结果不完整
-            const complete = String(r.IsComplete || '');
-            if (complete !== '1') {
+            const bucket = getWSAuditBucket(r);
+            if (bucket === 'audited' || bucket === 'pending') return;
+            if (bucket === 'incomplete') {
                 wsMachineCounts[mdr].incomplete++;
                 wsMachineCounts['_all'].incomplete++;
                 return;
             }
-            // 完整标本，检查分类缓存
-            const cached = wsClassifiedCache[r.ReportDR];
-            if (cached && (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL')) {
+            if (bucket === 'abnormal') {
                 wsMachineCounts[mdr].abnormalReady++;
                 wsMachineCounts['_all'].abnormalReady++;
-            } else {
+            } else if (bucket === 'normal') {
                 wsMachineCounts[mdr].normalReady++;
                 wsMachineCounts['_all'].normalReady++;
             }
+        });
+    }
+
+    function getWSAuditBucket(r) {
+        const status = String(r.Status || r.ReportStatus || '');
+        if (status === '3' || status === '4') return 'audited';
+        if (status === '0') return 'pending';
+        const complete = String(r.IsComplete || '');
+        if (complete !== '1') return 'incomplete';
+        const cached = wsClassifiedCache[r.ReportDR];
+        if (!cached) return 'incomplete';
+        if (cached.status === 'NORMAL') return 'normal';
+        if (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL') return 'abnormal';
+        return 'incomplete';
+    }
+
+    function getMachineSortRank(machine) {
+        const name = ((machine && (machine.CName || machine.Name || machine.RowID)) || '').toLowerCase();
+        const wg = String((machine && machine._wg) || '');
+        const rules = wg === '1'
+            ? [
+                ['血细胞', /血细胞|血球|血常规|bc-|xn|xs|sysmex|mindray|迈瑞/],
+                ['血凝', /血凝|凝血|coag|cs-|ca-|stago|acl/],
+                ['尿液', /尿液|尿沉渣|尿干化|尿常规|uf|uc|urisys|ave/],
+                ['粪便', /粪便|大便|便|fec|ob/],
+                ['血流变', /血流变|流变|hemorheology/],
+                ['手工杂项', /手工|杂项|manual/],
+            ]
+            : wg === '4'
+                ? [
+                    ['800', /dxi\s*800|dxi800|化学发光仪800|800/],
+                    ['x8', /maglumi\s*x?8|maglumix8|x8/],
+                    ['1600', /1600|getein/],
+                    ['wan200', /wan\s*200|wan200/],
+                    ['手工杂项', /手工|杂项|manual/],
+                ]
+                : [];
+        for (let i = 0; i < rules.length; i++) {
+            if (rules[i][1].test(name)) return i;
+        }
+        return 100;
+    }
+
+    function sortWSMachines(machines) {
+        return [...machines].sort((a, b) => {
+            const ra = getMachineSortRank(a);
+            const rb = getMachineSortRank(b);
+            if (ra !== rb) return ra - rb;
+            const na = a.CName || a.Name || a.RowID || '';
+            const nb = b.CName || b.Name || b.RowID || '';
+            return na.localeCompare(nb, 'zh');
         });
     }
 
@@ -949,39 +996,19 @@
         // 分类过滤
         if (wsCategory === 'normal') {
             d = d.filter(r => {
-                const status = String(r.Status || r.ReportStatus || '');
-                if (status === '3' || status === '4') return false;
-                const complete = String(r.IsComplete || '');
-                if (complete !== '1') return false;
-                const cached = wsClassifiedCache[r.ReportDR];
-                return !cached || cached.status === 'NORMAL';
+                return getWSAuditBucket(r) === 'normal';
             });
         } else if (wsCategory === 'abnormal') {
             d = d.filter(r => {
-                const status = String(r.Status || r.ReportStatus || '');
-                if (status === '3' || status === '4') return false;
-                const complete = String(r.IsComplete || '');
-                if (complete !== '1') return false;
-                const cached = wsClassifiedCache[r.ReportDR];
-                return cached && (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL');
+                return getWSAuditBucket(r) === 'abnormal';
             });
         } else if (wsCategory === 'incomplete') {
             d = d.filter(r => {
-                const status = String(r.Status || r.ReportStatus || '');
-                if (status === '3' || status === '4') return false;
-                if (status === '0') return false; // 待排样不显示在结果不完整中
-                const complete = String(r.IsComplete || '');
-                if (complete !== '1') return true;
-                // IsComplete='1' 但分类为 UNCERTAIN 的也算不完整（与 renderWSCategoryBar 计数逻辑一致）
-                const cached = wsClassifiedCache[r.ReportDR];
-                if (!cached) return false; // 未分类的不算不完整
-                return cached.status !== 'NORMAL' && cached.status !== 'ABNORMAL' && cached.status !== 'CRITICAL';
+                return getWSAuditBucket(r) === 'incomplete';
             });
         } else if (wsCategory === 'pending') {
             d = d.filter(r => {
-                const status = String(r.Status || r.ReportStatus || '');
-                // 待排样：Status = '0'
-                return status === '0';
+                return getWSAuditBucket(r) === 'pending';
             });
         }
         // 'all' = 不过滤分类
@@ -1036,39 +1063,24 @@
             machCounts[mdr].total++;
             machCounts['_all'].total++;
 
-            const status = String(r.Status || r.ReportStatus || '');
-            if (status === '0') { pendingCount++; return; }
-            if (status === '3' || status === '4') return;
-            const complete = String(r.IsComplete || '');
+            const bucket = getWSAuditBucket(r);
+            if (bucket === 'pending') { pendingCount++; return; }
+            if (bucket === 'audited') return;
 
-            // 工作组的 normalReady/abnormalReady
-            if (wgCounts[wg]) {
-                if (complete !== '1') { wgCounts[wg].incomplete++; }
-                else {
-                    const cached = wsClassifiedCache[r.ReportDR];
-                    if (cached && (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL')) wgCounts[wg].abnormalReady++;
-                    else if (cached && cached.status !== 'NORMAL') wgCounts[wg].incomplete++; // UNCERTAIN 算不完整
-                    else wgCounts[wg].normalReady++;
-                }
-            }
-            // 仪器的 normalReady/abnormalReady/incomplete
-            if (complete !== '1') {
+            if (bucket === 'incomplete') {
+                if (wgCounts[wg]) wgCounts[wg].incomplete++;
                 machCounts[mdr].incomplete++;
                 machCounts['_all'].incomplete++;
                 incompleteCount++;
                 return;
             }
-            const cached = wsClassifiedCache[r.ReportDR];
-            if (cached && (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL')) {
+            if (bucket === 'abnormal') {
+                if (wgCounts[wg]) wgCounts[wg].abnormalReady++;
                 machCounts[mdr].abnormalReady++;
                 machCounts['_all'].abnormalReady++;
                 abnormalCount++;
-            } else if (cached && cached.status !== 'NORMAL') {
-                // UNCERTAIN 算不完整（与 renderWSCategoryBar 计数逻辑一致）
-                machCounts[mdr].incomplete++;
-                machCounts['_all'].incomplete++;
-                incompleteCount++;
-            } else {
+            } else if (bucket === 'normal') {
+                if (wgCounts[wg]) wgCounts[wg].normalReady++;
                 machCounts[mdr].normalReady++;
                 machCounts['_all'].normalReady++;
                 normalCount++;
@@ -1123,13 +1135,9 @@
             const wg = r._wg;
             if (!wgCounts[wg]) return;
             wgCounts[wg].total++;
-            const status = String(r.Status || r.ReportStatus || '');
-            if (status === '3' || status === '4') return;
-            const complete = String(r.IsComplete || '');
-            if (complete !== '1') return;
-            const cached = wsClassifiedCache[r.ReportDR];
-            if (cached && (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL')) wgCounts[wg].abnormalReady++;
-            else wgCounts[wg].normalReady++;
+            const bucket = getWSAuditBucket(r);
+            if (bucket === 'normal') wgCounts[wg].normalReady++;
+            else if (bucket === 'abnormal') wgCounts[wg].abnormalReady++;
         });
 
         // 第一行：工作组标签
@@ -1161,7 +1169,7 @@
         let ac = mc['_all'] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
         if (wsActiveWG) {
             ac = {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-            wsMachines.filter(m => m._wg === wsActiveWG).forEach(m => {
+            sortWSMachines(wsMachines.filter(m => m._wg === wsActiveWG)).forEach(m => {
                 const mc2 = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
                 ac.total += mc2.total; ac.normalReady += mc2.normalReady;
                 ac.abnormalReady += mc2.abnormalReady; ac.incomplete += mc2.incomplete;
@@ -1173,7 +1181,7 @@
         </button>`;
 
         // 筛选当前工作组的仪器
-        const wgMachines = wsMachines.filter(m => !wsActiveWG || m._wg === wsActiveWG);
+        const wgMachines = sortWSMachines(wsMachines.filter(m => !wsActiveWG || m._wg === wsActiveWG));
         wgMachines.forEach(m => {
             const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
             h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${m.RowID}">
@@ -1222,24 +1230,11 @@
 
         let normalCount = 0, abnormalCount = 0, incompleteCount = 0, pendingCount = 0;
         filtered.forEach(r => {
-            const status = String(r.Status || r.ReportStatus || '');
-            // 待排样：Status = '0'
-            if (status === '0') { pendingCount++; return; } // 待排样单独分类
-            if (status === '3' || status === '4') return; // 已审核的不算
-            const complete = String(r.IsComplete || '');
-            if (complete !== '1') { incompleteCount++; return; }
-            // 完整的标本，检查分类缓存
-            const cached = wsClassifiedCache[r.ReportDR];
-            if (cached) {
-                if (cached.status === 'NORMAL') normalCount++;
-                else if (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL') abnormalCount++;
-                else incompleteCount++; // UNCERTAIN 也算不完整
-            } else if (wsClassifying) {
-                // 正在分类中的标本先不计入可审，避免按钮数量和实际批审条件不一致
-                incompleteCount++;
-            } else {
-                incompleteCount++;
-            }
+            const bucket = getWSAuditBucket(r);
+            if (bucket === 'normal') normalCount++;
+            else if (bucket === 'abnormal') abnormalCount++;
+            else if (bucket === 'incomplete') incompleteCount++;
+            else if (bucket === 'pending') pendingCount++;
         });
         const totalCount = filtered.length;
 
