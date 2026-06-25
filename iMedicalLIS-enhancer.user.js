@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.12
+// @version      7.8.13
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1978,6 +1978,12 @@
     function confirmAndBatchAudit(normalData) {
         console.log('[LIS] confirmAndBatchAudit called, count:', normalData.length);
         dbg('confirmAndBatchAudit 被调用, normalData.length:', normalData.length);
+        const blocked = (normalData || []).filter(r => !isAutoAuditableClassified(r));
+        if (blocked.length > 0) {
+            const first = blocked[0];
+            showToast(getAutoAuditBlockReason(first, first.row) || '包含不可自动审核的标本', 'error');
+            return;
+        }
         if (normalData.length === 0) { showToast('没有可审核的标本', 'warning'); return; }
         const existing = document.getElementById('lis-audit-confirm');
         if (existing) existing.remove();
@@ -2185,6 +2191,7 @@
             const row = sp.row || sp;
             const reportDR = sp.reportDR || row.ReportDR;
             if (!reportDR || !row) return;
+            if (!isAutoAuditableClassified(sp)) return;
             items.push({
                 reportDR: String(reportDR),
                 wg: row._wg || wgDR(),
@@ -2192,6 +2199,7 @@
                 labno: row.Labno || '',
                 name: row.PatName || '',
                 testSet: row.TestSetDesc || '',
+                status: sp.status || '',
                 retry: 0,
                 row
             });
@@ -2261,14 +2269,23 @@
             return;
         }
 
-        // 使用缓存的分类结果，未分类的标本标记为 UNCERTAIN（需人工确认）
+        // 使用缓存的分类结果；只允许 NORMAL 进入自动审核
         const formatted = unreviewed.map(r => {
             const cached = wsClassifiedCache[r.ReportDR];
             return cached
                 ? { status: cached.status, items: cached.items || [], row: r, reportDR: r.ReportDR }
                 : { status: 'UNCERTAIN', items: [], row: r, reportDR: r.ReportDR };
         });
-        confirmAndBatchAudit(formatted);
+        const normalOnly = formatted.filter(isAutoAuditableClassified);
+        const blocked = formatted.filter(r => !isAutoAuditableClassified(r));
+        if (blocked.length > 0) {
+            showToast(`已排除 ${blocked.length} 个异常/危急/待定标本`, 'warning');
+        }
+        if (normalOnly.length === 0) {
+            showToast(blocked.length ? getAutoAuditBlockReason(blocked[0], blocked[0].row) : '没有可审核的正常标本', 'warning');
+            return;
+        }
+        confirmAndBatchAudit(normalOnly);
     }
 
     // (showAuditConfirmDialog 和 performAudit 已删除，使用 confirmAndBatchAudit 替代)
@@ -2613,6 +2630,15 @@
                 return;
             }
             const reportDR = specimen.ReportDR;
+            const cached = wsClassifiedCache[reportDR];
+            if (cached && cached.status === 'CRITICAL') {
+                showToast(getAutoAuditBlockReason(cached, specimen), 'error');
+                return;
+            }
+            if (detailPanel && detailPanel.dataset.rdr === String(reportDR) && detailPanel.dataset.hasCritical === '1') {
+                showToast(`🚨 ${specimen.PatName || specimen.Labno || ''} 有危急值，必须在原始LIS中审核`, 'error');
+                return;
+            }
 
             // 安全校验: 结果必须完整
             const complete = String(specimen.IsComplete || '');
@@ -3248,7 +3274,11 @@
             }
 
             body.innerHTML = html;
-            const _dp = document.getElementById('lis-detail-panel'); if (_dp) _dp.dataset.rdr = String(rdr);
+            const _dp = document.getElementById('lis-detail-panel');
+            if (_dp) {
+                _dp.dataset.rdr = String(rdr);
+                _dp.dataset.hasCritical = critItems > 0 ? '1' : '0';
+            }
             // 存入 LRU 缓存
             detailLRUSet(rdr, { html, ts: Date.now() });
 
@@ -4979,6 +5009,30 @@ function fillNativeLoginForm(creds, lastWG) {
         return text.indexOf('危急') !== -1 || text.indexOf('危急值') !== -1;
     }
 
+    function classifyStatusText(status) {
+        if (status === 'NORMAL') return '正常';
+        if (status === 'CRITICAL') return '危急';
+        if (status === 'ABNORMAL') return '异常';
+        if (status === 'UNCERTAIN') return '待定';
+        return status || '待定';
+    }
+
+    function isAutoAuditableClassified(result) {
+        return !!result && result.status === 'NORMAL';
+    }
+
+    function getAutoAuditBlockReason(result, row) {
+        const r = result || {};
+        const specimen = row || r.row || {};
+        const name = specimen.PatName || specimen.Labno || '';
+        if (!r.status) return '未完成分类，需人工确认';
+        if (r.status === 'CRITICAL') return `🚨 ${name} 有危急值，必须在原始LIS中审核`;
+        if (r.status === 'ABNORMAL') return `⚠️ ${name} 有异常结果，需人工审核`;
+        if (r.status === 'UNCERTAIN') return `⚠️ ${name} 结果待定，需人工确认`;
+        if (r.status !== 'NORMAL') return `⚠️ ${name} 状态为${classifyStatusText(r.status)}，不可自动审核`;
+        return '';
+    }
+
     function classifyResultItem(item) {
         // 关键：结果为空/缺失 → UNCERTAIN
         const result = ((item.TextRes && String(item.TextRes).trim()) ? item.TextRes : (item.Result || '')).trim();
@@ -5319,7 +5373,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
         // 异步获取每个标本的分类（只取前50个避免过慢）
         const toCheck = eligible.slice(0, 50);
-        let normal = 0, abnormal = 0, uncertain = 0;
+        let normal = 0, abnormal = 0, critical = 0, uncertain = 0;
 
         // 并发获取（每批10个）
         const allResults = [];
@@ -5329,6 +5383,7 @@ function fillNativeLoginForm(creds, lastWG) {
             allResults.push(...results);
             results.forEach(r => {
                 if (r.status === 'NORMAL') normal++;
+                else if (r.status === 'CRITICAL') critical++;
                 else if (r.status === 'ABNORMAL') abnormal++;
                 else uncertain++;
             });
@@ -5337,6 +5392,7 @@ function fillNativeLoginForm(creds, lastWG) {
         statEl.innerHTML = `
             <span class="st-normal" title="全部正常，可批量审核">正常: ${normal}</span>
             <span class="st-abnormal" title="有异常结果，需人工审核">异常: ${abnormal}</span>
+            ${critical > 0 ? `<span class="st-abnormal" title="危急值，必须在原始LIS中审核">危急: ${critical}</span>` : ''}
             ${uncertain > 0 ? `<span class="st-uncertain" title="无法判断，需人工审核">待定: ${uncertain}</span>` : ''}
             <span class="st-total">共: ${total}</span>
         `;
@@ -5364,6 +5420,11 @@ function fillNativeLoginForm(creds, lastWG) {
             // 优先使用已缓存的分类结果
             const cached = wsClassifiedCache[selected.ReportDR];
             const result = cached || await fetchAndClassifySpecimen(selected);
+
+            if (result.status === 'CRITICAL') {
+                showToast(getAutoAuditBlockReason(result, selected), 'error');
+                return;
+            }
 
             if (result.status === 'ABNORMAL') {
                 const abnormalItems = result.items.filter(i => i.status !== 'NORMAL');
@@ -5783,6 +5844,12 @@ function fillNativeLoginForm(creds, lastWG) {
                 const item = currentQueueItem(queue);
                 if (!item) break;
 
+                const itemClassified = wsClassifiedCache[item.reportDR] || (item.status ? { status: item.status, row: item.row } : null);
+                if (itemClassified && !isAutoAuditableClassified(itemClassified)) {
+                    queue.skipped.push({ ...item, reason: classifyStatusText(itemClassified.status) + '标本不可自动审核' });
+                    skipCount++; queue.current++; saveAuditQueue(queue); continue;
+                }
+
                 if (item.wg && item.wg !== wgDR()) {
                     saveAuditQueue(queue);
                     const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
@@ -5923,7 +5990,7 @@ function fillNativeLoginForm(creds, lastWG) {
             r.row.Labno || '',
             r.row.EpisodeNo || '',
             r.row.TestSetDesc || '',
-            r.status === 'NORMAL' ? '正常' : r.status === 'ABNORMAL' ? '异常' : '待定',
+            classifyStatusText(r.status),
             r.items.filter(i => i.status !== 'NORMAL').map(i => `${i.name}(${i.result})`).join('; ')
         ]);
 
