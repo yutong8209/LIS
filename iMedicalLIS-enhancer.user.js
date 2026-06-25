@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.15
+// @version      7.8.16
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -2253,14 +2253,12 @@
 
     function checkAuditQueueResume() {
         const queue = loadAuditQueue();
-        if (!queue) return;
-        setTimeout(() => {
-            if (queue.keepWS) keepWorkbenchOnTop('恢复批审队列');
-            continueAuditQueue(queue).catch(e => {
-                dbg('恢复审核队列失败:', e);
-                showToast('恢复审核队列失败: ' + e.message, 'error');
-            });
-        }, 2000);
+        if (!queue || !queue.items || queue.items.length === 0) return;
+        // 不再自动恢复，先清除旧队列，让用户手动触发
+        const remaining = queue.items.length - (queue.current || 0);
+        if (remaining <= 0) { clearAuditQueue(); return; }
+        showToast(`发现未完成的批审队列（${remaining} 个标本），请在工作台中手动重新开始`, 'warning');
+        clearAuditQueue();
     }
 
     // --- F5 快捷键审核选中标本 ---
@@ -6138,7 +6136,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.15');
+        dbg('iMedicalLIS 增强助手 v7.8.16');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
