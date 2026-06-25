@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.19
+// @version      7.8.20
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5120,7 +5120,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 if (cacheKeys.length > _CLASSIFIED_CACHE_MAX) {
                     cacheKeys.slice(0, cacheKeys.length - _CLASSIFIED_CACHE_MAX).forEach(k => delete wsClassifiedCache[k]);
                 }
-                await new Promise(r => setTimeout(r, 50)); // 让 UI 有机会更新
+                await new Promise(r => setTimeout(r, 0)); // 仅 yield，不加额外延迟
             }
 
             dbg('分类完成');
@@ -5865,6 +5865,12 @@ function fillNativeLoginForm(creds, lastWG) {
             let totalCount = queue.items.length;
             let queuePausedForSwitch = false;
             _batchAbort = false;
+            // 按仪器分组排序剩余项，减少仪器切换次数（每次切换耗时 ~500ms）
+            if (queue.current < queue.items.length - 1) {
+                const remaining = queue.items.splice(queue.current);
+                remaining.sort((a, b) => String(a.mdr || '').localeCompare(String(b.mdr || '')));
+                queue.items.push(...remaining);
+            }
 
             while (queue.current < queue.items.length) {
                 if (_batchAbort) { dbg('批审被用户中止'); saveAuditQueueNow(queue); break; }
@@ -6076,68 +6082,63 @@ function fillNativeLoginForm(creds, lastWG) {
     function initReportEnhance() {
         if (!isReportPageActive()) return;
 
-        // 搜索原生审核函数
-        const w = uw();
-        const auditFuncs = [];
-        for (const key of Object.keys(w)) {
-            if (typeof w[key] === 'function' && /audit|review|check|report|sign|verify|confirm|save/i.test(key)) {
-                auditFuncs.push(key + ':' + typeof w[key]);
+        if (DEBUG) {
+            // 搜索原生审核函数
+            const w = uw();
+            const auditFuncs = [];
+            for (const key of Object.keys(w)) {
+                if (typeof w[key] === 'function' && /audit|review|check|report|sign|verify|confirm|save/i.test(key)) {
+                    auditFuncs.push(key + ':' + typeof w[key]);
+                }
             }
-        }
-        dbg('找到的函数: ' + auditFuncs.join(', '));
+            dbg('找到的函数: ' + auditFuncs.join(', '));
 
-        // 也搜索按钮的 onclick 处理器
-        const allBtns = document.querySelectorAll('button[onclick], a[onclick], input[onclick]');
-        allBtns.forEach(btn => {
-            const oc = btn.getAttribute('onclick') || '';
-            if (/audit|review|check|sign|save|report|confirm/i.test(oc)) {
-                dbg('按钮: ' + (btn.textContent||'').trim().substring(0,20) + ' → ' + oc.substring(0, 80));
-            }
-        });
-
-        // 深度搜索所有按钮（包括 iframe）
-        function searchButtons(doc, prefix) {
-            // 搜索所有可能的按钮元素
-            const btns = doc.querySelectorAll('button, a, input[type="button"], input[type="submit"], span[onclick], div[onclick], td[onclick]');
-            btns.forEach(btn => {
-                const text = (btn.textContent || btn.value || '').trim();
+            // 也搜索按钮的 onclick 处理器
+            const allBtns = document.querySelectorAll('button[onclick], a[onclick], input[onclick]');
+            allBtns.forEach(btn => {
                 const oc = btn.getAttribute('onclick') || '';
-                const id = btn.id || '';
-                if (text.length > 0 && text.length < 20) {
-                    dbg(prefix + '按钮: "' + text + '" id=' + id + ' onclick=' + (oc || 'none').substring(0, 100));
+                if (/audit|review|check|sign|save|report|confirm/i.test(oc)) {
+                    dbg('按钮: ' + (btn.textContent||'').trim().substring(0,20) + ' → ' + oc.substring(0, 80));
                 }
             });
-        }
-        searchButtons(document, '');
 
-        // 递归搜索所有 iframe
-        function searchIframesAll(doc, depth) {
-            if (depth > 5) return;
-            doc.querySelectorAll('iframe').forEach((iframe, i) => {
-                try {
-                    if (iframe.contentDocument) {
-                        searchButtons(iframe.contentDocument, 'iframe' + depth + '_' + i + ':');
-                        searchIframesAll(iframe.contentDocument, depth + 1);
+            // 深度搜索所有按钮（包括 iframe）
+            function searchButtons(doc, prefix) {
+                const btns = doc.querySelectorAll('button, a, input[type="button"], input[type="submit"], span[onclick], div[onclick], td[onclick]');
+                btns.forEach(btn => {
+                    const text = (btn.textContent || btn.value || '').trim();
+                    const oc = btn.getAttribute('onclick') || '';
+                    const id = btn.id || '';
+                    if (text.length > 0 && text.length < 20) {
+                        dbg(prefix + '按钮: "' + text + '" id=' + id + ' onclick=' + (oc || 'none').substring(0, 100));
                     }
-                } catch(e) {}
-            });
-        }
-        searchIframesAll(document, 0);
-
-        // 搜索所有全局函数
-        const funcNames = [];
-        for (const key of Object.keys(w)) {
-            if (typeof w[key] === 'function' && /audit|sign|sub|save|check|confirm|report|login|auth|review/i.test(key)) {
-                funcNames.push(key);
+                });
             }
+            searchButtons(document, '');
+
+            function searchIframesAll(doc, depth) {
+                if (depth > 5) return;
+                doc.querySelectorAll('iframe').forEach((iframe, i) => {
+                    try {
+                        if (iframe.contentDocument) {
+                            searchButtons(iframe.contentDocument, 'iframe' + depth + '_' + i + ':');
+                            searchIframesAll(iframe.contentDocument, depth + 1);
+                        }
+                    } catch(e) {}
+                });
+            }
+            searchIframesAll(document, 0);
+
+            const funcNames = [];
+            for (const key of Object.keys(w)) {
+                if (typeof w[key] === 'function' && /audit|sign|sub|save|check|confirm|report|login|auth|review/i.test(key)) {
+                    funcNames.push(key);
+                }
+            }
+            dbg('全局函数: ' + funcNames.join(', '));
         }
-        dbg('全局函数: ' + funcNames.join(', '));
 
-        // injectToolbar(); // 已禁用：不需要顶部原生工具栏
-        // updateToolbarStats(); // 已禁用：工具栏已移除
         registerAuditShortcuts();
-        // setInterval(updateToolbarStats, 30000); // 已禁用
-
         dbg('报告处理页增强已加载');
     }
 
@@ -6152,7 +6153,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.19');
+        dbg('iMedicalLIS 增强助手 v7.8.20');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
