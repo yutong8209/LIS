@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.14
+// @version      7.8.15
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -41,7 +41,7 @@
     const WG_MAP = {}; WG.forEach(w => WG_MAP[w.dr] = w);
 
     const REFRESH = 30000;
-    const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist' };
+    const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', wsState:'LIS_WSState_Persist' };
 
     // ==================== 工具 ====================
     const $  = s => document.querySelector(s);
@@ -837,9 +837,16 @@
         dbg('[WS] openWS 被调用');
         if (DEBUG) console.trace('[WS] openWS 调用栈');
 
-        wsActiveWG = wgDR() || ''; // 默认显示当前工作组，无法获取时显示全部
+        // 恢复上次退出时的工作台状态
+        try {
+            const saved = JSON.parse(localStorage.getItem(K.wsState) || '{}');
+            wsActiveWG = saved.wg || wgDR() || '';
+            wsCategory = saved.cat || 'normal';
+        } catch(e) {
+            wsActiveWG = wgDR() || '';
+            wsCategory = 'normal';
+        }
         wsActiveMachine = '';
-        wsCategory = 'normal';
         wsClassifiedCache = {};
         wsClassifying = false;
         wsAbnormalIndex = -1;
@@ -863,6 +870,8 @@
     function closeWS() {
         const wsEl = $('#lis-ws');
         if (!wsEl.classList.contains('show')) { dbg('[WS] closeWS 被调用但未打开，跳过'); return; }
+        // 保存当前工作台状态
+        try { localStorage.setItem(K.wsState, JSON.stringify({ wg: wsActiveWG, cat: wsCategory })); } catch(e) {}
         dbg('[WS] closeWS 被调用');
         if (DEBUG) console.trace('[WS] closeWS 调用栈');
         wsEl.classList.remove('show');
@@ -6129,7 +6138,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.14');
+        dbg('iMedicalLIS 增强助手 v7.8.15');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
