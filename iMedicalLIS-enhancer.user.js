@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.16
+// @version      7.8.17
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -718,7 +718,7 @@
         if (dr === curDR) return;
         const wgName = (WG_MAP[dr]||{}).name || dr;
         toast('正在切换到 ' + wgName + '...', 'w');
-        localStorage.setItem(LOGIN_WG_KEY, dr);
+        try { localStorage.setItem(LOGIN_WG_KEY, dr); } catch(e) {}
 
         // 方法1：直接操作原生切换下拉框 + 调用原生 changeLogin 函数
         try {
@@ -833,6 +833,7 @@
     function openWS() {
         // 防重入：如果已打开，不做任何操作
         const wsEl = $('#lis-ws');
+        if (!wsEl) return;
         if (wsEl.classList.contains('show')) { dbg('[WS] openWS 被调用但已打开，跳过'); return; }
         dbg('[WS] openWS 被调用');
         if (DEBUG) console.trace('[WS] openWS 调用栈');
@@ -849,6 +850,7 @@
         wsActiveMachine = '';
         wsClassifiedCache = {};
         wsClassifying = false;
+        wsLoading = false; // 重置加载状态，防止上次 closeWS 时 loadWSData 还在运行
         wsAbnormalIndex = -1;
         wsChecked.clear();
         wsData = [];
@@ -869,6 +871,7 @@
 
     function closeWS() {
         const wsEl = $('#lis-ws');
+        if (!wsEl) return;
         if (!wsEl.classList.contains('show')) { dbg('[WS] closeWS 被调用但未打开，跳过'); return; }
         // 保存当前工作台状态
         try { localStorage.setItem(K.wsState, JSON.stringify({ wg: wsActiveWG, cat: wsCategory })); } catch(e) {}
@@ -878,6 +881,13 @@
         wsEl.style.cssText = 'display:none!important';
         document.body.style.overflow = '';
         stopWSRefresh();
+        // 清理键盘监听器
+        if (_abnormalKeyHandler) {
+            document.removeEventListener('keydown', _abnormalKeyHandler);
+            _abnormalKeyHandler = null;
+        }
+        _removeDetailKeyHandler();
+        wsLoading = false; // 重置加载状态，防止下次 openWS 被阻塞
     }
 
     function isWSVisible() {
@@ -982,7 +992,7 @@
         updateWSFooter();
         // renderWSTable 延迟到 classifyAllSpecimens 完成后调用，避免多次无效 re-render
         // 如果分类无需执行（全部已缓存），classifyAllSpecimens 会直接调用 renderWSTable
-        classifyAllSpecimens();
+        classifyAllSpecimens().catch(e => dbg('分类启动异常:', e));
         
         // 更新CA认证状态
         } catch(e) {
@@ -2103,9 +2113,9 @@
         const reportDR = row.ReportDR;
 
         // 保存导航目标
-        localStorage.setItem(K.tgt, JSON.stringify({
+        try { localStorage.setItem(K.tgt, JSON.stringify({
             wgDR: targetDR, machineDR: mdr, labno: labno, reportDR: reportDR, time: Date.now()
-        }));
+        })); } catch(e) {}
 
         if (targetDR !== curDR) {
             // 需要切换工作组
@@ -2188,7 +2198,7 @@
             const raw = localStorage.getItem(K.auditQueue);
             if (!raw) return null;
             const q = JSON.parse(raw);
-            if (!q || !q.items || Date.now() - q.time > 10 * 60 * 1000) {
+            if (!q || !q.items || !q.time || Date.now() - q.time > 10 * 60 * 1000) {
                 localStorage.removeItem(K.auditQueue);
                 return null;
             }
@@ -3619,17 +3629,19 @@
     }
 
     function doLogin(wgDR) {
-        const user = document.getElementById('lis-lu').value.trim();
-        const pwd = document.getElementById('lis-lp').value;
+        const luEl = document.getElementById('lis-lu');
+        const lpEl = document.getElementById('lis-lp');
+        if (!luEl || !lpEl) return;
+        const user = luEl.value.trim();
+        const pwd = lpEl.value;
         if (!user || !pwd) { toast('请输入用户名和密码', 'w'); return; }
 
         const btn = document.getElementById('lis-lbtn');
-        btn.disabled = true;
-        btn.textContent = '⏳ 登录中...';
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ 登录中...'; }
 
         // 只保存用户名
         saveLoginCreds(user, wgDR);
-        localStorage.setItem(LOGIN_WG_KEY, wgDR);
+        try { localStorage.setItem(LOGIN_WG_KEY, wgDR); } catch(e) {}
 
         // 必须走原生表单流程（服务器需要先 checkUser 创建安全组会话）
         fillNativeAndSubmit(user, pwd, wgDR);
@@ -5080,41 +5092,45 @@ function fillNativeLoginForm(creds, lastWG) {
     async function classifyAllSpecimens() {
         if (wsClassifying) return;
         wsClassifying = true;
-
-        // 筛选需要分类的标本：未审核 + 结果完整 + 未缓存
-        const toClassify = wsData.filter(r => {
-            const status = String(r.Status || r.ReportStatus || '');
-            if (status === '3' || status === '4') return false;
-            const complete = String(r.IsComplete || '');
-            if (complete !== '1') return false;
-            return !wsClassifiedCache[r.ReportDR];
-        });
-
-        if (toClassify.length === 0) { wsClassifying = false; renderWSTable(); return; }
-
-        dbg('开始分类', toClassify.length, '个标本...');
-
-        // 批量分类（每批 8 个）
-        for (let i = 0; i < toClassify.length; i += 8) {
-            const batch = toClassify.slice(i, i + 8);
-            const results = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
-            results.forEach(r => {
-                if (r && r.reportDR) {
-                    wsClassifiedCache[r.reportDR] = r;
-                }
+        try {
+            // 筛选需要分类的标本：未审核 + 结果完整 + 未缓存
+            const toClassify = wsData.filter(r => {
+                const status = String(r.Status || r.ReportStatus || '');
+                if (status === '3' || status === '4') return false;
+                const complete = String(r.IsComplete || '');
+                if (complete !== '1') return false;
+                return !wsClassifiedCache[r.ReportDR];
             });
-            // 缓存淘汰
-            const cacheKeys = Object.keys(wsClassifiedCache);
-            if (cacheKeys.length > _CLASSIFIED_CACHE_MAX) {
-                cacheKeys.slice(0, cacheKeys.length - _CLASSIFIED_CACHE_MAX).forEach(k => delete wsClassifiedCache[k]);
-            }
-            await new Promise(r => setTimeout(r, 50)); // 让 UI 有机会更新
-        }
 
-        wsClassifying = false;
-        dbg('分类完成');
-        renderWSCategoryBar();
-        renderWSTable();
+            if (toClassify.length === 0) { renderWSTable(); return; }
+
+            dbg('开始分类', toClassify.length, '个标本...');
+
+            // 批量分类（每批 8 个）
+            for (let i = 0; i < toClassify.length; i += 8) {
+                const batch = toClassify.slice(i, i + 8);
+                const results = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
+                results.forEach(r => {
+                    if (r && r.reportDR) {
+                        wsClassifiedCache[r.reportDR] = r;
+                    }
+                });
+                // 缓存淘汰
+                const cacheKeys = Object.keys(wsClassifiedCache);
+                if (cacheKeys.length > _CLASSIFIED_CACHE_MAX) {
+                    cacheKeys.slice(0, cacheKeys.length - _CLASSIFIED_CACHE_MAX).forEach(k => delete wsClassifiedCache[k]);
+                }
+                await new Promise(r => setTimeout(r, 50)); // 让 UI 有机会更新
+            }
+
+            dbg('分类完成');
+            renderWSCategoryBar();
+            renderWSTable();
+        } catch(e) {
+            dbg('分类异常:', e);
+        } finally {
+            wsClassifying = false;
+        }
     }
 
     // --- 获取标本详情并分类 ---
@@ -6136,7 +6152,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.16');
+        dbg('iMedicalLIS 增强助手 v7.8.17');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
