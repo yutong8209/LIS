@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.11
+// @version      7.8.12
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -56,13 +56,17 @@
     const today  = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
     // 旧版 base64 编码（保持向后兼容）
     const encPwd = p => { try { return btoa(unescape(encodeURIComponent(p))); } catch(e) { return p; } };
-    const decPwd = e => { try { return decodeURIComponent(escape(atob(e))); } catch(e) { return e; } };
+    const decPwd = e => { try { if (!e || e.startsWith('V2:')) return ''; return decodeURIComponent(escape(atob(e))); } catch(e) { return ''; } };
 
     // ==================== AES-GCM 密码加密 ====================
     // 威胁模型：密钥硬编码在脚本中，能读取脚本源码的攻击者可解密。
     // 比 base64 强在：PBKDF2 派生增加逆向成本 + 随机 IV 防止相同密码产生相同密文。
+    // 注意：crypto.subtle 仅在 secure context（HTTPS 或 localhost）下可用。
+    // 非安全上下文（如 http://10.x.x.x）会自动回退到 base64。
+    const _cryptoAvailable = !!(typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.importKey);
     let _cryptoKey = null;
     async function getCryptoKey() {
+        if (!_cryptoAvailable) return null;
         if (_cryptoKey) return _cryptoKey;
         try {
             const enc = new TextEncoder();
@@ -79,7 +83,7 @@
     function fromB64(str) { const bin = atob(str); const buf = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i); return buf; }
     async function encPwdV2(plain) {
         const key = await getCryptoKey();
-        if (!key) return 'B64:' + encPwd(plain); // 回退
+        if (!key) return encPwd(plain); // crypto 不可用，直接 base64
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, new TextEncoder().encode(plain));
         return 'V2:' + toB64(iv) + ':' + toB64(ct);
@@ -88,7 +92,7 @@
         if (!stored) return '';
         if (stored.startsWith('V2:')) {
             const key = await getCryptoKey();
-            if (!key) return '';
+            if (!key) return ''; // crypto 不可用，无法解密 V2
             try {
                 const parts = stored.slice(3).split(':');
                 const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
@@ -97,6 +101,17 @@
         }
         if (stored.startsWith('B64:')) return decPwd(stored.slice(4));
         return decPwd(stored); // 旧格式
+    }
+    // 清除无法解密的 V2 数据（crypto 不可用时）
+    function repairPwdStorage() {
+        if (_cryptoAvailable) return;
+        [K.pwd, K.caPwd].forEach(k => {
+            const v = localStorage.getItem(k);
+            if (v && v.startsWith('V2:')) {
+                dbg('清除无法解密的 V2 密码:', k);
+                localStorage.removeItem(k);
+            }
+        });
     }
 
     // 同步 API（保持向后兼容，用于非 async 上下文）
@@ -119,6 +134,7 @@
         try { const v = localStorage.getItem(K.caPwd); return v ? await decPwdV2(v) : ''; } catch(e) { return loadCAPwd(); }
     }
     async function migratePwdStorage() {
+        if (!_cryptoAvailable) { repairPwdStorage(); return; }
         try {
             const pwd = loadPwd();
             if (pwd && !localStorage.getItem(K.pwd)?.startsWith('V2:')) await savePwdAsync(pwd);
@@ -6040,7 +6056,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.11');
+        dbg('iMedicalLIS 增强助手 v7.8.12');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
