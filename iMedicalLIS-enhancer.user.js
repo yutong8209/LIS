@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.17
+// @version      7.8.18
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -989,9 +989,9 @@
         invalidateCaches();
         renderWSTabs();
         renderWSCategoryBar();
+        renderWSTable(); // 先用未分类数据渲染，让用户立即看到标本列表
         updateWSFooter();
-        // renderWSTable 延迟到 classifyAllSpecimens 完成后调用，避免多次无效 re-render
-        // 如果分类无需执行（全部已缓存），classifyAllSpecimens 会直接调用 renderWSTable
+        // 分类在后台进行，每批次完成后更新计数，最终更新表格
         classifyAllSpecimens().catch(e => dbg('分类启动异常:', e));
         
         // 更新CA认证状态
@@ -6152,7 +6152,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.17');
+        dbg('iMedicalLIS 增强助手 v7.8.18');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
