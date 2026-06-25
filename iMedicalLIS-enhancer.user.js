@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.18
+// @version      7.8.19
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1087,7 +1087,7 @@
         const complete = String(r.IsComplete || '');
         if (complete !== '1') return 'incomplete';
         const cached = wsClassifiedCache[r.ReportDR];
-        if (!cached) return 'incomplete';
+        if (!cached) return 'normal'; // 分类未完成时默认显示为正常，分类完成后会更新
         if (cached.status === 'NORMAL') return 'normal';
         if (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL') return 'abnormal';
         return 'incomplete';
@@ -6152,7 +6152,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.18');
+        dbg('iMedicalLIS 增强助手 v7.8.19');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
