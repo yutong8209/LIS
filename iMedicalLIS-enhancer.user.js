@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.8.20
-// @description  报告审核增强 — 批量审核 + 审核工作台 + 热键（纯本地运行，无任何上传）
+// @version      7.11.3
+// @description  报告审核增强 — 批量审核 + 审核工作台 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -405,6 +405,56 @@
 .ws-spin{display:inline-block;width:18px;height:18px;border:2px solid #ddd;border-top:2px solid #3498db;border-radius:50%;animation:lis-sp .7s linear infinite;vertical-align:middle;margin-right:4px}
 @keyframes lis-sp{to{transform:rotate(360deg)}}
 
+/* --- 质控录入辅助 --- */
+#lis-qc-panel{position:fixed;top:34px;left:60px;width:560px;height:520px;min-width:360px;min-height:340px;z-index:100004;background:#fff;border:1px solid #b9d5ea;border-radius:6px;box-shadow:0 4px 16px rgba(59,116,153,.18);display:flex;flex-direction:column;overflow:hidden;font-family:'Microsoft YaHei','Segoe UI',sans-serif;color:#213547;box-sizing:border-box;resize:none}
+#lis-qc-panel.collapsed{height:34px;bottom:auto;width:240px;min-width:240px;min-height:34px}
+#lis-qc-panel.collapsed #lis-qc-body,#lis-qc-panel.collapsed .lis-qc-meta,#lis-qc-panel.collapsed #lis-qc-tools{display:none}
+#lis-qc-head{height:34px;flex-shrink:0;display:flex;align-items:center;gap:6px;padding:0 8px;background:linear-gradient(180deg,#eaf6fd,#d7edf9);border-bottom:1px solid #b9d5ea;box-sizing:border-box;cursor:move;user-select:none;overflow:hidden;touch-action:none}
+#lis-qc-title{font-size:13px;font-weight:700;color:#145b86;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 auto;min-width:0}
+.lis-qc-meta{font-size:11px;color:#5f7484;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;flex:0 1 auto}
+#lis-qc-head .lis-qc-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto}
+#lis-qc-head button,#lis-qc-tools button{border:1px solid #9dc6df;background:#fff;color:#246489;border-radius:4px;height:24px;min-width:26px;padding:0 8px;font-size:12px;line-height:22px;cursor:pointer}
+#lis-qc-head button:hover,#lis-qc-tools button:hover{background:#f3fbff;border-color:#4f9cca}
+#lis-qc-close{font-size:16px;line-height:20px;padding:0 6px;color:#8aa}
+#lis-qc-body{display:flex;flex-direction:column;min-height:0;flex:1;background:#f8fcff}
+#lis-qc-tools{height:30px;flex-shrink:0;display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid #d8eaf5;box-sizing:border-box;background:#fff}
+#lis-qc-tools .lis-qc-tip{font-size:12px;color:#7a8c99;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+#lis-qc-frame-wrap{display:none;height:26%;min-height:110px;border-bottom:1px solid #d8eaf5;background:#fff;position:relative}
+#lis-qc-frame{width:100%;height:100%;border:0;background:#fff}
+#lis-qc-local{flex:1;min-height:0;background:#fff;position:relative;overflow-y:auto;display:flex;flex-direction:column}
+#lis-qc-local .qc-chart-wrap{flex:1;display:flex;flex-direction:column;min-height:0}
+#lis-qc-local svg{width:100%;flex:1;min-height:0}
+#lis-qc-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#7b8b96;font-size:13px;line-height:1.6;padding:20px;box-sizing:border-box;background:#f8fcff}
+#lis-qc-resize{position:absolute;right:2px;bottom:2px;width:16px;height:16px;cursor:se-resize;z-index:2;background:linear-gradient(135deg,transparent 50%,#7ea7c7 50%);clip-path:polygon(100% 0,100% 100%,0 100%);touch-action:none}
+#lis-qc-panel.show-native #lis-qc-frame-wrap{display:block}
+#lis-qc-panel.show-native #lis-qc-local{min-height:120px}
+#lis-qc-panel.show-native #lis-qc-local{height:auto}
+#lis-qc-panel.qc-interacting #lis-qc-frame{pointer-events:none}
+#lis-qc-panel .qc-axis{stroke:#93a7b5;stroke-width:0.8}
+#lis-qc-panel .qc-grid{stroke:#d8e5ee;stroke-width:0.8}
+#lis-qc-panel .qc-line{stroke:#168276;stroke-width:1.6;fill:none}
+#lis-qc-panel .qc-dot{fill:#168276;stroke:#fff;stroke-width:1.2}
+#lis-qc-panel .qc-dot.above{fill:#3b82c4}
+#lis-qc-panel .qc-dot.below{fill:#1a9a6c}
+#lis-qc-panel .qc-dot.eq{fill:#95a5a6}
+#lis-qc-panel .qc-dot.warn{fill:#e07050}
+#lis-qc-panel .qc-dot.loss{fill:#d64545}
+.qc-chart-wrap{padding:0 0 4px}
+.qc-chart-title{font-size:10px;color:#5a7a8a;font-weight:600;padding:2px 0 0 4px;background:#f8fcff}
+#lis-qc-panel .qc-label{fill:#536b7a;font-size:8px}
+#lis-qc-panel .qc-sd{fill:#6d8190;font-size:8px;font-weight:600}
+#lis-qc-panel .qc-info{fill:#2c6e8a;font-size:9px;font-weight:700}
+#lis-qc-panel .qc-xbar{stroke:#168276;stroke-width:0.8;stroke-dasharray:3 2}
+#lis-qc-panel .qc-sd1{stroke:#9fd2c3;stroke-width:0.6;stroke-dasharray:3 3}
+#lis-qc-panel .qc-sd2{stroke:#f2c66d;stroke-width:0.6;stroke-dasharray:3 3}
+#lis-qc-panel .qc-sd3{stroke:#df8a8a;stroke-width:0.6;stroke-dasharray:3 3}
+#lis-qc-panel.dragging{opacity:.96}
+.qc-tip{display:none;position:fixed;pointer-events:none;z-index:999999;background:rgba(30,50,70,.92);border-radius:4px;padding:3px 8px;font-size:11px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.qc-tip-date{color:#7ec8e3;font-weight:700}
+.qc-tip-val{color:#f0e68c}
+#lis-qc-fab{position:fixed;right:20px;bottom:20px;z-index:100004;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#2980b9,#1a6ea0);color:#fff;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.25);transition:transform .15s}
+#lis-qc-fab:hover{transform:scale(1.15);background:linear-gradient(135deg,#3498db,#2471a3)}
+
 
     
 /* --- 登录页优化 --- */
@@ -768,6 +818,708 @@
         setTimeout(() => {
             location.href = BASE + '/login/form/Login.aspx';
         }, 500);
+    }
+
+    // ============================================================
+    //  模块 QC：质控数据录入页辅助
+    // ============================================================
+    let qcInputInited = false;
+    let qcPanelCollapsed = false;
+    let qcPanelShowNative = false;
+    let qcPanelClosed = false;
+    let qcRefreshTimer = null;
+    let qcProbeTimer = null;
+    let qcLastKey = '';
+    const QC_POS_KEY = 'lis-qc-panel-pos';
+
+    function qcSavePos() {
+        const panel = document.getElementById('lis-qc-panel');
+        if (!panel) return;
+        try {
+            const pos = { l: panel.offsetLeft, t: panel.offsetTop, w: panel.offsetWidth, h: panel.offsetHeight };
+            localStorage.setItem(QC_POS_KEY, JSON.stringify(pos));
+        } catch(e) {}
+    }
+    function qcRestorePos() {
+        try {
+            const raw = localStorage.getItem(QC_POS_KEY);
+            if (!raw) return null;
+            return JSON.parse(raw);
+        } catch(e) { return null; }
+    }
+    let qcLastFrameUrl = '';
+
+    let qcIFrame = null; // 质控页面所在的 iframe 元素
+    let qcWin = null;    // 质控页面的 window（可能是 iframe.contentWindow 或 window）
+    let qcDoc = null;    // 质控页面的 document
+
+    // 尝试在当前页面的 iframe 中查找质控页面
+    function qcFindIFrame() {
+        const frames = document.querySelectorAll('iframe');
+        for (const f of frames) {
+            try {
+                const href = f.contentWindow && f.contentWindow.location && f.contentWindow.location.href || '';
+                if (href.indexOf('/qc/form/frmQCDataInputNew') > -1) return f;
+            } catch(e) { /* 跨域无法访问 */ }
+        }
+        // 也检查 src 属性（跨域时无法读 contentWindow.location）
+        for (const f of frames) {
+            const src = f.src || '';
+            if (src.indexOf('/qc/form/frmQCDataInputNew') > -1 || src.indexOf('/qc/') > -1) return f;
+        }
+        return null;
+    }
+
+    function isQCDataInputPage() {
+        // 先检查当前页面
+        if (location.href.indexOf('/qc/form/frmQCDataInputNew') > -1) return true;
+        const hasQcGrids = document.getElementById('dgData') && document.getElementById('dgTestCode');
+        const hasQcControls = document.getElementById('dglevelno') || document.getElementById('cmbMach') || document.getElementById('cmbMat');
+        if (hasQcGrids && hasQcControls) return true;
+        // 再检查 iframe
+        const f = qcFindIFrame();
+        try {
+        if (f && f.contentDocument) {
+            const doc = f.contentDocument;
+            const grids = doc.getElementById('dgData') && doc.getElementById('dgTestCode');
+            const controls = doc.getElementById('dglevelno') || doc.getElementById('cmbMach') || doc.getElementById('cmbMat');
+            if (grids && controls) return true;
+        }
+        } catch(e) {}
+        return false;
+    }
+
+    // 获取质控页面的上下文（window/document/jQuery）
+    function qcGetCtx() {
+        // 如果当前就是质控页
+        if (location.href.indexOf('/qc/form/frmQCDataInputNew') > -1 || (document.getElementById('dgData') && document.getElementById('dgTestCode'))) {
+            return { win: window, doc: document };
+        }
+        // 否则从 iframe 获取
+        try {
+            if (qcIFrame && qcIFrame.contentWindow && qcIFrame.contentDocument) {
+                return { win: qcIFrame.contentWindow, doc: qcIFrame.contentDocument };
+            }
+        } catch(e) {}
+        const f = qcFindIFrame();
+        try {
+            if (f && f.contentWindow && f.contentDocument) {
+                qcIFrame = f;
+                return { win: f.contentWindow, doc: f.contentDocument };
+            }
+        } catch(e) {}
+        return { win: window, doc: document };
+    }
+
+    function getJQ() {
+        const ctx = qcGetCtx();
+        return (ctx.win.jQuery || ctx.win.$ || g('jQuery') || g('$') || window.jQuery || window.$);
+    }
+
+    function qcTryEasyUI(fn, fallback) {
+        try { return fn(); } catch(e) { return fallback; }
+    }
+
+    function qcEasyValue(selector, plugin, method) {
+        const jq = getJQ();
+        if (!jq || !jq(selector)[plugin]) return '';
+        return qcTryEasyUI(() => jq(selector)[plugin](method || 'getValue'), '');
+    }
+
+    function qcSelectedRow(selector) {
+        const jq = getJQ();
+        if (!jq || !jq(selector).datagrid) return null;
+        return qcTryEasyUI(() => jq(selector).datagrid('getSelected'), null);
+    }
+
+    function qcSelectedRows(selector) {
+        const jq = getJQ();
+        if (!jq || !jq(selector).datagrid) return [];
+        return qcTryEasyUI(() => jq(selector).datagrid('getSelections') || [], []);
+    }
+
+    function qcGridRows(selector) {
+        const jq = getJQ();
+        if (!jq || !jq(selector).datagrid) return [];
+        return qcTryEasyUI(() => jq(selector).datagrid('getRows') || [], []);
+    }
+
+    function qcBuildContext() {
+        const test = qcSelectedRow('#dgTestCode');
+        const levels = qcSelectedRows('#dglevelno');
+        const rows = qcGridRows('#dgData');
+        const level = levels[0] || (rows.length ? { LevelNo: rows[0].LevelNo, CName: 'Level' + rows[0].LevelNo, MatLotDR: rows[0].MaterialLotDR } : null);
+        const qcf = String((test && test.QcFlag) || '').split('^');
+        const machineDR = qcEasyValue('#cmbMach', 'combobox', 'getValue') || (rows[0] && rows[0].MachineParameterDR) || qcf[3] || '';
+        const machineName = qcEasyValue('#cmbMach', 'combobox', 'getText') || (rows[0] && rows[0].MachineParameterName) || '';
+        const startDate = qcEasyValue('#startdate', 'datebox', 'getValue') || today();
+        const endDate = qcEasyValue('#enddate', 'datebox', 'getValue') || today();
+        const testCodeDR = (test && test.RowID) || (rows[0] && rows[0].TestCodeDR) || qcf[4] || '';
+        const matDR = (test && test.MatDR) || (rows[0] && rows[0].MaterialDR) || '';
+        const matLotDR = (level && level.MatLotDR) || (test && test.MatLotRowID) || (rows[0] && rows[0].MaterialLotDR) || qcf[2] || '';
+        const mapType = qcf[1] || '0';
+        return {
+            test, levels, rows, level, machineDR, machineName, startDate, endDate,
+            testCodeDR, matDR, matLotDR, mapType,
+            testName: (test && (test.CName || test.Synonym || test.Code)) || (rows[0] && rows[0].TCName) || '',
+            materialName: (test && test.MaterialName) || (rows[0] && rows[0].MaterialLotName) || '',
+            levelNo: level && level.LevelNo ? String(level.LevelNo) : ''
+        };
+    }
+
+    function qcContextKey(ctx) {
+        return [ctx.machineDR, ctx.testCodeDR, ctx.matLotDR, ctx.levelNo, ctx.startDate, ctx.endDate].join('|');
+    }
+
+    function qcNativeUrl(ctx) {
+        if (!ctx.machineDR || !ctx.testCodeDR) return '';
+        const p = new URLSearchParams();
+        p.set('MachineDR', ctx.machineDR);
+        p.set('MatLotDr', ctx.matLotDR || '');
+        p.set('TestCodeDR', ctx.testCodeDR);
+        p.set('StartDate', ctx.startDate || today());
+        p.set('EndDate', ctx.endDate || today());
+        p.set('MapType', ctx.mapType || '0');
+        return BASE + '/qc/facade/frmQCDrawLJFacade.aspx?' + p.toString();
+    }
+
+    function qcAverageValue(row) {
+        const vals = [];
+        for (let i = 1; i <= 7; i++) {
+            const n = parseFloat(row['Result' + i]);
+            if (!Number.isNaN(n)) vals.push(n);
+        }
+        if (vals.length) return vals.reduce((a, b) => a + b, 0) / vals.length;
+        const candidates = [row.DayAve, row.Result, row.TextRes, row.TestResultPosNeg];
+        for (const v of candidates) {
+            const n = parseFloat(v);
+            if (!Number.isNaN(n)) return n;
+        }
+        return null;
+    }
+
+    // 绘制单个浓度的质控图 SVG
+    function qcBuildSVG(points, levelLabel) {
+        if (!points.length) return '';
+        const xbarPoint = points.find(p => !Number.isNaN(p.xbar) && !Number.isNaN(p.sd));
+        const xbar = xbarPoint ? xbarPoint.xbar : points.reduce((a, p) => a + p.value, 0) / points.length;
+        const sdRaw = xbarPoint ? xbarPoint.sd : 0;
+        const spread = sdRaw > 0 ? sdRaw : Math.max(0.0001, (Math.max(...points.map(p => p.value)) - Math.min(...points.map(p => p.value))) / 6);
+        const values = points.map(p => p.value).concat([xbar - 3 * spread, xbar + 3 * spread]);
+        let minY = Math.min(...values), maxY = Math.max(...values);
+        if (minY === maxY) { minY -= 1; maxY += 1; }
+        const padY = (maxY - minY) * 0.08;
+        minY -= padY; maxY += padY;
+        const w = 480, h = 140, left = 40, right = 10, top = 10, bottom = 18;
+        const plotW = w - left - right, plotH = h - top - bottom;
+        const x = i => left + (points.length === 1 ? plotW / 2 : i * plotW / (points.length - 1));
+        const y = v => top + (maxY - v) * plotH / (maxY - minY);
+        const fmt = v => {
+            const abs = Math.abs(v);
+            return abs >= 100 ? v.toFixed(0) : abs >= 10 ? v.toFixed(1) : v.toFixed(2);
+        };
+        const lineFor = (v, cls, label) => {
+            if (v < minY || v > maxY) return '';
+            const yy = y(v);
+            return `<line class="${cls}" x1="${left}" y1="${yy}" x2="${w-right}" y2="${yy}"></line><text class="qc-sd" x="3" y="${yy+3}">${esc(label)}</text>`;
+        };
+        const path = points.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.value).toFixed(1)).join(' ');
+        const tol = spread * 0.15; // 落在 ±15% SD 内视为"等于"平均值
+        const dots = points.map((p, i) => {
+            const diff = p.value - xbar;
+            const z = Math.abs(diff) / spread;
+            // 颜色优先级：outlier > 偏离方向
+            let cls;
+            if (z >= 3) cls = 'loss';
+            else if (z >= 2) cls = 'warn';
+            else if (Math.abs(diff) <= tol) cls = 'eq';
+            else if (diff > 0) cls = 'above';
+            else cls = 'below';
+            return `<circle class="qc-dot ${cls}" cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3.2" data-date="${esc(p.date||'')}" data-val="${esc(fmt(p.value))}"></circle>`;
+        }).join('');
+        const last = points[points.length - 1];
+        const xLabels = points.map((p, i) => {
+            const d = String(p.date || '');
+            const day = d.length >= 10 ? d.slice(8, 10) : d.slice(-2);
+            return `<text class="qc-label" x="${x(i).toFixed(1)}" y="${h-3}" text-anchor="middle">${esc(day)}</text>`;
+        }).join('');
+        return `
+            <div class="qc-chart-title">${esc(levelLabel)}</div>
+            <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" aria-label="质控趋势图">
+                <rect x="0" y="0" width="${w}" height="${h}" fill="#fff"></rect>
+                ${lineFor(xbar + 3 * spread, 'qc-sd3', '+3SD')}
+                ${lineFor(xbar + 2 * spread, 'qc-sd2', '+2SD')}
+                ${lineFor(xbar + spread, 'qc-sd1', '+1SD')}
+                ${lineFor(xbar, 'qc-xbar', 'X')}
+                ${lineFor(xbar - spread, 'qc-sd1', '-1SD')}
+                ${lineFor(xbar - 2 * spread, 'qc-sd2', '-2SD')}
+                ${lineFor(xbar - 3 * spread, 'qc-sd3', '-3SD')}
+                <line class="qc-axis" x1="${left}" y1="${top}" x2="${left}" y2="${h-bottom}"></line>
+                <line class="qc-axis" x1="${left}" y1="${h-bottom}" x2="${w-right}" y2="${h-bottom}"></line>
+                <path class="qc-line" d="${path}"></path>
+                ${dots}
+                ${xLabels}
+                <text class="qc-info" x="${w-right}" y="${top+8}" text-anchor="end">靶值 ${esc(fmt(xbar))}  SD ${esc(fmt(spread))}</text>
+            </svg>`;
+    }
+
+    function qcDrawLocal(ctx) {
+        const host = document.getElementById('lis-qc-local');
+        if (!host) return;
+        const rows = ctx.rows || [];
+        // 找出所有浓度
+        const levelMap = {};
+        rows.forEach(r => {
+            const ln = String(r.LevelNo || '1');
+            if (!levelMap[ln]) levelMap[ln] = [];
+            const v = qcAverageValue(r);
+            if (v !== null && !Number.isNaN(v)) {
+                levelMap[ln].push({ date: r.TestDate || r.AddDate || '', value: v, xbar: parseFloat(r.SetUpX), sd: parseFloat(r.SetUpSD) });
+            }
+        });
+        const levelNos = Object.keys(levelMap).sort();
+        if (!levelNos.length) {
+            host.innerHTML = '<div id="lis-qc-empty">当前项目/浓度暂无可绘制数据。<br>录入或切换项目后会自动刷新。</div>';
+            return;
+        }
+        let html = '';
+        const activeLevels = ctx.levels && ctx.levels.length > 1 ? levelNos : [ctx.levelNo || levelNos[0]];
+        const drawLevels = activeLevels.filter(ln => levelMap[ln] && levelMap[ln].length > 0);
+        if (!drawLevels.length) { html = '<div id="lis-qc-empty">暂无可绘制数据。</div>'; }
+        else {
+            drawLevels.forEach(ln => {
+                const pts = levelMap[ln].slice(-45);
+                const label = 'Level ' + ln;
+                html += `<div class="qc-chart-wrap">${qcBuildSVG(pts, label)}</div>`;
+            });
+        }
+        host.innerHTML = html;
+        // 悬浮 tooltip（挂到 body 上用 fixed 定位，不触发容器 reflow）
+        let tip = document.getElementById('lis-qc-tooltip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'lis-qc-tooltip';
+            tip.className = 'qc-tip';
+            const td = document.createElement('span'); td.className = 'qc-tip-date';
+            const tv = document.createElement('span'); tv.className = 'qc-tip-val';
+            tip.appendChild(td); tip.appendChild(document.createTextNode(' ')); tip.appendChild(tv);
+            document.body.appendChild(tip);
+        }
+        const tipDate = tip.querySelector('.qc-tip-date');
+        const tipVal = tip.querySelector('.qc-tip-val');
+        host.addEventListener('mousemove', e => {
+            const dot = e.target.closest('.qc-dot');
+            if (!dot) { tip.style.display = 'none'; return; }
+            const date = dot.getAttribute('data-date') || '';
+            const val = dot.getAttribute('data-val') || '';
+            tipDate.textContent = (date.length >= 10 ? date.slice(8, 10) : date) + '日';
+            tipVal.textContent = val;
+            tip.style.display = 'block';
+            tip.style.left = (e.clientX + 10) + 'px';
+            tip.style.top = (e.clientY - 26) + 'px';
+        });
+        host.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    }
+
+    function qcUpdatePanel(forceFrame) {
+        const panel = document.getElementById('lis-qc-panel');
+        if (!panel) return;
+        const ctx = qcBuildContext();
+        const title = document.getElementById('lis-qc-title');
+        const meta = panel.querySelector('.lis-qc-meta');
+        const tip = panel.querySelector('.lis-qc-tip');
+        const frame = document.getElementById('lis-qc-frame');
+        if (!ctx.testCodeDR || !ctx.machineDR) {
+            if (title) title.textContent = '质控图';
+            if (meta) meta.textContent = '请选择仪器和项目';
+            if (tip) tip.textContent = '等待右侧项目列表选择完成';
+            if (frame) frame.removeAttribute('src');
+            qcDrawLocal({ rows: [], levelNo: '' });
+            return;
+        }
+        const key = qcContextKey(ctx);
+        if (!forceFrame && key === qcLastKey) {
+            qcDrawLocal(ctx);
+            return;
+        }
+        qcLastKey = key;
+        const levelText = ctx.levelNo ? 'Level' + ctx.levelNo : '全部浓度';
+        if (title) title.textContent = ctx.testName || '质控图';
+        if (meta) meta.textContent = `${levelText} | ${ctx.startDate} 至 ${ctx.endDate}`;
+        if (tip) tip.textContent = `${ctx.machineName || ctx.machineDR} / ${ctx.materialName || ctx.matLotDR || '质控物'}`;
+        const url = qcNativeUrl(ctx);
+        if (frame && url && (forceFrame || url !== qcLastFrameUrl)) {
+            qcLastFrameUrl = url;
+            frame.src = url;
+        }
+        qcDrawLocal(ctx);
+    }
+
+    function qcScheduleRefresh(forceFrame, delay) {
+        clearTimeout(qcRefreshTimer);
+        qcRefreshTimer = setTimeout(() => qcUpdatePanel(!!forceFrame), delay == null ? 180 : delay);
+    }
+
+    function qcOpenNative() {
+        const url = qcNativeUrl(qcBuildContext());
+        if (url) window.open(url, '_blank');
+    }
+
+    function qcVisibleRect(el) {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        if (!r || r.width <= 0 || r.height <= 0) return null;
+        return r;
+    }
+
+    // 获取 iframe 内元素在主框架视口中的坐标
+    function qcVisibleRectInMain(el, ctx) {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        if (!r || r.width <= 0 || r.height <= 0) return null;
+        // 如果元素就在当前页面，直接返回
+        if (ctx.win === window) return r;
+        // 否则加上 iframe 的偏移
+        try {
+            const iframeEl = qcIFrame || qcFindIFrame();
+            if (!iframeEl) return r;
+            const iframeRect = iframeEl.getBoundingClientRect();
+            return {
+                left: r.left + iframeRect.left,
+                top: r.top + iframeRect.top,
+                right: r.right + iframeRect.left,
+                bottom: r.bottom + iframeRect.top,
+                width: r.width,
+                height: r.height
+            };
+        } catch(e) { return r; }
+    }
+
+    function qcPlacePanel() {
+        const panel = document.getElementById('lis-qc-panel');
+        if (!panel || qcPanelCollapsed) return;
+        // 优先恢复上次保存的位置
+        if (!panel.dataset.userMoved) {
+            const saved = qcRestorePos();
+            if (saved) {
+                panel.dataset.userMoved = '1';
+                panel.classList.add('lis-qc-placed');
+                panel.style.left = saved.l + 'px';
+                panel.style.top = saved.t + 'px';
+                panel.style.width = saved.w + 'px';
+                panel.style.height = saved.h + 'px';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                return;
+            }
+        }
+        // 用户手动拖动或缩放后不再自动挪回去；双击标题栏可恢复自动位置。
+        if (panel.dataset.userMoved) return;
+        const viewportW = window.innerWidth || document.documentElement.clientWidth || 1280;
+        const dataGrid = qcGetCtx().doc.getElementById('dgData');
+        const testGrid = qcGetCtx().doc.getElementById('dgTestCode');
+        const leftRect = qcVisibleRectInMain(dataGrid, qcGetCtx());
+        const rightRect = qcVisibleRectInMain(testGrid, qcGetCtx());
+        let width = Math.min(560, Math.max(360, Math.round(viewportW * 0.36)));
+        let left = Math.max(46, Math.round(viewportW * 0.03));
+        if (leftRect && rightRect) {
+            const gapW = Math.round(rightRect.left - leftRect.right);
+            if (gapW >= 360) {
+                left = Math.max(46, Math.round(leftRect.right + 12));
+                width = Math.min(560, gapW - 20);
+            }
+        }
+        panel.classList.add('lis-qc-placed');
+        panel.style.left = left + 'px';
+        panel.style.right = 'auto';
+        panel.style.top = '34px';
+        panel.style.bottom = 'auto';
+        panel.style.width = width + 'px';
+        panel.style.height = Math.max(340, Math.round((window.innerHeight || 720) * 0.62)) + 'px';
+        panel.style.minWidth = '360px';
+    }
+
+    function qcCreatePanel() {
+        if (document.getElementById('lis-qc-panel')) return;
+        const panel = document.createElement('div');
+        panel.id = 'lis-qc-panel';
+        panel.innerHTML = `
+            <div id="lis-qc-head">
+                <span id="lis-qc-title">质控图</span>
+                <span class="lis-qc-meta">等待选择项目</span>
+                <span class="lis-qc-actions">
+                    <button id="lis-qc-native" title="显示/隐藏原生质控图">原生</button>
+                    <button id="lis-qc-open" title="打开原生质控图">新窗</button>
+                    <button id="lis-qc-collapse" title="收起/展开">_</button>
+                    <button id="lis-qc-close" title="关闭质控面板">&times;</button>
+                </span>
+            </div>
+            <div id="lis-qc-body">
+                <div id="lis-qc-tools">
+                    <span class="lis-qc-tip">随右侧项目和浓度自动刷新</span>
+                    <button id="lis-qc-refresh" title="刷新质控图">刷新</button>
+                </div>
+                <div id="lis-qc-frame-wrap"><iframe id="lis-qc-frame" title="LIS 原生质控图"></iframe></div>
+                <div id="lis-qc-local"><div id="lis-qc-empty">请选择右侧项目，质控图会显示在这里。</div></div>
+                <div id="lis-qc-resize" title="拖动调整大小"></div>
+            </div>`;
+        document.body.appendChild(panel);
+        qcPlacePanel();
+        document.getElementById('lis-qc-refresh').addEventListener('click', () => qcScheduleRefresh(true, 0));
+        document.getElementById('lis-qc-native').addEventListener('click', () => {
+            qcPanelShowNative = !qcPanelShowNative;
+            panel.classList.toggle('show-native', qcPanelShowNative);
+            qcScheduleRefresh(true, 0);
+        });
+        document.getElementById('lis-qc-open').addEventListener('click', qcOpenNative);
+        document.getElementById('lis-qc-collapse').addEventListener('click', () => {
+            qcPanelCollapsed = !qcPanelCollapsed;
+            panel.classList.toggle('collapsed', qcPanelCollapsed);
+            if (!qcPanelCollapsed) setTimeout(qcPlacePanel, 0);
+        });
+        document.getElementById('lis-qc-close').addEventListener('click', () => {
+            panel.style.display = 'none';
+            qcPanelClosed = true;
+            showQCFab();
+        });
+        // 悬浮按钮（关闭面板后可重新打开，可拖动）
+        let fab = document.getElementById('lis-qc-fab');
+        if (!fab) {
+            fab = document.createElement('div');
+            fab.id = 'lis-qc-fab';
+            fab.textContent = 'QC';
+            fab.title = '拖动移动 | 点击打开质控面板';
+            fab.style.display = 'none';
+            // 恢复上次位置
+            try {
+                const fp = JSON.parse(localStorage.getItem('lis-qc-fab-pos') || '');
+                if (fp && typeof fp.l === 'number') {
+                    fab.style.left = fp.l + 'px'; fab.style.top = fp.t + 'px';
+                    fab.style.right = 'auto'; fab.style.bottom = 'auto';
+                }
+            } catch(e) {}
+            document.body.appendChild(fab);
+        }
+        function showQCFab() { fab.style.display = 'flex'; }
+        function hideQCFab() { fab.style.display = 'none'; }
+        // 拖动 QC FAB
+        let qfDrag = false, qfMoved = false, qfSX, qfSY, qfOL, qfOT;
+        fab.addEventListener('pointerdown', e => {
+            qfDrag = true; qfMoved = false;
+            qfSX = e.clientX; qfSY = e.clientY;
+            qfOL = fab.offsetLeft; qfOT = fab.offsetTop;
+            fab.setPointerCapture(e.pointerId);
+            fab.style.transition = 'none';
+            e.preventDefault();
+        });
+        fab.addEventListener('pointermove', e => {
+            if (!qfDrag) return;
+            const dx = e.clientX - qfSX, dy = e.clientY - qfSY;
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) qfMoved = true;
+            if (qfMoved) {
+                fab.style.left = Math.max(0, qfOL + dx) + 'px';
+                fab.style.top = Math.max(0, qfOT + dy) + 'px';
+                fab.style.right = 'auto'; fab.style.bottom = 'auto';
+            }
+        });
+        fab.addEventListener('pointerup', () => {
+            qfDrag = false; fab.style.transition = '';
+            if (qfMoved) {
+                try { localStorage.setItem('lis-qc-fab-pos', JSON.stringify({ l: fab.offsetLeft, t: fab.offsetTop })); } catch(e) {}
+            }
+        });
+        fab.addEventListener('click', () => {
+            if (qfMoved) return;
+            panel.style.display = '';
+            qcPanelClosed = false;
+            hideQCFab();
+            qcScheduleRefresh(true, 0);
+        });
+        // 面板可见时隐藏悬浮按钮
+        const fabObs = new MutationObserver(() => {
+            if (panel.style.display === 'none') showQCFab(); else hideQCFab();
+        });
+        fabObs.observe(panel, { attributes: true, attributeFilter: ['style'] });
+        // 拖拽移动面板
+        const head = document.getElementById('lis-qc-head');
+        const resize = document.getElementById('lis-qc-resize');
+        const beginQCInteract = () => {
+            panel.style.left = panel.offsetLeft + 'px';
+            panel.style.top = panel.offsetTop + 'px';
+            panel.style.width = panel.offsetWidth + 'px';
+            panel.style.height = panel.offsetHeight + 'px';
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            panel.style.transition = 'none';
+            panel.classList.add('dragging');
+            panel.classList.add('qc-interacting');
+            document.body.style.userSelect = 'none';
+        };
+        const endQCInteract = () => {
+            panel.dataset.userMoved = '1';
+            panel.style.transition = '';
+            panel.classList.remove('dragging');
+            panel.classList.remove('qc-interacting');
+            document.body.style.userSelect = '';
+            qcSavePos();
+        };
+        head.addEventListener('pointerdown', e => {
+            if (e.target.tagName === 'BUTTON') return;
+            beginQCInteract();
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startLeft = panel.offsetLeft;
+            const startTop = panel.offsetTop;
+            const width = panel.offsetWidth;
+            const height = panel.offsetHeight;
+            head.setPointerCapture(e.pointerId);
+            const move = ev => {
+                const vw = window.innerWidth, vh = window.innerHeight;
+                const nl = startLeft + (ev.clientX - startX);
+                const nt = startTop + (ev.clientY - startY);
+                panel.style.left = Math.max(0, Math.min(nl, vw - width)) + 'px';
+                panel.style.top = Math.max(0, Math.min(nt, vh - height)) + 'px';
+            };
+            const up = ev => {
+                try { head.releasePointerCapture(ev.pointerId); } catch(x) {}
+                head.removeEventListener('pointermove', move);
+                head.removeEventListener('pointerup', up);
+                head.removeEventListener('pointercancel', up);
+                endQCInteract();
+            };
+            head.addEventListener('pointermove', move);
+            head.addEventListener('pointerup', up);
+            head.addEventListener('pointercancel', up);
+            e.preventDefault();
+        });
+        head.addEventListener('dblclick', () => {
+            delete panel.dataset.userMoved;
+            panel.classList.remove('dragging');
+            qcPlacePanel();
+        });
+        resize.addEventListener('pointerdown', e => {
+            beginQCInteract();
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startW = panel.offsetWidth;
+            const startH = panel.offsetHeight;
+            const left = panel.offsetLeft;
+            const top = panel.offsetTop;
+            resize.setPointerCapture(e.pointerId);
+            const move = ev => {
+                const vw = window.innerWidth, vh = window.innerHeight;
+                const minW = 360, minH = 340;
+                const maxW = vw - left - 8;
+                const maxH = vh - top - 8;
+                const nw = Math.max(minW, Math.min(startW + (ev.clientX - startX), maxW));
+                const nh = Math.max(minH, Math.min(startH + (ev.clientY - startY), maxH));
+                panel.style.width = nw + 'px';
+                panel.style.height = nh + 'px';
+            };
+            const up = ev => {
+                try { resize.releasePointerCapture(ev.pointerId); } catch(x) {}
+                resize.removeEventListener('pointermove', move);
+                resize.removeEventListener('pointerup', up);
+                resize.removeEventListener('pointercancel', up);
+                endQCInteract();
+            };
+            resize.addEventListener('pointermove', move);
+            resize.addEventListener('pointerup', up);
+            resize.addEventListener('pointercancel', up);
+            e.preventDefault();
+        });
+    }
+
+    function qcWrapEasyUIOption(selector, plugin, name, after) {
+        const jq = getJQ();
+        if (!jq || !jq(selector)[plugin]) return;
+        qcTryEasyUI(() => {
+            const opts = jq(selector)[plugin]('options');
+            if (!opts || opts['_lisQc_' + name]) return;
+            const old = opts[name];
+            opts['_lisQc_' + name] = true;
+            opts[name] = function() {
+                const ret = typeof old === 'function' ? old.apply(this, arguments) : undefined;
+                setTimeout(after, 0);
+                return ret;
+            };
+        });
+    }
+
+    function qcBindPageEvents() {
+        qcWrapEasyUIOption('#dgTestCode', 'datagrid', 'onSelect', () => qcScheduleRefresh(true, 350));
+        qcWrapEasyUIOption('#dgTestCode', 'datagrid', 'onLoadSuccess', () => qcScheduleRefresh(true, 500));
+        qcWrapEasyUIOption('#dglevelno', 'datagrid', 'onSelect', () => qcScheduleRefresh(true, 250));
+        qcWrapEasyUIOption('#dglevelno', 'datagrid', 'onUnselect', () => qcScheduleRefresh(true, 250));
+        qcWrapEasyUIOption('#dglevelno', 'datagrid', 'onCheckAll', () => qcScheduleRefresh(true, 250));
+        qcWrapEasyUIOption('#dglevelno', 'datagrid', 'onUncheckAll', () => qcScheduleRefresh(true, 250));
+        qcWrapEasyUIOption('#dgData', 'datagrid', 'onLoadSuccess', () => qcScheduleRefresh(false, 250));
+        qcWrapEasyUIOption('#dgData', 'datagrid', 'onAfterEdit', () => qcScheduleRefresh(false, 120));
+        qcWrapEasyUIOption('#cmbMach', 'combobox', 'onSelect', () => qcScheduleRefresh(true, 700));
+        qcWrapEasyUIOption('#cmbMat', 'combobox', 'onSelect', () => qcScheduleRefresh(true, 700));
+        qcWrapEasyUIOption('#startdate', 'datebox', 'onSelect', () => qcScheduleRefresh(true, 700));
+        qcWrapEasyUIOption('#enddate', 'datebox', 'onSelect', () => qcScheduleRefresh(true, 700));
+        // 事件监听绑定到质控页面所在的 document（可能是 iframe）
+        const ctx = qcGetCtx();
+        const targetDoc = ctx.doc;
+        targetDoc.addEventListener('keyup', e => {
+            if (e.target && /^(INPUT|TEXTAREA)$/i.test(e.target.tagName)) qcScheduleRefresh(false, 260);
+        }, true);
+        ['click', 'change'].forEach(ev => targetDoc.addEventListener(ev, () => {
+            qcPlacePanel();
+            qcScheduleRefresh(false, 320);
+        }, true));
+        window.addEventListener('resize', () => {
+            qcPlacePanel();
+            qcScheduleRefresh(false, 260);
+        });
+        const dataDiv = targetDoc.getElementById('dataDiv');
+        if (dataDiv) {
+            const ob = new MutationObserver(() => {
+                qcPlacePanel();
+                qcScheduleRefresh(false, 300);
+            });
+            ob.observe(dataDiv, { childList: true, subtree: true, characterData: true });
+        }
+    }
+
+    function initQCInputEnhance() {
+        if (qcInputInited) return;
+        if (!isQCDataInputPage()) return;
+        const wait = (left) => {
+            const jq = getJQ();
+            const ctx = qcGetCtx();
+            const ready = jq && jq('#dgTestCode').length && jq('#dgTestCode').datagrid && ctx.doc.getElementById('dgData');
+            if (!ready) {
+                if (left > 0) setTimeout(() => wait(left - 1), 300);
+                return;
+            }
+            qcInputInited = true;
+            qcCreatePanel();
+            qcBindPageEvents();
+            qcScheduleRefresh(true, 800);
+            console.log('[LIS-QC] 质控录入辅助已加载');
+        };
+        wait(80);
+    }
+
+    function startQCInputProbe() {
+        if (qcProbeTimer) return;
+        const probe = () => {
+            const isQC = isQCDataInputPage();
+            const panel = document.getElementById('lis-qc-panel');
+            if (isQC && !qcInputInited && !qcPanelClosed) initQCInputEnhance();
+            else if (qcInputInited && panel) {
+                if (isQC && !qcPanelClosed) {
+                    panel.style.display = '';
+                    qcPlacePanel();
+                } else if (!isQC) {
+                    panel.style.display = 'none';
+                }
+            }
+        };
+        probe();
+        qcProbeTimer = setInterval(probe, 1000);
     }
 
     // ============================================================
@@ -3406,11 +4158,19 @@
         });
         wsAttrObserver.observe(ws, { attributes: true, attributeFilter: ['class', 'style'] });
 
-        // 浮动按钮（可拖动）
+        // 浮动按钮（可拖动，记忆位置）
         const fab = document.createElement('button');
         fab.id = 'lis-fab';
         fab.innerHTML = '🔬';
         fab.title = '拖动移动 | 点击打开工作台';
+        // 恢复上次位置
+        try {
+            const wp = JSON.parse(localStorage.getItem('lis-fab-pos') || '');
+            if (wp && typeof wp.l === 'number') {
+                fab.style.left = wp.l + 'px'; fab.style.top = wp.t + 'px';
+                fab.style.right = 'auto'; fab.style.bottom = 'auto';
+            }
+        } catch(e) {}
         document.body.appendChild(fab);
 
         const tip = document.createElement('div');
@@ -3418,28 +4178,33 @@
         tip.textContent = '点击打开审核工作台';
         document.body.appendChild(tip);
 
-        // 拖动功能
+        // 拖动功能（pointer events）
         let fabDragging = false, fabMoved = false, fabStartX, fabStartY, fabOrigX, fabOrigY;
-        fab.addEventListener('mousedown', e => {
+        fab.addEventListener('pointerdown', e => {
             fabDragging = true; fabMoved = false;
             fabStartX = e.clientX; fabStartY = e.clientY;
-            const rect = fab.getBoundingClientRect();
-            fabOrigX = rect.left; fabOrigY = rect.top;
+            fabOrigX = fab.offsetLeft; fabOrigY = fab.offsetTop;
+            fab.setPointerCapture(e.pointerId);
+            fab.style.transition = 'none';
             e.preventDefault();
         });
-        document.addEventListener('mousemove', e => {
+        fab.addEventListener('pointermove', e => {
             if (!fabDragging) return;
             const dx = e.clientX - fabStartX, dy = e.clientY - fabStartY;
             if (Math.abs(dx) > 3 || Math.abs(dy) > 3) fabMoved = true;
             if (fabMoved) {
-                fab.style.transition = 'none';
-                fab.style.left = (fabOrigX + dx) + 'px';
-                fab.style.top = (fabOrigY + dy) + 'px';
+                fab.style.left = Math.max(0, fabOrigX + dx) + 'px';
+                fab.style.top = Math.max(0, fabOrigY + dy) + 'px';
                 fab.style.right = 'auto';
                 fab.style.bottom = 'auto';
             }
         });
-        document.addEventListener('mouseup', () => { fabDragging = false; });
+        fab.addEventListener('pointerup', () => {
+            fabDragging = false; fab.style.transition = '';
+            if (fabMoved) {
+                try { localStorage.setItem('lis-fab-pos', JSON.stringify({ l: fab.offsetLeft, t: fab.offsetTop })); } catch(e) {}
+            }
+        });
         // 点击（拖动后不触发）
         fab.addEventListener('click', e => { if (!fabMoved) openWS(); });
         fab.addEventListener('mouseenter', () => tip.classList.add('show'));
@@ -6153,7 +6918,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.8.20');
+        dbg('iMedicalLIS 增强助手 v7.10.2');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
@@ -6174,7 +6939,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
         if (!_isMain) {
             // iframe 中只做认证，不创建 UI
-            dbg('iframe 中运行，跳过 UI');
+            // 质控页的 UI 由主框架的 probe 跨 iframe 初始化
             return;
         }
 
@@ -6182,6 +6947,7 @@ function fillNativeLoginForm(creds, lastWG) {
         createWS();
         checkNavigateTarget();
         checkAuditQueueResume();
+        startQCInputProbe();
         initReportEnhance();
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
     }
@@ -6190,6 +6956,7 @@ function fillNativeLoginForm(creds, lastWG) {
     window.addEventListener('beforeunload', () => {
         if (_authTimer) { clearInterval(_authTimer); _authTimer = null; }
         if (_batchScanTimer) { clearInterval(_batchScanTimer); _batchScanTimer = null; }
+        if (qcProbeTimer) { clearInterval(qcProbeTimer); qcProbeTimer = null; }
         if (wsTimer) { clearInterval(wsTimer); wsTimer = null; }
     });
 
