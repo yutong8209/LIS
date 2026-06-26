@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.11.3
+// @version      7.11.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1107,18 +1107,21 @@
         }
         const tipDate = tip.querySelector('.qc-tip-date');
         const tipVal = tip.querySelector('.qc-tip-val');
-        host.addEventListener('mousemove', e => {
-            const dot = e.target.closest('.qc-dot');
-            if (!dot) { tip.style.display = 'none'; return; }
-            const date = dot.getAttribute('data-date') || '';
-            const val = dot.getAttribute('data-val') || '';
-            tipDate.textContent = (date.length >= 10 ? date.slice(8, 10) : date) + '日';
-            tipVal.textContent = val;
-            tip.style.display = 'block';
-            tip.style.left = (e.clientX + 10) + 'px';
-            tip.style.top = (e.clientY - 26) + 'px';
-        });
-        host.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+        if (!host._lisQcTipBound) {
+            host._lisQcTipBound = true;
+            host.addEventListener('mousemove', e => {
+                const dot = e.target.closest('.qc-dot');
+                if (!dot) { tip.style.display = 'none'; return; }
+                const date = dot.getAttribute('data-date') || '';
+                const val = dot.getAttribute('data-val') || '';
+                tipDate.textContent = (date.length >= 10 ? date.slice(8, 10) : date) + '日';
+                tipVal.textContent = val;
+                tip.style.display = 'block';
+                tip.style.left = (e.clientX + 10) + 'px';
+                tip.style.top = (e.clientY - 26) + 'px';
+            });
+            host.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+        }
     }
 
     function qcUpdatePanel(forceFrame) {
@@ -1292,7 +1295,7 @@
             fab.style.display = 'none';
             // 恢复上次位置
             try {
-                const fp = JSON.parse(localStorage.getItem('lis-qc-fab-pos') || '');
+                const fp = JSON.parse(localStorage.getItem('lis-qc-fab-pos') || 'null');
                 if (fp && typeof fp.l === 'number') {
                     fab.style.left = fp.l + 'px'; fab.style.top = fp.t + 'px';
                     fab.style.right = 'auto'; fab.style.bottom = 'auto';
@@ -1551,6 +1554,8 @@
     let _countsCache = null;    // 统一计数缓存
     let _countsCacheKey = '';    // 计数缓存键
     let _classifyRawCache = {}; // 分类时的原始 API 响应缓存，供详情面板复用
+    let _classifyVersion = 0; // 分类结果版本，驱动过滤缓存失效
+    let _normalKeyHandler = null; // 普通视图键盘监听
 
     function invalidateCaches() {
         _filteredCache = null;
@@ -1601,6 +1606,7 @@
         }
         wsActiveMachine = '';
         wsClassifiedCache = {};
+        _classifyVersion++;
         wsClassifying = false;
         wsLoading = false; // 重置加载状态，防止上次 closeWS 时 loadWSData 还在运行
         wsAbnormalIndex = -1;
@@ -1637,6 +1643,10 @@
         if (_abnormalKeyHandler) {
             document.removeEventListener('keydown', _abnormalKeyHandler);
             _abnormalKeyHandler = null;
+        }
+        if (_normalKeyHandler) {
+            document.removeEventListener('keydown', _normalKeyHandler);
+            _normalKeyHandler = null;
         }
         _removeDetailKeyHandler();
         wsLoading = false; // 重置加载状态，防止下次 openWS 被阻塞
@@ -1839,7 +1849,7 @@
         const complete = String(r.IsComplete || '');
         if (complete !== '1') return 'incomplete';
         const cached = wsClassifiedCache[r.ReportDR];
-        if (!cached) return 'normal'; // 分类未完成时默认显示为正常，分类完成后会更新
+        if (!cached) return 'incomplete'; // 分类未完成时不进入正常可审，避免误批审
         if (cached.status === 'NORMAL') return 'normal';
         if (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL') return 'abnormal';
         return 'incomplete';
@@ -1888,7 +1898,7 @@
         // 读取当前搜索框值（不能用旧的 wsSearchQuery）
         const _q = ($('#lis-ws-search') || {}).value || '';
         // 缓存检查
-        const ck = wsActiveWG + '|' + wsActiveMachine + '|' + wsCategory + '|' + _q + '|' + (wsSort.field + wsSort.asc);
+        const ck = wsActiveWG + '|' + wsActiveMachine + '|' + wsCategory + '|' + _q + '|' + (wsSort.field + wsSort.asc) + '|' + _classifyVersion;
         if (_filteredCache && _filteredCacheKey === ck) return _filteredCache;
         let d = [...wsData];
         // 工作组过滤
@@ -2267,6 +2277,10 @@
             document.removeEventListener('keydown', _abnormalKeyHandler);
             _abnormalKeyHandler = null;
         }
+        if (_normalKeyHandler) {
+            document.removeEventListener('keydown', _normalKeyHandler);
+            _normalKeyHandler = null;
+        }
 
         const data = filteredData();
         if (data.length === 0) {
@@ -2287,12 +2301,9 @@
         }
         // 正常/全部/不完整视图：Escape 关闭工作台
         if (wsCategory !== 'abnormal') {
-            const _normalKeyHandler = (e) => {
+            _normalKeyHandler = (e) => {
                 if (e.key === 'Escape') { e.preventDefault(); closeWS(); }
             };
-            // 移除旧的（如果有），绑定新的
-            if (body._normalKeyHandler) document.removeEventListener('keydown', body._normalKeyHandler);
-            body._normalKeyHandler = _normalKeyHandler;
             document.addEventListener('keydown', _normalKeyHandler);
         }
     }
@@ -2342,7 +2353,13 @@
         const batchBtn = document.getElementById('lis-norm-batch');
         if (batchBtn) {
             batchBtn.addEventListener('click', () => {
-                const formatted = data.map(r => ({ status: 'NORMAL', items: [], row: r, reportDR: r.ReportDR }));
+                const formatted = data
+                    .map(r => wsClassifiedCache[r.ReportDR])
+                    .filter(c => c && c.status === 'NORMAL');
+                if (formatted.length !== data.length) {
+                    showToast('部分标本尚未完成正常分类，请稍候刷新后再批审', 'warning');
+                    return;
+                }
                 confirmAndBatchAudit(formatted);
             });
         }
@@ -5867,7 +5884,13 @@ function fillNativeLoginForm(creds, lastWG) {
                 return !wsClassifiedCache[r.ReportDR];
             });
 
-            if (toClassify.length === 0) { renderWSTable(); return; }
+            if (toClassify.length === 0) {
+                calcMachineCounts();
+                renderWSTabs();
+                renderWSCategoryBar();
+                renderWSTable();
+                return;
+            }
 
             dbg('开始分类', toClassify.length, '个标本...');
 
@@ -5878,17 +5901,24 @@ function fillNativeLoginForm(creds, lastWG) {
                 results.forEach(r => {
                     if (r && r.reportDR) {
                         wsClassifiedCache[r.reportDR] = r;
+                        _classifyVersion++;
                     }
                 });
                 // 缓存淘汰
                 const cacheKeys = Object.keys(wsClassifiedCache);
                 if (cacheKeys.length > _CLASSIFIED_CACHE_MAX) {
-                    cacheKeys.slice(0, cacheKeys.length - _CLASSIFIED_CACHE_MAX).forEach(k => delete wsClassifiedCache[k]);
+                    cacheKeys.slice(0, cacheKeys.length - _CLASSIFIED_CACHE_MAX).forEach(k => {
+                        delete wsClassifiedCache[k];
+                        _classifyVersion++;
+                    });
                 }
+                invalidateCaches();
                 await new Promise(r => setTimeout(r, 0)); // 仅 yield，不加额外延迟
             }
 
             dbg('分类完成');
+            calcMachineCounts();
+            renderWSTabs();
             renderWSCategoryBar();
             renderWSTable();
         } catch(e) {
@@ -6918,7 +6948,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.10.2');
+        dbg('iMedicalLIS 增强助手 v7.11.4');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
