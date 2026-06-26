@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.11.4
+// @version      7.11.8
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -188,7 +188,7 @@
         panel = document.createElement('div');
         panel.id = 'lis-debug-panel';
         panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;background:#1e1e1e;color:#0f0;font:12px monospace;padding:10px;max-height:40vh;overflow:auto';
-        panel.innerHTML = '<b>LIS Debug Log (Alt+D 关闭)</b><br>' + _dbgLog.join('<br>');
+        panel.innerHTML = '<b>LIS Debug Log (Alt+D 关闭)</b><br>' + _dbgLog.map(l => esc(l)).join('<br>');
         document.body.appendChild(panel);
     }
 
@@ -339,6 +339,8 @@
 .ws-abnormal-card.auditing{border-left-color:#168276;background:#eef7f5;box-shadow:0 0 0 1px rgba(22,130,118,.14)}
 .ws-abnormal-card.has-critical{border-left-color:#b91c1c;background:#fff7f7}
 .ws-abnormal-card.has-critical.focused{border-left-color:#b91c1c;background:#ffeded;box-shadow:0 0 0 1px rgba(185,28,28,.14)}
+.ws-abnormal-card.has-infection-warning{border-left-color:#d97706;background:#fffbeb}
+.ws-abnormal-card.has-infection-warning.focused{border-left-color:#d97706;background:#fef3c7;box-shadow:0 0 0 1px rgba(217,119,6,.14)}
 .ab-card-top{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
 .ab-card-name{font-size:14px;font-weight:600;color:#2c3e50;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
 .ab-card-no{font-size:12px;color:#888;white-space:nowrap}
@@ -434,11 +436,11 @@
 #lis-qc-panel .qc-grid{stroke:#d8e5ee;stroke-width:0.8}
 #lis-qc-panel .qc-line{stroke:#168276;stroke-width:1.6;fill:none}
 #lis-qc-panel .qc-dot{fill:#168276;stroke:#fff;stroke-width:1.2}
-#lis-qc-panel .qc-dot.above{fill:#3b82c4}
-#lis-qc-panel .qc-dot.below{fill:#1a9a6c}
+#lis-qc-panel .qc-dot.above{fill:#e67e22}
+#lis-qc-panel .qc-dot.below{fill:#2980b9}
 #lis-qc-panel .qc-dot.eq{fill:#95a5a6}
-#lis-qc-panel .qc-dot.warn{fill:#e07050}
-#lis-qc-panel .qc-dot.loss{fill:#d64545}
+#lis-qc-panel .qc-dot.warn{fill:#c0392b}
+#lis-qc-panel .qc-dot.loss{fill:#7d1049}
 .qc-chart-wrap{padding:0 0 4px}
 .qc-chart-title{font-size:10px;color:#5a7a8a;font-weight:600;padding:2px 0 0 4px;background:#f8fcff}
 #lis-qc-panel .qc-label{fill:#536b7a;font-size:8px}
@@ -449,7 +451,7 @@
 #lis-qc-panel .qc-sd2{stroke:#f2c66d;stroke-width:0.6;stroke-dasharray:3 3}
 #lis-qc-panel .qc-sd3{stroke:#df8a8a;stroke-width:0.6;stroke-dasharray:3 3}
 #lis-qc-panel.dragging{opacity:.96}
-.qc-tip{display:none;position:fixed;pointer-events:none;z-index:999999;background:rgba(30,50,70,.92);border-radius:4px;padding:3px 8px;font-size:11px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.qc-tip{display:none;position:fixed;top:0;left:0;pointer-events:none;z-index:999999;background:rgba(30,50,70,.92);border-radius:4px;padding:3px 8px;font-size:11px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.18);will-change:transform}
 .qc-tip-date{color:#7ec8e3;font-weight:700}
 .qc-tip-val{color:#f0e68c}
 #lis-qc-fab{position:fixed;right:20px;bottom:20px;z-index:100004;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#2980b9,#1a6ea0);color:#fff;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.25);transition:transform .15s}
@@ -865,7 +867,7 @@
         // 也检查 src 属性（跨域时无法读 contentWindow.location）
         for (const f of frames) {
             const src = f.src || '';
-            if (src.indexOf('/qc/form/frmQCDataInputNew') > -1 || src.indexOf('/qc/') > -1) return f;
+            if (src.indexOf('/qc/form/frmQCDataInputNew') > -1) return f;
         }
         return null;
     }
@@ -968,7 +970,8 @@
     }
 
     function qcContextKey(ctx) {
-        return [ctx.machineDR, ctx.testCodeDR, ctx.matLotDR, ctx.levelNo, ctx.startDate, ctx.endDate].join('|');
+        const levelPart = (ctx.levels || []).map(l => l.LevelNo).sort().join(',') || ctx.levelNo || '';
+        return [ctx.machineDR, ctx.testCodeDR, ctx.matLotDR, levelPart, ctx.startDate, ctx.endDate].join('|');
     }
 
     function qcNativeUrl(ctx) {
@@ -1004,6 +1007,8 @@
         const xbarPoint = points.find(p => !Number.isNaN(p.xbar) && !Number.isNaN(p.sd));
         const xbar = xbarPoint ? xbarPoint.xbar : points.reduce((a, p) => a + p.value, 0) / points.length;
         const sdRaw = xbarPoint ? xbarPoint.sd : 0;
+        const xbarStr = (xbarPoint && xbarPoint.xbarStr) || String(xbar);
+        const sdStr = (xbarPoint && xbarPoint.sdStr) || String(sdRaw);
         const spread = sdRaw > 0 ? sdRaw : Math.max(0.0001, (Math.max(...points.map(p => p.value)) - Math.min(...points.map(p => p.value))) / 6);
         const values = points.map(p => p.value).concat([xbar - 3 * spread, xbar + 3 * spread]);
         let minY = Math.min(...values), maxY = Math.max(...values);
@@ -1024,7 +1029,6 @@
             return `<line class="${cls}" x1="${left}" y1="${yy}" x2="${w-right}" y2="${yy}"></line><text class="qc-sd" x="3" y="${yy+3}">${esc(label)}</text>`;
         };
         const path = points.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.value).toFixed(1)).join(' ');
-        const tol = spread * 0.15; // 落在 ±15% SD 内视为"等于"平均值
         const dots = points.map((p, i) => {
             const diff = p.value - xbar;
             const z = Math.abs(diff) / spread;
@@ -1032,7 +1036,7 @@
             let cls;
             if (z >= 3) cls = 'loss';
             else if (z >= 2) cls = 'warn';
-            else if (Math.abs(diff) <= tol) cls = 'eq';
+            else if (diff === 0) cls = 'eq';
             else if (diff > 0) cls = 'above';
             else cls = 'below';
             return `<circle class="qc-dot ${cls}" cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3.2" data-date="${esc(p.date||'')}" data-val="${esc(fmt(p.value))}"></circle>`;
@@ -1059,7 +1063,7 @@
                 <path class="qc-line" d="${path}"></path>
                 ${dots}
                 ${xLabels}
-                <text class="qc-info" x="${w-right}" y="${top+8}" text-anchor="end">靶值 ${esc(fmt(xbar))}  SD ${esc(fmt(spread))}</text>
+                <text class="qc-info" x="${w-right}" y="${top+8}" text-anchor="end">靶值 ${esc(xbarStr)}  SD ${esc(sdStr)}</text>
             </svg>`;
     }
 
@@ -1074,7 +1078,7 @@
             if (!levelMap[ln]) levelMap[ln] = [];
             const v = qcAverageValue(r);
             if (v !== null && !Number.isNaN(v)) {
-                levelMap[ln].push({ date: r.TestDate || r.AddDate || '', value: v, xbar: parseFloat(r.SetUpX), sd: parseFloat(r.SetUpSD) });
+                levelMap[ln].push({ date: r.TestDate || r.AddDate || '', value: v, xbar: parseFloat(r.SetUpX), sd: parseFloat(r.SetUpSD), xbarStr: String(r.SetUpX ?? ''), sdStr: String(r.SetUpSD ?? '') });
             }
         });
         const levelNos = Object.keys(levelMap).sort();
@@ -1117,8 +1121,7 @@
                 tipDate.textContent = (date.length >= 10 ? date.slice(8, 10) : date) + '日';
                 tipVal.textContent = val;
                 tip.style.display = 'block';
-                tip.style.left = (e.clientX + 10) + 'px';
-                tip.style.top = (e.clientY - 26) + 'px';
+                tip.style.transform = `translate(${e.clientX + 10}px,${e.clientY - 26}px)`;
             });
             host.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
         }
@@ -1198,6 +1201,7 @@
         } catch(e) { return r; }
     }
 
+    let _qcLastPosKey = '';
     function qcPlacePanel() {
         const panel = document.getElementById('lis-qc-panel');
         if (!panel || qcPanelCollapsed) return;
@@ -1218,6 +1222,7 @@
         }
         // 用户手动拖动或缩放后不再自动挪回去；双击标题栏可恢复自动位置。
         if (panel.dataset.userMoved) return;
+        // 如果位置没变就跳过（避免重复设置样式触发抖动）
         const viewportW = window.innerWidth || document.documentElement.clientWidth || 1280;
         const dataGrid = qcGetCtx().doc.getElementById('dgData');
         const testGrid = qcGetCtx().doc.getElementById('dgTestCode');
@@ -1232,13 +1237,17 @@
                 width = Math.min(560, gapW - 20);
             }
         }
+        const h = Math.max(340, Math.round((window.innerHeight || 720) * 0.62));
+        const posKey = `${left}|34|${width}|${h}`;
+        if (posKey === _qcLastPosKey) return;
+        _qcLastPosKey = posKey;
         panel.classList.add('lis-qc-placed');
         panel.style.left = left + 'px';
         panel.style.right = 'auto';
         panel.style.top = '34px';
         panel.style.bottom = 'auto';
         panel.style.width = width + 'px';
-        panel.style.height = Math.max(340, Math.round((window.innerHeight || 720) * 0.62)) + 'px';
+        panel.style.height = h + 'px';
         panel.style.minWidth = '360px';
     }
 
@@ -1398,6 +1407,7 @@
         head.addEventListener('dblclick', () => {
             delete panel.dataset.userMoved;
             panel.classList.remove('dragging');
+            _qcLastPosKey = '';
             qcPlacePanel();
         });
         resize.addEventListener('pointerdown', e => {
@@ -1469,7 +1479,6 @@
             if (e.target && /^(INPUT|TEXTAREA)$/i.test(e.target.tagName)) qcScheduleRefresh(false, 260);
         }, true);
         ['click', 'change'].forEach(ev => targetDoc.addEventListener(ev, () => {
-            qcPlacePanel();
             qcScheduleRefresh(false, 320);
         }, true));
         window.addEventListener('resize', () => {
@@ -1479,7 +1488,6 @@
         const dataDiv = targetDoc.getElementById('dataDiv');
         if (dataDiv) {
             const ob = new MutationObserver(() => {
-                qcPlacePanel();
                 qcScheduleRefresh(false, 300);
             });
             ob.observe(dataDiv, { childList: true, subtree: true, characterData: true });
@@ -2102,7 +2110,7 @@
         wgMachines.forEach(m => {
             const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
             h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${m.RowID}">
-                <span class="ws-tab-name">${m.CName||m.Name}</span>
+                <span class="ws-tab-name">${esc(m.CName||m.Name)}</span>
                 <span class="mach-cnt">${c.total}</span>
             </button>`;
         });
@@ -2270,6 +2278,7 @@
 
     function renderWSTable() {
         const body = $('#lis-ws-body');
+        if (!body) return;
         // 强制 flex 和滚动（LIS 系统 CSS 会覆盖）
         body.style.cssText = 'flex:1!important;overflow:auto!important;min-height:0!important;position:relative';
         // 移除旧的异常视图键盘监听
@@ -4082,7 +4091,7 @@
             body.innerHTML = `
                 <div style="text-align:center;padding:40px;color:#e74c3c">
                     <p>❌ 加载失败</p>
-                    <p style="font-size:12px">${e.message}</p>
+                    <p style="font-size:12px">${esc(e.message)}</p>
                 </div>
             `;
         }
@@ -4169,7 +4178,6 @@
             for (const m of muts) {
                 if (m.type === 'attributes' && m.target.id === 'lis-ws') {
                     dbg('[WS] #lis-ws 属性变化:', m.attributeName, 'class=', ws.className, 'style=', ws.style.cssText);
-                    console.trace('[WS] #lis-ws 属性变化调用栈');
                 }
             }
         });
@@ -5961,6 +5969,12 @@ function fillNativeLoginForm(creds, lastWG) {
             // 缓存原始数据供详情面板复用，避免重复请求
             if (itemInfo.length > 0) {
                 _classifyRawCache[reportDR] = { data, ts: Date.now() };
+                // 限制缓存大小，防止内存泄漏
+                const keys = Object.keys(_classifyRawCache);
+                if (keys.length > 200) {
+                    const sorted = keys.sort((a, b) => (_classifyRawCache[a].ts || 0) - (_classifyRawCache[b].ts || 0));
+                    for (let i = 0; i < sorted.length - 100; i++) delete _classifyRawCache[sorted[i]];
+                }
             }
 
             const classifications = itemInfo.map(item => ({
@@ -5979,7 +5993,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 critical: isCriticalResultItem(item),
                 panicLow: item.PanicLow || item.CriticalLow || '',
                 panicHigh: item.PanicHigh || item.CriticalHigh || '',
-                preResult: item.PreResult || null
+                preResult: item
             }));
 
             // 传染病历史结果比对（x8 仪器）
@@ -6101,7 +6115,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
     // 判断是否阴性结果
     function isNegativeResult(result) {
-        if (!result) return true;
+        if (!result) return false;
         const r = result.toUpperCase().trim();
         if (r === '-' || r === '阴性' || r === 'NEGATIVE' || r === 'NEG' || r === 'NON-REACTIVE') return true;
         if (r.includes('阴性') || r.includes('阴')) return true;
