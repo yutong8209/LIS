@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.11.8
+// @version      7.11.9
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -770,7 +770,7 @@
         if (dr === curDR) return;
         const wgName = (WG_MAP[dr]||{}).name || dr;
         toast('正在切换到 ' + wgName + '...', 'w');
-        try { localStorage.setItem(LOGIN_WG_KEY, dr); } catch(e) {}
+        try { localStorage.setItem('LIS_LastWorkGroup', dr); } catch(e) {}
 
         // 方法1：直接操作原生切换下拉框 + 调用原生 changeLogin 函数
         try {
@@ -2505,7 +2505,8 @@
 
         try {
             const startIndex = Math.max(0, wsAbnormalIndex);
-            const card = document.querySelector(`.ws-abnormal-card[data-rdr="${String(specimen.ReportDR || '').replace(/"/g, '\\"')}"]`);
+            const targetDR = String(specimen.ReportDR || '');
+            const card = [...document.querySelectorAll('.ws-abnormal-card[data-rdr]')].find(c => c.dataset.rdr === targetDR);
             if (card) {
                 card.classList.add('auditing');
                 const hint = card.querySelector('.ab-card-hint');
@@ -3073,6 +3074,7 @@
         // 使用缓存的分类结果；只允许 NORMAL 进入自动审核
         const formatted = unreviewed.map(r => {
             const cached = wsClassifiedCache[r.ReportDR];
+            if (cached) cached._accessTs = Date.now();
             return cached
                 ? { status: cached.status, items: cached.items || [], row: r, reportDR: r.ReportDR }
                 : { status: 'UNCERTAIN', items: [], row: r, reportDR: r.ReportDR };
@@ -3595,7 +3597,7 @@
             '4': '🔄 复审',
             '5': '❌ 取消'
         };
-        return map[status] || '未知';
+        return map[String(status)] || '未知';
     }
 
     // 解析并渲染单个检验项目的历次结果，返回 {cells:[], dates:[]}
@@ -4030,6 +4032,7 @@
                 if (info.CollectDT && info.ReceiveDT) {
                     try {
                         const diffMs = new Date(info.ReceiveDT) - new Date(info.CollectDT);
+                        if (isNaN(diffMs)) throw new Error('invalid date');
                         const diffH = Math.floor(diffMs / 3600000);
                         const diffM = Math.floor((diffMs % 3600000) / 60000);
                         timeDelta = diffH > 0 ? diffH + '小时' + diffM + '分' : diffM + '分钟';
@@ -4289,10 +4292,12 @@
             document.getElementById('lis-pwdca').addEventListener('click', closePwdDlg);
             o.addEventListener('click', e => { if(e.target===o) closePwdDlg(); });
         }
-        document.getElementById('lis-pwdi').value = await loadPwdAsync();
-        document.getElementById('lis-pwds').textContent = (await loadPwdAsync()) ? '当前已保存审核密码' : '尚未保存审核密码';
-        document.getElementById('lis-cawdi').value = await loadCAPwdAsync();
-        document.getElementById('lis-cawds').textContent = (await loadCAPwdAsync()) ? '当前已保存CA密码' : '尚未保存CA密码';
+        const pwd = await loadPwdAsync();
+        document.getElementById('lis-pwdi').value = pwd;
+        document.getElementById('lis-pwds').textContent = pwd ? '当前已保存审核密码' : '尚未保存审核密码';
+        const caPwd = await loadCAPwdAsync();
+        document.getElementById('lis-cawdi').value = caPwd;
+        document.getElementById('lis-cawds').textContent = caPwd ? '当前已保存CA密码' : '尚未保存CA密码';
         o.classList.add('show');
         document.getElementById('lis-pwdi').focus();
     }
@@ -4369,7 +4374,7 @@
             <h4>⚡ 快速登录 — iMedicalLIS</h4>
             <div class="lis-lb-row">
                 <label>用户名</label>
-                <input type="text" id="lis-lu" placeholder="用户名" value="${creds?creds.user:''}" autocomplete="username" />
+                <input type="text" id="lis-lu" placeholder="用户名" value="${creds?esc(creds.user):''}" autocomplete="username" />
             </div>
             <div class="lis-lb-row">
                 <label>密码</label>
@@ -4397,7 +4402,7 @@
                     b.style.borderColor = '#e0e0e0';
                 });
                 btn.classList.add('sel');
-                btn.style.background = btn.style.borderColor = wgs.find(w=>w.dr===btn.dataset.dr).color;
+                btn.style.background = btn.style.borderColor = (wgs.find(w=>w.dr===btn.dataset.dr) || {}).color || '#e0e0e0';
                 btn.style.color = '#fff';
                 selectedWG = btn.dataset.dr;
             });
@@ -4409,7 +4414,7 @@
 
         // Enter 快捷键
         box.addEventListener('keydown', e => {
-            if (e.keyCode === 13) doLogin(selectedWG);
+            if (e.key === 'Enter') doLogin(selectedWG);
         });
 
         // 如果有保存的凭证，聚焦到登录按钮
@@ -4900,13 +4905,13 @@ function fillNativeLoginForm(creds, lastWG) {
             t.indexOf('未录入') !== -1 || t.indexOf('请录入') !== -1) {
             return 'incomplete';
         }
+        if (t.indexOf('成功') !== -1 && t.indexOf('失败') === -1 && t.indexOf('错误') === -1) return 'success';
         if (t.indexOf('密码错误') !== -1 || t.indexOf('认证失败') !== -1 ||
             t.indexOf('账号锁定') !== -1 || t.indexOf('失败') !== -1 ||
             t.indexOf('错误') !== -1 || t.indexOf('不允许') !== -1 ||
             t.indexOf('未通过') !== -1) {
             return 'failure';
         }
-        if (t.indexOf('成功') !== -1) return 'success';
         return '';
     }
 
@@ -5676,13 +5681,13 @@ function fillNativeLoginForm(creds, lastWG) {
         const hasHigh = high && !isNaN(high.value);
 
         if (parsed.op === '<' || parsed.op === '<=') {
-            if (hasLow && parsed.value <= low.value) return 'LOW';
             if (hasHigh && parsed.value > high.value) return 'HIGH';
+            if (parsed.op === '<' && hasHigh && parsed.value >= high.value) return '';
             return 'NORMAL';
         }
         if (parsed.op === '>' || parsed.op === '>=') {
-            if (hasHigh && parsed.value >= high.value) return 'HIGH';
             if (hasLow && parsed.value < low.value) return 'LOW';
+            if (parsed.op === '>' && hasLow && parsed.value <= low.value) return '';
             return 'NORMAL';
         }
         if (hasHigh && parsed.value > high.value) return 'HIGH';
@@ -5705,9 +5710,9 @@ function fillNativeLoginForm(creds, lastWG) {
         if (m) return { low: '', high: m[1] };
         m = raw.match(/^(?:>|>=)\s*([-+]?\d+(?:\.\d+)?)/);
         if (m) return { low: m[1], high: '' };
-        m = raw.match(/(?:正常|参考)?\s*([-+]?\d+(?:\.\d+)?)\s*以下/);
+        m = raw.match(/(?:正常|参考|值)?[：:\s]*([-+]?\d+(?:\.\d+)?)\s*以下/);
         if (m) return { low: '', high: m[1] };
-        m = raw.match(/(?:正常|参考)?\s*([-+]?\d+(?:\.\d+)?)\s*以上/);
+        m = raw.match(/(?:正常|参考|值)?[：:\s]*([-+]?\d+(?:\.\d+)?)\s*以上/);
         if (m) return { low: m[1], high: '' };
         return { low: '', high: '' };
     }
@@ -5908,13 +5913,15 @@ function fillNativeLoginForm(creds, lastWG) {
                 const results = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
                 results.forEach(r => {
                     if (r && r.reportDR) {
+                        r._accessTs = Date.now();
                         wsClassifiedCache[r.reportDR] = r;
                         _classifyVersion++;
                     }
                 });
-                // 缓存淘汰
+                // 缓存淘汰（按最近访问时间排序，淘汰最久未访问的）
                 const cacheKeys = Object.keys(wsClassifiedCache);
                 if (cacheKeys.length > _CLASSIFIED_CACHE_MAX) {
+                    cacheKeys.sort((a, b) => (wsClassifiedCache[a]._accessTs || 0) - (wsClassifiedCache[b]._accessTs || 0));
                     cacheKeys.slice(0, cacheKeys.length - _CLASSIFIED_CACHE_MAX).forEach(k => {
                         delete wsClassifiedCache[k];
                         _classifyVersion++;
@@ -6106,7 +6113,7 @@ function fillNativeLoginForm(creds, lastWG) {
         const r = result.toUpperCase().trim();
         // 阳性标记
         if (r === '+' || r === '阳性' || r === 'POSITIVE' || r === 'POS' || r === 'REACTIVE') return true;
-        if (r.includes('+') || r.includes('阳性') || r.includes('阳')) return true;
+        if (/^\+{1,4}$/.test(r) || r.includes('阳性') || r.includes('弱阳')) return true;
         // 数值 > 1（S/CO 值通常 >1 为阳性）
         const num = parseFloat(r);
         if (!isNaN(num) && num > 1) return true;
@@ -6305,7 +6312,8 @@ function fillNativeLoginForm(creds, lastWG) {
         const selected = getNativeSelectedRow();
         if (!selected) return;
 
-        const currentIndex = rows.indexOf(selected);
+        const selectedDR = selected.ReportDR || '';
+        const currentIndex = rows.findIndex(r => (r.ReportDR || '') === selectedDR);
         if (currentIndex === -1) return;
 
         // 找下一个待审核的标本
@@ -6333,7 +6341,8 @@ function fillNativeLoginForm(creds, lastWG) {
         const selected = getNativeSelectedRow();
         if (!selected) return;
 
-        const currentIndex = rows.indexOf(selected);
+        const selectedDR = selected.ReportDR || '';
+        const currentIndex = rows.findIndex(r => (r.ReportDR || '') === selectedDR);
         if (currentIndex === -1) return;
 
         // 找上一个待审核的标本
@@ -6497,12 +6506,25 @@ function fillNativeLoginForm(creds, lastWG) {
             confirmBtn.disabled = !checkBtn.checked;
         });
 
-        document.getElementById('lis-ab-close').addEventListener('click', () => dialog.remove());
-        document.getElementById('lis-ab-cancel').addEventListener('click', () => dialog.remove());
-        dialog.addEventListener('click', e => { if (e.target === dialog) dialog.remove(); });
+        // ESC 关闭（与其他关闭路径共用清理）
+        let escRemoved = false;
+        const escHandler = e => {
+            if (e.key === 'Escape') {
+                cleanupAndRemove();
+            }
+        };
+        const cleanupAndRemove = () => {
+            if (!escRemoved) { document.removeEventListener('keydown', escHandler); escRemoved = true; }
+            dialog.remove();
+        };
+        document.addEventListener('keydown', escHandler);
+
+        document.getElementById('lis-ab-close').addEventListener('click', cleanupAndRemove);
+        document.getElementById('lis-ab-cancel').addEventListener('click', cleanupAndRemove);
+        dialog.addEventListener('click', e => { if (e.target === dialog) cleanupAndRemove(); });
 
         confirmBtn.addEventListener('click', () => {
-            dialog.remove();
+            cleanupAndRemove();
             executeBatchAudit(normal).catch(e => {
                 console.error('[LIS] 批审异常:', e);
             });
@@ -6511,15 +6533,6 @@ function fillNativeLoginForm(creds, lastWG) {
         document.getElementById('lis-ab-export').addEventListener('click', () => {
             exportAuditTrail(normal, abnormal, uncertain);
         });
-
-        // ESC 关闭
-        const escHandler = e => {
-            if (e.key === 'Escape') {
-                dialog.remove();
-                document.removeEventListener('keydown', escHandler);
-            }
-        };
-        document.addEventListener('keydown', escHandler);
     }
 
     // --- 按 ReportDR 在原生 datagrid 中选中行 ---
@@ -6847,7 +6860,7 @@ function fillNativeLoginForm(creds, lastWG) {
         a.href = url;
         a.download = `审核清单_${today()}.csv`;
         a.click();
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         showToast('已导出审核清单', 'success');
     }
 
@@ -6962,7 +6975,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.11.4');
+        dbg('iMedicalLIS 增强助手 v7.11.9');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
