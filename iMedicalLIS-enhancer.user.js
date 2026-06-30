@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.14.0
-// @description  报告审核增强 — 批量审核 + 审核工作台 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
+// @version      7.18.0
+// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -192,20 +192,30 @@
         document.body.appendChild(panel);
     }
 
-    async function fetchJ(u, timeoutMs) {
+    async function fetchJ(u, timeoutMs, externalSignal) {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs || 15000);
+        let externalAbort = null;
         try {
+            if (externalSignal) {
+                if (externalSignal.aborted) ctrl.abort();
+                else {
+                    externalAbort = () => ctrl.abort();
+                    externalSignal.addEventListener('abort', externalAbort, { once: true });
+                }
+            }
             const r = await fetch(u, { credentials: 'same-origin', signal: ctrl.signal });
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const text = await r.text();
             if (!text || (text.trim()[0] !== '{' && text.trim()[0] !== '[')) throw new Error('非JSON响应');
             return JSON.parse(text);
         } catch(e) {
-            if (e.name === 'AbortError') dbg('fetch 超时:', u);
+            if (e.name === 'AbortError') dbg(externalSignal && externalSignal.aborted ? 'fetch 已取消:' : 'fetch 超时:', u);
             else console.error('[LIS] fetch error:', e);
             throw e;
-        } finally { clearTimeout(timer);
+        } finally {
+            clearTimeout(timer);
+            if (externalSignal && externalAbort) externalSignal.removeEventListener('abort', externalAbort);
         }
     }
 
@@ -229,6 +239,42 @@
 #lis-fab:active{cursor:grabbing}
 #lis-fab-tip{position:fixed;bottom:84px;right:20px;z-index:99998;background:rgba(0,0,0,.8);color:#fff;padding:6px 12px;border-radius:6px;font-size:11px;pointer-events:none;opacity:0;transition:.3s;white-space:pre-line}
 #lis-fab-tip.show{opacity:1}
+
+/* --- 病人结果筛选导出 --- */
+#lis-pr-fab{position:fixed;right:20px;bottom:152px;z-index:99999;width:52px;height:52px;border-radius:50%;border:none;background:#145b86;color:#fff;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 3px 14px rgba(20,91,134,.35);display:flex;align-items:center;justify-content:center;user-select:none}
+#lis-pr-fab:hover{background:#0f4668;transform:scale(1.06)}
+#lis-pr-panel{position:fixed!important;inset:0!important;z-index:100006!important;background:#eef2f6;display:none;flex-direction:column;font-family:'Microsoft YaHei','Segoe UI',sans-serif;color:#1f2933}
+#lis-pr-panel.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
+#lis-pr-hd{height:38px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#f1f7fb;border-bottom:1px solid #d5e4ef;flex-shrink:0}
+#lis-pr-hd h3{margin:0;font-size:14px;color:#145b86;white-space:nowrap}
+#lis-pr-hd .pr-spacer{flex:1}
+#lis-pr-hd button,#lis-pr-tools button{height:26px;border:1px solid #9dc6df;background:#fff;color:#246489;border-radius:5px;padding:0 10px;font-size:12px;font-weight:700;cursor:pointer}
+#lis-pr-hd button:hover,#lis-pr-tools button:hover{background:#f5fbff;border-color:#4f9cca}
+#lis-pr-hd .pr-close{font-size:18px;line-height:20px;padding:0 8px;color:#7b8b96}
+#lis-pr-tools{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:5px;padding:6px 8px;background:#fbfdff;border-bottom:1px solid #d5e4ef;flex-shrink:0;overflow:visible}
+#lis-pr-tools label{display:flex;flex-direction:column;gap:2px;font-size:10px;color:#5f7484;font-weight:700;min-width:0}
+#lis-pr-tools input,#lis-pr-tools select{height:24px;box-sizing:border-box;border:1px solid #cbd5df;border-radius:4px;padding:2px 6px;font-size:12px;color:#213547;background:#fff;min-width:0}
+#lis-pr-tools .pr-wide{grid-column:span 2}
+#lis-pr-tools .pr-section{display:none}
+#lis-pr-tools .pr-actions{grid-column:span 3;display:flex;align-items:flex-end;gap:6px}
+#lis-pr-status{padding:6px 10px;font-size:12px;color:#6b7785;background:#fff;flex-shrink:0;border-bottom:1px solid #edf1f5}
+#lis-pr-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;background:#f7f9fb;padding:8px;position:relative;z-index:1}
+#lis-pr-body table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #dce3eb;border-radius:6px;overflow:hidden;font-size:12px}
+#lis-pr-body th{position:sticky;top:0;background:#edf2f7;color:#334155;padding:7px 8px;text-align:left;border-bottom:1px solid #d7dee8;white-space:nowrap;z-index:1}
+#lis-pr-body td{padding:6px 8px;border-bottom:1px solid #edf1f5;white-space:nowrap;vertical-align:middle}
+#lis-pr-body tr:nth-child(even){background:#fbfcfd}
+#lis-pr-body tr:hover{background:#eef7f5}
+#lis-pr-body .pr-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#7b8b96;font-size:13px;text-align:center;line-height:1.7}
+#lis-pr-body .pr-abn{color:#c62828;font-weight:700}
+#lis-pr-body .pr-low{color:#1565c0;font-weight:700}
+#lis-pr-body .pr-high{color:#e65100;font-weight:700}
+#lis-pr-body .pr-critical{color:#b71c1c;font-weight:800}
+@media(max-width:900px){
+  #lis-pr-panel{inset:8px}
+  #lis-pr-tools{grid-template-columns:repeat(2,minmax(0,1fr))}
+  #lis-pr-tools .pr-wide,#lis-pr-tools .pr-actions{grid-column:span 2}
+  #lis-pr-fab{bottom:142px}
+}
 
 /* --- 顶部快速切换条 --- */
 #lis-qbar{position:fixed;top:4px;left:50%;transform:translateX(-50%) translateY(-120%);z-index:99998;background:rgba(44,62,80,.92);backdrop-filter:blur(8px);padding:3px 10px;display:flex;align-items:center;gap:5px;transition:.3s;border-radius:0 0 8px 8px;box-shadow:0 2px 8px rgba(0,0,0,.25);opacity:0}
@@ -393,6 +439,16 @@
 #lis-pwdp .b-can{background:#95a5a6;color:#fff}
 #lis-pwdp .tip{font-size:11px;color:#95a5a6;margin-top:12px;line-height:1.5}
 #lis-pwdp .sts{font-size:12px;margin-top:6px}
+
+/* --- 病人结果分页控件 --- */
+#lis-pr-pagination{position:sticky;bottom:0;z-index:5;display:flex;align-items:center;gap:8px;padding:10px 12px;background:#fff;border-top:2px solid #d7dee8;font-size:12px;color:#334155;box-shadow:0 -4px 12px rgba(0,0,0,.1);margin-top:8px}
+#lis-pr-pagination button{height:28px;border:1px solid #cbd5df;background:#fff;color:#246489;border-radius:5px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+#lis-pr-pagination button:hover:not(:disabled){background:#f5fbff;border-color:#4f9cca}
+#lis-pr-pagination button:disabled{opacity:.4;cursor:not-allowed}
+#lis-pr-pagination .pr-pg-info{color:#6b7785;white-space:nowrap}
+#lis-pr-pagination .pr-pg-jump{display:flex;align-items:center;gap:4px}
+#lis-pr-pagination .pr-pg-jump input{width:52px;height:26px;border:1px solid #cbd5df;border-radius:4px;padding:0 6px;font-size:12px;text-align:center}
+#lis-pr-pagination .pr-pg-total{margin-left:auto;color:#6b7785;white-space:nowrap}
 
 /* --- Toast --- */
 .lis-t{position:fixed;top:50px;right:20px;z-index:100003;padding:10px 18px;border-radius:6px;font-size:13px;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.2);animation:lis-si .3s ease;pointer-events:none}
@@ -1209,12 +1265,18 @@
         if (!panel.dataset.userMoved) {
             const saved = qcRestorePos();
             if (saved) {
+                const vw = window.innerWidth || document.documentElement.clientWidth || 1280;
+                const vh = window.innerHeight || document.documentElement.clientHeight || 720;
+                const w = Math.min(Math.max(Number(saved.w) || 560, 360), Math.max(360, vw - 8));
+                const h = Math.min(Math.max(Number(saved.h) || 420, 340), Math.max(340, vh - 8));
+                const l = Math.max(0, Math.min(Number(saved.l) || 0, Math.max(0, vw - w)));
+                const t = Math.max(0, Math.min(Number(saved.t) || 0, Math.max(0, vh - h)));
                 panel.dataset.userMoved = '1';
                 panel.classList.add('lis-qc-placed');
-                panel.style.left = saved.l + 'px';
-                panel.style.top = saved.t + 'px';
-                panel.style.width = saved.w + 'px';
-                panel.style.height = saved.h + 'px';
+                panel.style.left = l + 'px';
+                panel.style.top = t + 'px';
+                panel.style.width = w + 'px';
+                panel.style.height = h + 'px';
                 panel.style.right = 'auto';
                 panel.style.bottom = 'auto';
                 return;
@@ -1509,7 +1571,7 @@
             qcCreatePanel();
             qcBindPageEvents();
             qcScheduleRefresh(true, 800);
-            console.log('[LIS-QC] 质控录入辅助已加载');
+            dbg('[LIS-QC] 质控录入辅助已加载');
         };
         wait(80);
     }
@@ -1533,6 +1595,826 @@
         qcProbeTimer = setInterval(probe, 1000);
     }
 
+
+    // ============================================================
+    //  模块 PR：病人结果筛选导出（独立小工具）— v7.15 重构
+    // ============================================================
+    let prData = [];
+    let prBusy = false;
+    let prComposing = false;
+    let prAbortCtrl = null;        // 当前查询的 AbortController
+    let prQuerySeq = 0;            // 查询序号，防止旧查询回写新结果
+    let prPage = 1;                // 当前页码（从 1 开始）
+    const prPageSize = 100;        // 每页行数
+    const _prDetailCache = new Map(); // 详情结果 LRU 缓存
+    const _prDetailInflight = new Map(); // 正在读取的明细请求，防止重复点击重复请求
+    const _prWorkListCache = new Map();  // 标本列表短缓存，切换筛选条件时复用
+    const _PR_DETAIL_MAX = 1000;      // PR 模块缓存上限（结果查询一次性查询量大）
+    const _PR_WORKLIST_MAX = 20;
+    const _PR_WORKLIST_TTL = 120000;  // 2 分钟内同日期/工作组/仪器/状态复用标本列表
+
+    function prTodayOffset(days) {
+        const d = new Date();
+        d.setDate(d.getDate() + (days || 0));
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function prStatusText(status) {
+        const map = {'0':'待排样','1':'登记','2':'初审','3':'审核','4':'复审','5':'取消'};
+        return map[String(status || '')] || String(status || '');
+    }
+
+    function prSetStatus(text, type) {
+        const el = document.getElementById('lis-pr-status');
+        if (!el) return;
+        el.textContent = text || '';
+        el.style.color = type === 'error' ? '#c62828' : (type === 'ok' ? '#168276' : '#6b7785');
+    }
+
+    function prSetBusy(on) {
+        prBusy = !!on;
+        ['lis-pr-query','lis-pr-export','lis-pr-cancel'].forEach(id => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            if (id === 'lis-pr-cancel') btn.style.display = on ? '' : 'none';
+            else btn.disabled = prBusy;
+        });
+    }
+
+    function prCancel() {
+        prQuerySeq++;
+        if (prAbortCtrl) { prAbortCtrl.abort(); prAbortCtrl = null; }
+        prSetStatus('已取消查询。', 'info');
+        prSetBusy(false);
+    }
+
+    /* ---------- LRU 缓存（复用工作台 _detailLRU 模式） ---------- */
+    function prCacheGet(key) {
+        if (!_prDetailCache.has(key)) return null;
+        const v = _prDetailCache.get(key);
+        _prDetailCache.delete(key);
+        _prDetailCache.set(key, v);  // 移到最新
+        return v;
+    }
+    function prCacheSet(key, val) {
+        if (_prDetailCache.has(key)) _prDetailCache.delete(key);
+        if (_prDetailCache.size >= _PR_DETAIL_MAX) {
+            const first = _prDetailCache.keys().next().value;
+            _prDetailCache.delete(first);
+        }
+        _prDetailCache.set(key, val);
+    }
+    function prCacheKey(specimen) {
+        return (specimen.ReportDR || specimen.TodoReportDR || '') + '|' + (specimen.MachineParameterDR || '') + '|' + (specimen.Status || specimen.ReportStatus || '');
+    }
+
+    function prWorkListCacheKey(filters) {
+        return [filters.start, filters.end, filters.wg || '', filters.machine || '', filters.status || ''].join('|');
+    }
+
+    function prWorkListCacheGet(key) {
+        const hit = _prWorkListCache.get(key);
+        if (!hit) return null;
+        if (Date.now() - hit.ts > _PR_WORKLIST_TTL) {
+            _prWorkListCache.delete(key);
+            return null;
+        }
+        _prWorkListCache.delete(key);
+        _prWorkListCache.set(key, hit);
+        return hit.rows;
+    }
+
+    function prWorkListCacheSet(key, rows) {
+        if (_prWorkListCache.has(key)) _prWorkListCache.delete(key);
+        while (_prWorkListCache.size >= _PR_WORKLIST_MAX) {
+            _prWorkListCache.delete(_prWorkListCache.keys().next().value);
+        }
+        _prWorkListCache.set(key, { ts: Date.now(), rows });
+    }
+
+    function prGetFilters() {
+        const val = id => ((document.getElementById(id) || {}).value || '').trim();
+        return {
+            start: val('lis-pr-start') || today(),
+            end: val('lis-pr-end') || today(),
+            wg: val('lis-pr-wg') !== undefined ? val('lis-pr-wg') : (wgDR() || ''),
+            machine: val('lis-pr-machine'),
+            status: val('lis-pr-status-filter'),
+            q: val('lis-pr-q').toLowerCase(),
+            patientType: val('lis-pr-patient-type').toLowerCase(),
+            dept: val('lis-pr-dept').toLowerCase(),
+            ward: val('lis-pr-ward').toLowerCase(),
+            doctor: val('lis-pr-doctor').toLowerCase(),
+            diagnosis: val('lis-pr-diagnosis').toLowerCase(),
+            sex: val('lis-pr-sex'),
+            ageMin: parseFloat((document.getElementById('lis-pr-age-min') || {}).value),
+            ageMax: parseFloat((document.getElementById('lis-pr-age-max') || {}).value),
+            specimen: val('lis-pr-specimen').toLowerCase(),
+            item: val('lis-pr-item').toLowerCase(),
+            resultText: val('lis-pr-result-text').toLowerCase(),
+            resultOp: val('lis-pr-result-op'),
+            resultValue: parseFloat((document.getElementById('lis-pr-result-value') || {}).value),
+            resultMin: parseFloat((document.getElementById('lis-pr-result-min') || {}).value),
+            resultMax: parseFloat((document.getElementById('lis-pr-result-max') || {}).value),
+            judge: val('lis-pr-judge'),
+            abnormal: (document.getElementById('lis-pr-abnormal') || {}).checked || false
+        };
+    }
+
+    async function prLoadMachinesForWG(wg) {
+        const sel = document.getElementById('lis-pr-machine');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">全部仪器</option>';
+        if (!wg) return;
+        try {
+            const machines = await loadMachines(wg);
+            sortWSMachines(machines.map(m => ({...m, _wg: wg}))).forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.RowID || '';
+                opt.textContent = m.CName || m.Name || m.RowID || '';
+                sel.appendChild(opt);
+            });
+        } catch(e) {
+            prSetStatus('仪器列表加载失败: ' + e.message, 'error');
+        }
+    }
+
+    function prNormalizeWorkRow(r, wg, machine) {
+        return {
+            ...r,
+            _wg: wg.dr,
+            _wgn: wg.name,
+            _mn: machine.CName || machine.Name || machine.RowID || '',
+            _mdr: machine.RowID || ''
+        };
+    }
+
+    /* 确保 loadMachines 结果被缓存（即使为空） */
+    async function prLoadMachinesCached(dr) {
+        const data = await loadMachines(dr).catch(() => []);
+        return Array.isArray(data) ? data : [];
+    }
+
+    /* 并行加载所有工作组的标本列表 */
+    async function prLoadRows(filters, signal) {
+        const cacheKey = prWorkListCacheKey(filters);
+        const cachedRows = prWorkListCacheGet(cacheKey);
+        if (cachedRows) {
+            prSetStatus(`复用标本列表缓存：${cachedRows.length} 个标本。`, 'info');
+            return cachedRows;
+        }
+        const targetWGs = filters.wg ? WG.filter(w => w.dr === filters.wg) : WG;
+        const wgTotal = targetWGs.length;
+
+        /* 所有工作组并行加载 */
+        let requestFailed = false;
+        const wgPromises = targetWGs.map(async (w, wgIdx) => {
+            if (signal && signal.aborted) return [];
+            let machines;
+            try {
+                machines = await loadMachines(w.dr);
+            } catch(e) {
+                requestFailed = true;
+                dbg('病人结果仪器列表加载失败:', w.name, e.message);
+                return [];
+            }
+            machines = Array.isArray(machines) ? machines : [];
+            const targetMachines = filters.machine
+                ? machines.filter(m => String(m.RowID) === String(filters.machine))
+                : machines;
+            if (!targetMachines.length) return [];
+
+            const ss = buildSS(w.dr);
+            /* 当前工作组内的各仪器并行加载 */
+            const machinePromises = targetMachines.filter(m => m.RowID).map(async (m, mIdx) => {
+                if (signal && signal.aborted) return [];
+                const mname = m.CName || m.Name || m.RowID || '';
+                prSetStatus(`正在查询 [${w.name}] ${mname}（工作组 ${wgIdx + 1}/${wgTotal}，仪器 ${mIdx + 1}/${targetMachines.length}）...`, 'info');
+                const p = new URLSearchParams();
+                p.set('ClassName','LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
+                p.set('QueryName','QryWorkList');
+                p.set('FunModul','MTHD');
+                p.set('P0', filters.status || '');
+                p.set('P1', filters.start);
+                p.set('P2', filters.end);
+                p.set('P10', m.RowID || '');
+                p.set('P11', 'N^^^^');
+                p.set('P14', ss);
+                try {
+                    const data = await fetchJ(CSP + '?' + p.toString(), 20000, signal);
+                    const list = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+                    return list.map(r => prNormalizeWorkRow(r, w, m));
+                } catch(e) {
+                    if (e.name === 'AbortError') return [];
+                    requestFailed = true;
+                    dbg('病人结果查询失败:', w.name, mname, e.message);
+                    return [];
+                }
+            });
+            const results = await Promise.all(machinePromises);
+            return results.flat();
+        });
+
+        const wgResults = await Promise.all(wgPromises);
+        const rows = wgResults.flat();
+        if (!(signal && signal.aborted) && !requestFailed) prWorkListCacheSet(cacheKey, rows);
+        return rows;
+    }
+
+    function prFilterRows(rows, filters) {
+        let data = rows;
+        if (filters.q) {
+            const q = filters.q;
+            data = data.filter(r => [
+                r.PatName, r.Labno, r.EpisodeNo, r.RegNo, r.AdmNo, r.RecordNo,
+                r.TestSetDesc, r.Location, r.LocationName, r.Ward, r.WardName
+            ].some(v => String(v || '').toLowerCase().includes(q)));
+        }
+        if (filters.sex) data = data.filter(r => {
+            const sex = String(r.Sex || r.Species || '');
+            return !sex || sex.includes(filters.sex);
+        });
+        if (filters.patientType) {
+            data = data.filter(r => {
+                const type = prPatientTypeText(r, {});
+                return !type || prTextMatch(type, filters.patientType);
+            });
+        }
+        /* QryWorkList 能返回的字段在阶段1先过滤，减少阶段2请求量 */
+        if (filters.dept) {
+            data = data.filter(r => {
+                const dept = [r.Location, r.LocationName, r.Ward, r.WardName].filter(Boolean).join(' ');
+                return !dept || prTextMatch(dept, filters.dept);
+            });
+        }
+        if (filters.specimen) {
+            data = data.filter(r => {
+                const specimen = String(r.Specimen || r.SpecimenDesc || '');
+                return !specimen || prTextMatch(specimen, filters.specimen);
+            });
+        }
+        return data;
+    }
+
+    function prMayHaveResult(row) {
+        const resultFlag = String(row.ResultFlag || '').toUpperCase();
+        const complete = String(row.IsComplete || '');
+        if (resultFlag === 'N' && complete === '0') return false;
+        return true;
+    }
+
+    function prNeedsDetailEvenWithoutResult(filters) {
+        return !!(filters.doctor || filters.diagnosis || filters.ward || filters.ageMin === filters.ageMin ||
+            filters.ageMax === filters.ageMax || filters.item || filters.resultText || filters.judge ||
+            filters.abnormal || filters.resultOp || filters.resultMin === filters.resultMin || filters.resultMax === filters.resultMax);
+    }
+
+    function prTextMatch(value, q) {
+        return !q || String(value || '').toLowerCase().includes(q);
+    }
+
+    function prFirstText() {
+        for (let i = 0; i < arguments.length; i += 1) {
+            const v = arguments[i];
+            if (v == null) continue;
+            const text = String(v).trim();
+            if (text) return text;
+        }
+        return '';
+    }
+
+    function prPatientTypeText(specimen, labInfo) {
+        specimen = specimen || {};
+        labInfo = labInfo || {};
+        return prFirstText(
+            specimen.AdmType, specimen.AdmTypeName, specimen.AdmissionType, specimen.AdmissionTypeName,
+            specimen.PatientTypeName, specimen.PatientType, specimen.PatientClassName, specimen.PatientClass,
+            specimen.PatTypeName, specimen.PatType, specimen.PatTypeDesc, specimen.VisitTypeName, specimen.VisitType,
+            labInfo.AdmType, labInfo.AdmTypeName, labInfo.AdmissionType, labInfo.AdmissionTypeName,
+            labInfo.PatientTypeName, labInfo.PatientType, labInfo.PatientClassName, labInfo.PatientClass,
+            labInfo.PatTypeName, labInfo.PatType, labInfo.PatTypeDesc, labInfo.VisitTypeName, labInfo.VisitType
+        );
+    }
+
+    function prNumberPass(value, filters) {
+        if (filters.resultOp && Number.isNaN(filters.resultValue)) return true;
+        const parsed = parseComparableNumber(value);
+        if (!parsed || Number.isNaN(parsed.value)) {
+            return !filters.resultOp && Number.isNaN(filters.resultValue) && Number.isNaN(filters.resultMin) && Number.isNaN(filters.resultMax);
+        }
+        const n = parsed.value;
+        if (filters.resultOp && !Number.isNaN(filters.resultValue)) {
+            const v = filters.resultValue;
+            if (filters.resultOp === 'gt' && !(n > v)) return false;
+            if (filters.resultOp === 'gte' && !(n >= v)) return false;
+            if (filters.resultOp === 'lt' && !(n < v)) return false;
+            if (filters.resultOp === 'lte' && !(n <= v)) return false;
+            if (filters.resultOp === 'eq' && !(Math.abs(n - v) < 1e-9)) return false;
+        }
+        if (!Number.isNaN(filters.resultMin) && n < filters.resultMin) return false;
+        if (!Number.isNaN(filters.resultMax) && n > filters.resultMax) return false;
+        return true;
+    }
+
+    function prResultPass(row, filters) {
+        if (filters.patientType && !prTextMatch(row.patientType, filters.patientType)) return false;
+        if (filters.sex && !String(row.sex || '').includes(filters.sex)) return false;
+        if (filters.dept && !prTextMatch([row.location, row.ward].filter(Boolean).join(' '), filters.dept)) return false;
+        if (filters.ward && !prTextMatch(row.ward, filters.ward)) return false;
+        if (filters.doctor && !prTextMatch(row.doctor, filters.doctor)) return false;
+        if (filters.specimen && !prTextMatch(row.specimen, filters.specimen)) return false;
+        if (filters.item && !prTextMatch([row.itemName, row.itemSynonym, row.testSet].filter(Boolean).join(' '), filters.item)) return false;
+        if (filters.resultText && !prTextMatch([row.result, row.abFlag, classifyStatusText(row.status)].filter(Boolean).join(' '), filters.resultText)) return false;
+        if (filters.diagnosis && !prTextMatch(row.diagnosis, filters.diagnosis)) return false;
+        if (filters.judge && row.status !== filters.judge) return false;
+        if (filters.abnormal && row.status === 'NORMAL') return false;
+        /* 年龄筛选 */
+        if (!Number.isNaN(filters.ageMin) || !Number.isNaN(filters.ageMax)) {
+            const age = parseFloat(row.age);
+            if (Number.isNaN(age)) return false;
+            if (!Number.isNaN(filters.ageMin) && age < filters.ageMin) return false;
+            if (!Number.isNaN(filters.ageMax) && age > filters.ageMax) return false;
+        }
+        if ((filters.resultOp && !Number.isNaN(filters.resultValue)) || !Number.isNaN(filters.resultMin) || !Number.isNaN(filters.resultMax)) {
+            if (!prNumberPass(row.result, filters)) return false;
+        }
+        return true;
+    }
+
+    /* 清理参考范围中的日期格式 */
+    function cleanRefRange(ref) {
+        if (!ref) return '';
+        ref = ref.replace(/\d{4}-\d{2}-\d{2}/g, '').replace(/\d{2}-\d{2}/g, '').replace(/\d{4}\/\d{2}\/\d{2}/g, '');
+        ref = ref.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').replace(/^[\s,]+|[\s,]+$/g, '');
+        return ref.trim();
+    }
+
+    function prRowsFromDetailData(specimen, data) {
+        const itemInfo = (data && data.ItemInfo) ? data.ItemInfo : [];
+        const labInfo = (data && data.LabInfo && data.LabInfo[0]) ? data.LabInfo[0] : {};
+        return itemInfo.map(item => {
+            const result = ((item.TextRes && String(item.TextRes).trim()) ? item.TextRes : (item.Result || '')).trim();
+            const status = classifyResultItem(item);
+            return {
+                workGroup: specimen._wgn || '',
+                machine: specimen._mn || '',
+                patient: specimen.PatName || labInfo.PatName || '',
+                patientType: prPatientTypeText(specimen, labInfo),
+                sex: specimen.Sex || labInfo.Sex || labInfo.Species || '',
+                age: specimen.Age || labInfo.Age || '',
+                labno: specimen.Labno || '',
+                episodeNo: specimen.EpisodeNo || '',
+                regNo: specimen.RegNo || labInfo.RegNo || '',
+                location: specimen.Location || specimen.LocationName || labInfo.Location || labInfo.LocationName || '',
+                ward: specimen.Ward || specimen.WardName || labInfo.Ward || labInfo.WardName || '',
+                doctor: specimen.Doctor || specimen.DoctorName || specimen.ReqDoctorName || specimen.ApplyDoctorName || labInfo.Doctor || labInfo.DoctorName || labInfo.ReqDoctorName || '',
+                diagnosis: specimen.Diagnose || specimen.Diagnosis || labInfo.Diagnose || labInfo.Diagnosis || '',
+                specimen: specimen.Specimen || specimen.SpecimenDesc || labInfo.Specimen || labInfo.SpecimenDesc || '',
+                testSet: specimen.TestSetDesc || '',
+                acceptDT: specimen.AcceptDT || labInfo.AcceptDT || '',
+                reportStatus: prStatusText(specimen.Status || specimen.ReportStatus),
+                itemName: item.CName || item.Name || '',
+                itemSynonym: item.Synonym || item.Code || '',
+                result,
+                unit: item.Unit || item.Units || '',
+                refRange: cleanRefRange(item.RefRanges || item.RefRange || item.ReferenceRange || ''),
+                abFlag: item.AbFlag || '',
+                status
+            };
+        });
+    }
+
+    async function prFetchResultRows(specimen, filters, signal) {
+        if (signal && signal.aborted) return [];
+        const reportDR = specimen.ReportDR || specimen.TodoReportDR || '';
+        if (!reportDR) return [];
+
+        /* 检查 LRU 缓存 */
+        const ck = prCacheKey(specimen);
+        const cached = prCacheGet(ck);
+        if (cached) {
+            return cached.filter(row => prResultPass(row, filters));
+        }
+
+        const rawCache = (typeof _classifyRawCache !== 'undefined') ? _classifyRawCache[reportDR] : null;
+        if (rawCache && rawCache.data) {
+            const rows = prRowsFromDetailData(specimen, rawCache.data);
+            prCacheSet(ck, rows);
+            return rows.filter(row => prResultPass(row, filters));
+        }
+
+        const inflight = _prDetailInflight.get(ck);
+        if (inflight) {
+            const rows = await inflight;
+            return rows.filter(row => prResultPass(row, filters));
+        }
+
+        const promise = (async () => {
+            const ss = buildSS(specimen._wg || filters.wg || wgDR());
+            const p = new URLSearchParams();
+            p.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
+            p.set('QueryName', 'GetReportInfoAll');
+            p.set('FunModul', 'MTHD');
+            p.set('P0', reportDR);
+            p.set('P1', specimen.MachineParameterDR || '');
+            p.set('P2', specimen.WorkGroupMachineDR || specimen._mdr || '');
+            p.set('P3', specimen.Status || specimen.ReportStatus || '');
+            p.set('P4', specimen.EpisodeNo || '');
+            p.set('P5', specimen.TransmitDate || '');
+            p.set('P14', ss);
+            let data = await fetchJ(CSP + '?' + p.toString(), 20000, signal);
+            let itemInfo = (data && data.ItemInfo) ? data.ItemInfo : [];
+            if (itemInfo.length === 0 && (specimen.Status || specimen.ReportStatus)) {
+                p.set('P3', '');
+                data = await fetchJ(CSP + '?' + p.toString(), 20000, signal);
+            }
+            const rows = prRowsFromDetailData(specimen, data);
+            prCacheSet(ck, rows);
+            return rows;
+        })();
+
+        _prDetailInflight.set(ck, promise);
+        let allRows;
+        try {
+            allRows = await promise;
+        } finally {
+            _prDetailInflight.delete(ck);
+        }
+
+        return allRows.filter(row => prResultPass(row, filters));
+    }
+
+    function prRenderTable(rows) {
+        const body = document.getElementById('lis-pr-body');
+        if (!body) return;
+        if (!rows.length) {
+            body.innerHTML = '<div class="pr-empty">暂无结果。<br>请调整筛选条件后点击查询。</div>';
+            return;
+        }
+
+        const totalRows = rows.length;
+        const totalPages = Math.max(1, Math.ceil(totalRows / prPageSize));
+        if (prPage > totalPages) prPage = totalPages;
+        if (prPage < 1) prPage = 1;
+        const startIdx = (prPage - 1) * prPageSize;
+        const endIdx = Math.min(startIdx + prPageSize, totalRows);
+        const pageRows = rows.slice(startIdx, endIdx);
+
+        let h = '<table><thead><tr><th>姓名</th><th>性别</th><th>年龄</th><th>类型</th><th>科室</th><th>诊断</th><th>检验号</th><th>流水号</th><th>仪器</th><th>标本</th><th>组合</th><th>项目</th><th>结果</th><th>参考范围</th><th>状态</th><th>核收时间</th></tr></thead><tbody>';
+        pageRows.forEach(r => {
+            const cls = r.status === 'CRITICAL' ? 'pr-critical' : (r.status === 'HIGH' ? 'pr-high' : (r.status === 'LOW' ? 'pr-low' : (r.status === 'ABNORMAL' ? 'pr-abn' : '')));
+            h += `<tr>
+                <td>${esc(r.patient)}</td>
+                <td>${esc(r.sex)}</td>
+                <td>${esc(r.age)}</td>
+                <td>${esc(r.patientType)}</td>
+                <td>${esc(r.location || r.ward)}</td>
+                <td>${esc(r.diagnosis)}</td>
+                <td>${esc(r.labno)}</td>
+                <td>${esc(r.episodeNo)}</td>
+                <td>${esc(r.machine)}</td>
+                <td>${esc(r.specimen)}</td>
+                <td>${esc(r.testSet)}</td>
+                <td>${esc(r.itemName)}</td>
+                <td class="${cls}">${esc(r.result)}${r.unit ? ' ' + esc(r.unit) : ''}</td>
+                <td>${esc(r.refRange)}</td>
+                <td>${esc(classifyStatusText(r.status))}</td>
+                <td>${esc(r.acceptDT)}</td>
+            </tr>`;
+        });
+        h += '</tbody></table>';
+
+        /* 分页控件 */
+        h += `<div id="lis-pr-pagination">
+            <button id="lis-pr-pg-prev" ${prPage <= 1 ? 'disabled' : ''}>上一页</button>
+            <span class="pr-pg-info">第 ${prPage}/${totalPages} 页</span>
+            <button id="lis-pr-pg-next" ${prPage >= totalPages ? 'disabled' : ''}>下一页</button>
+            <span class="pr-pg-jump">跳转到 <input id="lis-pr-pg-input" type="number" min="1" max="${totalPages}" value="${prPage}" placeholder="页码"> 页</span>
+            <span class="pr-pg-total">共 ${totalRows} 条</span>
+        </div>`;
+
+        body.innerHTML = h;
+
+        /* 绑定分页事件 */
+        const prevBtn = document.getElementById('lis-pr-pg-prev');
+        const nextBtn = document.getElementById('lis-pr-pg-next');
+        const jumpInput = document.getElementById('lis-pr-pg-input');
+        if (prevBtn) prevBtn.addEventListener('click', () => { prPage--; prRenderTable(prData); });
+        if (nextBtn) nextBtn.addEventListener('click', () => { prPage++; prRenderTable(prData); });
+        if (jumpInput) jumpInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                const v = parseInt(jumpInput.value, 10);
+                if (!isNaN(v) && v >= 1 && v <= totalPages) { prPage = v; prRenderTable(prData); }
+            }
+        });
+    }
+
+    function prCsvCell(value) {
+        return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"';
+    }
+
+    function prExportCSV() {
+        if (!prData.length) { showToast('没有可导出的结果', 'warning'); return; }
+        const headers = ['工作组','仪器','姓名','病人类型','性别','年龄','检验号','流水号','登记号','科室','病区','医生','诊断','标本','组合','核收时间','报告状态','项目','结果','单位','参考范围','异常标志','判断'];
+        const rows = prData.map(r => [
+            r.workGroup, r.machine, r.patient, r.patientType, r.sex, r.age, r.labno, r.episodeNo, r.regNo,
+            r.location, r.ward, r.doctor, r.diagnosis, r.specimen, r.testSet, r.acceptDT, r.reportStatus, r.itemName,
+            r.result, r.unit, r.refRange, r.abFlag, classifyStatusText(r.status)
+        ]);
+        const csv = '\uFEFF' + headers.map(prCsvCell).join(',') + '\n' + rows.map(row => row.map(prCsvCell).join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const f = prGetFilters();
+        a.download = `病人结果_${f.start}_${f.end}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showToast('病人结果已导出', 'success');
+    }
+
+    function prClearFilters() {
+        [
+            'lis-pr-q','lis-pr-patient-type','lis-pr-dept','lis-pr-ward','lis-pr-doctor',
+            'lis-pr-diagnosis','lis-pr-age-min','lis-pr-age-max','lis-pr-specimen',
+            'lis-pr-item','lis-pr-result-text','lis-pr-result-value','lis-pr-result-min','lis-pr-result-max'
+        ].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        ['lis-pr-status-filter','lis-pr-sex','lis-pr-judge','lis-pr-result-op'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        const abnormal = document.getElementById('lis-pr-abnormal');
+        if (abnormal) abnormal.checked = false;
+        prSetStatus('筛选条件已清空。', 'info');
+    }
+
+    function prProtectChineseInput(panel) {
+        panel.addEventListener('compositionstart', e => {
+            if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) prComposing = true;
+        }, true);
+        panel.addEventListener('compositionend', e => {
+            if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) {
+                setTimeout(() => { prComposing = false; }, 0);
+            }
+        }, true);
+        ['keydown','keypress','keyup','beforeinput','input'].forEach(evName => {
+            panel.addEventListener(evName, e => {
+                if (!e.target || !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+                if (e.isComposing || prComposing || e.keyCode === 229) {
+                    e.stopPropagation();
+                    return;
+                }
+                if (e.key === 'Enter' || e.key === 'Escape') return;
+                e.stopPropagation();
+            }, true);
+        });
+    }
+
+    /* 修复：只拦截工具栏区域的滚轮（工具栏 overflow:visible 需手动滚动），
+       #lis-pr-body 使用原生 overflow:auto 滚动，不阻止默认行为 */
+    function prBindWheelScroll(panel) {
+        panel.addEventListener('wheel', e => {
+            const tools = document.getElementById('lis-pr-tools');
+            if (tools && e.target && e.target.closest && e.target.closest('#lis-pr-tools')) {
+                /* 工具栏区域：需要手动处理滚动 */
+                if (tools.scrollHeight > tools.clientHeight) {
+                    tools.scrollTop += e.deltaY;
+                    e.preventDefault();
+                }
+                e.stopPropagation();
+            }
+            /* #lis-pr-body 区域：不拦截，让浏览器原生滚动处理 */
+        }, { passive: false, capture: true });
+    }
+
+    /* 批次节流延迟（ms） */
+    const PR_THROTTLE_MS = 50;
+
+    /* 主查询函数（重构版：并行加载 + 取消 + 缓存 + 进度） */
+    async function prQuery() {
+        if (prBusy) return;
+        const filters = prGetFilters();
+        if (filters.resultOp && Number.isNaN(filters.resultValue)) {
+            prSetStatus('已选择数值关系，请填写比较值。', 'error');
+            showToast('请填写结果比较值', 'warning');
+            return;
+        }
+        const querySeq = ++prQuerySeq;
+        prSetBusy(true);
+        prAbortCtrl = new AbortController();
+        const signal = prAbortCtrl.signal;
+        prData = [];
+        prRenderTable([]);
+        try {
+            /* 阶段1：并行加载标本列表 */
+            prSetStatus(filters.wg ? '正在查询当前工作组标本列表...' : '正在并行查询所有工作组...', 'info');
+            const allRows = await prLoadRows(filters, signal);
+            if (signal.aborted || querySeq !== prQuerySeq) return;
+            const rows = prFilterRows(allRows, filters);
+            if (!rows.length) {
+                if (querySeq !== prQuerySeq) return;
+                prSetStatus(`未找到符合条件的标本（共查询 ${allRows.length} 条记录）。`, 'info');
+                return;
+            }
+            const mustReadDetail = prNeedsDetailEvenWithoutResult(filters);
+            const detailRows = mustReadDetail ? rows : rows.filter(prMayHaveResult);
+            const skippedNoResult = rows.length - detailRows.length;
+            if (!detailRows.length) {
+                prSetStatus(`找到 ${rows.length} 个标本，但工作列表显示暂无结果。`, 'info');
+                return;
+            }
+            /* 智能判断是否需要结果明细 */
+            /* 阶段2：批次读取明细（带节流 + 进度 + 缓存复用） */
+            prSetStatus(`找到 ${rows.length} 个标本，${skippedNoResult ? '跳过 ' + skippedNoResult + ' 个暂无结果标本，' : ''}正在读取结果明细...`, 'info');
+            let resultRows = [];
+            const batchSize = 15;
+            let lastRenderAt = 0;
+            for (let i = 0; i < detailRows.length; i += batchSize) {
+                if (signal.aborted || querySeq !== prQuerySeq) return;
+                const batch = detailRows.slice(i, i + batchSize);
+                const lists = await Promise.all(batch.map(r => prFetchResultRows(r, filters, signal).catch(e => {
+                    if (e.name === 'AbortError') return [];
+                    dbg('病人结果明细失败:', r.Labno || r.ReportDR, e.message);
+                    return [];
+                })));
+                if (signal.aborted || querySeq !== prQuerySeq) return;
+                lists.forEach(list => resultRows.push(...list));
+                const done = Math.min(i + batch.length, detailRows.length);
+                if (resultRows.length && (resultRows.length - lastRenderAt >= 100 || done === detailRows.length)) {
+                    prData = resultRows;
+                    prRenderTable(prData);
+                    lastRenderAt = resultRows.length;
+                }
+                prSetStatus(`正在读取结果明细 ${done} / ${detailRows.length}，已得到 ${resultRows.length} 条结果${skippedNoResult ? '，已跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}...`, 'info');
+
+                /* 批次间节流（避免服务端限流） */
+                if (i + batchSize < detailRows.length) {
+                    await new Promise(r => setTimeout(r, PR_THROTTLE_MS));
+                }
+            }
+
+            if (signal.aborted || querySeq !== prQuerySeq) return;
+            prData = resultRows;
+            prPage = 1;
+            prRenderTable(prData);
+            const cacheHits = _prDetailCache.size;
+            prSetStatus(`完成：${rows.length} 个标本，${prData.length} 条结果${skippedNoResult ? '，跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}。明细缓存 ${cacheHits} 个标本。`, 'ok');
+        } catch(e) {
+            if (querySeq !== prQuerySeq) return;
+            if (e.name === 'AbortError') { prSetStatus('查询已取消。', 'info'); return; }
+            prSetStatus('查询失败: ' + e.message, 'error');
+            showToast('病人结果查询失败: ' + e.message, 'error');
+        } finally {
+            if (querySeq === prQuerySeq) {
+                prAbortCtrl = null;
+                prSetBusy(false);
+            }
+        }
+    }
+
+    function createPatientResultTool() {
+        if (document.getElementById('lis-pr-fab')) return;
+        const fab = document.createElement('button');
+        fab.id = 'lis-pr-fab';
+        fab.textContent = '结果';
+        fab.title = '病人结果筛选导出';
+        document.body.appendChild(fab);
+
+        const panel = document.createElement('div');
+        panel.id = 'lis-pr-panel';
+        panel.innerHTML = `
+            <div id="lis-pr-hd">
+                <h3>病人结果筛选导出</h3>
+                <span class="pr-spacer"></span>
+                <button id="lis-pr-mini" title="隐藏">_</button>
+                <button class="pr-close" id="lis-pr-close" title="关闭">×</button>
+            </div>
+            <div id="lis-pr-tools">
+                <div class="pr-section">标本范围</div>
+                <label>开始日期<input type="date" id="lis-pr-start"></label>
+                <label>结束日期<input type="date" id="lis-pr-end"></label>
+                <label>工作组<select id="lis-pr-wg">
+                    ${WG.map(w => `<option value="${esc(w.dr)}">${esc(w.name)}</option>`).join('')}
+                    <option value="">全部工作组</option>
+                </select></label>
+                <label>仪器<select id="lis-pr-machine"><option value="">全部仪器</option></select></label>
+                <label>状态<select id="lis-pr-status-filter">
+                    <option value="">全部</option><option value="1">登记</option><option value="2">初审</option><option value="3">审核</option><option value="4">复审</option>
+                </select></label>
+                <label class="pr-wide">综合搜索<input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 流水号 / 住院号"></label>
+                <div class="pr-section">患者信息</div>
+                <label>病人类型<input type="text" id="lis-pr-patient-type" placeholder="门诊 / 住院 / 体检"></label>
+                <label>科室<input type="text" id="lis-pr-dept" placeholder="申请科室 / 就诊科室"></label>
+                <label>病区<input type="text" id="lis-pr-ward" placeholder="病区 / 护理单元"></label>
+                <label>医生<input type="text" id="lis-pr-doctor" placeholder="申请医生"></label>
+                <label class="pr-wide">诊断<input type="text" id="lis-pr-diagnosis" placeholder="诊断关键字"></label>
+                <label>性别<select id="lis-pr-sex"><option value="">全部</option><option value="男">男</option><option value="女">女</option></select></label>
+                <label>年龄下限<input type="number" id="lis-pr-age-min" placeholder="岁"></label>
+                <label>年龄上限<input type="number" id="lis-pr-age-max" placeholder="岁"></label>
+                <label>标本类型<input type="text" id="lis-pr-specimen" placeholder="血清 / 全血 / 尿液"></label>
+                <div class="pr-section">项目结果</div>
+                <label class="pr-wide">项目名称<input type="text" id="lis-pr-item" placeholder="如 血红蛋白 / HBsAg"></label>
+                <label>判断<select id="lis-pr-judge">
+                    <option value="">全部</option><option value="NORMAL">正常</option><option value="HIGH">偏高</option><option value="LOW">偏低</option><option value="ABNORMAL">异常</option><option value="CRITICAL">危急</option><option value="UNCERTAIN">待定</option>
+                </select></label>
+                <label>结果文本<input type="text" id="lis-pr-result-text" placeholder="+ / 阳性 / 未检出"></label>
+                <label>数值关系<select id="lis-pr-result-op">
+                    <option value="">不筛</option><option value="gt">&gt;</option><option value="gte">&gt;=</option><option value="lt">&lt;</option><option value="lte">&lt;=</option><option value="eq">=</option>
+                </select></label>
+                <label>比较值<input type="number" step="any" id="lis-pr-result-value" placeholder="数值"></label>
+                <label>数值下限<input type="number" step="any" id="lis-pr-result-min"></label>
+                <label>数值上限<input type="number" step="any" id="lis-pr-result-max"></label>
+                <label style="justify-content:end"><span><input type="checkbox" id="lis-pr-abnormal" style="height:auto;vertical-align:middle"> 仅异常</span></label>
+                <div class="pr-actions">
+                    <button id="lis-pr-query">查询</button>
+                    <button id="lis-pr-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">停止</button>
+                    <button id="lis-pr-clear">清空条件</button>
+                    <button id="lis-pr-export">导出CSV</button>
+                </div>
+            </div>
+            <div id="lis-pr-status">请选择条件后查询。数据仅在本机浏览器内处理。</div>
+            <div id="lis-pr-body"><div class="pr-empty">点击"查询"后显示病人结果明细。<br>这里导出的是结果数据，不是正式报告单。</div></div>`;
+        document.body.appendChild(panel);
+
+        const start = document.getElementById('lis-pr-start');
+        const end = document.getElementById('lis-pr-end');
+        const wgSel = document.getElementById('lis-pr-wg');
+        if (start) start.value = today();
+        if (end) end.value = today();
+        const defaultWG = wgDR() || '4';
+        if (wgSel) {
+            wgSel.value = WG.some(w => w.dr === defaultWG) ? defaultWG : '';
+        }
+        prLoadMachinesForWG(wgSel ? wgSel.value : '');
+
+
+        document.getElementById('lis-pr-mini').addEventListener('click', () => panel.classList.remove('show'));
+        document.getElementById('lis-pr-close').addEventListener('click', () => panel.classList.remove('show'));
+        document.getElementById('lis-pr-query').addEventListener('click', prQuery);
+        document.getElementById('lis-pr-cancel').addEventListener('click', prCancel);
+        document.getElementById('lis-pr-clear').addEventListener('click', prClearFilters);
+        document.getElementById('lis-pr-export').addEventListener('click', prExportCSV);
+        wgSel.addEventListener('change', () => prLoadMachinesForWG(wgSel.value));
+
+        /* FAB 拖动 */
+        const FAB_POS_KEY = 'lis-pr-fab-pos';
+        // 恢复位置
+        try {
+            const fp = JSON.parse(localStorage.getItem(FAB_POS_KEY) || 'null');
+            if (fp && typeof fp.l === 'number') {
+                fab.style.left = fp.l + 'px';
+                fab.style.top = fp.t + 'px';
+                fab.style.right = 'auto';
+                fab.style.bottom = 'auto';
+                fab.style.position = 'fixed';
+            }
+        } catch(e) {}
+        // 拖动 + 点击
+        let fabDx = 0, fabDy = 0, fabDownX = 0, fabDownY = 0;
+        fab.addEventListener('mousedown', e => {
+            fabDx = e.clientX - fab.offsetLeft;
+            fabDy = e.clientY - fab.offsetTop;
+            fabDownX = e.clientX;
+            fabDownY = e.clientY;
+            const onMove = ev => {
+                fab.style.left = (ev.clientX - fabDx) + 'px';
+                fab.style.top = (ev.clientY - fabDy) + 'px';
+                fab.style.right = 'auto';
+                fab.style.bottom = 'auto';
+                fab.style.position = 'fixed';
+            };
+            const onUp = ev => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                const dist = Math.abs(ev.clientX - fabDownX) + Math.abs(ev.clientY - fabDownY);
+                if (dist < 5) {
+                    // 没怎么动，算点击
+                    panel.classList.toggle('show');
+                } else {
+                    // 拖动了，保存位置
+                    try { localStorage.setItem(FAB_POS_KEY, JSON.stringify({ l: fab.offsetLeft, t: fab.offsetTop })); } catch(e) {}
+                }
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            e.preventDefault();
+        });
+        prProtectChineseInput(panel);
+        prBindWheelScroll(panel);
+        panel.addEventListener('keydown', e => {
+            if (e.isComposing || prComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter' && !e.shiftKey && e.target && /INPUT|SELECT/.test(e.target.tagName)) {
+                e.preventDefault();
+                prQuery();
+            }
+            if (e.key === 'Escape') panel.classList.remove('show');
+        });
+    }
     // ============================================================
     //  模块 C：一体化工作台（核心）
     // ============================================================
@@ -1542,7 +2424,7 @@
     let wsActiveWG = ''; // 当前选中的工作组 DR, ''=全部工作组
     let wsCategory = 'normal'; // 当前分类: 'normal'/'abnormal'/'incomplete'/'all'
     let wsClassifiedCache = {}; // 分类缓存 {[reportDR]: {status, items, row, reportDR}}
-    const _CLASSIFIED_CACHE_MAX = 200;
+    const _CLASSIFIED_CACHE_MAX = 1000;
     let wsClassifying = false;  // 分类进行中标记
     let wsAbnormalIndex = -1;   // 异常视图当前焦点索引
     let wsChecked = new Set(); // 选中的 ReportDR 集合
@@ -1563,15 +2445,18 @@
     let _countsCacheKey = '';    // 计数缓存键
     let _classifyRawCache = {}; // 分类时的原始 API 响应缓存，供详情面板复用
     let _classifyVersion = 0; // 分类结果版本，驱动过滤缓存失效
+    let _wsLoadSeq = 0; // 工作台加载序号，防止旧请求覆盖新刷新
+    let _classifyRunSeq = 0; // 分类运行序号，防止旧分类任务影响新刷新
+    let _lastWSNonEmptyAt = 0; // 最近一次成功加载到标本的时间，用于强制刷新兜底
     let _normalKeyHandler = null; // 普通视图键盘监听
 
-    function invalidateCaches() {
+    function invalidateCaches(options = {}) {
         _filteredCache = null;
         _filteredCacheKey = '';
         _countsCache = null;
         _countsCacheKey = '';
-        _detailLRU.clear();
-        _classifyRawCache = {};
+        if (options.detail) _detailLRU.clear();
+        if (options.raw) _classifyRawCache = {};
     }
 
     function detailLRUGet(key) {
@@ -1624,6 +2509,7 @@
         wsData = [];
         wsMachines = [];
         wsMachineCounts = {};
+        invalidateCaches({ detail: true, raw: true });
         wsEl.classList.add('show');
         // 强制 flex 布局（LIS 系统 CSS 会覆盖）
         wsEl.style.cssText = 'display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important;position:fixed!important;inset:0!important;z-index:100000!important';
@@ -1685,16 +2571,28 @@
         dbg('[WS] 批审保持工作台置顶: ' + (reason || ''));
     }
 
-    function startWSRefresh() { stopWSRefresh(); wsTimer = setInterval(loadWSData, REFRESH); }
+    function startWSRefresh() { stopWSRefresh(); wsTimer = setInterval(() => loadWSData(), REFRESH); }
     function stopWSRefresh() { if(wsTimer){clearInterval(wsTimer);wsTimer=null;} }
 
     // --- 加载数据 ---
-    async function loadWSData() {
-        if (wsLoading) return;
+    async function loadWSData(options = {}) {
+        const force = !!(options && options.force);
+        if (wsLoading && !force) return { skipped: true };
+        const seq = force ? ++_wsLoadSeq : _wsLoadSeq;
+        if (force) {
+            wsLoading = false;
+            wsClassifying = false;
+            wsClassifiedCache = {};
+            _classifyVersion++;
+            wsChecked.clear();
+            wsAbnormalIndex = -1;
+            wsMachineCounts = {};
+            invalidateCaches();
+        }
         try {
         wsLoading = true;
         const qi = document.getElementById('lis-qi');
-        if (qi) qi.textContent = '加载中...';
+        if (qi) qi.textContent = force ? '强制刷新中...' : '加载中...';
 
         const curDR = wgDR();
         const targetWGs = WG; // 加载所有工作组的数据
@@ -1743,35 +2641,84 @@
         }));
 
         for (const r of wgResults) {
+            if (seq !== _wsLoadSeq) return;
             allData.push(...r.data);
             allMachines.push(...r.machines);
         }
+        if (seq !== _wsLoadSeq) return;
 
         // 防止空数据覆盖已有数据（网络异常/会话过期时服务器可能返回空）
         if (allData.length === 0 && wsData.length > 0) {
             dbg('刷新返回空数据，保留原有', wsData.length, '条');
             if (qi) qi.textContent = `刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
-            return;
+            if (force) showToast('工作台强制刷新仍返回空数据，可能需要重新登录或刷新浏览器页面', 'warning');
+            return { ok: false, empty: true, preserved: true };
         }
         wsData = allData;
         wsMachines = allMachines;
+        if (wsData.length > 0) _lastWSNonEmptyAt = Date.now();
         calcMachineCounts();
 
         if (qi) qi.textContent = `${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
-        invalidateCaches();
+        invalidateCaches({ raw: true });
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable(); // 先用未分类数据渲染，让用户立即看到标本列表
         updateWSFooter();
         // 分类在后台进行，每批次完成后更新计数，最终更新表格
-        classifyAllSpecimens().catch(e => dbg('分类启动异常:', e));
+        classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
+        return { ok: true, count: wsData.length };
         
         // 更新CA认证状态
         } catch(e) {
             dbg('loadWSData 异常:', e);
             if (qi) qi.textContent = '加载失败';
+            return { ok: false, error: e };
         } finally {
-            wsLoading = false;
+            if (seq === _wsLoadSeq) wsLoading = false;
+        }
+    }
+
+    async function forceRefreshWS() {
+        dbg('[WS] 强制刷新工作台状态');
+        stopWSRefresh();
+        clearMachineCache();
+        const oldData = wsData;
+        const oldMachines = wsMachines;
+        const oldCounts = wsMachineCounts;
+        const oldClassified = wsClassifiedCache;
+        const hadData = wsData.length > 0 || _lastWSNonEmptyAt > 0;
+        wsLoading = false;
+        wsClassifying = false;
+        wsClassifiedCache = {};
+        _classifyVersion++;
+        wsChecked.clear();
+        wsAbnormalIndex = -1;
+        invalidateCaches({ detail: true, raw: true });
+        renderWSTabs();
+        renderWSCategoryBar();
+        renderWSTable();
+        updateWSFooter();
+        try {
+            const result = await loadWSData({ force: true });
+            if (hadData && result && result.empty) {
+                wsData = oldData;
+                wsMachines = oldMachines;
+                wsMachineCounts = oldCounts;
+                wsClassifiedCache = oldClassified;
+                _classifyVersion++;
+                invalidateCaches({ detail: true, raw: true });
+                renderWSTabs();
+                renderWSCategoryBar();
+                renderWSTable();
+                updateWSFooter();
+                showToast('工作台仍返回 0，正在刷新浏览器页面...', 'warning');
+                setTimeout(() => {
+                    try { window.location.reload(); } catch(e) {}
+                }, 800);
+            }
+        } finally {
+            if (isWSVisible()) startWSRefresh();
         }
     }
 
@@ -2035,10 +2982,9 @@
         // 初始检查CA状态
         document.getElementById('lis-ws-refresh').addEventListener('click', () => {
             dbg('刷新按钮被点击');
-            clearMachineCache(); // 强制重新加载仪器列表
             const btn = document.getElementById('lis-ws-refresh');
             if (btn) btn.classList.add('spinning');
-            loadWSData().finally(() => {
+            forceRefreshWS().finally(() => {
                 if (btn) { btn.classList.remove('spinning'); }
             });
         });
@@ -2610,7 +3556,7 @@
             let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 25000, keepWS: true });
             if (!auditResult) {
                 dbg('异常审核首次未确认，短暂等待原生列表状态...');
-                auditResult = await waitNativeActionResult(iframeWin, reportDR, ['3'], 5000, true);
+                auditResult = await waitNativeActionResult(iframeWin, reportDR, ['3'], 5000, false);
             }
             if (auditResult === 'incomplete') {
                 showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
@@ -2782,7 +3728,6 @@
 
     // --- 确认并批量审核 ---
     function confirmAndBatchAudit(normalData) {
-        console.log('[LIS] confirmAndBatchAudit called, count:', normalData.length);
         dbg('confirmAndBatchAudit 被调用, normalData.length:', normalData.length);
         const blocked = (normalData || []).filter(r => !isAutoAuditableClassified(r));
         if (blocked.length > 0) {
@@ -3103,6 +4048,7 @@
     let detailSource = null;  // 'abnormal' | 'normal' | null
     let detailSourceIndex = -1;
     let _detailKeyHandler = null; // 详情面板键盘监听器
+    let _detailLoadSeq = 0; // 详情加载序号，防止旧请求覆盖当前标本
 
     function createDetailPanel() {
         if (detailPanel) return detailPanel;
@@ -3151,7 +4097,7 @@
     }
 
     function openDetailPanel(specimen, source, sourceIndex) {
-        console.log('[LIS-DEBUG] openDetailPanel', specimen.ReportDR, specimen.PatName, source);
+        dbg('openDetailPanel', specimen.ReportDR, specimen.PatName, source);
         createDetailPanel();
         // 清理异常视图键盘监听，防止与详情面板冲突
         if (_abnormalKeyHandler) {
@@ -3748,11 +4694,16 @@
         const body = document.getElementById('lis-detail-body');
         if (!body) return;
         const rdr = specimen.ReportDR || '';
+        const seq = ++_detailLoadSeq;
+        const isCurrentDetail = () => detailPanel && detailPanel.classList.contains('show') &&
+            currentDetailSpecimen && String(currentDetailSpecimen.ReportDR || '') === String(rdr) &&
+            seq === _detailLoadSeq;
 
         // LRU 缓存命中
         const cached = detailLRUGet(rdr);
         if (cached) {
             dbg('详情缓存命中:', rdr);
+            if (!isCurrentDetail()) return;
             body.innerHTML = cached.html;
             return;
         }
@@ -3878,6 +4829,7 @@
             }
 
             if (itemInfo.length === 0) {
+                if (!isCurrentDetail()) return;
                 body.innerHTML = '<div style="text-align:center;padding:40px;color:#999">未找到结果数据</div>';
                 return;
             }
@@ -4079,6 +5031,7 @@
                 }
             }
 
+            if (!isCurrentDetail()) return;
             body.innerHTML = html;
             const _dp = document.getElementById('lis-detail-panel');
             if (_dp) {
@@ -4093,6 +5046,7 @@
 
         } catch (e) {
             dbg('加载详细结果失败:', e);
+            if (!isCurrentDetail()) return;
             body.innerHTML = `
                 <div style="text-align:center;padding:40px;color:#e74c3c">
                     <p>❌ 加载失败</p>
@@ -4659,8 +5613,8 @@ function fillNativeLoginForm(creds, lastWG) {
         try {
             if (window !== window.top) return false;
         } catch(e) { return false; }
-        // 在主页面上始终返回 true（工具栏始终显示）
-        return true;
+        if (getReportIframeWin()) return true;
+        return [...document.querySelectorAll('a')].some(a => (a.textContent || '').trim() === '报告处理');
     }
 
     // --- 获取原生 EasyUI datagrid 的行数据 ---
@@ -5194,7 +6148,7 @@ function fillNativeLoginForm(creds, lastWG) {
         const isAudit = btnId === 'btn_ReportAuth' || options.action === 'audit';
         const expectedStatuses = options.expectedStatuses || (isAudit ? ['3'] : []);
         const timeoutMs = options.timeoutMs || (isAudit ? 15000 : 8000);
-        const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : isAudit;
+        const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : false;
 
         // 记录当前选中行的 ReportDR（用于检测审核成功）
         let targetReportDR = '';
@@ -5886,10 +6840,12 @@ function fillNativeLoginForm(creds, lastWG) {
     }
 
     // --- 后台分类所有未审核的完整标本 ---
-    async function classifyAllSpecimens() {
+    async function classifyAllSpecimens(loadSeq = _wsLoadSeq) {
         if (wsClassifying) return;
         wsClassifying = true;
+        const runSeq = ++_classifyRunSeq;
         try {
+            if (loadSeq !== _wsLoadSeq) return;
             // 筛选需要分类的标本：未审核 + 结果完整 + 未缓存
             const toClassify = wsData.filter(r => {
                 const status = String(r.Status || r.ReportStatus || '');
@@ -5911,8 +6867,10 @@ function fillNativeLoginForm(creds, lastWG) {
 
             // 批量分类（每批 8 个）
             for (let i = 0; i < toClassify.length; i += 8) {
+                if (loadSeq !== _wsLoadSeq) return;
                 const batch = toClassify.slice(i, i + 8);
                 const results = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
+                if (loadSeq !== _wsLoadSeq) return;
                 results.forEach(r => {
                     if (r && r.reportDR) {
                         r._accessTs = Date.now();
@@ -5934,6 +6892,7 @@ function fillNativeLoginForm(creds, lastWG) {
             }
 
             dbg('分类完成');
+            if (loadSeq !== _wsLoadSeq) return;
             calcMachineCounts();
             renderWSTabs();
             renderWSCategoryBar();
@@ -5941,7 +6900,7 @@ function fillNativeLoginForm(creds, lastWG) {
         } catch(e) {
             dbg('分类异常:', e);
         } finally {
-            wsClassifying = false;
+            if (runSeq === _classifyRunSeq) wsClassifying = false;
         }
     }
 
@@ -6977,7 +7936,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.12.0');
+        dbg('iMedicalLIS 增强助手 v7.18.0');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
@@ -7004,9 +7963,11 @@ function fillNativeLoginForm(creds, lastWG) {
 
         // initQBar(); // 已禁用：不需要顶部快速切换条
         createWS();
+        createPatientResultTool();
         checkNavigateTarget();
         checkAuditQueueResume();
         startQCInputProbe();
+        injectToolbar();
         initReportEnhance();
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
     }
