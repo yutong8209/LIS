@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.18.0
+// @version      7.20.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -57,6 +57,10 @@
     // 旧版 base64 编码（保持向后兼容）
     const encPwd = p => { try { return btoa(unescape(encodeURIComponent(p))); } catch(e) { return p; } };
     const decPwd = e => { try { if (!e || e.startsWith('V2:')) return ''; return decodeURIComponent(escape(atob(e))); } catch(e) { return ''; } };
+    const isPatientResultPanelEvent = e => {
+        const t = e && e.target;
+        return !!(t && t.closest && t.closest('#lis-pr-panel'));
+    };
 
     // ==================== AES-GCM 密码加密 ====================
     // 威胁模型：密钥硬编码在脚本中，能读取脚本源码的攻击者可解密。
@@ -248,17 +252,41 @@
 #lis-pr-hd{height:38px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#f1f7fb;border-bottom:1px solid #d5e4ef;flex-shrink:0}
 #lis-pr-hd h3{margin:0;font-size:14px;color:#145b86;white-space:nowrap}
 #lis-pr-hd .pr-spacer{flex:1}
-#lis-pr-hd button,#lis-pr-tools button{height:26px;border:1px solid #9dc6df;background:#fff;color:#246489;border-radius:5px;padding:0 10px;font-size:12px;font-weight:700;cursor:pointer}
+#lis-pr-hd button,#lis-pr-tools button{height:24px;border:1px solid #9dc6df;background:#fff;color:#246489;border-radius:4px;padding:0 8px;font-size:11px;font-weight:700;cursor:pointer}
 #lis-pr-hd button:hover,#lis-pr-tools button:hover{background:#f5fbff;border-color:#4f9cca}
 #lis-pr-hd .pr-close{font-size:18px;line-height:20px;padding:0 8px;color:#7b8b96}
-#lis-pr-tools{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:5px;padding:6px 8px;background:#fbfdff;border-bottom:1px solid #d5e4ef;flex-shrink:0;overflow:visible}
-#lis-pr-tools label{display:flex;flex-direction:column;gap:2px;font-size:10px;color:#5f7484;font-weight:700;min-width:0}
-#lis-pr-tools input,#lis-pr-tools select{height:24px;box-sizing:border-box;border:1px solid #cbd5df;border-radius:4px;padding:2px 6px;font-size:12px;color:#213547;background:#fff;min-width:0}
-#lis-pr-tools .pr-wide{grid-column:span 2}
+#lis-pr-tools{display:flex;flex-wrap:wrap;align-items:flex-end;gap:7px 8px;padding:8px 10px;background:#fbfdff;border-bottom:1px solid #d5e4ef;flex-shrink:0;overflow:visible}
+#lis-pr-tools label{display:flex;flex:0 0 auto;flex-direction:column;gap:3px;font-size:10px;color:#526575;font-weight:700;line-height:1.05;white-space:nowrap}
+#lis-pr-tools input,#lis-pr-tools select{width:100%;height:26px;box-sizing:border-box;border:1px solid #c3ced8;border-radius:4px;padding:2px 7px;font-size:12px;color:#213547;background:#fff;outline:none}
+#lis-pr-tools input:focus,#lis-pr-tools select:focus{border-color:#4f9cca;box-shadow:0 0 0 2px rgba(79,156,202,.12)}
+#lis-pr-tools .pr-date{width:126px}
+#lis-pr-tools .pr-xs{width:76px}
+#lis-pr-tools .pr-sm{width:104px}
+#lis-pr-tools .pr-md{width:132px}
+#lis-pr-tools .pr-lg{width:168px}
+#lis-pr-tools .pr-wide{width:208px}
+#lis-pr-tools .pr-xl{width:220px}
 #lis-pr-tools .pr-section{display:none}
-#lis-pr-tools .pr-actions{grid-column:span 3;display:flex;align-items:flex-end;gap:6px}
-#lis-pr-status{padding:6px 10px;font-size:12px;color:#6b7785;background:#fff;flex-shrink:0;border-bottom:1px solid #edf1f5}
-#lis-pr-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;background:#f7f9fb;padding:8px;position:relative;z-index:1}
+#lis-pr-tools .pr-actions{display:flex;flex:0 0 auto;align-items:flex-end;gap:6px;margin-left:auto;min-width:292px}
+#lis-pr-tools .pr-actions button{min-width:64px;height:26px}
+#lis-pr-tools .pr-date input{cursor:pointer;background:#fff}
+#lis-pr-tools .pr-date-shortcuts{display:flex;align-items:flex-end;gap:4px}
+#lis-pr-tools .pr-date-shortcuts button{min-width:54px;height:26px;padding:0 7px;color:#4f6b7d;background:#f7fbff;border-color:#c4d8e8;font-weight:700}
+#lis-pr-tools .pr-toggle{height:26px;display:flex!important;flex-direction:row!important;align-items:center;align-self:flex-end;gap:6px;box-sizing:border-box;border:1px solid #c3ced8;border-radius:4px;background:#fff;color:#314457;font-size:12px;font-weight:700;padding:0 10px;white-space:nowrap;cursor:pointer;line-height:1}
+#lis-pr-tools .pr-toggle:hover{border-color:#4f9cca;background:#f7fbff}
+#lis-pr-tools .pr-toggle input{width:13px;height:13px;margin:0;accent-color:#145b86}
+#lis-pr-date-picker{position:fixed;z-index:100020;width:252px;background:#fff;border:1px solid #b9cbd9;border-radius:6px;box-shadow:0 8px 24px rgba(31,45,61,.18);padding:8px;font-family:'Microsoft YaHei','Segoe UI',sans-serif}
+#lis-pr-date-picker .pr-dp-head{display:flex;gap:6px;margin-bottom:8px;align-items:center}
+#lis-pr-date-picker select{height:26px;border:1px solid #c3ced8;border-radius:4px;background:#fff;color:#213547;font-size:12px;padding:0 4px;flex:1}
+#lis-pr-date-picker .pr-dp-today{height:26px;border:1px solid #9dc6df;border-radius:4px;background:#f7fbff;color:#246489;font-size:12px;font-weight:700;padding:0 8px;cursor:pointer}
+#lis-pr-date-picker .pr-dp-week,#lis-pr-date-picker .pr-dp-days{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+#lis-pr-date-picker .pr-dp-week span{font-size:10px;color:#7b8b96;text-align:center;padding:2px 0}
+#lis-pr-date-picker .pr-dp-days button{height:26px;border:1px solid transparent;border-radius:4px;background:#fff;color:#213547;font-size:12px;padding:0;cursor:pointer}
+#lis-pr-date-picker .pr-dp-days button.blank{visibility:hidden;pointer-events:none}
+#lis-pr-date-picker .pr-dp-days button:hover{background:#edf7ff;border-color:#9dc6df}
+#lis-pr-date-picker .pr-dp-days button.on{background:#145b86;border-color:#145b86;color:#fff;font-weight:700}
+#lis-pr-status{padding:4px 10px;font-size:11px;color:#6b7785;background:#fff;flex-shrink:0;border-bottom:1px solid #edf1f5}
+#lis-pr-body{flex:1;min-height:0;overflow-y:auto;overflow-x:auto;background:#f7f9fb;padding:8px;position:relative;z-index:1}
 #lis-pr-body table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #dce3eb;border-radius:6px;overflow:hidden;font-size:12px}
 #lis-pr-body th{position:sticky;top:0;background:#edf2f7;color:#334155;padding:7px 8px;text-align:left;border-bottom:1px solid #d7dee8;white-space:nowrap;z-index:1}
 #lis-pr-body td{padding:6px 8px;border-bottom:1px solid #edf1f5;white-space:nowrap;vertical-align:middle}
@@ -269,13 +297,6 @@
 #lis-pr-body .pr-low{color:#1565c0;font-weight:700}
 #lis-pr-body .pr-high{color:#e65100;font-weight:700}
 #lis-pr-body .pr-critical{color:#b71c1c;font-weight:800}
-@media(max-width:900px){
-  #lis-pr-panel{inset:8px}
-  #lis-pr-tools{grid-template-columns:repeat(2,minmax(0,1fr))}
-  #lis-pr-tools .pr-wide,#lis-pr-tools .pr-actions{grid-column:span 2}
-  #lis-pr-fab{bottom:142px}
-}
-
 /* --- 顶部快速切换条 --- */
 #lis-qbar{position:fixed;top:4px;left:50%;transform:translateX(-50%) translateY(-120%);z-index:99998;background:rgba(44,62,80,.92);backdrop-filter:blur(8px);padding:3px 10px;display:flex;align-items:center;gap:5px;transition:.3s;border-radius:0 0 8px 8px;box-shadow:0 2px 8px rgba(0,0,0,.25);opacity:0}
 #lis-qbar.show{transform:translateX(-50%) translateY(0);opacity:1}
@@ -1605,6 +1626,7 @@
     let prAbortCtrl = null;        // 当前查询的 AbortController
     let prQuerySeq = 0;            // 查询序号，防止旧查询回写新结果
     let prPage = 1;                // 当前页码（从 1 开始）
+    let prDatePickerCleanup = null;
     const prPageSize = 100;        // 每页行数
     const _prDetailCache = new Map(); // 详情结果 LRU 缓存
     const _prDetailInflight = new Map(); // 正在读取的明细请求，防止重复点击重复请求
@@ -1664,8 +1686,14 @@
         }
         _prDetailCache.set(key, val);
     }
+    function prMachineParameterDR(row) {
+        return row.MachineParameterDR || row.MachParamDR || row.MachineParamDR || row.ParamDR || '';
+    }
+    function prWorkGroupMachineDR(row) {
+        return row.WorkGroupMachineDR || row.WorkGroupMachine || row.MachineDR || row._mdr || '';
+    }
     function prCacheKey(specimen) {
-        return (specimen.ReportDR || specimen.TodoReportDR || '') + '|' + (specimen.MachineParameterDR || '') + '|' + (specimen.Status || specimen.ReportStatus || '');
+        return (specimen.ReportDR || specimen.TodoReportDR || '') + '|' + prMachineParameterDR(specimen) + '|' + prWorkGroupMachineDR(specimen) + '|' + (specimen.Status || specimen.ReportStatus || '');
     }
 
     function prWorkListCacheKey(filters) {
@@ -1692,9 +1720,91 @@
         _prWorkListCache.set(key, { ts: Date.now(), rows });
     }
 
+    function prCleanFilterText(value) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+        const lower = text.toLowerCase();
+        if (/^(如|例如|示例)\s*/.test(text)) return '';
+        if (lower === '姓名 / 检验号 / 住院号') return '';
+        if (text === '门诊 / 住院' || text === '诊断关键字') return '';
+        return text;
+    }
+
+    function prLooksLikePatientType(text) {
+        return /^(门诊|住院|体检|急诊|留观|住院病人|门诊病人)$/i.test(String(text || '').trim());
+    }
+
+    function prAutoCorrectPatientTypeFields() {
+        const patientType = document.getElementById('lis-pr-patient-type');
+        const dept = document.getElementById('lis-pr-dept');
+        const ward = document.getElementById('lis-pr-ward');
+        if (patientType && !String(patientType.value || '').trim()) {
+            if (dept && prLooksLikePatientType(dept.value)) {
+                patientType.value = String(dept.value || '').trim();
+                dept.value = '';
+            } else if (ward && prLooksLikePatientType(ward.value)) {
+                patientType.value = String(ward.value || '').trim();
+                ward.value = '';
+            }
+        }
+    }
+
+    function prNormalizeFilters(filters) {
+        filters.q = prCleanFilterText(filters.q).toLowerCase();
+        filters.patientType = prCleanFilterText(filters.patientType).toLowerCase();
+        filters.dept = prCleanFilterText(filters.dept).toLowerCase();
+        filters.ward = prCleanFilterText(filters.ward).toLowerCase();
+        filters.doctor = prCleanFilterText(filters.doctor).toLowerCase();
+        filters.diagnosis = prCleanFilterText(filters.diagnosis).toLowerCase();
+        filters.specimen = prCleanFilterText(filters.specimen).toLowerCase();
+        filters.item = prCleanFilterText(filters.item).toLowerCase();
+        filters.resultText = prCleanFilterText(filters.resultText).toLowerCase();
+
+        /* 常见误填：把“住院/门诊/体检”填到科室或病区时，自动按病人类型处理。 */
+        ['dept', 'ward'].forEach(key => {
+            if (!filters.patientType && prLooksLikePatientType(filters[key])) {
+                filters.patientType = filters[key];
+                filters[key] = '';
+            }
+        });
+        return filters;
+    }
+
+    function prActiveFilterSummary(filters) {
+        const parts = [];
+        parts.push(`${filters.start || today()} 至 ${filters.end || today()}`);
+        const wg = WG.find(w => String(w.dr) === String(filters.wg || ''));
+        parts.push(`工作组=${wg ? wg.name : '全部'}`);
+        const machineSel = document.getElementById('lis-pr-machine');
+        if (filters.machine && machineSel) {
+            const opt = machineSel.options[machineSel.selectedIndex];
+            parts.push(`仪器=${opt ? opt.textContent : filters.machine}`);
+        }
+        if (filters.status) parts.push(`状态=${prStatusText(filters.status)}`);
+        if (filters.q) parts.push(`综合=${filters.q}`);
+        if (filters.patientType) parts.push(`病人类型=${filters.patientType}`);
+        if (filters.dept) parts.push(`科室=${filters.dept}`);
+        if (filters.ward) parts.push(`病区=${filters.ward}`);
+        if (filters.doctor) parts.push(`医生=${filters.doctor}`);
+        if (filters.diagnosis) parts.push(`诊断=${filters.diagnosis}`);
+        if (filters.sex) parts.push(`性别=${filters.sex}`);
+        if (!Number.isNaN(filters.ageMin)) parts.push(`年龄>=${filters.ageMin}`);
+        if (!Number.isNaN(filters.ageMax)) parts.push(`年龄<=${filters.ageMax}`);
+        if (filters.specimen) parts.push(`标本=${filters.specimen}`);
+        if (filters.item) parts.push(`项目=${filters.item}`);
+        if (filters.judge) parts.push(`判断=${classifyStatusText(filters.judge)}`);
+        if (filters.resultText) parts.push(`结果文本=${filters.resultText}`);
+        if (filters.resultOp && !Number.isNaN(filters.resultValue)) parts.push(`数值${filters.resultOp}${filters.resultValue}`);
+        if (!Number.isNaN(filters.resultMin)) parts.push(`数值>=${filters.resultMin}`);
+        if (!Number.isNaN(filters.resultMax)) parts.push(`数值<=${filters.resultMax}`);
+        if (filters.abnormal) parts.push('仅异常结果');
+        return parts.join('，');
+    }
+
     function prGetFilters() {
+        prAutoCorrectPatientTypeFields();
         const val = id => ((document.getElementById(id) || {}).value || '').trim();
-        return {
+        return prNormalizeFilters({
             start: val('lis-pr-start') || today(),
             end: val('lis-pr-end') || today(),
             wg: val('lis-pr-wg') !== undefined ? val('lis-pr-wg') : (wgDR() || ''),
@@ -1718,7 +1828,7 @@
             resultMax: parseFloat((document.getElementById('lis-pr-result-max') || {}).value),
             judge: val('lis-pr-judge'),
             abnormal: (document.getElementById('lis-pr-abnormal') || {}).checked || false
-        };
+        });
     }
 
     async function prLoadMachinesForWG(wg) {
@@ -1853,6 +1963,9 @@
                 return !specimen || prTextMatch(specimen, filters.specimen);
             });
         }
+        if (filters.ward) {
+            data = data.filter(r => prTextMatch(r.Ward || r.WardName || '', filters.ward));
+        }
         return data;
     }
 
@@ -1886,7 +1999,7 @@
     function prPatientTypeText(specimen, labInfo) {
         specimen = specimen || {};
         labInfo = labInfo || {};
-        return prFirstText(
+        const direct = prFirstText(
             specimen.AdmType, specimen.AdmTypeName, specimen.AdmissionType, specimen.AdmissionTypeName,
             specimen.PatientTypeName, specimen.PatientType, specimen.PatientClassName, specimen.PatientClass,
             specimen.PatTypeName, specimen.PatType, specimen.PatTypeDesc, specimen.VisitTypeName, specimen.VisitType,
@@ -1894,6 +2007,27 @@
             labInfo.PatientTypeName, labInfo.PatientType, labInfo.PatientClassName, labInfo.PatientClass,
             labInfo.PatTypeName, labInfo.PatType, labInfo.PatTypeDesc, labInfo.VisitTypeName, labInfo.VisitType
         );
+        if (direct) return direct;
+        const inpatientHint = prFirstText(
+            specimen.AdmNo, specimen.InHospNo, specimen.InpatientNo, specimen.InPatientNo, specimen.HospitalNo,
+            labInfo.AdmNo, labInfo.InHospNo, labInfo.InpatientNo, labInfo.InPatientNo, labInfo.HospitalNo,
+            specimen.BedNo, specimen.Bed, labInfo.BedNo, labInfo.Bed
+        );
+        const wardHint = prFirstText(specimen.Ward, specimen.WardName, labInfo.Ward, labInfo.WardName);
+        if (inpatientHint || wardHint) return '住院';
+        const outpatientHint = prFirstText(
+            specimen.ClinicNo, specimen.OutpatientNo, specimen.OutPatientNo, specimen.OPNo,
+            labInfo.ClinicNo, labInfo.OutpatientNo, labInfo.OutPatientNo, labInfo.OPNo
+        );
+        if (outpatientHint) return '门诊';
+        return '';
+    }
+
+    function prAsArray(value) {
+        if (!value) return [];
+        if (Array.isArray(value)) return value;
+        if (Array.isArray(value.rows)) return value.rows;
+        return [value];
     }
 
     function prNumberPass(value, filters) {
@@ -1950,8 +2084,8 @@
     }
 
     function prRowsFromDetailData(specimen, data) {
-        const itemInfo = (data && data.ItemInfo) ? data.ItemInfo : [];
-        const labInfo = (data && data.LabInfo && data.LabInfo[0]) ? data.LabInfo[0] : {};
+        const itemInfo = prAsArray(data && data.ItemInfo);
+        const labInfo = prAsArray(data && data.LabInfo)[0] || {};
         return itemInfo.map(item => {
             const result = ((item.TextRes && String(item.TextRes).trim()) ? item.TextRes : (item.Result || '')).trim();
             const status = classifyResultItem(item);
@@ -2016,14 +2150,14 @@
             p.set('QueryName', 'GetReportInfoAll');
             p.set('FunModul', 'MTHD');
             p.set('P0', reportDR);
-            p.set('P1', specimen.MachineParameterDR || '');
-            p.set('P2', specimen.WorkGroupMachineDR || specimen._mdr || '');
+            p.set('P1', prMachineParameterDR(specimen));
+            p.set('P2', prWorkGroupMachineDR(specimen));
             p.set('P3', specimen.Status || specimen.ReportStatus || '');
             p.set('P4', specimen.EpisodeNo || '');
             p.set('P5', specimen.TransmitDate || '');
             p.set('P14', ss);
             let data = await fetchJ(CSP + '?' + p.toString(), 20000, signal);
-            let itemInfo = (data && data.ItemInfo) ? data.ItemInfo : [];
+            let itemInfo = prAsArray(data && data.ItemInfo);
             if (itemInfo.length === 0 && (specimen.Status || specimen.ReportStatus)) {
                 p.set('P3', '');
                 data = await fetchJ(CSP + '?' + p.toString(), 20000, signal);
@@ -2153,26 +2287,163 @@
         prSetStatus('筛选条件已清空。', 'info');
     }
 
+    function prSetDateRange(kind) {
+        const start = document.getElementById('lis-pr-start');
+        const end = document.getElementById('lis-pr-end');
+        if (!start || !end) return;
+        prCloseDatePicker();
+        if (kind === 'month') {
+            start.value = prTodayOffset(-29);
+            end.value = today();
+        } else if (kind === 'year') {
+            start.value = prTodayOffset(-364);
+            end.value = today();
+        } else {
+            start.value = today();
+            end.value = today();
+        }
+    }
+
+    function prParseDateText(text) {
+        const m = String(text || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m) return null;
+        const y = Number(m[1]);
+        const mo = Number(m[2]);
+        const d = Number(m[3]);
+        const dt = new Date(y, mo - 1, d);
+        if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+        return dt;
+    }
+
+    function prFormatDateObj(d) {
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function prDaysInMonth(year, month) {
+        return new Date(year, month, 0).getDate();
+    }
+
+    function prCloseDatePicker() {
+        const old = document.getElementById('lis-pr-date-picker');
+        if (old) old.remove();
+        if (prDatePickerCleanup) {
+            prDatePickerCleanup();
+            prDatePickerCleanup = null;
+        }
+    }
+
+    function prOpenDatePicker(input) {
+        if (!input) return;
+        prCloseDatePicker();
+        const base = prParseDateText(input.value) || new Date();
+        let viewYear = base.getFullYear();
+        let viewMonth = base.getMonth() + 1;
+        const selected = prFormatDateObj(base);
+        const picker = document.createElement('div');
+        picker.id = 'lis-pr-date-picker';
+
+        const render = () => {
+            const minYear = Math.min(2020, new Date().getFullYear() - 6, viewYear - 2);
+            const maxYear = Math.max(2035, new Date().getFullYear() + 2, viewYear + 2);
+            const years = [];
+            for (let y = minYear; y <= maxYear; y += 1) {
+                years.push(`<option value="${y}"${y === viewYear ? ' selected' : ''}>${y}年</option>`);
+            }
+            const months = [];
+            for (let m = 1; m <= 12; m += 1) {
+                months.push(`<option value="${m}"${m === viewMonth ? ' selected' : ''}>${m}月</option>`);
+            }
+            const firstDay = new Date(viewYear, viewMonth - 1, 1).getDay();
+            const count = prDaysInMonth(viewYear, viewMonth);
+            const days = [];
+            for (let i = 0; i < firstDay; i += 1) days.push('<button type="button" class="blank" tabindex="-1"></button>');
+            for (let d = 1; d <= count; d += 1) {
+                const value = viewYear + '-' + String(viewMonth).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+                days.push(`<button type="button" data-date="${value}" class="${value === input.value ? 'on' : ''}">${d}</button>`);
+            }
+            picker.innerHTML = `
+                <div class="pr-dp-head">
+                    <select class="pr-dp-year">${years.join('')}</select>
+                    <select class="pr-dp-month">${months.join('')}</select>
+                    <button type="button" class="pr-dp-today">今天</button>
+                </div>
+                <div class="pr-dp-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+                <div class="pr-dp-days">${days.join('')}</div>`;
+            const yearSel = picker.querySelector('.pr-dp-year');
+            const monthSel = picker.querySelector('.pr-dp-month');
+            yearSel.addEventListener('change', () => {
+                viewYear = Number(yearSel.value);
+                render();
+            });
+            monthSel.addEventListener('change', () => {
+                viewMonth = Number(monthSel.value);
+                render();
+            });
+            picker.querySelector('.pr-dp-today').addEventListener('click', e => {
+                e.stopPropagation();
+                input.value = today();
+                prCloseDatePicker();
+            });
+            picker.querySelectorAll('.pr-dp-days button[data-date]').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    input.value = btn.dataset.date || selected;
+                    prCloseDatePicker();
+                });
+            });
+        };
+        render();
+        document.body.appendChild(picker);
+        const rect = input.getBoundingClientRect();
+        picker.style.left = Math.min(rect.left, window.innerWidth - picker.offsetWidth - 8) + 'px';
+        picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - picker.offsetHeight - 8) + 'px';
+        const closeOnOutside = e => {
+            if (e.target === input || picker.contains(e.target)) return;
+            prCloseDatePicker();
+        };
+        const closeOnEsc = e => {
+            if (e.key === 'Escape') prCloseDatePicker();
+        };
+        prDatePickerCleanup = () => {
+            document.removeEventListener('mousedown', closeOnOutside, true);
+            document.removeEventListener('keydown', closeOnEsc, true);
+        };
+        setTimeout(() => {
+            document.addEventListener('mousedown', closeOnOutside, true);
+            document.addEventListener('keydown', closeOnEsc, true);
+        }, 0);
+    }
+
     function prProtectChineseInput(panel) {
+        const isTextInput = el => el && /^(INPUT|TEXTAREA)$/i.test(el.tagName) && el.type !== 'checkbox' && el.type !== 'radio';
         panel.addEventListener('compositionstart', e => {
-            if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) prComposing = true;
+            if (isTextInput(e.target)) prComposing = true;
+            e.stopPropagation();
         }, true);
         panel.addEventListener('compositionend', e => {
-            if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) {
+            if (isTextInput(e.target)) {
                 setTimeout(() => { prComposing = false; }, 0);
             }
+            e.stopPropagation();
         }, true);
-        ['keydown','keypress','keyup','beforeinput','input'].forEach(evName => {
-            panel.addEventListener(evName, e => {
-                if (!e.target || !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-                if (e.isComposing || prComposing || e.keyCode === 229) {
-                    e.stopPropagation();
-                    return;
-                }
-                if (e.key === 'Enter' || e.key === 'Escape') return;
+        panel.addEventListener('beforeinput', e => {
+            if (isTextInput(e.target)) e.stopPropagation();
+        }, true);
+        panel.addEventListener('input', e => {
+            if (isTextInput(e.target)) e.stopPropagation();
+        }, true);
+        panel.addEventListener('keydown', e => {
+            if (!isTextInput(e.target) && !(e.target && e.target.tagName === 'SELECT')) return;
+            if (e.isComposing || prComposing || e.keyCode === 229) {
                 e.stopPropagation();
-            }, true);
-        });
+                return;
+            }
+            if (e.key === 'Enter' || e.key === 'Escape') return;
+            e.stopPropagation();
+        }, true);
+        panel.addEventListener('keyup', e => {
+            if (isTextInput(e.target)) e.stopPropagation();
+        }, true);
     }
 
     /* 修复：只拦截工具栏区域的滚轮（工具栏 overflow:visible 需手动滚动），
@@ -2199,6 +2470,7 @@
     async function prQuery() {
         if (prBusy) return;
         const filters = prGetFilters();
+        const activeSummary = prActiveFilterSummary(filters);
         if (filters.resultOp && Number.isNaN(filters.resultValue)) {
             prSetStatus('已选择数值关系，请填写比较值。', 'error');
             showToast('请填写结果比较值', 'warning');
@@ -2218,14 +2490,14 @@
             const rows = prFilterRows(allRows, filters);
             if (!rows.length) {
                 if (querySeq !== prQuerySeq) return;
-                prSetStatus(`未找到符合条件的标本（共查询 ${allRows.length} 条记录）。`, 'info');
+                prSetStatus(`未找到符合条件的标本（共查询 ${allRows.length} 条记录）。当前生效：${activeSummary}`, 'info');
                 return;
             }
             const mustReadDetail = prNeedsDetailEvenWithoutResult(filters);
             const detailRows = mustReadDetail ? rows : rows.filter(prMayHaveResult);
             const skippedNoResult = rows.length - detailRows.length;
             if (!detailRows.length) {
-                prSetStatus(`找到 ${rows.length} 个标本，但工作列表显示暂无结果。`, 'info');
+                prSetStatus(`找到 ${rows.length} 个标本，但工作列表显示暂无结果。当前生效：${activeSummary}`, 'info');
                 return;
             }
             /* 智能判断是否需要结果明细 */
@@ -2263,7 +2535,8 @@
             prPage = 1;
             prRenderTable(prData);
             const cacheHits = _prDetailCache.size;
-            prSetStatus(`完成：${rows.length} 个标本，${prData.length} 条结果${skippedNoResult ? '，跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}。明细缓存 ${cacheHits} 个标本。`, 'ok');
+            const zeroHint = prData.length ? '' : ` 当前生效：${activeSummary}`;
+            prSetStatus(`完成：${rows.length} 个标本，${prData.length} 条结果${skippedNoResult ? '，跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}。明细缓存 ${cacheHits} 个标本。${zeroHint}`, prData.length ? 'ok' : 'info');
         } catch(e) {
             if (querySeq !== prQuerySeq) return;
             if (e.name === 'AbortError') { prSetStatus('查询已取消。', 'info'); return; }
@@ -2296,40 +2569,45 @@
             </div>
             <div id="lis-pr-tools">
                 <div class="pr-section">标本范围</div>
-                <label>开始日期<input type="date" id="lis-pr-start"></label>
-                <label>结束日期<input type="date" id="lis-pr-end"></label>
-                <label>工作组<select id="lis-pr-wg">
+                <label class="pr-date">开始日期<input type="text" id="lis-pr-start" readonly placeholder="选择日期"></label>
+                <label class="pr-date">结束日期<input type="text" id="lis-pr-end" readonly placeholder="选择日期"></label>
+                <div class="pr-date-shortcuts">
+                    <button type="button" data-range="today">今天</button>
+                    <button type="button" data-range="month">近一月</button>
+                    <button type="button" data-range="year">近一年</button>
+                </div>
+                <label class="pr-md">工作组<select id="lis-pr-wg">
                     ${WG.map(w => `<option value="${esc(w.dr)}">${esc(w.name)}</option>`).join('')}
                     <option value="">全部工作组</option>
                 </select></label>
-                <label>仪器<select id="lis-pr-machine"><option value="">全部仪器</option></select></label>
-                <label>状态<select id="lis-pr-status-filter">
+                <label class="pr-lg">仪器<select id="lis-pr-machine"><option value="">全部仪器</option></select></label>
+                <label class="pr-sm">状态<select id="lis-pr-status-filter">
                     <option value="">全部</option><option value="1">登记</option><option value="2">初审</option><option value="3">审核</option><option value="4">复审</option>
                 </select></label>
-                <label class="pr-wide">综合搜索<input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 流水号 / 住院号"></label>
+                <label class="pr-xl">综合搜索<input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 住院号"></label>
                 <div class="pr-section">患者信息</div>
-                <label>病人类型<input type="text" id="lis-pr-patient-type" placeholder="门诊 / 住院 / 体检"></label>
-                <label>科室<input type="text" id="lis-pr-dept" placeholder="申请科室 / 就诊科室"></label>
-                <label>病区<input type="text" id="lis-pr-ward" placeholder="病区 / 护理单元"></label>
-                <label>医生<input type="text" id="lis-pr-doctor" placeholder="申请医生"></label>
+                <label class="pr-sm">病人类型<input type="text" id="lis-pr-patient-type" placeholder="门诊 / 住院"></label>
+                <label class="pr-md">科室<input type="text" id="lis-pr-dept" placeholder="科室"></label>
+                <label class="pr-sm">病区<input type="text" id="lis-pr-ward" placeholder="病区"></label>
+                <label class="pr-sm">医生<input type="text" id="lis-pr-doctor" placeholder="医生"></label>
                 <label class="pr-wide">诊断<input type="text" id="lis-pr-diagnosis" placeholder="诊断关键字"></label>
-                <label>性别<select id="lis-pr-sex"><option value="">全部</option><option value="男">男</option><option value="女">女</option></select></label>
-                <label>年龄下限<input type="number" id="lis-pr-age-min" placeholder="岁"></label>
-                <label>年龄上限<input type="number" id="lis-pr-age-max" placeholder="岁"></label>
-                <label>标本类型<input type="text" id="lis-pr-specimen" placeholder="血清 / 全血 / 尿液"></label>
+                <label class="pr-xs">性别<select id="lis-pr-sex"><option value="">全部</option><option value="男">男</option><option value="女">女</option></select></label>
+                <label class="pr-xs">年龄≥<input type="number" id="lis-pr-age-min" placeholder="岁"></label>
+                <label class="pr-xs">年龄≤<input type="number" id="lis-pr-age-max" placeholder="岁"></label>
+                <label class="pr-sm">标本<input type="text" id="lis-pr-specimen" placeholder="血清"></label>
                 <div class="pr-section">项目结果</div>
-                <label class="pr-wide">项目名称<input type="text" id="lis-pr-item" placeholder="如 血红蛋白 / HBsAg"></label>
-                <label>判断<select id="lis-pr-judge">
+                <label class="pr-lg">项目名称<input type="text" id="lis-pr-item" placeholder="如 HBsAg"></label>
+                <label class="pr-md">判断<select id="lis-pr-judge">
                     <option value="">全部</option><option value="NORMAL">正常</option><option value="HIGH">偏高</option><option value="LOW">偏低</option><option value="ABNORMAL">异常</option><option value="CRITICAL">危急</option><option value="UNCERTAIN">待定</option>
                 </select></label>
-                <label>结果文本<input type="text" id="lis-pr-result-text" placeholder="+ / 阳性 / 未检出"></label>
-                <label>数值关系<select id="lis-pr-result-op">
+                <label class="pr-md">结果文本<input type="text" id="lis-pr-result-text" placeholder="含 阳性 / +"></label>
+                <label class="pr-xs">关系<select id="lis-pr-result-op">
                     <option value="">不筛</option><option value="gt">&gt;</option><option value="gte">&gt;=</option><option value="lt">&lt;</option><option value="lte">&lt;=</option><option value="eq">=</option>
                 </select></label>
-                <label>比较值<input type="number" step="any" id="lis-pr-result-value" placeholder="数值"></label>
-                <label>数值下限<input type="number" step="any" id="lis-pr-result-min"></label>
-                <label>数值上限<input type="number" step="any" id="lis-pr-result-max"></label>
-                <label style="justify-content:end"><span><input type="checkbox" id="lis-pr-abnormal" style="height:auto;vertical-align:middle"> 仅异常</span></label>
+                <label class="pr-xs">比较值<input type="number" step="any" id="lis-pr-result-value" placeholder="值"></label>
+                <label class="pr-xs">数值≥<input type="number" step="any" id="lis-pr-result-min"></label>
+                <label class="pr-xs">数值≤<input type="number" step="any" id="lis-pr-result-max"></label>
+                <label class="pr-toggle"><input type="checkbox" id="lis-pr-abnormal"><span>仅异常结果</span></label>
                 <div class="pr-actions">
                     <button id="lis-pr-query">查询</button>
                     <button id="lis-pr-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">停止</button>
@@ -2346,20 +2624,41 @@
         const wgSel = document.getElementById('lis-pr-wg');
         if (start) start.value = today();
         if (end) end.value = today();
-        const defaultWG = wgDR() || '4';
+        const defaultWG = '';
         if (wgSel) {
             wgSel.value = WG.some(w => w.dr === defaultWG) ? defaultWG : '';
         }
         prLoadMachinesForWG(wgSel ? wgSel.value : '');
 
 
-        document.getElementById('lis-pr-mini').addEventListener('click', () => panel.classList.remove('show'));
-        document.getElementById('lis-pr-close').addEventListener('click', () => panel.classList.remove('show'));
+        document.getElementById('lis-pr-mini').addEventListener('click', () => {
+            prCloseDatePicker();
+            panel.classList.remove('show');
+        });
+        document.getElementById('lis-pr-close').addEventListener('click', () => {
+            prCloseDatePicker();
+            panel.classList.remove('show');
+        });
         document.getElementById('lis-pr-query').addEventListener('click', prQuery);
         document.getElementById('lis-pr-cancel').addEventListener('click', prCancel);
         document.getElementById('lis-pr-clear').addEventListener('click', prClearFilters);
         document.getElementById('lis-pr-export').addEventListener('click', prExportCSV);
         wgSel.addEventListener('change', () => prLoadMachinesForWG(wgSel.value));
+        panel.querySelectorAll('.pr-date-shortcuts button').forEach(btn => {
+            btn.addEventListener('click', () => prSetDateRange(btn.dataset.range || 'today'));
+        });
+        [start, end].forEach(el => {
+            if (!el) return;
+            el.addEventListener('click', () => prOpenDatePicker(el));
+            el.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    prOpenDatePicker(el);
+                } else if (e.key === 'Escape') {
+                    prCloseDatePicker();
+                }
+            });
+        });
 
         /* FAB 拖动 */
         const FAB_POS_KEY = 'lis-pr-fab-pos';
@@ -2536,10 +2835,7 @@
         document.body.style.overflow = '';
         stopWSRefresh();
         // 清理键盘监听器
-        if (_abnormalKeyHandler) {
-            document.removeEventListener('keydown', _abnormalKeyHandler);
-            _abnormalKeyHandler = null;
-        }
+        _removeAbnormalKeyHandler();
         if (_normalKeyHandler) {
             document.removeEventListener('keydown', _normalKeyHandler);
             _normalKeyHandler = null;
@@ -3204,24 +3500,42 @@
     // --- 渲染：数据表 ---
     // --- 渲染：数据表（分发到各分类视图）---
     let _abnormalKeyHandler = null; // 异常视图键盘监听器
+    let _abnormalKeyTargets = [];
     function _rebindAbnormalKeyHandler() {
         if (_abnormalKeyHandler) return;
         _abnormalKeyHandler = e => {
+            if (isPatientResultPanelEvent(e)) return;
             if (wsCategory !== 'abnormal') return;
             if (detailPanel && detailPanel.classList.contains('show')) return;
             if (e.defaultPrevented) return;
             if (_abnormalAuditInProgress) {
-                if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); }
+                if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); }
                 return;
             }
             const curData = filteredData();
+            if (!curData.length) return;
+            if (wsAbnormalIndex < 0 || wsAbnormalIndex >= curData.length) wsAbnormalIndex = 0;
             if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveAbnormalFocus(1, curData); }
             else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveAbnormalFocus(-1, curData); }
-            else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); auditAbnormalSpecimen(curData[wsAbnormalIndex]); }
-            else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); if (curData[wsAbnormalIndex]) openDetailPanel(curData[wsAbnormalIndex]); }
+            else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); auditAbnormalSpecimen(curData[wsAbnormalIndex]); }
+            else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); if (curData[wsAbnormalIndex]) openDetailPanel(curData[wsAbnormalIndex], 'abnormal', wsAbnormalIndex); }
             else if (e.key === 'Escape') { wsCategory = 'normal'; renderWSCategoryBar(); renderWSTable(); }
         };
-        document.addEventListener('keydown', _abnormalKeyHandler);
+        _abnormalKeyTargets = [document];
+        const iframeWin = getReportIframeWin();
+        if (iframeWin && iframeWin.document && iframeWin.document !== document) _abnormalKeyTargets.push(iframeWin.document);
+        _abnormalKeyTargets.forEach(doc => {
+            try { doc.addEventListener('keydown', _abnormalKeyHandler, true); } catch(e) {}
+        });
+    }
+
+    function _removeAbnormalKeyHandler() {
+        if (!_abnormalKeyHandler) return;
+        (_abnormalKeyTargets.length ? _abnormalKeyTargets : [document]).forEach(doc => {
+            try { doc.removeEventListener('keydown', _abnormalKeyHandler, true); } catch(e) {}
+        });
+        _abnormalKeyTargets = [];
+        _abnormalKeyHandler = null;
     }
 
     function renderWSTable() {
@@ -3230,10 +3544,7 @@
         // 强制 flex 和滚动（LIS 系统 CSS 会覆盖）
         body.style.cssText = 'flex:1!important;overflow:auto!important;min-height:0!important;position:relative';
         // 移除旧的异常视图键盘监听
-        if (_abnormalKeyHandler) {
-            document.removeEventListener('keydown', _abnormalKeyHandler);
-            _abnormalKeyHandler = null;
-        }
+        _removeAbnormalKeyHandler();
         if (_normalKeyHandler) {
             document.removeEventListener('keydown', _normalKeyHandler);
             _normalKeyHandler = null;
@@ -3259,6 +3570,7 @@
         // 正常/全部/不完整视图：Escape 关闭工作台
         if (wsCategory !== 'abnormal') {
             _normalKeyHandler = (e) => {
+                if (isPatientResultPanelEvent(e)) return;
                 if (e.key === 'Escape') { e.preventDefault(); closeWS(); }
             };
             document.addEventListener('keydown', _normalKeyHandler);
@@ -3444,11 +3756,76 @@
         }
     }
 
+    function advanceAbnormalFocusAfterSkip(startIndex) {
+        const data = filteredData();
+        const cards = document.querySelectorAll('.ws-abnormal-card');
+        if (!data.length || !cards.length) return;
+        if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.remove('focused');
+        if (data.length === 1) {
+            wsAbnormalIndex = 0;
+        } else {
+            wsAbnormalIndex = Math.min(Math.max(startIndex, 0), data.length - 1);
+            wsAbnormalIndex = (wsAbnormalIndex + 1) % data.length;
+        }
+        if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.add('focused');
+        _scrollAbnormalFocus();
+    }
+
+    function nextPaint() {
+        return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+
+    function clearAbnormalAuditingCard(reportDR) {
+        const card = [...document.querySelectorAll('.ws-abnormal-card[data-rdr]')].find(c => String(c.dataset.rdr || '') === String(reportDR || ''));
+        if (!card) return;
+        card.classList.remove('auditing');
+        card.removeAttribute('aria-busy');
+        const hint = card.querySelector('.ab-card-hint');
+        if (hint && hint.textContent === '正在审核...') hint.textContent = 'Enter=审核';
+    }
+
+    async function confirmAbnormalAuditEventually(iframeWin, reportDR, patientName) {
+        const ft = document.getElementById('lis-ws-ft-stat');
+        if (ft) ft.textContent = `正在确认审核结果：${patientName || reportDR}`;
+        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], 12000, true);
+        if (confirmed && confirmed !== 'incomplete') return true;
+        await sleep(1500);
+        const latestWin = getReportIframeWin() || iframeWin;
+        const found = findNativeRowByReportDR(latestWin, reportDR);
+        if (!found) return true;
+        return isExpectedNativeStatus(found.row, ['3']);
+    }
+
     let _abnormalAuditInProgress = false;
 
     async function auditAbnormalSpecimen(specimen) {
-        if (!specimen || _abnormalAuditInProgress) return;
+        if (_abnormalAuditInProgress) {
+            showToast('正在审核上一条，请稍候', 'warning');
+            return;
+        }
+        if (_auditInProgress) {
+            showToast('正在批量审核中，请稍候', 'warning');
+            return;
+        }
+        if (!specimen) {
+            const data = filteredData();
+            if (data.length) {
+                wsAbnormalIndex = Math.max(0, Math.min(wsAbnormalIndex, data.length - 1));
+                specimen = data[wsAbnormalIndex];
+            }
+        }
+        if (!specimen) {
+            showToast('没有可审核的异常标本', 'warning');
+            return;
+        }
         _abnormalAuditInProgress = true;
+        // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
+        const _auditSafetyTimer = setTimeout(() => {
+            if (_abnormalAuditInProgress) {
+                dbg('异常审核安全超时：操作耗时超过 60 秒');
+                showToast('异常审核操作耗时较长，请耐心等待', 'warning');
+            }
+        }, 60000);
         dbg('异常列表审核开始:', specimen.PatName);
 
         try {
@@ -3459,13 +3836,18 @@
                 card.classList.add('auditing');
                 const hint = card.querySelector('.ab-card-hint');
                 if (hint) hint.textContent = '正在审核...';
+                card.setAttribute('aria-busy', 'true');
             }
+            const ft = document.getElementById('lis-ws-ft-stat');
+            if (ft) ft.textContent = `正在审核异常标本：${specimen.PatName || specimen.Labno || targetDR}`;
             showToast(`正在审核: ${specimen.PatName || specimen.Labno || ''}`, 'warning');
+            await nextPaint();
 
             // 安全校验: 危急值不能通过工作台审核
             const cached = wsClassifiedCache[specimen.ReportDR];
             if (cached && cached.status === 'CRITICAL') {
                 showToast(`🚨 ${specimen.PatName} 有危急值，必须在原始LIS中审核`, 'error');
+                advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
 
@@ -3478,13 +3860,14 @@
                 await new Promise(r => setTimeout(r, 1000));
                 iframeWin = getReportIframeWin() || await ensureReportPageLoaded({ keepWS: true });
             }
-            if (!iframeWin) { showToast('报告页面加载失败', 'error'); return; }
+            if (!iframeWin) { showToast('报告页面加载失败', 'error'); advanceAbnormalFocusAfterSkip(startIndex); return; }
 
             const jq = iframeWin.jQuery || iframeWin.$;
             const me = iframeWin.me;
             if (!jq || !me) {
                 showToast('报告页面未就绪，请稍后重试', 'error');
                 dbg('审核失败: jq=', !!jq, 'me=', !!me);
+                advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
 
@@ -3494,6 +3877,7 @@
             const complete = String(specimen.IsComplete || '');
             if (complete !== '1') {
                 showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
+                advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
 
@@ -3501,6 +3885,7 @@
             const status = String(specimen.Status || specimen.ReportStatus || '');
             if (status === '3' || status === '4') {
                 showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
+                advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
 
@@ -3544,27 +3929,33 @@
             }
             if (!selected) {
                 showToast('未在原生列表中找到该标本', 'error');
+                advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
             const detailReady = await waitReportDetailReady(iframeWin, reportDR, 5000);
             if (!detailReady) {
                 showToast('报告详情未加载完成，请稍后重试', 'warning');
+                advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
 
-            // 使用原生审核按钮
-            let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 25000, keepWS: true });
+            // 使用原生审核按钮（带总超时保护）
+            let auditResult = await Promise.race([
+                clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 15000, keepWS: true, missingAsSuccess: true, targetReportDR: reportDR }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('审核超时(25s)')), 25000))
+            ]).catch(e => { dbg('异常审核超时:', e.message); return false; });
             if (!auditResult) {
                 dbg('异常审核首次未确认，短暂等待原生列表状态...');
-                auditResult = await waitNativeActionResult(iframeWin, reportDR, ['3'], 5000, false);
+                auditResult = await confirmAbnormalAuditEventually(iframeWin, reportDR, specimen.PatName || specimen.Labno || '');
             }
             if (auditResult === 'incomplete') {
                 showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
+                advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
             if (!auditResult) {
-                clearCAAuth(); // 审核失败，清除CA认证状态
-                showToast('审核失败', 'error');
+                showToast('未确认审核成功，已跳到下一条', 'warning');
+                advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
             showToast(`已审核: ${specimen.PatName}`, 'success');
@@ -3594,7 +3985,10 @@
             dbg('审核失败:', e);
             showToast('审核失败: ' + e.message, 'error');
         } finally {
+            clearTimeout(_auditSafetyTimer);
+            clearAbnormalAuditingCard(specimen && specimen.ReportDR);
             _abnormalAuditInProgress = false;
+            updateWSFooter();
             dbg('异常列表审核结束');
         }
     }
@@ -3990,10 +4384,9 @@
     function checkAuditQueueResume() {
         const queue = loadAuditQueue();
         if (!queue || !queue.items || queue.items.length === 0) return;
-        // 不再自动恢复，先清除旧队列，让用户手动触发
         const remaining = queue.items.length - (queue.current || 0);
         if (remaining <= 0) { clearAuditQueue(); return; }
-        showToast(`发现未完成的批审队列（${remaining} 个标本），请在工作台中手动重新开始`, 'warning');
+        showToast(`发现上次未完成的批审队列（${remaining} 个标本），已清除。`, 'info');
         clearAuditQueue();
     }
 
@@ -4100,10 +4493,7 @@
         dbg('openDetailPanel', specimen.ReportDR, specimen.PatName, source);
         createDetailPanel();
         // 清理异常视图键盘监听，防止与详情面板冲突
-        if (_abnormalKeyHandler) {
-            document.removeEventListener('keydown', _abnormalKeyHandler);
-            _abnormalKeyHandler = null;
-        }
+        _removeAbnormalKeyHandler();
 
         // 面板已打开时直接换内容，避免点击其它样本时先收回再二次点击。
         if (detailPanel.classList.contains('show')) {
@@ -4176,6 +4566,7 @@
         // 注册详情面板键盘监听
         _removeDetailKeyHandler();
         _detailKeyHandler = (e) => {
+            if (isPatientResultPanelEvent(e)) return;
             if (!detailPanel || !detailPanel.classList.contains('show')) return;
             if (e.key === 'Escape') {
                 e.preventDefault();
@@ -4322,6 +4713,7 @@
         // 重新注册键盘监听
         _removeDetailKeyHandler();
         _detailKeyHandler = (e) => {
+            if (isPatientResultPanelEvent(e)) return;
             if (!detailPanel || !detailPanel.classList.contains('show')) return;
             if (e.key === 'Escape') {
                 e.preventDefault(); e.stopImmediatePropagation(); closeDetailPanel();
@@ -4349,7 +4741,22 @@
             dbg('详情审核跳过: specimen=', !!currentDetailSpecimen, 'inProgress=', _detailAuditInProgress);
             return;
         }
+        if (_auditInProgress) {
+            showToast('正在批量审核中，请稍候', 'warning');
+            return;
+        }
+        if (_abnormalAuditInProgress) {
+            showToast('正在审核异常标本中，请稍候', 'warning');
+            return;
+        }
         _detailAuditInProgress = true;
+        // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
+        const _detailSafetyTimer = setTimeout(() => {
+            if (_detailAuditInProgress) {
+                dbg('详情审核安全超时：操作耗时超过 60 秒');
+                showToast('详情审核操作耗时较长，请耐心等待', 'warning');
+            }
+        }, 60000);
         dbg('详情审核开始:', currentDetailSpecimen.PatName);
 
         try {
@@ -4514,6 +4921,7 @@
             dbg('详情面板审核失败:', e);
             showToast('审核失败: ' + e.message, 'error');
         } finally {
+            clearTimeout(_detailSafetyTimer);
             _detailAuditInProgress = false;
             dbg('详情审核结束, inProgress 重置为 false');
         }
@@ -5587,20 +5995,26 @@ function fillNativeLoginForm(creds, lastWG) {
     let _batchAbort = false;
     let _auditAbortFlag = false;
     let _auditLockTs = 0;
-    const AUDIT_LOCK_TIMEOUT = 300000; // 5分钟自动释放卡死的锁
+    let _auditLockId = 0;
+    const AUDIT_LOCK_TIMEOUT = 45000; // 45秒超时警告（不自动释放）
     function acquireAuditLock(tag) {
         if (_auditInProgress && (Date.now() - _auditLockTs > AUDIT_LOCK_TIMEOUT)) {
-            dbg('审核锁超时自动释放 (held by', tag, ')');
-            _auditInProgress = false;
+            dbg('审核锁持有超过', AUDIT_LOCK_TIMEOUT / 1000, '秒，可能存在卡死 (held by', tag, ')');
             _auditAbortFlag = true;
+            showToast('审核操作耗时较长，可能需要等待', 'warning');
         }
         if (_auditInProgress) return false;
         _auditInProgress = true;
         _auditAbortFlag = false;
         _auditLockTs = Date.now();
-        return true;
+        _auditLockId++;
+        return _auditLockId;
     }
-    function releaseAuditLock() {
+    function releaseAuditLock(expectedLockId) {
+        if (expectedLockId && expectedLockId !== _auditLockId) {
+            dbg('releaseAuditLock: 锁已不属于当前操作，跳过释放 (expected=', expectedLockId, 'current=', _auditLockId, ')');
+            return;
+        }
         _batchAbort = false;
         _auditAbortFlag = false;
         _auditInProgress = false;
@@ -5970,6 +6384,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!iframeWin || !reportDR) return false;
         const end = Date.now() + timeoutMs;
         const target = String(reportDR);
+        let curHitCount = 0;
         // 同步检查一次（避免首次等待）
         try {
             const me = iframeWin.me;
@@ -5989,6 +6404,10 @@ function fillNativeLoginForm(creds, lastWG) {
                     const leftRows = jq ? (jq('#dgLeftReportItem').datagrid('getRows') || []) : [];
                     const rightRows = jq && jq('#dgRightReportItem').length ? (jq('#dgRightReportItem').datagrid('getRows') || []) : [];
                     if (leftRows.length || rightRows.length) return true;
+                    curHitCount++;
+                    if (curHitCount >= 3) return true;
+                } else {
+                    curHitCount = 0;
                 }
             } catch(e) {}
         }
@@ -6009,9 +6428,15 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!caUser) { showToast('无法获取用户名', 'error'); return false; }
 
         dbg('CA: 检测到 CA 窗口');
+        const totalDeadline = Date.now() + 90000;
 
         // 最多重试 3 次
         for (let attempt = 1; attempt <= 3; attempt++) {
+            if (Date.now() > totalDeadline) {
+                dbg('CA: 总超时(90s)已到');
+                showToast('CA 认证超时，请手动完成', 'error');
+                return false;
+            }
             dbg('CA 尝试 ' + attempt + '/3');
 
             // 等待 iframe 加载（最多 15 秒）
@@ -6151,10 +6576,10 @@ function fillNativeLoginForm(creds, lastWG) {
         const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : false;
 
         // 记录当前选中行的 ReportDR（用于检测审核成功）
-        let targetReportDR = '';
+        let targetReportDR = options.targetReportDR ? String(options.targetReportDR) : '';
         try {
             const sel = me && me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
-            if (sel) targetReportDR = String(sel.ReportDR || '');
+            if (!targetReportDR && sel) targetReportDR = String(sel.ReportDR || '');
         } catch(e) {}
 
         // 点击审核按钮
@@ -6636,16 +7061,24 @@ function fillNativeLoginForm(creds, lastWG) {
         const hasLow = low && !isNaN(low.value);
         const hasHigh = high && !isNaN(high.value);
 
+        // 带操作符的结果：只能在确定时返回 HIGH/LOW，否则返回 ''（不确定）
         if (parsed.op === '<' || parsed.op === '<=') {
-            if (hasHigh && parsed.value > high.value) return 'HIGH';
-            if (parsed.op === '<' && hasHigh && parsed.value >= high.value) return '';
-            return 'NORMAL';
+            // "<X" 的实际值 < X，永远不能确定为 HIGH
+            if (parsed.op === '<' && hasLow && parsed.value <= low.value) return 'LOW';
+            if (parsed.op === '<=' && hasLow && parsed.value < low.value) return 'LOW';
+            // 只有无边界限制时才可能是 NORMAL
+            if (!hasLow && !hasHigh) return 'NORMAL';
+            return '';  // 不确定
         }
         if (parsed.op === '>' || parsed.op === '>=') {
-            if (hasLow && parsed.value < low.value) return 'LOW';
-            if (parsed.op === '>' && hasLow && parsed.value <= low.value) return '';
-            return 'NORMAL';
+            // ">X" 的实际值 > X，永远不能确定为 LOW
+            if (parsed.op === '>' && hasHigh && parsed.value >= high.value) return 'HIGH';
+            if (parsed.op === '>=' && hasHigh && parsed.value > high.value) return 'HIGH';
+            // 只有无边界限制时才可能是 NORMAL
+            if (!hasLow && !hasHigh) return 'NORMAL';
+            return '';  // 不确定
         }
+        // 无操作符：标准数值比较
         if (hasHigh && parsed.value > high.value) return 'HIGH';
         if (hasLow && parsed.value < low.value) return 'LOW';
         return 'NORMAL';
@@ -6712,7 +7145,7 @@ function fillNativeLoginForm(creds, lastWG) {
     function isExplicitNegativeText(value) {
         const r = normalizeQualitativeText(value);
         if (!r) return false;
-        if (r === '-' || r === 'NEGATIVE' || r === 'NEG' || r === 'NON-REACTIVE' || r === 'NONREACTIVE') return true;
+        if (r === '-' || r === '(-)' || r === 'NEGATIVE' || r === 'NEG' || r === 'NON-REACTIVE' || r === 'NONREACTIVE') return true;
         return r.includes('阴性') || r === '未见' || r === '未检出' || r === '未检测到';
     }
 
@@ -7211,6 +7644,11 @@ function fillNativeLoginForm(creds, lastWG) {
     // --- 快速审核当前标本 ---
     async function quickAuditCurrent() {
         if (!acquireAuditLock('quickAudit')) return;
+        if (_abnormalAuditInProgress || _detailAuditInProgress) {
+            showToast('正在审核异常标本或详情面板审核中，请稍候', 'warning');
+            releaseAuditLock();
+            return;
+        }
 
         const selected = getNativeSelectedRow();
         if (!selected) {
@@ -7328,6 +7766,11 @@ function fillNativeLoginForm(creds, lastWG) {
     // --- 批量审核对话框 ---
     async function showBatchAuditDialog() {
         if (!acquireAuditLock('showBatchDialog')) return;
+        if (_abnormalAuditInProgress || _detailAuditInProgress) {
+            showToast('正在审核异常标本或详情面板审核中，请稍候', 'warning');
+            releaseAuditLock();
+            return;
+        }
         try {
             const eligible = getAuditEligibleRows();
             if (eligible.length === 0) {
@@ -7593,6 +8036,16 @@ function fillNativeLoginForm(creds, lastWG) {
     async function continueAuditQueue(queue) {
         if (!queue || !queue.items || queue.items.length === 0) return;
         if (!acquireAuditLock('batchAudit')) { showToast('正在审核中，请稍候', 'warning'); return; }
+        if (_abnormalAuditInProgress) {
+            showToast('正在审核异常标本中，请稍候', 'warning');
+            releaseAuditLock();
+            return;
+        }
+        if (_detailAuditInProgress) {
+            showToast('正在详情面板审核中，请稍候', 'warning');
+            releaseAuditLock();
+            return;
+        }
         if (queue.keepWS) keepWorkbenchOnTop('批审开始');
 
         // 显示进度条
@@ -7651,7 +8104,11 @@ function fillNativeLoginForm(creds, lastWG) {
             // 按仪器分组排序剩余项，减少仪器切换次数（每次切换耗时 ~500ms）
             if (queue.current < queue.items.length - 1) {
                 const remaining = queue.items.splice(queue.current);
-                remaining.sort((a, b) => String(a.mdr || '').localeCompare(String(b.mdr || '')));
+                remaining.sort((a, b) => {
+                    const wgCmp = String(a.wg || '').localeCompare(String(b.wg || ''), 'zh');
+                    if (wgCmp) return wgCmp;
+                    return String(a.mdr || '').localeCompare(String(b.mdr || ''), 'zh');
+                });
                 queue.items.push(...remaining);
             }
 
@@ -7732,8 +8189,8 @@ function fillNativeLoginForm(creds, lastWG) {
 
                     let timedOut = false;
                     const auditResult = await Promise.race([
-                        clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 15000, keepWS: queue.keepWS }).then(r => { if (!timedOut) return r; }),
-                        new Promise((_, rej) => setTimeout(() => { timedOut = true; rej(new Error('审核超时(20s)')); }, 20000))
+                        clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 15000, keepWS: queue.keepWS, missingAsSuccess: true, targetReportDR: item.reportDR }).then(r => { if (!timedOut) return r; }),
+	                        new Promise((_, rej) => setTimeout(() => { timedOut = true; rej(new Error('审核超时(25s)')); }, 25000))
                     ]);
                     if (queue.keepWS) keepWorkbenchOnTop('单个标本审核后');
                     if (auditResult === 'incomplete') {
@@ -7834,6 +8291,7 @@ function fillNativeLoginForm(creds, lastWG) {
     // --- 键盘快捷键注册 ---
     function registerAuditShortcuts() {
         document.addEventListener('keydown', e => {
+            if (isPatientResultPanelEvent(e)) return;
             // 忽略输入框中的按键
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
             // 忽略如果对话框打开
@@ -7936,7 +8394,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.18.0');
+        dbg('iMedicalLIS 增强助手 v7.20.0');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
