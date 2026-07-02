@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.31
+// @version      7.20.32
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -269,65 +269,51 @@
 #lis-fab-tip.show{opacity:1}
 
 /* --- 病人结果筛选导出 --- */
-#lis-pr-fab{position:fixed;right:20px;bottom:152px;z-index:99999;width:52px;height:52px;border-radius:50%;border:none;background:linear-gradient(145deg,#168276,#0f6b62);color:#fff;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 4px 16px rgba(22,130,118,.35);display:flex;align-items:center;justify-content:center;user-select:none;transition:transform .2s,box-shadow .2s}
-#lis-pr-fab:hover{transform:scale(1.06);box-shadow:0 6px 20px rgba(22,130,118,.45)}
-#lis-pr-panel{position:fixed!important;inset:0!important;z-index:100006!important;background:#e8edf2;display:none;flex-direction:column;font-family:'Microsoft YaHei','Segoe UI',sans-serif;color:#1f2933}
+#lis-pr-fab{position:fixed;right:20px;bottom:152px;z-index:99999;width:52px;height:52px;border-radius:50%;border:none;background:#145b86;color:#fff;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 3px 14px rgba(20,91,134,.35);display:flex;align-items:center;justify-content:center;user-select:none;transition:transform .15s}
+#lis-pr-fab:hover{background:#0f4668;transform:scale(1.06)}
+#lis-pr-panel{position:fixed!important;inset:0!important;z-index:100006!important;background:#eef2f6;display:none;flex-direction:column;font-family:'Microsoft YaHei','Segoe UI',sans-serif;color:#1f2933}
 #lis-pr-panel.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
-#lis-pr-hd{min-height:48px;display:flex;align-items:center;gap:10px;padding:0 16px;background:linear-gradient(90deg,#fff 0%,#f4faf8 100%);border-bottom:1px solid #d7e3de;flex-shrink:0;box-shadow:0 1px 0 rgba(22,130,118,.06)}
-#lis-pr-hd .pr-hd-main{display:flex;flex-direction:column;gap:1px;min-width:0}
-#lis-pr-hd h3{margin:0;font-size:15px;color:#14504a;font-weight:800;letter-spacing:.02em}
-#lis-pr-hd .pr-hd-sub{font-size:11px;color:#6b7c78;font-weight:500}
+#lis-pr-hd{height:40px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#f1f7fb;border-bottom:1px solid #d5e4ef;flex-shrink:0}
+#lis-pr-hd h3{margin:0;font-size:14px;color:#145b86;white-space:nowrap;font-weight:800}
 #lis-pr-hd .pr-spacer{flex:1}
-#lis-pr-hd button{height:30px;min-width:30px;border:1px solid #c5d6d0;background:#fff;color:#4a5f5a;border-radius:8px;padding:0 10px;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
-#lis-pr-hd button:hover{background:#f0f7f4;border-color:#168276;color:#0f6f65}
-#lis-pr-hd .pr-close{font-size:18px;line-height:1;padding:0 10px;color:#8a9a94}
-#lis-pr-filter-scroll{flex:0 0 auto;overflow:visible;padding:12px 14px 6px;background:#e8edf2}
-#lis-pr-tools{display:flex;flex-direction:column;gap:10px}
-.pr-card{background:#fff;border:1px solid #dce6e2;border-radius:10px;box-shadow:0 1px 3px rgba(31,45,55,.05);overflow:hidden}
-.pr-card-hd{display:flex;align-items:center;gap:8px;padding:8px 12px;background:linear-gradient(180deg,#f8fbfa,#f2f7f5);border-bottom:1px solid #e8efec;font-size:12px;font-weight:800;color:#2a4a44;letter-spacing:.03em}
-.pr-card-ico{font-size:14px;line-height:1;opacity:.9}
-.pr-card-bd{padding:10px 12px 12px}
-.pr-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 10px}
-.pr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px 10px;align-items:end}
-.pr-grid-wide{grid-column:1/-1}
-#lis-pr-tools label,#lis-pr-filter-scroll label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:#5a6b66;font-weight:700;line-height:1.1}
-#lis-pr-tools input,#lis-pr-tools select,#lis-pr-filter-scroll input,#lis-pr-filter-scroll select{width:100%;height:32px;box-sizing:border-box;border:1px solid #cdd8d4;border-radius:8px;padding:0 10px;font-size:12px;color:#1f2933;background:#fafcfb;outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
-#lis-pr-tools input:focus,#lis-pr-tools select:focus,#lis-pr-filter-scroll input:focus,#lis-pr-filter-scroll select:focus{border-color:#168276;background:#fff;box-shadow:0 0 0 3px rgba(22,130,118,.1)}
-#lis-pr-tools .pr-date,#lis-pr-filter-scroll .pr-date{min-width:128px;flex:0 0 128px}
-#lis-pr-tools .pr-date input{cursor:pointer}
-#lis-pr-tools .pr-date-shortcuts{display:flex;align-items:flex-end;gap:6px;flex-wrap:wrap}
-#lis-pr-tools .pr-date-shortcuts button{height:32px;min-width:58px;padding:0 12px;border:1px solid #c5d6d0;border-radius:8px;background:#fff;color:#3d524c;font-size:11px;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s}
-#lis-pr-tools .pr-date-shortcuts button:hover{background:#eef7f3;border-color:#168276;color:#0f6f65}
-.pr-mach-section{margin-top:10px}
-.pr-mach-label{font-size:11px;font-weight:800;color:#5a6b66;margin-bottom:6px}
-.pr-mach-hint{font-size:10px;color:#8a9a94;margin-top:6px;line-height:1.4}
-#lis-pr-machine-tree{display:flex;flex-direction:column;gap:8px;padding:0;background:transparent;border:none;overflow:visible}
-.pr-wg-block{border:1px solid #d0ddd8;border-radius:8px;background:#f6faf8;padding:8px 10px 10px}
-.pr-wg-block[data-wg="1"]{border-top:3px solid #e74c3c}
-.pr-wg-block[data-wg="3"]{border-top:3px solid #3498db}
-.pr-wg-block[data-wg="4"]{border-top:3px solid #2ecc71}
-.pr-wg-title{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;margin:0 0 8px;font-size:12px;font-weight:800;color:#2a4a44;line-height:1.3;cursor:pointer;user-select:none}
-.pr-wg-title input{width:15px!important;height:15px!important;margin:0;flex-shrink:0;accent-color:#168276}
-.pr-wg-mach-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px 8px}
-.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:flex-start;gap:7px;margin:0;padding:7px 9px;font-size:12px!important;font-weight:600!important;color:#2c3e46!important;line-height:1.4!important;background:#fff;border:1px solid #dde5e1;border-radius:7px;cursor:pointer;white-space:normal!important;word-break:break-word;overflow:visible!important;max-width:none!important;text-overflow:unset!important;transition:border-color .12s,background .12s}
-.pr-mach-option:hover{border-color:#168276;background:#f0f7f4}
-.pr-mach-option:has(input:checked){border-color:#168276;background:#e8f5f1;box-shadow:inset 0 0 0 1px rgba(22,130,118,.15)}
-.pr-mach-option input{width:15px!important;height:15px!important;margin:2px 0 0;flex-shrink:0;accent-color:#168276}
-#lis-pr-tools .pr-toggle{grid-column:span 2;height:32px;flex-direction:row!important;align-items:center;justify-content:flex-start;gap:8px;border:1px solid #cdd8d4;border-radius:8px;background:#fafcfb;padding:0 10px;cursor:pointer;align-self:end}
-#lis-pr-tools .pr-toggle:hover{border-color:#168276;background:#f0f7f4}
-#lis-pr-tools .pr-toggle input{width:15px;height:15px;margin:0;accent-color:#168276}
-#lis-pr-actions{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#fff;border-top:1px solid #dce6e2;border-bottom:1px solid #dce6e2;flex-shrink:0;box-shadow:0 -2px 8px rgba(0,0,0,.04)}
-#lis-pr-actions button{height:34px;border-radius:8px;padding:0 16px;font-size:12px;font-weight:800;cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s,transform .1s}
-#lis-pr-actions button:active{transform:scale(.98)}
-#lis-pr-query{background:linear-gradient(180deg,#1a9a8c,#168276);color:#fff;border-color:#127a6e;min-width:88px;box-shadow:0 2px 6px rgba(22,130,118,.25)}
-#lis-pr-query:hover{background:linear-gradient(180deg,#1eb3a3,#1a9588)}
-#lis-pr-export{background:#fff;color:#2a5a52;border-color:#b8ccc6}
-#lis-pr-export:hover{background:#f0f7f4;border-color:#168276}
-#lis-pr-clear{background:transparent;color:#6b7c78;border-color:#d0ddd8}
-#lis-pr-clear:hover{background:#f5f7f6;color:#334155}
-#lis-pr-cancel{background:#fff3e0;color:#c2410c;border-color:#fdba74}
-#lis-pr-actions .pr-act-spacer{flex:1}
-#lis-pr-actions .pr-act-hint{font-size:10px;color:#8a9a94;max-width:200px;line-height:1.35}
+#lis-pr-hd button,#lis-pr-tools button{height:26px;border:1px solid #9dc6df;background:#fff;color:#246489;border-radius:4px;padding:0 10px;font-size:11px;font-weight:700;cursor:pointer}
+#lis-pr-hd button:hover,#lis-pr-tools button:hover{background:#f5fbff;border-color:#4f9cca}
+#lis-pr-hd .pr-close{font-size:18px;line-height:20px;padding:0 8px;color:#7b8b96}
+#lis-pr-tools{display:flex;flex-wrap:wrap;align-items:flex-end;gap:7px 8px;padding:8px 10px;background:#fbfdff;border-bottom:1px solid #d5e4ef;flex-shrink:0;max-height:40vh;overflow-y:auto;overflow-x:hidden}
+#lis-pr-tools label{display:flex;flex:0 0 auto;flex-direction:column;gap:3px;font-size:10px;color:#526575;font-weight:700;line-height:1.05;white-space:nowrap}
+#lis-pr-tools input,#lis-pr-tools select{width:100%;height:26px;box-sizing:border-box;border:1px solid #c3ced8;border-radius:4px;padding:2px 7px;font-size:12px;color:#213547;background:#fff;outline:none}
+#lis-pr-tools input:focus,#lis-pr-tools select:focus{border-color:#4f9cca;box-shadow:0 0 0 2px rgba(79,156,202,.12)}
+#lis-pr-tools .pr-date{width:126px}
+#lis-pr-tools .pr-xs{width:76px}
+#lis-pr-tools .pr-sm{width:104px}
+#lis-pr-tools .pr-md{width:132px}
+#lis-pr-tools .pr-lg{width:168px}
+#lis-pr-tools .pr-mach-tree-wrap{width:480px;align-self:stretch}
+#lis-pr-machine-tree{display:flex;gap:6px;align-items:stretch;border:1px solid #c3ced8;border-radius:4px;background:#fff;padding:4px;min-height:54px;max-height:96px;overflow:auto}
+.pr-wg-box{border:1px solid #d9e3ec;border-radius:4px;background:#fbfdff;min-width:148px;max-width:180px;flex:0 0 auto}
+.pr-wg-box[data-wg="1"]{border-top:2px solid #e74c3c}
+.pr-wg-box[data-wg="3"]{border-top:2px solid #3498db}
+.pr-wg-box[data-wg="4"]{border-top:2px solid #2ecc71}
+.pr-wg-head{height:22px;display:flex;align-items:center;gap:5px;padding:0 7px;font-size:11px;font-weight:800;color:#246489;cursor:pointer;border-bottom:1px solid #edf1f5;user-select:none}
+.pr-wg-head input{width:12px!important;height:12px!important;margin:0}
+.pr-wg-body{padding:4px 6px;display:flex;flex-direction:column;gap:3px;max-height:64px;overflow:auto}
+.pr-wg-box.collapsed .pr-wg-body{display:none}
+.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:5px;font-size:11px!important;font-weight:600!important;color:#334155!important;line-height:1.2!important;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.pr-mach-option input{width:12px!important;height:12px!important;margin:0}
+#lis-pr-tools .pr-wide{width:208px}
+#lis-pr-tools .pr-xl{width:220px}
+#lis-pr-tools .pr-section{flex:1 0 100%;display:flex;align-items:center;margin:2px 0 0;padding:3px 8px;font-size:11px;font-weight:800;color:#246489;background:#edf5fb;border-left:3px solid #145b86;border-radius:0 4px 4px 0}
+#lis-pr-tools .pr-section:first-child{margin-top:0}
+#lis-pr-tools .pr-actions{display:flex;flex:0 0 auto;align-items:flex-end;gap:6px;margin-left:auto;min-width:292px}
+#lis-pr-tools .pr-actions button{min-width:64px;height:26px}
+#lis-pr-tools #lis-pr-query{background:#145b86;color:#fff;border-color:#0f4668;box-shadow:0 1px 4px rgba(20,91,134,.25)}
+#lis-pr-tools #lis-pr-query:hover{background:#0f4668}
+#lis-pr-tools .pr-date input{cursor:pointer;background:#fff}
+#lis-pr-tools .pr-date-shortcuts{display:flex;align-items:flex-end;gap:4px}
+#lis-pr-tools .pr-date-shortcuts button{min-width:54px;height:26px;padding:0 7px;color:#4f6b7d;background:#f7fbff;border-color:#c4d8e8;font-weight:700}
+#lis-pr-tools .pr-toggle{height:26px;display:flex!important;flex-direction:row!important;align-items:center;align-self:flex-end;gap:6px;box-sizing:border-box;border:1px solid #c3ced8;border-radius:4px;background:#fff;color:#314457;font-size:12px;font-weight:700;padding:0 10px;white-space:nowrap;cursor:pointer;line-height:1}
+#lis-pr-tools .pr-toggle:hover{border-color:#4f9cca;background:#f7fbff}
+#lis-pr-tools .pr-toggle input{width:13px;height:13px;margin:0;accent-color:#145b86}
 #lis-pr-date-picker{position:fixed;z-index:100020;width:252px;background:#fff;border:1px solid #b9cbd9;border-radius:6px;box-shadow:0 8px 24px rgba(31,45,61,.18);padding:8px;font-family:'Microsoft YaHei','Segoe UI',sans-serif}
 #lis-pr-date-picker .pr-dp-head{display:flex;gap:6px;margin-bottom:8px;align-items:center}
 #lis-pr-date-picker select{height:26px;border:1px solid #c3ced8;border-radius:4px;background:#fff;color:#213547;font-size:12px;padding:0 4px;flex:1}
@@ -338,7 +324,7 @@
 #lis-pr-date-picker .pr-dp-days button.blank{visibility:hidden;pointer-events:none}
 #lis-pr-date-picker .pr-dp-days button:hover{background:#edf7ff;border-color:#9dc6df}
 #lis-pr-date-picker .pr-dp-days button.on{background:#145b86;border-color:#145b86;color:#fff;font-weight:700}
-#lis-pr-status{padding:6px 14px;font-size:11px;color:#5a6b66;background:#fafcfb;flex-shrink:0;border-bottom:1px solid #e8efec}
+#lis-pr-status{padding:4px 10px;font-size:11px;color:#6b7785;background:#fff;flex-shrink:0;border-bottom:1px solid #edf1f5}
 #lis-pr-status.ok{color:#0f6f65;background:#eef7f3}
 #lis-pr-status.error{color:#c62828;background:#fff5f5}
 #lis-pr-status.info{color:#1565c0;background:#f3f8ff}
@@ -1994,7 +1980,7 @@
         if (!box) return;
         const oldSelected = new Set(prCheckedValues('.lis-pr-machine-check'));
         const oldWGs = new Set(prCheckedValues('.lis-pr-wg-check'));
-        box.innerHTML = '<span style="font-size:11px;color:#8a9a94;padding:8px 4px;align-self:center">仪器列表加载中...</span>';
+        box.innerHTML = '<span style="font-size:11px;color:#7b8b96;padding:4px 6px">仪器加载中...</span>';
         const targetWGs = WG;
         try {
             const groups = await Promise.all(targetWGs.map(async w => {
@@ -2007,13 +1993,23 @@
                     const value = (m._wg || '') + '|' + (m.RowID || '');
                     const checked = oldSelected.has(value) ? ' checked' : '';
                     const name = esc(m.CName || m.Name || m.RowID || '');
-                    return `<label class="pr-mach-option"><input type="checkbox" class="lis-pr-machine-check" data-wg="${esc(g.wg.dr)}" value="${esc(value)}"${checked}><span>${name}</span></label>`;
-                }).join('') : '<div style="font-size:12px;color:#9aa5b1;padding:4px 0">未加载到仪器</div>';
-                return `<div class="pr-wg-block" data-wg="${esc(g.wg.dr)}">
-                    <label class="pr-wg-title"><input type="checkbox" class="lis-pr-wg-check" value="${esc(g.wg.dr)}"${wgChecked}><span>${esc(g.wg.name)}</span></label>
-                    <div class="pr-wg-mach-grid">${items}</div>
+                    return `<label class="pr-mach-option" title="${name}"><input type="checkbox" class="lis-pr-machine-check" data-wg="${esc(g.wg.dr)}" value="${esc(value)}"${checked}>${name}</label>`;
+                }).join('') : '<div style="font-size:11px;color:#9aa5b1;padding:2px 0">未加载到仪器</div>';
+                return `<div class="pr-wg-box" data-wg="${esc(g.wg.dr)}">
+                    <div class="pr-wg-head"><span class="pr-fold">▾</span><input type="checkbox" class="lis-pr-wg-check" value="${esc(g.wg.dr)}"${wgChecked}><span>${esc(g.wg.name)}</span></div>
+                    <div class="pr-wg-body">${items}</div>
                 </div>`;
             }).join('');
+            box.querySelectorAll('.pr-wg-head').forEach(head => {
+                head.addEventListener('click', e => {
+                    if (e.target && e.target.classList && e.target.classList.contains('lis-pr-wg-check')) return;
+                    const group = head.closest('.pr-wg-box');
+                    if (!group) return;
+                    group.classList.toggle('collapsed');
+                    const f = head.querySelector('.pr-fold');
+                    if (f) f.textContent = group.classList.contains('collapsed') ? '▸' : '▾';
+                });
+            });
         } catch(e) {
             prSetStatus('仪器列表加载失败: ' + e.message, 'error');
         }
@@ -2740,7 +2736,16 @@
     /* 修复：只拦截工具栏区域的滚轮（工具栏 overflow:visible 需手动滚动），
        #lis-pr-body 使用原生 overflow:auto 滚动，不阻止默认行为 */
     function prBindWheelScroll(panel) {
-        /* 筛选区一次性展示，滚轮交给结果区原生滚动 */
+        panel.addEventListener('wheel', e => {
+            const tools = document.getElementById('lis-pr-tools');
+            if (tools && e.target && e.target.closest && e.target.closest('#lis-pr-tools')) {
+                if (tools.scrollHeight > tools.clientHeight) {
+                    tools.scrollTop += e.deltaY;
+                    e.preventDefault();
+                }
+                e.stopPropagation();
+            }
+        }, { passive: false, capture: true });
     }
 
     /* 批次节流延迟（ms） */
@@ -2847,88 +2852,57 @@
         panel.id = 'lis-pr-panel';
         panel.innerHTML = `
             <div id="lis-pr-hd">
-                <div class="pr-hd-main">
-                    <h3>病人结果筛选导出</h3>
-                    <span class="pr-hd-sub">本地查询 · 不离开浏览器 · 可导出 CSV</span>
-                </div>
+                <h3>病人结果筛选导出</h3>
                 <span class="pr-spacer"></span>
-                <button id="lis-pr-mini" title="最小化">—</button>
+                <button id="lis-pr-mini" title="隐藏">_</button>
                 <button class="pr-close" id="lis-pr-close" title="关闭">×</button>
             </div>
-            <div id="lis-pr-filter-scroll">
-                <div id="lis-pr-tools">
-                    <div class="pr-card">
-                        <div class="pr-card-hd"><span class="pr-card-ico">📅</span>标本范围</div>
-                        <div class="pr-card-bd">
-                            <div class="pr-row">
-                                <label class="pr-date">开始日期<input type="text" id="lis-pr-start" readonly placeholder="选择日期"></label>
-                                <label class="pr-date">结束日期<input type="text" id="lis-pr-end" readonly placeholder="选择日期"></label>
-                                <div class="pr-date-shortcuts">
-                                    <button type="button" data-range="today">今天</button>
-                                    <button type="button" data-range="month">近一月</button>
-                                    <button type="button" data-range="year">近一年</button>
-                                </div>
-                            </div>
-                            <div class="pr-mach-section">
-                                <div class="pr-mach-label">工作组 / 仪器</div>
-                                <div id="lis-pr-machine-tree"></div>
-                                <div class="pr-mach-hint">不勾选 = 全部；勾选工作组名 = 整组；也可单独勾选仪器</div>
-                            </div>
-                            <div class="pr-grid" style="margin-top:10px">
-                                <label>状态<select id="lis-pr-status-filter">
-                                    <option value="">全部</option><option value="1">登记</option><option value="2">初审</option><option value="3">审核</option><option value="4">复审</option>
-                                </select></label>
-                                <label class="pr-grid-wide">综合搜索<input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 住院号"></label>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="pr-card">
-                        <div class="pr-card-hd"><span class="pr-card-ico">👤</span>患者信息</div>
-                        <div class="pr-card-bd">
-                            <div class="pr-grid">
-                                <label>病人类型<input type="text" id="lis-pr-patient-type" placeholder="体检"></label>
-                                <label>科室<input type="text" id="lis-pr-dept" placeholder="科室"></label>
-                                <label>病区<input type="text" id="lis-pr-ward" placeholder="病区"></label>
-                                <label>医生<input type="text" id="lis-pr-doctor" placeholder="医生"></label>
-                                <label class="pr-grid-wide">诊断<input type="text" id="lis-pr-diagnosis" placeholder="诊断关键字"></label>
-                                <label>性别<select id="lis-pr-sex"><option value="">全部</option><option value="男">男</option><option value="女">女</option></select></label>
-                                <label>年龄 ≥<input type="number" id="lis-pr-age-min" placeholder="岁"></label>
-                                <label>年龄 ≤<input type="number" id="lis-pr-age-max" placeholder="岁"></label>
-                                <label>标本<input type="text" id="lis-pr-specimen" placeholder="血清"></label>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="pr-card">
-                        <div class="pr-card-hd"><span class="pr-card-ico">🧪</span>项目结果</div>
-                        <div class="pr-card-bd">
-                            <div class="pr-grid">
-                                <label class="pr-grid-wide">项目名称<input type="text" id="lis-pr-item" placeholder="如 HBsAg"></label>
-                                <label>判断<select id="lis-pr-judge">
-                                    <option value="">全部</option><option value="NORMAL">正常</option><option value="HIGH">偏高</option><option value="LOW">偏低</option><option value="ABNORMAL">异常</option><option value="CRITICAL">危急</option><option value="UNCERTAIN">待定</option>
-                                </select></label>
-                                <label>结果文本<input type="text" id="lis-pr-result-text" placeholder="阳性 / +"></label>
-                                <label>关系<select id="lis-pr-result-op">
-                                    <option value="">不筛</option><option value="gt">&gt;</option><option value="gte">≥</option><option value="lt">&lt;</option><option value="lte">≤</option><option value="eq">=</option>
-                                </select></label>
-                                <label>比较值<input type="number" step="any" id="lis-pr-result-value" placeholder="数值"></label>
-                                <label>数值 ≥<input type="number" step="any" id="lis-pr-result-min"></label>
-                                <label>数值 ≤<input type="number" step="any" id="lis-pr-result-max"></label>
-                                <label class="pr-toggle"><input type="checkbox" id="lis-pr-abnormal"><span>仅异常结果</span></label>
-                            </div>
-                        </div>
-                    </div>
+            <div id="lis-pr-tools">
+                <div class="pr-section">标本范围</div>
+                <label class="pr-date">开始日期<input type="text" id="lis-pr-start" readonly placeholder="选择日期"></label>
+                <label class="pr-date">结束日期<input type="text" id="lis-pr-end" readonly placeholder="选择日期"></label>
+                <div class="pr-date-shortcuts">
+                    <button type="button" data-range="today">今天</button>
+                    <button type="button" data-range="month">近一月</button>
+                    <button type="button" data-range="year">近一年</button>
+                </div>
+                <label class="pr-mach-tree-wrap">工作组 / 仪器（不勾=全部；勾工作组=整组；展开后可只勾仪器）<div id="lis-pr-machine-tree"></div></label>
+                <label class="pr-sm">状态<select id="lis-pr-status-filter">
+                    <option value="">全部</option><option value="1">登记</option><option value="2">初审</option><option value="3">审核</option><option value="4">复审</option>
+                </select></label>
+                <label class="pr-xl">综合搜索<input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 住院号"></label>
+                <div class="pr-section">患者信息</div>
+                <label class="pr-sm">病人类型<input type="text" id="lis-pr-patient-type" placeholder="体检 职工体检"></label>
+                <label class="pr-md">科室<input type="text" id="lis-pr-dept" placeholder="科室"></label>
+                <label class="pr-sm">病区<input type="text" id="lis-pr-ward" placeholder="病区"></label>
+                <label class="pr-sm">医生<input type="text" id="lis-pr-doctor" placeholder="医生"></label>
+                <label class="pr-wide">诊断<input type="text" id="lis-pr-diagnosis" placeholder="诊断关键字"></label>
+                <label class="pr-xs">性别<select id="lis-pr-sex"><option value="">全部</option><option value="男">男</option><option value="女">女</option></select></label>
+                <label class="pr-xs">年龄≥<input type="number" id="lis-pr-age-min" placeholder="岁"></label>
+                <label class="pr-xs">年龄≤<input type="number" id="lis-pr-age-max" placeholder="岁"></label>
+                <label class="pr-sm">标本<input type="text" id="lis-pr-specimen" placeholder="血清"></label>
+                <div class="pr-section">项目结果</div>
+                <label class="pr-lg">项目名称<input type="text" id="lis-pr-item" placeholder="如 HBsAg"></label>
+                <label class="pr-md">判断<select id="lis-pr-judge">
+                    <option value="">全部</option><option value="NORMAL">正常</option><option value="HIGH">偏高</option><option value="LOW">偏低</option><option value="ABNORMAL">异常</option><option value="CRITICAL">危急</option><option value="UNCERTAIN">待定</option>
+                </select></label>
+                <label class="pr-md">结果文本<input type="text" id="lis-pr-result-text" placeholder="含 阳性 / +"></label>
+                <label class="pr-xs">关系<select id="lis-pr-result-op">
+                    <option value="">不筛</option><option value="gt">&gt;</option><option value="gte">&gt;=</option><option value="lt">&lt;</option><option value="lte">&lt;=</option><option value="eq">=</option>
+                </select></label>
+                <label class="pr-xs">比较值<input type="number" step="any" id="lis-pr-result-value" placeholder="值"></label>
+                <label class="pr-xs">数值≥<input type="number" step="any" id="lis-pr-result-min"></label>
+                <label class="pr-xs">数值≤<input type="number" step="any" id="lis-pr-result-max"></label>
+                <label class="pr-toggle"><input type="checkbox" id="lis-pr-abnormal"><span>仅异常结果</span></label>
+                <div class="pr-actions">
+                    <button id="lis-pr-query">查询</button>
+                    <button id="lis-pr-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">停止</button>
+                    <button id="lis-pr-clear">清空条件</button>
+                    <button id="lis-pr-export">导出CSV</button>
                 </div>
             </div>
-            <div id="lis-pr-actions">
-                <button id="lis-pr-query">查询</button>
-                <button id="lis-pr-cancel" style="display:none">停止</button>
-                <button id="lis-pr-clear">清空条件</button>
-                <button id="lis-pr-export">导出 CSV</button>
-                <span class="pr-act-spacer"></span>
-                <span class="pr-act-hint">数据仅在本机处理，不会上传</span>
-            </div>
-            <div id="lis-pr-status">请选择条件后点击「查询」。</div>
-            <div id="lis-pr-body"><div class="pr-empty">点击「查询」后显示病人结果明细。<br>导出的是结果数据，不是正式报告单。</div></div>`;
+            <div id="lis-pr-status">请选择条件后查询。数据仅在本机浏览器内处理。</div>
+            <div id="lis-pr-body"><div class="pr-empty">点击"查询"后显示病人结果明细。<br>这里导出的是结果数据，不是正式报告单。</div></div>`;
         document.body.appendChild(panel);
 
         const start = document.getElementById('lis-pr-start');
@@ -9601,7 +9575,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.31');
+        dbg('iMedicalLIS 增强助手 v7.20.32');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
