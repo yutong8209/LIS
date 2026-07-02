@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.24
+// @version      7.20.25
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1108,6 +1108,61 @@
         return null;
     }
 
+    function qcParseDate(s) {
+        const d = String(s || '').trim();
+        if (!d) return NaN;
+        if (/^\d{4}-\d{2}-\d{2}/.test(d)) return new Date(d.slice(0, 10) + 'T00:00:00').getTime();
+        if (/^\d{8}$/.test(d)) return new Date(d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + 'T00:00:00').getTime();
+        const parsed = Date.parse(d);
+        return Number.isNaN(parsed) ? NaN : parsed;
+    }
+
+    function qcFormatXLabel(dateStr, fewPoints) {
+        const d = String(dateStr || '');
+        if (fewPoints && d.length >= 10) return d.slice(5, 10).replace('-', '/');
+        if (d.length >= 10) return d.slice(8, 10);
+        return d.slice(-2);
+    }
+
+    // 横轴定位：少量点用固定间距居中，避免 2～3 个点拉满整图
+    function qcXPositions(points, left, plotW) {
+        const n = points.length;
+        if (n === 1) return [left + plotW / 2];
+
+        const dates = points.map(p => qcParseDate(p.date));
+        const hasDates = dates.every(t => !Number.isNaN(t));
+        const fewPoints = n <= 4;
+
+        if (fewPoints) {
+            const slot = Math.min(44, Math.max(30, plotW / 10));
+            const used = (n - 1) * slot;
+            const x0 = left + Math.max(24, (plotW - used) / 2);
+            return points.map((_, i) => x0 + i * slot);
+        }
+
+        if (hasDates) {
+            let minT = Math.min(...dates);
+            let maxT = Math.max(...dates);
+            const dayMs = 86400000;
+            const minSpan = 7 * dayMs;
+            if (maxT - minT < minSpan) {
+                const mid = (minT + maxT) / 2;
+                minT = mid - minSpan / 2;
+                maxT = mid + minSpan / 2;
+            }
+            const pad = (maxT - minT) * 0.06;
+            minT -= pad;
+            maxT += pad;
+            const span = maxT - minT || dayMs;
+            return dates.map(t => left + (t - minT) / span * plotW);
+        }
+
+        const slot = Math.min(40, plotW / Math.max(n, 8));
+        const used = (n - 1) * slot;
+        const x0 = left + (plotW - used) / 2;
+        return points.map((_, i) => x0 + i * slot);
+    }
+
     // 绘制单个浓度的质控图 SVG
     function qcBuildSVG(points, levelLabel) {
         if (!points.length) return '';
@@ -1124,7 +1179,9 @@
         minY -= padY; maxY += padY;
         const w = 480, h = 140, left = 40, right = 10, top = 10, bottom = 18;
         const plotW = w - left - right, plotH = h - top - bottom;
-        const x = i => left + (points.length === 1 ? plotW / 2 : i * plotW / (points.length - 1));
+        const xs = qcXPositions(points, left, plotW);
+        const fewPoints = points.length <= 4;
+        const x = i => xs[i];
         const y = v => top + (maxY - v) * plotH / (maxY - minY);
         const fmt = v => {
             const abs = Math.abs(v);
@@ -1150,9 +1207,8 @@
         }).join('');
         const last = points[points.length - 1];
         const xLabels = points.map((p, i) => {
-            const d = String(p.date || '');
-            const day = d.length >= 10 ? d.slice(8, 10) : d.slice(-2);
-            return `<text class="qc-label" x="${x(i).toFixed(1)}" y="${h-3}" text-anchor="middle">${esc(day)}</text>`;
+            const label = qcFormatXLabel(p.date, fewPoints);
+            return `<text class="qc-label" x="${x(i).toFixed(1)}" y="${h-3}" text-anchor="middle">${esc(label)}</text>`;
         }).join('');
         return `
             <div class="qc-chart-title">${esc(levelLabel)}</div>
@@ -1199,7 +1255,12 @@
         if (!drawLevels.length) { html = '<div id="lis-qc-empty">暂无可绘制数据。</div>'; }
         else {
             drawLevels.forEach(ln => {
-                const pts = levelMap[ln].slice(-45);
+                const pts = levelMap[ln].slice(-45).sort((a, b) => {
+                    const ta = qcParseDate(a.date);
+                    const tb = qcParseDate(b.date);
+                    if (!Number.isNaN(ta) && !Number.isNaN(tb)) return ta - tb;
+                    return String(a.date || '').localeCompare(String(b.date || ''));
+                });
                 const label = 'Level ' + ln;
                 html += `<div class="qc-chart-wrap">${qcBuildSVG(pts, label)}</div>`;
             });
@@ -9102,7 +9163,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.24');
+        dbg('iMedicalLIS 增强助手 v7.20.25');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
