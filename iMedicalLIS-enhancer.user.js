@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.35
+// @version      7.20.36
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -2338,7 +2338,7 @@
         if (filters.ward && !prTextMatchAny(row.ward, filters.wardTerms)) return false;
         if (filters.doctor && !prTextMatchAny(row.doctor, filters.doctorTerms)) return false;
         if (filters.specimen && !prTextMatchAny(row.specimen, filters.specimenTerms)) return false;
-        if (filters.item && !prTextMatchAny([row.itemName, row.itemSynonym, row.testSet].filter(Boolean).join(' '), filters.itemTerms)) return false;
+        if (filters.item && !prTextMatchAny([row.itemName, row.itemSynonym].filter(Boolean).join(' '), filters.itemTerms)) return false;
         if (filters.resultText && !prTextMatchAny([row.result, row.abFlag, classifyStatusText(row.status)].filter(Boolean).join(' '), filters.resultTextTerms)) return false;
         if (filters.diagnosis && !prTextMatchAny(row.diagnosis, filters.diagnosisTerms)) return false;
         if (filters.judge && row.status !== filters.judge) return false;
@@ -2882,7 +2882,7 @@
                 <label class="pr-xs">年龄≤<input type="number" id="lis-pr-age-max" placeholder="岁"></label>
                 <label class="pr-sm">标本<input type="text" id="lis-pr-specimen" placeholder="血清"></label>
                 <div class="pr-section">项目结果</div>
-                <label class="pr-lg">项目名称<input type="text" id="lis-pr-item" placeholder="如 HBsAg"></label>
+                <label class="pr-lg">项目名称<input type="text" id="lis-pr-item" placeholder="如 梅毒（仅单项名）"></label>
                 <label class="pr-md">判断<select id="lis-pr-judge">
                     <option value="">全部</option><option value="NORMAL">正常</option><option value="HIGH">偏高</option><option value="LOW">偏低</option><option value="ABNORMAL">异常</option><option value="CRITICAL">危急</option><option value="UNCERTAIN">待定</option>
                 </select></label>
@@ -9688,7 +9688,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.35');
+        dbg('iMedicalLIS 增强助手 v7.20.36');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
