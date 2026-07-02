@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.38
+// @version      7.20.39
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4003,9 +4003,12 @@
             if (_abnormalAuditInProgress) {
                 if (e.key === 'Enter') {
                     e.preventDefault(); e.stopImmediatePropagation();
-                    _abnormalAuditQueued = true;
-                    const ft = document.getElementById('lis-ws-ft-stat');
-                    if (ft) ft.textContent = '审核进行中，下一条已排队...';
+                    if (!_abnormalAuditQueued) {
+                        _abnormalAuditQueued = true;
+                        const ft = document.getElementById('lis-ws-ft-stat');
+                        if (ft) ft.textContent = '⏳ 当前条审完后自动审下一条（已排队）';
+                        showToast('下一条已排队，当前条完成后自动继续', 'info');
+                    }
                 }
                 return;
             }
@@ -4330,6 +4333,15 @@
         if (hint && hint.textContent === '正在审核...') hint.textContent = 'Enter=审核';
     }
 
+    function auditTargetContext(iframeWin, reportDR) {
+        if (!iframeWin || !reportDR) {
+            return { rowPresent: false, detailReady: false, allowMissingSuccess: false };
+        }
+        const rowPresent = !!findNativeRowByReportDR(iframeWin, reportDR);
+        const detailReady = isReportDetailLoaded(iframeWin, reportDR);
+        return { rowPresent, detailReady, allowMissingSuccess: rowPresent && detailReady };
+    }
+
     function verifyAuditSucceededByReportDR(iframeWin, reportDR) {
         if (!reportDR) return false;
         const latestWin = getReportIframeWin() || iframeWin;
@@ -4353,11 +4365,12 @@
         const batchMode = !!options.batchMode;
         const ft = document.getElementById('lis-ws-ft-stat');
         if (ft) ft.textContent = `正在确认审核结果：${patientName || reportDR}`;
-        const targetWasPresent = options.targetWasPresent !== undefined
-            ? !!options.targetWasPresent
-            : !!findNativeRowByReportDR(iframeWin, reportDR);
+        const ctx = auditTargetContext(iframeWin, reportDR);
+        const targetWasPresent = options.targetWasPresent !== undefined ? !!options.targetWasPresent : ctx.rowPresent;
+        const detailWasReady = options.detailWasReady !== undefined ? !!options.detailWasReady : ctx.detailReady;
+        const allowMissing = targetWasPresent && detailWasReady;
         const confirmTimeout = batchMode ? (options.afterCA ? 12000 : 8000) : 12000;
-        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, true, {
+        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, allowMissing, {
             targetWasPresent,
             missingStableMs: batchMode ? 700 : 900,
             turbo: batchMode && !options.afterCA
@@ -4367,7 +4380,7 @@
         if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) return true;
         const latestWin = getReportIframeWin() || iframeWin;
         const found = findNativeRowByReportDR(latestWin, reportDR);
-        if (!found) return targetWasPresent;
+        if (!found) return allowMissing;
         return isExpectedNativeStatus(found.row, ['3', '4']);
     }
 
@@ -4454,6 +4467,11 @@
             let iframeWin = await prefetchReportPageForWS();
             if (!iframeWin) iframeWin = getReportIframeWin();
             if (!iframeWin) return;
+            installNativeDetailGuard(iframeWin);
+            if (!canScriptSelectNativeRow(iframeWin, reportDR)) {
+                dbg('预热跳过：用户正在原生列表查看其他标本');
+                return;
+            }
             const item = specimenToAuditItem(specimen);
             const mdrKey = String(item.mdr || '');
             if (mdrKey) {
@@ -4467,9 +4485,8 @@
                 }
             }
             iframeWin = getReportIframeWin() || iframeWin;
-            installNativeDetailGuard(iframeWin);
             if (!canScriptSelectNativeRow(iframeWin, reportDR)) {
-                dbg('预热跳过：用户正在原生列表查看其他标本');
+                dbg('预热中止：刷新列表后用户已接管原生选择');
                 return;
             }
             if (item.labno && typeof iframeWin.FindFast === 'function') {
@@ -4628,6 +4645,7 @@
     async function executeNativeAudit(iframeWin, specimen, options = {}) {
         const fast = options.fast !== false;
         const reportDR = specimen.ReportDR;
+        const auditCtx = auditTargetContext(iframeWin, reportDR);
         const caReady = isCASessionReady(iframeWin);
         let result = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
             action: 'audit',
@@ -4636,12 +4654,16 @@
             timeoutMs: fast ? (caReady ? 5000 : 8000) : 15000,
             keepWS: !!options.keepWS,
             caSessionReady: caReady,
-            missingAsSuccess: true,
+            missingAsSuccess: auditCtx.allowMissingSuccess,
             targetReportDR: reportDR
         });
         if (!result) {
             iframeWin = getReportIframeWin() || iframeWin;
-            result = await confirmAuditEventually(iframeWin, reportDR, specimen.PatName || specimen.Labno || '', { batchMode: fast, targetWasPresent: true });
+            result = await confirmAuditEventually(iframeWin, reportDR, specimen.PatName || specimen.Labno || '', {
+                batchMode: fast,
+                targetWasPresent: auditCtx.rowPresent,
+                detailWasReady: auditCtx.detailReady
+            });
         }
         return result;
     }
@@ -7602,7 +7624,9 @@ function fillNativeLoginForm(creds, lastWG) {
             const sel = me && me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
             if (!targetReportDR && sel) targetReportDR = String(sel.ReportDR || '');
         } catch(e) {}
-        const targetWasPresent = !!targetReportDR && !!findNativeRowByReportDR(iframeWin, targetReportDR);
+        const auditCtx = auditTargetContext(iframeWin, targetReportDR);
+        const targetWasPresent = auditCtx.rowPresent;
+        const allowMissingSuccess = missingAsSuccess && auditCtx.allowMissingSuccess;
         const waitOpts = { targetWasPresent, missingStableMs, failureGraceMs: caSessionReady ? 800 : (batchMode ? 1200 : 3000), ignoreMessages: true, turbo: batchMode || caSessionReady };
 
         if (isAudit && targetReportDR && !isReportDetailLoaded(iframeWin, targetReportDR)) {
@@ -7633,11 +7657,11 @@ function fillNativeLoginForm(creds, lastWG) {
 
         let caDetected = false;
         let authLoginDetected = false;
-        const instant = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 120 : 80, missingAsSuccess, waitOpts);
+        const instant = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 120 : 80, allowMissingSuccess, waitOpts);
         if (instant !== false) return instant;
 
         for (let poll = 0; poll < maxPoll; poll++) {
-            const early = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 100 : 50, missingAsSuccess, waitOpts);
+            const early = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 100 : 50, allowMissingSuccess, waitOpts);
             if (early !== false) return early;
 
             await sleep(pollSleep);
@@ -7671,8 +7695,7 @@ function fillNativeLoginForm(creds, lastWG) {
             saveCAAuth();
             if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
             dbg('CA 认证成功，等待审核回调...');
-            // CA 耗时较长时标本可能已审核并从列表消失，需结合 targetWasPresent 判定
-            const postCaMissing = missingAsSuccess || targetWasPresent;
+            const postCaMissing = allowMissingSuccess;
             const postCaTimeout = batchMode ? Math.max(timeoutMs, 20000) : timeoutMs;
             const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, postCaTimeout, postCaMissing, { ...waitOpts, missingStableMs, failureGraceMs: batchMode ? 3000 : 4000 });
             if (caResult) return caResult;
@@ -7684,7 +7707,7 @@ function fillNativeLoginForm(creds, lastWG) {
             return false;
         }
 
-        const result = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess, { ...waitOpts, missingStableMs, failureGraceMs: batchMode ? 2000 : 3000 });
+        const result = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, allowMissingSuccess, { ...waitOpts, missingStableMs, failureGraceMs: batchMode ? 2000 : 3000 });
         if (result) return result;
 
         if (authLoginDetected) {
@@ -8819,13 +8842,17 @@ function fillNativeLoginForm(creds, lastWG) {
                 showToast('未找到报告处理页面，请先打开"报告处理"', 'error');
                 return;
             }
+            const auditCtx = auditTargetContext(iframeWin, reportDR);
             const caReady = isCASessionReady(iframeWin);
             let auditOK = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
                 action: 'audit', expectedStatuses: ['3'], timeoutMs: caReady ? 8000 : 15000,
-                caSessionReady: caReady, missingAsSuccess: true, targetReportDR: reportDR
+                caSessionReady: caReady, missingAsSuccess: auditCtx.allowMissingSuccess, targetReportDR: reportDR
             });
             if (!auditOK) {
-                auditOK = await confirmAuditEventually(iframeWin, reportDR, selected.PatName || selected.Labno || '', { targetWasPresent: true });
+                auditOK = await confirmAuditEventually(iframeWin, reportDR, selected.PatName || selected.Labno || '', {
+                    targetWasPresent: auditCtx.rowPresent,
+                    detailWasReady: auditCtx.detailReady
+                });
             }
             if (auditOK === 'incomplete') {
                 showToast(`⚠️ 跳过: ${selected.PatName || ''} — 结果不完整，不可审核`, 'warning');
@@ -9480,17 +9507,23 @@ function fillNativeLoginForm(creds, lastWG) {
                     }
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
-                    const hadTargetRow = true;
+                    const auditCtx = auditTargetContext(iframeWin, item.reportDR);
                     let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
                         action: 'audit', expectedStatuses: ['3'], batchMode: true,
                         timeoutMs: batchCAReady ? 6000 : 10000, keepWS: queue.keepWS,
                         caSessionReady: batchCAReady,
-                        missingAsSuccess: batchCAReady, targetReportDR: item.reportDR
+                        missingAsSuccess: batchCAReady && auditCtx.allowMissingSuccess,
+                        targetReportDR: item.reportDR
                     });
                     if (!auditResult) {
                         dbg('批审单条首次未确认，继续确认原生状态:', item.name || item.reportDR);
                         iframeWin = getReportIframeWin() || iframeWin;
-                        auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', { batchMode: true, targetWasPresent: hadTargetRow, afterCA: true });
+                        auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', {
+                            batchMode: true,
+                            targetWasPresent: auditCtx.rowPresent,
+                            detailWasReady: auditCtx.detailReady,
+                            afterCA: true
+                        });
                     }
                     if (!auditResult && verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
                         dbg('批审最终校验：标本实际已审核', item.reportDR);
@@ -9709,7 +9742,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.38');
+        dbg('iMedicalLIS 增强助手 v7.20.39');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
