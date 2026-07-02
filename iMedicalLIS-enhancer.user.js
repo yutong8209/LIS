@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.34
+// @version      7.20.35
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4941,6 +4941,14 @@
         const existing = document.getElementById('lis-audit-confirm');
         if (existing) existing.remove();
 
+        const wgNames = [...new Set(normalData.map(r => {
+            const wg = r.row._wg;
+            return (WG_MAP[wg] || {}).name || wg || '当前组';
+        }))];
+        const flowHint = wgNames.length > 1
+            ? `<p style="margin:8px 0 0;font-size:12px;color:#5c6b7a;line-height:1.55">含 <b>${wgNames.length}</b> 个工作组（${esc(wgNames.join('、'))}），将自动切换；<b>每组首条</b>自动 CA 认证，同组后续秒审，无需手动预审。</p>`
+            : `<p style="margin:8px 0 0;font-size:12px;color:#5c6b7a;line-height:1.55"><b>首条</b>将自动触发 CA 认证（capping 登录），同组后续秒审，<b>无需</b>手动先审一条。</p>`;
+
         const dialog = document.createElement('div');
         dialog.id = 'lis-audit-confirm';
         dialog.innerHTML = `
@@ -4952,6 +4960,7 @@
                 <div class="ab-body">
                     <div class="ab-section">
                         <h5><span class="ab-count" style="background:#27ae60">${normalData.length}</span> 正常标本（将自动审核）</h5>
+                        ${flowHint}
                         <div class="ab-list" style="max-height:300px;overflow-y:auto">
                             ${normalData.map(r => `<div class="ab-item">
                                 <span class="ab-name">${esc(r.row.PatName||'未知')}</span>
@@ -9312,7 +9321,8 @@ function fillNativeLoginForm(creds, lastWG) {
             let batchLastMdr = '';
             let batchListFresh = false;
             let batchSkipSelect = false;
-            let batchCAReady = isCASessionReady(iframeWin);
+            queue.caReadyByWg = queue.caReadyByWg || {};
+            let batchCAReady = queue.caReadyByWg[wgDR()] || isCASessionReady(iframeWin);
             _batchAbort = false;
             if (queue.current < queue.items.length - 1) {
                 const remaining = queue.items.splice(queue.current);
@@ -9320,7 +9330,8 @@ function fillNativeLoginForm(creds, lastWG) {
                 queue.items.push(...remaining);
             }
 
-            updateBatchProgress(batchCAReady ? 'CA 已认证，秒审模式...' : '对齐原生：全部仪器列表...', 0);
+            const prepHint = batchCAReady ? 'CA 已认证，秒审模式...' : '首条将自动 CA 认证，加载全部仪器列表...';
+            updateBatchProgress(prepHint, 0);
             iframeWin = await refreshNativeWorkListAllMachines(iframeWin, { fast: true });
             if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
             batchListFresh = true;
@@ -9362,14 +9373,19 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
 
                 if (item.wg && item.wg !== wgDR()) {
+                    if (batchCAReady && wgDR()) queue.caReadyByWg[wgDR()] = true;
                     queue.pausedForSwitch = true;
                     saveAuditQueueNow(queue);
                     const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
-                    showToast('切换到' + wgName + '继续审核...', 'warning');
+                    const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
+                    showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
                     queuePausedForSwitch = true;
                     switchWG(item.wg);
                     break;
                 }
+
+                const itemWg = item.wg || wgDR();
+                batchCAReady = queue.caReadyByWg[itemWg] || isCASessionReady(iframeWin);
 
                 batchListFresh = false;
                 totalCount = queue.items.length;
@@ -9381,7 +9397,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     const sec = Math.ceil(remaining / 1000);
                     etaStr = sec > 60 ? ` · 剩余约${Math.ceil(sec/60)}分钟` : ` · 剩余约${sec}秒`;
                 }
-                const modeHint = batchCAReady ? ' · 秒审' : '';
+                const modeHint = batchCAReady ? ' · 秒审' : ' · 自动CA';
                 updateBatchProgress(`${queue.current + 1} / ${totalCount} - ${item.name || item.labno || item.reportDR}${item.retry ? '（重试' + item.retry + '）' : ''}${modeHint}${etaStr}`, queue.current / totalCount * 100);
 
                 try {
@@ -9466,6 +9482,7 @@ function fillNativeLoginForm(creds, lastWG) {
                         queue.done.push(item);
                         successCount++;
                         batchCAReady = true;
+                        queue.caReadyByWg[itemWg] = true;
                         if (prepareNextBatchItemAfterAudit(iframeWin, queue, item)) {
                             batchSkipSelect = true;
                             dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
@@ -9671,7 +9688,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.34');
+        dbg('iMedicalLIS 增强助手 v7.20.35');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
