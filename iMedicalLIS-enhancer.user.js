@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.18
+// @version      7.20.19
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -444,6 +444,7 @@
 .ab-card-item.infection-warning{background:#fff3e0;color:#e65100;font-weight:700}
 .ab-card-item.uncertain{background:#f5f5f5;color:#757575}
 .ab-card-hint{font-size:11px;color:#bbb;white-space:nowrap;margin-left:auto}
+.ws-abnormal-machine{position:sticky;top:0;z-index:2;background:#f1f5f9;border:1px solid #d7dee8;border-radius:5px;padding:4px 10px;margin:8px 0 2px;font-size:11px;font-weight:600;color:#475569;letter-spacing:.02em}
 .ws-abnormal-hint{background:#fff;border:1px solid #d7dee8;border-left:4px solid #2f6fb3;border-radius:6px;padding:7px 10px;margin:10px 0 0;font-size:12px;color:#334155;display:flex;align-items:center;gap:6px}
 .ws-abnormal-hint kbd{background:#f7f9fb;border:1px solid #cbd5df;border-radius:3px;padding:1px 5px;font-size:11px;font-family:monospace}
 
@@ -3345,6 +3346,56 @@
         });
     }
 
+    function specimenMachineRank(row) {
+        const wg = String(row._wg || '');
+        const mdr = prWorkGroupMachineDR(row);
+        return getMachineSortRank({ CName: row._mn || '', Name: row._mn || '', RowID: mdr, _wg: wg });
+    }
+
+    function compareSpecimensByMachineGroup(a, b) {
+        const wgA = String(a._wg || '');
+        const wgB = String(b._wg || '');
+        const wgCmp = wgA.localeCompare(wgB, 'zh');
+        if (wgCmp) return wgCmp;
+
+        const rankA = specimenMachineRank(a);
+        const rankB = specimenMachineRank(b);
+        if (rankA !== rankB) return rankA - rankB;
+
+        const mdrA = prWorkGroupMachineDR(a);
+        const mdrB = prWorkGroupMachineDR(b);
+        const mdrCmp = String(mdrA).localeCompare(String(mdrB), 'zh');
+        if (mdrCmp) return mdrCmp;
+
+        return String(a._mn || '').localeCompare(String(b._mn || ''), 'zh');
+    }
+
+    function compareSpecimensForAudit(a, b) {
+        const g = compareSpecimensByMachineGroup(a, b);
+        if (g) return g;
+        const va = String(a.AcceptDT || '');
+        const vb = String(b.AcceptDT || '');
+        const dtCmp = vb.localeCompare(va, 'zh');
+        if (dtCmp) return dtCmp;
+        return String(a.Labno || '').localeCompare(String(b.Labno || ''), 'zh');
+    }
+
+    function compareAuditQueueItems(a, b) {
+        const rowA = a.row || a;
+        const rowB = b.row || b;
+        const g = compareSpecimensByMachineGroup(rowA, rowB);
+        if (g) return g;
+        const va = String(rowA.AcceptDT || '');
+        const vb = String(rowB.AcceptDT || '');
+        const dtCmp = vb.localeCompare(va, 'zh');
+        if (dtCmp) return dtCmp;
+        return String(a.labno || '').localeCompare(String(b.labno || ''), 'zh');
+    }
+
+    function sortSpecimensForAudit(rows) {
+        return [...rows].sort(compareSpecimensForAudit);
+    }
+
     // --- 过滤 & 排序 ---
     function filteredData() {
         // 读取当前搜索框值（不能用旧的 wsSearchQuery）
@@ -3388,12 +3439,23 @@
             );
         }
         wsSearchQuery = _q; // 保存搜索词用于高亮
-        // 排序
+        // 排序：批审/异常待审按仪器分组，同仪器内再按原排序字段
         const {field, asc} = wsSort;
-        d.sort((a,b) => {
-            const va = (a[field]||'').toString(), vb = (b[field]||'').toString();
-            return asc ? va.localeCompare(vb,'zh') : vb.localeCompare(va,'zh');
-        });
+        if (wsCategory === 'abnormal' || wsCategory === 'normal') {
+            d.sort((a, b) => {
+                const g = compareSpecimensByMachineGroup(a, b);
+                if (g) return g;
+                const va = (a[field] || '').toString();
+                const vb = (b[field] || '').toString();
+                return asc ? va.localeCompare(vb, 'zh') : vb.localeCompare(va, 'zh');
+            });
+        } else {
+            d.sort((a, b) => {
+                const va = (a[field] || '').toString();
+                const vb = (b[field] || '').toString();
+                return asc ? va.localeCompare(vb, 'zh') : vb.localeCompare(va, 'zh');
+            });
+        }
 
         dbg('过滤后数据量:', d.length, '分类:', wsCategory);
         _filteredCache = d;
@@ -3848,11 +3910,18 @@
         if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) wsAbnormalIndex = 0;
 
         let h = `<div class="ws-abnormal-hint">
-            <kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 切换 <kbd>点击</kbd> 详情
+            <kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 切换 <kbd>点击</kbd> 详情 · 按仪器分组，审完一台再换下一台
         </div>`;
         h += '<div class="ws-abnormal-list">';
 
+        let lastMachineKey = '';
         data.forEach((r, i) => {
+            const machineKey = String(r._wg || '') + '|' + String(prWorkGroupMachineDR(r) || r._mn || '');
+            if (machineKey !== lastMachineKey) {
+                const machineLabel = r._mn || prWorkGroupMachineDR(r) || '未知仪器';
+                h += `<div class="ws-abnormal-machine">🔬 ${esc(machineLabel)}</div>`;
+                lastMachineKey = machineKey;
+            }
             const cached = wsClassifiedCache[r.ReportDR];
             const items = cached ? cached.items : [];
             const abnormalItems = items.filter(it => it.status !== 'NORMAL');
@@ -4081,7 +4150,15 @@
         const escDR = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(String(reportDR || '')) : String(reportDR || '').replace(/"/g, '\\"');
         const card = document.querySelector(`.ws-abnormal-card[data-rdr="${escDR}"]`);
         const list = card && card.parentElement;
-        if (card) card.remove();
+        if (card) {
+            const prev = card.previousElementSibling;
+            const next = card.nextElementSibling;
+            card.remove();
+            if (prev && prev.classList && prev.classList.contains('ws-abnormal-machine')) {
+                const nextIsCard = next && next.classList && next.classList.contains('ws-abnormal-card');
+                if (!nextIsCard) prev.remove();
+            }
+        }
 
         const newData = filteredData();
         if (newData.length === 0) {
@@ -4406,7 +4483,8 @@
     // --- 确认并批量审核 ---
     function confirmAndBatchAudit(normalData) {
         dbg('confirmAndBatchAudit 被调用, normalData.length:', normalData.length);
-        const blocked = (normalData || []).filter(r => !isAutoAuditableClassified(r));
+        normalData = [...(normalData || [])].sort((a, b) => compareSpecimensForAudit(a.row || a, b.row || b));
+        const blocked = normalData.filter(r => !isAutoAuditableClassified(r));
         if (blocked.length > 0) {
             const first = blocked[0];
             showToast(getAutoAuditBlockReason(first, first.row) || '包含不可自动审核的标本', 'error');
@@ -4623,7 +4701,7 @@
             items.push({
                 reportDR: String(reportDR),
                 wg: row._wg || wgDR(),
-                mdr: row._mdr || row.WorkGroupMachineDR || '',
+                mdr: prWorkGroupMachineDR(row) || '',
                 labno: row.Labno || '',
                 name: row.PatName || '',
                 testSet: row.TestSetDesc || '',
@@ -4632,13 +4710,7 @@
                 row
             });
         });
-        items.sort((a, b) => {
-            const wgCmp = String(a.wg || '').localeCompare(String(b.wg || ''), 'zh');
-            if (wgCmp) return wgCmp;
-            const mCmp = String(a.mdr || '').localeCompare(String(b.mdr || ''), 'zh');
-            if (mCmp) return mCmp;
-            return String(a.labno || '').localeCompare(String(b.labno || ''), 'zh');
-        });
+        items.sort(compareAuditQueueItems);
         return { mode: mode || 'batch', items, done: [], failed: [], skipped: [], current: 0, keepWS: isWSVisible() };
     }
 
@@ -8457,14 +8529,10 @@ function fillNativeLoginForm(creds, lastWG) {
             let batchListFresh = false;
             let batchSkipSelect = false;
             _batchAbort = false;
-            // 按仪器分组排序剩余项，减少仪器切换次数
+            // 按仪器分组排序剩余项，先审完一台仪器再切换
             if (queue.current < queue.items.length - 1) {
                 const remaining = queue.items.splice(queue.current);
-                remaining.sort((a, b) => {
-                    const wgCmp = String(a.wg || '').localeCompare(String(b.wg || ''), 'zh');
-                    if (wgCmp) return wgCmp;
-                    return String(a.mdr || '').localeCompare(String(b.mdr || ''), 'zh');
-                });
+                remaining.sort(compareAuditQueueItems);
                 queue.items.push(...remaining);
             }
 
@@ -8775,7 +8843,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.18');
+        dbg('iMedicalLIS 增强助手 v7.20.19');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
