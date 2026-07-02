@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.20
+// @version      7.20.21
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -2982,6 +2982,45 @@
         _detailLRU.set(key, val);
     }
 
+    const WS_CATEGORIES = ['normal', 'abnormal', 'incomplete', 'pending', 'all'];
+
+    function saveWSState() {
+        try {
+            localStorage.setItem(K.wsState, JSON.stringify({
+                wg: wsActiveWG,
+                cat: wsCategory,
+                mdr: wsActiveMachine
+            }));
+        } catch(e) {}
+    }
+
+    function loadWSState() {
+        const fallback = { wg: wgDR() || '', cat: 'normal', mdr: '' };
+        try {
+            const saved = JSON.parse(localStorage.getItem(K.wsState) || '{}');
+            const wg = Object.prototype.hasOwnProperty.call(saved, 'wg') ? String(saved.wg) : fallback.wg;
+            const cat = WS_CATEGORIES.includes(saved.cat) ? saved.cat : fallback.cat;
+            const mdr = Object.prototype.hasOwnProperty.call(saved, 'mdr') ? String(saved.mdr) : fallback.mdr;
+            return { wg, cat, mdr };
+        } catch(e) {
+            return fallback;
+        }
+    }
+
+    function applyWSState(state) {
+        wsActiveWG = state.wg;
+        wsCategory = state.cat;
+        wsActiveMachine = state.mdr;
+    }
+
+    function normalizeWSMachineSelection() {
+        if (!wsActiveMachine) return;
+        const ok = wsMachines.some(m =>
+            String(m.RowID) === String(wsActiveMachine) && (!wsActiveWG || m._wg === wsActiveWG)
+        );
+        if (!ok) wsActiveMachine = '';
+    }
+
     // 打开工作台
     function openWS() {
         // 防重入：如果已打开，不做任何操作
@@ -2991,16 +3030,7 @@
         dbg('[WS] openWS 被调用');
         if (DEBUG) console.trace('[WS] openWS 调用栈');
 
-        // 恢复上次退出时的工作台状态
-        try {
-            const saved = JSON.parse(localStorage.getItem(K.wsState) || '{}');
-            wsActiveWG = saved.wg || wgDR() || '';
-            wsCategory = saved.cat || 'normal';
-        } catch(e) {
-            wsActiveWG = wgDR() || '';
-            wsCategory = 'normal';
-        }
-        wsActiveMachine = '';
+        applyWSState(loadWSState());
         wsClassifiedCache = {};
         _classifyVersion++;
         wsClassifying = false;
@@ -3028,8 +3058,7 @@
         const wsEl = $('#lis-ws');
         if (!wsEl) return;
         if (!wsEl.classList.contains('show')) { dbg('[WS] closeWS 被调用但未打开，跳过'); return; }
-        // 保存当前工作台状态
-        try { localStorage.setItem(K.wsState, JSON.stringify({ wg: wsActiveWG, cat: wsCategory })); } catch(e) {}
+        saveWSState();
         dbg('[WS] closeWS 被调用');
         if (DEBUG) console.trace('[WS] closeWS 调用栈');
         wsEl.classList.remove('show');
@@ -3055,6 +3084,7 @@
         const wsEl = document.getElementById('lis-ws');
         if (!wsEl) return;
         if (!wsEl.classList.contains('show')) {
+            applyWSState(loadWSState());
             invalidateCaches(); // 确保使用最新数据渲染
             wsEl.classList.add('show');
             renderWSHeader();
@@ -3063,6 +3093,7 @@
             renderWSTable();
             updateWSFooter();
             startWSRefresh();
+            if (!wsData.length) loadWSData();
         }
         wsEl.style.cssText = 'display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important;position:fixed!important;inset:0!important;z-index:100000!important';
         document.body.style.overflow = 'hidden';
@@ -3155,6 +3186,7 @@
         wsData = allData;
         wsMachines = allMachines;
         if (wsData.length > 0) _lastWSNonEmptyAt = Date.now();
+        normalizeWSMachineSelection();
         calcMachineCounts();
 
         if (qi) qi.textContent = `${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
@@ -3630,6 +3662,7 @@
             wsActiveMachine = '';
             wsAbnormalIndex = -1;
             wsChecked.clear();
+            saveWSState();
             renderWSTabs();
             renderWSCategoryBar();
             renderWSTable();
@@ -3641,6 +3674,7 @@
             wsActiveMachine = b.dataset.m;
             wsAbnormalIndex = -1;
             wsChecked.clear();
+            saveWSState();
             renderWSTabs();
             renderWSCategoryBar();
             renderWSTable();
@@ -3709,6 +3743,7 @@
             wsCategory = b.dataset.cat;
             wsAbnormalIndex = -1;
             // 不清空 wsChecked，保留用户勾选
+            saveWSState();
             renderWSCategoryBar();
             renderWSTable();
         }));
@@ -3788,7 +3823,7 @@
             else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveAbnormalFocus(-1, curData); }
             else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); auditAbnormalSpecimen(curData[wsAbnormalIndex]); }
             else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); if (curData[wsAbnormalIndex]) openDetailPanel(curData[wsAbnormalIndex], 'abnormal', wsAbnormalIndex); }
-            else if (e.key === 'Escape') { wsCategory = 'normal'; renderWSCategoryBar(); renderWSTable(); }
+            else if (e.key === 'Escape') { wsCategory = 'normal'; saveWSState(); renderWSCategoryBar(); renderWSTable(); }
         };
         _abnormalKeyTargets = [document];
         const iframeWin = getReportIframeWin();
@@ -8907,7 +8942,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.20');
+        dbg('iMedicalLIS 增强助手 v7.20.21');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
