@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.21
+// @version      7.20.23
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -61,6 +61,12 @@
     const isPatientResultPanelEvent = e => {
         const t = e && e.target;
         return !!(t && t.closest && t.closest('#lis-pr-panel'));
+    };
+    const isEditableEventTarget = e => {
+        const t = e && e.target;
+        if (!t) return false;
+        const tag = String(t.tagName || '').toUpperCase();
+        return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!t.isContentEditable;
     };
 
     // ==================== AES-GCM 密码加密 ====================
@@ -3801,6 +3807,7 @@
         if (_abnormalKeyHandler) return;
         _abnormalKeyHandler = e => {
             if (isPatientResultPanelEvent(e)) return;
+            if (isEditableEventTarget(e)) return;
             if (wsCategory !== 'abnormal') return;
             if (detailPanel && detailPanel.classList.contains('show')) return;
             if (e.defaultPrevented) return;
@@ -4100,12 +4107,13 @@
         const batchMode = !!options.batchMode;
         const ft = document.getElementById('lis-ws-ft-stat');
         if (ft) ft.textContent = `正在确认审核结果：${patientName || reportDR}`;
-        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], batchMode ? 2200 : 12000, true, { targetWasPresent: true, missingStableMs: batchMode ? 400 : 900, turbo: batchMode });
+        const targetWasPresent = !!findNativeRowByReportDR(iframeWin, reportDR);
+        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], batchMode ? 2200 : 12000, true, { targetWasPresent, missingStableMs: batchMode ? 400 : 900, turbo: batchMode });
         if (confirmed && confirmed !== 'incomplete') return true;
         await sleep(batchMode ? 100 : 1500);
         const latestWin = getReportIframeWin() || iframeWin;
         const found = findNativeRowByReportDR(latestWin, reportDR);
-        if (!found) return true;
+        if (!found) return targetWasPresent;
         return isExpectedNativeStatus(found.row, ['3']);
     }
 
@@ -4774,11 +4782,62 @@
         if (!item) return true;
         const curDR = wgDR();
         if (!item.wg || item.wg === curDR) return true;
-        saveAuditQueue(queue);
+        queue.pausedForSwitch = true;
+        saveAuditQueueNow(queue);
         const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
         showToast('切换到' + wgName + '继续审核...', 'warning');
         switchWG(item.wg);
         return false;
+    }
+
+    function runAuditQueueResume(delayMs) {
+        setTimeout(() => {
+            const freshQueue = loadAuditQueue();
+            if (!freshQueue || !freshQueue.items || (freshQueue.items.length - (freshQueue.current || 0)) <= 0) {
+                clearAuditQueue();
+                return;
+            }
+            delete freshQueue.pausedForSwitch;
+            saveAuditQueueNow(freshQueue);
+            continueAuditQueue(freshQueue).catch(e => {
+                dbg('续跑批审队列失败:', e);
+                showToast('续跑批审失败: ' + e.message, 'error');
+            });
+        }, delayMs);
+    }
+
+    function confirmAuditQueueResume(remaining) {
+        const existing = document.getElementById('lis-queue-resume');
+        if (existing) existing.remove();
+        const dialog = document.createElement('div');
+        dialog.id = 'lis-queue-resume';
+        dialog.innerHTML = `
+            <div id="lis-audit-box" style="max-width:420px">
+                <div class="ab-hd">
+                    <h4>继续批审？</h4>
+                    <button class="ab-close" id="lis-qr-close">✕</button>
+                </div>
+                <div class="ab-body">
+                    <p style="margin:0;font-size:13px;color:#334155;line-height:1.6">
+                        发现上次未完成的批审队列，还有 <b>${remaining}</b> 个标本待处理。是否继续？
+                    </p>
+                </div>
+                <div class="ab-ft">
+                    <button class="ab-cancel" id="lis-qr-cancel">放弃</button>
+                    <button class="ab-confirm ok" id="lis-qr-confirm">继续批审</button>
+                </div>
+            </div>`;
+        document.body.appendChild(dialog);
+        dialog.classList.add('show');
+        const close = () => dialog.remove();
+        document.getElementById('lis-qr-close').addEventListener('click', close);
+        document.getElementById('lis-qr-cancel').addEventListener('click', () => { clearAuditQueue(); close(); });
+        dialog.addEventListener('click', e => { if (e.target === dialog) close(); });
+        document.getElementById('lis-qr-confirm').addEventListener('click', () => {
+            close();
+            showToast(`继续批审（${remaining} 个标本）...`, 'warning');
+            runAuditQueueResume(300);
+        });
     }
 
     function checkAuditQueueResume() {
@@ -4786,8 +4845,12 @@
         if (!queue || !queue.items || queue.items.length === 0) return;
         const remaining = queue.items.length - (queue.current || 0);
         if (remaining <= 0) { clearAuditQueue(); return; }
-        showToast(`发现上次未完成的批审队列（${remaining} 个标本），已清除。`, 'info');
-        clearAuditQueue();
+        if (queue.pausedForSwitch) {
+            showToast(`切换工作组后继续批审（${remaining} 个标本）...`, 'warning');
+            runAuditQueueResume(1500);
+            return;
+        }
+        confirmAuditQueueResume(remaining);
     }
 
     // --- F5 快捷键审核选中标本 ---
@@ -6303,8 +6366,8 @@ function fillNativeLoginForm(creds, lastWG) {
 #lis-tb-hoverzone.hidden{display:none}
 
 /* --- 审核确认对话框 --- */
-#lis-audit-confirm{position:fixed;inset:0;z-index:100020;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
-#lis-audit-confirm.show{display:flex}
+#lis-audit-confirm,#lis-queue-resume{position:fixed;inset:0;z-index:100020;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
+#lis-audit-confirm.show,#lis-queue-resume.show{display:flex}
 #lis-audit-box{background:#fff;border-radius:12px;width:560px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4)}
 #lis-audit-box .ab-hd{padding:16px 20px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between}
 #lis-audit-box .ab-hd h4{margin:0;font-size:16px;color:#2c3e50}
@@ -6671,6 +6734,20 @@ function fillNativeLoginForm(creds, lastWG) {
         return '';
     }
 
+    function isNativeButtonDisabled(btn, jq) {
+        if (!btn) return true;
+        try {
+            if (btn.disabled) return true;
+            if (btn.getAttribute('disabled') !== null) return true;
+            const cls = String(btn.className || '');
+            if (/\bl-btn-disabled\b|\bdisabled\b/.test(cls)) return true;
+            const parent = btn.closest && btn.closest('.l-btn');
+            if (parent && /\bl-btn-disabled\b|\bdisabled\b/.test(String(parent.className || ''))) return true;
+            if (jq && jq(btn).hasClass && (jq(btn).hasClass('l-btn-disabled') || jq(btn).hasClass('disabled'))) return true;
+        } catch(e) {}
+        return false;
+    }
+
     async function waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess = false, options = {}) {
         const doc = iframeWin ? iframeWin.document : document;
         const jq = iframeWin ? (iframeWin.jQuery || iframeWin.$) : window.jQuery;
@@ -6963,12 +7040,11 @@ function fillNativeLoginForm(creds, lastWG) {
                 if (btn) break;
             }
         }
-        if (!btn) { dbg('按钮 ' + btnId + ' 不存在'); return false; }
-
         const jq = iframeWin ? (iframeWin.jQuery || iframeWin.$) : window.jQuery;
         const doc = iframeWin ? iframeWin.document : document;
         const me = iframeWin ? iframeWin.me : null;
 
+        if (!btn) { dbg('按钮 ' + btnId + ' 不存在'); return false; }
         if (!jq) { dbg('原生 jQuery 不存在'); return false; }
 
         const batchMode = !!options.batchMode;
@@ -6990,6 +7066,11 @@ function fillNativeLoginForm(creds, lastWG) {
 
         if (isAudit && targetReportDR && !isReportDetailLoaded(iframeWin, targetReportDR)) {
             dbg('审核中止: 目标标本详情未就绪, targetReportDR=' + targetReportDR);
+            return false;
+        }
+
+        if (isAudit && isNativeButtonDisabled(btn, jq)) {
+            dbg('审核按钮不可用，跳过 targetReportDR=' + targetReportDR);
             return false;
         }
 
@@ -8582,7 +8663,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
         try {
             const sameWG = await ensureAuditQueueWorkGroup(queue);
-            if (!sameWG) { releaseAuditLock(auditLockId); progress.remove(); return; }
+            if (!sameWG) { progress.remove(); return; }
 
             let iframeWin = getReportIframeWin();
             if (!iframeWin) {
@@ -8592,7 +8673,7 @@ function fillNativeLoginForm(creds, lastWG) {
             }
             if (!iframeWin) {
                 showToast('❌ 未找到报告处理页面', 'error');
-                releaseAuditLock(auditLockId); progress.remove(); return;
+                progress.remove(); return;
             }
 
             // 等待 iframe 就绪
@@ -8608,7 +8689,7 @@ function fillNativeLoginForm(creds, lastWG) {
             }
             if (!jq || !me) {
                 showToast('报告页面未就绪，请稍后重试', 'error');
-                releaseAuditLock(auditLockId); progress.remove(); return;
+                progress.remove(); return;
             }
 
             updateBatchProgress('准备批审，加载报告列表...', 0);
@@ -8653,7 +8734,8 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
 
                 if (item.wg && item.wg !== wgDR()) {
-                    saveAuditQueue(queue);
+                    queue.pausedForSwitch = true;
+                    saveAuditQueueNow(queue);
                     const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
                     showToast('切换到' + wgName + '继续审核...', 'warning');
                     queuePausedForSwitch = true;
@@ -8942,7 +9024,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.21');
+        dbg('iMedicalLIS 增强助手 v7.20.23');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
