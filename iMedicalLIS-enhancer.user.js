@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.36
+// @version      7.20.37
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1831,7 +1831,7 @@
         if (!text) return '';
         const lower = text.toLowerCase();
         if (/^(如|例如|示例)\s*/.test(text)) return '';
-        if (lower === '姓名 / 检验号 / 住院号') return '';
+        if (lower === '姓名 / 检验号 / 住院号' || lower === '姓名 / 检验号 / 登记号 / 病案号') return '';
         if (text === '门诊 / 住院' || text === '诊断关键字') return '';
         return text;
     }
@@ -1887,6 +1887,7 @@
         filters.doctor = prCleanFilterText(filters.doctor).toLowerCase();
         filters.diagnosis = prCleanFilterText(filters.diagnosis).toLowerCase();
         filters.specimen = prCleanFilterText(filters.specimen).toLowerCase();
+        filters.testSet = prCleanFilterText(filters.testSet).toLowerCase();
         filters.item = prCleanFilterText(filters.item).toLowerCase();
         filters.resultText = prCleanFilterText(filters.resultText).toLowerCase();
         filters.qTerms = prSplitTerms(filters.q);
@@ -1896,6 +1897,7 @@
         filters.doctorTerms = prSplitTerms(filters.doctor);
         filters.diagnosisTerms = prSplitTerms(filters.diagnosis);
         filters.specimenTerms = prSplitTerms(filters.specimen);
+        filters.testSetTerms = prSplitTerms(filters.testSet);
         filters.itemTerms = prSplitTerms(filters.item);
         filters.resultTextTerms = prSplitTerms(filters.resultText);
 
@@ -1935,6 +1937,7 @@
         if (!Number.isNaN(filters.ageMin)) parts.push(`年龄>=${filters.ageMin}`);
         if (!Number.isNaN(filters.ageMax)) parts.push(`年龄<=${filters.ageMax}`);
         if (filters.specimen) parts.push(`标本=${filters.specimen}`);
+        if (filters.testSet) parts.push(`组合=${filters.testSet}`);
         if (filters.item) parts.push(`项目=${filters.item}`);
         if (filters.judge) parts.push(`判断=${classifyStatusText(filters.judge)}`);
         if (filters.resultText) parts.push(`结果文本=${filters.resultText}`);
@@ -1964,6 +1967,7 @@
             ageMin: parseFloat((document.getElementById('lis-pr-age-min') || {}).value),
             ageMax: parseFloat((document.getElementById('lis-pr-age-max') || {}).value),
             specimen: val('lis-pr-specimen').toLowerCase(),
+            testSet: val('lis-pr-testset').toLowerCase(),
             item: val('lis-pr-item').toLowerCase(),
             resultText: val('lis-pr-result-text').toLowerCase(),
             resultOp: val('lis-pr-result-op'),
@@ -2141,9 +2145,11 @@
         let data = rows;
         if (filters.q) {
             data = data.filter(r => [
-                r.PatName, r.Labno, r.EpisodeNo, r.RegNo, r.AdmNo, r.RecordNo,
-                r.TestSetDesc, r.Location, r.LocationName, r.Ward, r.WardName
+                r.PatName, r.Labno, r.EpisodeNo, r.RegNo, r.AdmNo, r.RecordNo
             ].some(v => prTextMatchAny(v, filters.qTerms)));
+        }
+        if (filters.testSet) {
+            data = data.filter(r => prTextMatchAny(r.TestSetDesc, filters.testSetTerms));
         }
         if (filters.sex) data = data.filter(r => {
             const sex = String(r.Sex || r.Species || '');
@@ -2338,6 +2344,7 @@
         if (filters.ward && !prTextMatchAny(row.ward, filters.wardTerms)) return false;
         if (filters.doctor && !prTextMatchAny(row.doctor, filters.doctorTerms)) return false;
         if (filters.specimen && !prTextMatchAny(row.specimen, filters.specimenTerms)) return false;
+        if (filters.testSet && !prTextMatchAny(row.testSet, filters.testSetTerms)) return false;
         if (filters.item && !prTextMatchAny([row.itemName, row.itemSynonym].filter(Boolean).join(' '), filters.itemTerms)) return false;
         if (filters.resultText && !prTextMatchAny([row.result, row.abFlag, classifyStatusText(row.status)].filter(Boolean).join(' '), filters.resultTextTerms)) return false;
         if (filters.diagnosis && !prTextMatchAny(row.diagnosis, filters.diagnosisTerms)) return false;
@@ -2559,7 +2566,7 @@
         [
             'lis-pr-q','lis-pr-patient-type','lis-pr-dept','lis-pr-ward','lis-pr-doctor',
             'lis-pr-diagnosis','lis-pr-age-min','lis-pr-age-max','lis-pr-specimen',
-            'lis-pr-item','lis-pr-result-text','lis-pr-result-value','lis-pr-result-min','lis-pr-result-max'
+            'lis-pr-testset','lis-pr-item','lis-pr-result-text','lis-pr-result-value','lis-pr-result-min','lis-pr-result-max'
         ].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.value = '';
@@ -2870,7 +2877,7 @@
                 <label class="pr-sm">状态<select id="lis-pr-status-filter">
                     <option value="">全部</option><option value="1">登记</option><option value="2">初审</option><option value="3">审核</option><option value="4">复审</option>
                 </select></label>
-                <label class="pr-xl">综合搜索<input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 住院号"></label>
+                <label class="pr-xl">综合搜索<input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 登记号 / 病案号"></label>
                 <div class="pr-section">患者信息</div>
                 <label class="pr-sm">病人类型<input type="text" id="lis-pr-patient-type" placeholder="体检 职工体检"></label>
                 <label class="pr-md">科室<input type="text" id="lis-pr-dept" placeholder="科室"></label>
@@ -2882,6 +2889,7 @@
                 <label class="pr-xs">年龄≤<input type="number" id="lis-pr-age-max" placeholder="岁"></label>
                 <label class="pr-sm">标本<input type="text" id="lis-pr-specimen" placeholder="血清"></label>
                 <div class="pr-section">项目结果</div>
+                <label class="pr-md">医嘱组合<input type="text" id="lis-pr-testset" placeholder="如 传染病八项"></label>
                 <label class="pr-lg">项目名称<input type="text" id="lis-pr-item" placeholder="如 梅毒（仅单项名）"></label>
                 <label class="pr-md">判断<select id="lis-pr-judge">
                     <option value="">全部</option><option value="NORMAL">正常</option><option value="HIGH">偏高</option><option value="LOW">偏低</option><option value="ABNORMAL">异常</option><option value="CRITICAL">危急</option><option value="UNCERTAIN">待定</option>
@@ -9688,7 +9696,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.36');
+        dbg('iMedicalLIS 增强助手 v7.20.37');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
