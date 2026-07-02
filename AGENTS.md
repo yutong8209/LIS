@@ -43,6 +43,13 @@ python3 ~/脚本/image-reader.py "/path/to/image.png"
 - The userscript targets `192.168.31.111:9111` (nginx proxy) and `10.0.29.100` (direct). Do not change host/port without confirming.
 - Userscript version is in the `@version` header. Bump on meaningful changes.
 
+## 发布流程（每次改完必做）
+
+1. **Bump** `@version`（有意义变更时）
+2. **Commit**：中文说明，写清改了什么、为什么
+3. **Push**：`git push` 到 `origin/main`（用户要求每次更新后自动推送，不要只改本地）
+4. **Diff 摘要**：回复里用 `git show --stat` 或 `git diff` 概括变更文件与要点，方便用户核对
+
 ## Gotchas
 
 - `browser_control.py` uses `mss` for screenshots (not pyautogui) — captures full primary monitor.
