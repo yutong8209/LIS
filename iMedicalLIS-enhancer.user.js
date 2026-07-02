@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.28
+// @version      7.20.29
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -43,7 +43,9 @@
     const WG_MAP = {}; WG.forEach(w => WG_MAP[w.dr] = w);
 
     const REFRESH = 30000;
-    const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', wsState:'LIS_WSState_Persist' };
+    const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
+    const CLASSIFY_STALE_MS = 5 * 60 * 1000;
+    const AUDIT_QUEUE_LOCK_TTL = 45000;
 
     // ==================== 工具 ====================
     const $  = s => document.querySelector(s);
@@ -158,6 +160,7 @@
     const loadCAAuth = () => { try { const v=localStorage.getItem(K.caAuth); if(!v) return null; const o=JSON.parse(v); return o; } catch(e){ return null; } };
     const clearCAAuth = () => { try { localStorage.removeItem(K.caAuth); } catch(e){} };
     const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const escAttr = s => esc(s);
     // 通过原生 setter 设置 input 值（兼容 EasyUI/React 等框架）
     function setNativeInputValue(el, value) {
         try {
@@ -751,8 +754,8 @@
 
     // 审核登录页面（iframe 中）
     function fillAuthPage() {
-        const tryFill = () => {
-            const pwd = loadPwd();
+        const tryFill = async () => {
+            const pwd = await loadPwdAsync();
             if (!pwd) return false;
             const inputs = document.querySelectorAll('input[type="password"], input[onfocus*="password"]');
             for (const inp of inputs) {
@@ -762,18 +765,19 @@
                 }
                 if (!inp._lisListen) {
                     inp._lisListen = true;
-                    inp.addEventListener('change', () => { if(inp.value) savePwd(inp.value); });
-                    inp.addEventListener('keydown', e => { if(e.keyCode===13 && inp.value) savePwd(inp.value); });
+                    inp.addEventListener('change', () => { if(inp.value) savePwdAsync(inp.value); });
+                    inp.addEventListener('keydown', e => { if(e.keyCode===13 && inp.value) savePwdAsync(inp.value); });
                 }
             }
             return inputs.length > 0;
         };
-        if (!tryFill()) {
-            const ob = new MutationObserver(() => { if(tryFill()) ob.disconnect(); });
+        tryFill().then(ok => {
+            if (ok) return;
+            const ob = new MutationObserver(() => { tryFill().then(filled => { if(filled) ob.disconnect(); }); });
             ob.observe(document.body, {childList:true, subtree:true});
             setTimeout(() => ob.disconnect(), 60000);
-            [500,1000,2000].forEach(t => setTimeout(tryFill, t));
-        }
+            [500,1000,2000].forEach(t => setTimeout(() => tryFill(), t));
+        });
     }
 
     // 报告处理页面：批审窗口
@@ -796,8 +800,8 @@
         }, 2000);
     }
 
-    function fillBatchPwd() {
-        const pwd = loadPwd();
+    async function fillBatchPwd() {
+        const pwd = await loadPwdAsync();
         if (!pwd) return;
         const f = document.getElementById('text_AuthUserLoginPasssword');
         if (f && !f.value && f.offsetParent!==null) {
@@ -807,23 +811,23 @@
         }
         if (f && !f._lisListen) {
             f._lisListen = true;
-            f.addEventListener('change', () => { if(f.value) savePwd(f.value); });
-            f.addEventListener('keydown', e => { if(e.keyCode===13 && f.value) savePwd(f.value); });
+            f.addEventListener('change', () => { if(f.value) savePwdAsync(f.value); });
+            f.addEventListener('keydown', e => { if(e.keyCode===13 && f.value) savePwdAsync(f.value); });
         }
     }
 
-    function fillIframe(ifr) {
+    async function fillIframe(ifr) {
         try {
             const doc = ifr.contentDocument;
             if (!doc) return;
-            const pwd = loadPwd();
+            const pwd = await loadPwdAsync();
             if (!pwd) return;
             doc.querySelectorAll('input[type="password"], input[onfocus*="password"]').forEach(inp => {
                 if (!inp.value) { setNativeInputValue(inp, pwd); inp.type='password'; }
                 if (!inp._lisListen) {
                     inp._lisListen = true;
-                    inp.addEventListener('change', () => { if(inp.value) savePwd(inp.value); });
-                    inp.addEventListener('keydown', e => { if(e.keyCode===13 && inp.value) savePwd(inp.value); });
+                    inp.addEventListener('change', () => { if(inp.value) savePwdAsync(inp.value); });
+                    inp.addEventListener('keydown', e => { if(e.keyCode===13 && inp.value) savePwdAsync(inp.value); });
                 }
             });
         } catch(e){}
@@ -3013,6 +3017,60 @@
     let _classifyRunSeq = 0; // 分类运行序号，防止旧分类任务影响新刷新
     let _lastWSNonEmptyAt = 0; // 最近一次成功加载到标本的时间，用于强制刷新兜底
     let _normalKeyHandler = null; // 普通视图键盘监听
+    let _abnormalFocusDR = '';
+    let _wsSearchTimer = null;
+    const _tabId = 'tab_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+
+    function specimenFingerprint(row) {
+        if (!row) return '';
+        return [
+            row.ReportDR,
+            row.Status || row.ReportStatus,
+            row.IsComplete,
+            row.AcceptDT,
+            row.TransmitDate,
+            row._mdr,
+            row._pending ? '1' : '0'
+        ].map(v => String(v || '')).join('|');
+    }
+
+    function isClassificationStale(row) {
+        if (!row || !row.ReportDR) return true;
+        const cached = wsClassifiedCache[row.ReportDR];
+        if (!cached) return true;
+        const fp = specimenFingerprint(row);
+        if (cached.fingerprint !== fp) return true;
+        const age = Date.now() - (cached._classifiedAt || cached._accessTs || 0);
+        return age > CLASSIFY_STALE_MS;
+    }
+
+    function pruneStaleClassificationCache(newData) {
+        const newMap = new Map((newData || []).map(r => [String(r.ReportDR), specimenFingerprint(r)]));
+        let changed = false;
+        for (const dr of Object.keys(wsClassifiedCache)) {
+            if (!newMap.has(dr)) {
+                delete wsClassifiedCache[dr];
+                changed = true;
+                continue;
+            }
+            const cached = wsClassifiedCache[dr];
+            const fp = newMap.get(dr);
+            if (cached.fingerprint !== fp) {
+                delete wsClassifiedCache[dr];
+                changed = true;
+            }
+        }
+        if (changed) _classifyVersion++;
+        return changed;
+    }
+
+    function attachClassificationMeta(result, row) {
+        if (!result || !row) return result;
+        result.fingerprint = specimenFingerprint(row);
+        result._classifiedAt = Date.now();
+        result.row = row;
+        return result;
+    }
 
     function invalidateCaches(options = {}) {
         _filteredCache = null;
@@ -3153,6 +3211,38 @@
         return wsData.find(r => String(r.ReportDR || '') === target) || null;
     }
 
+    function resolveQueueItemRow(item) {
+        if (!item) return null;
+        return wsData.find(r => String(r.ReportDR) === String(item.reportDR)) || null;
+    }
+
+    function acquireQueueLock() {
+        try {
+            const raw = localStorage.getItem(K.auditQueueLock);
+            if (raw) {
+                const lock = JSON.parse(raw);
+                if (lock.owner !== _tabId && Date.now() - (lock.ts || 0) < AUDIT_QUEUE_LOCK_TTL) return false;
+            }
+            localStorage.setItem(K.auditQueueLock, JSON.stringify({ owner: _tabId, ts: Date.now() }));
+            return true;
+        } catch(e) { return true; }
+    }
+
+    function refreshQueueLock() {
+        try {
+            localStorage.setItem(K.auditQueueLock, JSON.stringify({ owner: _tabId, ts: Date.now() }));
+        } catch(e) {}
+    }
+
+    function releaseQueueLock() {
+        try {
+            const raw = localStorage.getItem(K.auditQueueLock);
+            if (!raw) return;
+            const lock = JSON.parse(raw);
+            if (lock.owner === _tabId) localStorage.removeItem(K.auditQueueLock);
+        } catch(e) {}
+    }
+
     function isWSVisible() {
         const wsEl = document.getElementById('lis-ws');
         return !!(wsEl && wsEl.classList.contains('show'));
@@ -3265,10 +3355,11 @@
         wsMachines = allMachines;
         if (wsData.length > 0) _lastWSNonEmptyAt = Date.now();
         normalizeWSMachineSelection();
+        pruneStaleClassificationCache(wsData);
         calcMachineCounts();
 
         if (qi) qi.textContent = `${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
-        invalidateCaches({ raw: true });
+        invalidateCaches({ raw: true, detail: true });
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable(); // 先用未分类数据渲染，让用户立即看到标本列表
@@ -3373,7 +3464,7 @@
         const rows = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
         return rows.map(r => ({
             ...r,
-            ReportDR: r.Labno || r.RegNo || ('P_' + Math.random().toString(36).substr(2, 8)),
+            ReportDR: 'pending:' + String(wgmDR || '') + ':' + String(r.Labno || '') + ':' + String(r.RegNo || ''),
             Status: '0', ReportStatus: '0', IsComplete: '0',
             EpisodeNo: r.RegNo || '',
             AcceptDT: ((r.AcceptDate || '') + ' ' + (r.AcceptTime || '')).trim(),
@@ -3492,8 +3583,8 @@
     }
 
     function compareAuditQueueItems(a, b) {
-        const rowA = a.row || a;
-        const rowB = b.row || b;
+        const rowA = resolveQueueItemRow(a) || { _wg: a.wg, _mdr: a.mdr, AcceptDT: '', Labno: a.labno };
+        const rowB = resolveQueueItemRow(b) || { _wg: b.wg, _mdr: b.mdr, AcceptDT: '', Labno: b.labno };
         const g = compareSpecimensByMachineGroup(rowA, rowB);
         if (g) return g;
         const va = String(rowA.AcceptDT || '');
@@ -3658,8 +3749,11 @@
         });
         document.getElementById('lis-ws-close').addEventListener('click', closeWS);
         document.getElementById('lis-ws-pwd').addEventListener('click', openPwdDlg);
-        let st;
-        document.getElementById('lis-ws-search').addEventListener('input', () => { clearTimeout(st); st=setTimeout(()=>renderWSTable(),200); });
+        document.getElementById('lis-ws-search').addEventListener('input', () => {
+            invalidateCaches();
+            clearTimeout(_wsSearchTimer);
+            _wsSearchTimer = setTimeout(() => renderWSTable(), 200);
+        });
     }
 
     // --- 渲染：仪器标签栏（两级：工作组 + 仪器）---
@@ -3725,7 +3819,7 @@
         const wgMachines = sortWSMachines(wsMachines.filter(m => !wsActiveWG || m._wg === wsActiveWG));
         wgMachines.forEach(m => {
             const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-            h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${m.RowID}">
+            h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${escAttr(m.RowID)}">
                 <span class="ws-tab-name">${esc(m.CName||m.Name)}</span>
                 <span class="mach-cnt">${c.total}</span>
             </button>`;
@@ -3901,11 +3995,16 @@
             else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveAbnormalFocus(-1, curData); }
             else if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault(); e.stopImmediatePropagation();
-                const sp = curData[wsAbnormalIndex];
+                const sp = getAbnormalFocusSpecimen(curData);
+                if (!sp) return;
                 markAbnormalAuditUI(sp, 'start');
                 void auditAbnormalSpecimen(sp);
             }
-            else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); if (curData[wsAbnormalIndex]) openDetailPanel(curData[wsAbnormalIndex], 'abnormal', wsAbnormalIndex); }
+            else if (e.key === 'Enter' && e.shiftKey) {
+                e.preventDefault(); e.stopImmediatePropagation();
+                const sp = getAbnormalFocusSpecimen(curData);
+                if (sp) openDetailPanel(sp, 'abnormal', wsAbnormalIndex);
+            }
             else if (e.key === 'Escape') { wsCategory = 'normal'; saveWSState(); renderWSCategoryBar(); renderWSTable(); }
         };
         _abnormalKeyTargets = [document];
@@ -3993,8 +4092,8 @@
 
         data.forEach((r, i) => {
             const ck = wsChecked.has(r.ReportDR) ? 'checked' : '';
-            h += `<tr class="${wsChecked.has(r.ReportDR)?'sel':''}" data-i="${i}" data-rdr="${r.ReportDR||''}">`;
-            h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${r.ReportDR||''}" ${ck} /></td>`;
+            h += `<tr class="${wsChecked.has(r.ReportDR)?'sel':''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR||'')}">`;
+            h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${escAttr(r.ReportDR||'')}" ${ck} /></td>`;
             h += `<td>${highlightText(r._mn||'', wsSearchQuery)}</td>`;
             h += `<td>${highlightText(r.PatName||'', wsSearchQuery)}</td>`;
             h += `<td><b>${highlightText(r.Labno||'', wsSearchQuery)}</b></td>`;
@@ -4023,9 +4122,31 @@
         _bindTableEvents(body, data, 'normal');
     }
 
+    function getAbnormalFocusSpecimen(data) {
+        data = data || filteredData();
+        if (!data.length) return null;
+        const focused = document.querySelector('.ws-abnormal-card.focused');
+        const focusDR = (focused && focused.dataset.rdr) || _abnormalFocusDR;
+        if (focusDR) {
+            const sp = findWSSpecimenByReportDR(focusDR);
+            if (sp) {
+                const idx = data.findIndex(r => String(r.ReportDR) === String(sp.ReportDR));
+                if (idx >= 0) wsAbnormalIndex = idx;
+                return sp;
+            }
+        }
+        if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) wsAbnormalIndex = 0;
+        return data[wsAbnormalIndex] || null;
+    }
+
     // --- 异常待审视图（卡片式）---
     function renderAbnormalView(data, body) {
-        if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) wsAbnormalIndex = 0;
+        if (_abnormalFocusDR) {
+            const idx = data.findIndex(r => String(r.ReportDR) === String(_abnormalFocusDR));
+            wsAbnormalIndex = idx >= 0 ? idx : (data.length ? 0 : -1);
+        } else if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {
+            wsAbnormalIndex = data.length ? 0 : -1;
+        }
 
         let h = `<div class="ws-abnormal-hint">
             <kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 切换 <kbd>点击</kbd> 详情 · 按仪器分组，审完一台再换下一台
@@ -4047,7 +4168,7 @@
             const hasInfectionWarning = cached && cached.infectionWarning;
             const focused = i === wsAbnormalIndex ? ' focused' : '';
 
-            h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}" data-i="${i}" data-rdr="${r.ReportDR||''}">`;
+            h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR||'')}">`;
             h += `<span class="ab-card-name">${highlightText(r.PatName||'', wsSearchQuery)}</span>`;
             h += `<span class="ab-card-no">${highlightText(r.Labno||'', wsSearchQuery)}</span>`;
             h += `<span class="ab-card-test">${highlightText(r._mn||'', wsSearchQuery)}</span>`;
@@ -4113,14 +4234,13 @@
         // 卡片点击 → 更新聚焦 + 打开详情
         body.querySelectorAll('.ws-abnormal-card').forEach(card => {
             card.addEventListener('click', () => {
-                const i = parseInt(card.dataset.i);
-                const specimen = findWSSpecimenByReportDR(card.dataset.rdr) || (i >= 0 && i < data.length ? data[i] : null);
+                const specimen = findWSSpecimenByReportDR(card.dataset.rdr);
                 if (!specimen) return;
+                _abnormalFocusDR = String(specimen.ReportDR || '');
                 const cards = document.querySelectorAll('.ws-abnormal-card');
-                if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.remove('focused');
+                cards.forEach(c => c.classList.remove('focused'));
+                card.classList.add('focused');
                 wsAbnormalIndex = Math.max(0, filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR)));
-                if (wsAbnormalIndex < 0) wsAbnormalIndex = i;
-                if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.add('focused');
                 openDetailPanel(specimen, 'abnormal', wsAbnormalIndex);
             });
         });
@@ -4134,14 +4254,17 @@
     }
 
     function moveAbnormalFocus(dir, data) {
-        const cards = document.querySelectorAll('.ws-abnormal-card');
-        if (cards.length === 0) return;
-        // 移除旧聚焦
-        if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.remove('focused');
-        // 计算新索引
-        wsAbnormalIndex = Math.max(0, Math.min(data.length - 1, wsAbnormalIndex + dir));
-        // 添加新聚焦
-        if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.add('focused');
+        data = data || filteredData();
+        if (!data.length) return;
+        const cur = getAbnormalFocusSpecimen(data);
+        let idx = cur ? data.findIndex(r => String(r.ReportDR) === String(cur.ReportDR)) : wsAbnormalIndex;
+        if (idx < 0) idx = 0;
+        idx = Math.max(0, Math.min(data.length - 1, idx + dir));
+        wsAbnormalIndex = idx;
+        _abnormalFocusDR = String(data[idx].ReportDR || '');
+        document.querySelectorAll('.ws-abnormal-card').forEach(c => c.classList.remove('focused'));
+        const card = [...document.querySelectorAll('.ws-abnormal-card')].find(c => String(c.dataset.rdr) === _abnormalFocusDR);
+        if (card) card.classList.add('focused');
         _scrollAbnormalFocus();
         scheduleAbnormalAuditPrewarm();
     }
@@ -4166,6 +4289,7 @@
             wsAbnormalIndex = (wsAbnormalIndex + 1) % data.length;
         }
         if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.add('focused');
+        if (data[wsAbnormalIndex]) _abnormalFocusDR = String(data[wsAbnormalIndex].ReportDR || '');
         _scrollAbnormalFocus();
     }
 
@@ -4639,7 +4763,7 @@
             else if (ic === '0') icHTML = '<span class="complete-empty">❌ 无结果</span>';
             else icHTML = '<span style="color:#999">-</span>';
 
-            h += `<tr data-i="${i}" data-rdr="${r.ReportDR||''}">`;
+            h += `<tr data-i="${i}" data-rdr="${escAttr(r.ReportDR||'')}">`;
             h += `<td>${highlightText(r._mn||'', wsSearchQuery)}</td>`;
             h += `<td>${highlightText(r.PatName||'', wsSearchQuery)}</td>`;
             h += `<td><b>${highlightText(r.Labno||'', wsSearchQuery)}</b></td>`;
@@ -4674,10 +4798,10 @@
             const statusVal = r.Status || r.ReportStatus || '';
             const st = stMap[statusVal] || {t:r.StatusDesc||'?',cls:''};
             const ck = wsChecked.has(r.ReportDR) ? 'checked' : '';
-            h += `<tr class="st-${statusVal} ${wsChecked.has(r.ReportDR)?'sel':''}" data-i="${i}" data-rdr="${r.ReportDR||''}">`;
-            h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${r.ReportDR||''}" ${ck} /></td>`;
+            h += `<tr class="st-${statusVal} ${wsChecked.has(r.ReportDR)?'sel':''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR||'')}">`;
+            h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${escAttr(r.ReportDR||'')}" ${ck} /></td>`;
             h += `<td>${highlightText(r._mn||'', wsSearchQuery)}</td>`;
-            h += `<td><span class="st-tag ${st.cls}">${st.t}</span></td>`;
+            h += `<td><span class="st-tag ${st.cls}">${esc(st.t)}</span></td>`;
             const ic = r.IsComplete;
             let icHTML = '';
             if (ic === '1') icHTML = '<span class="complete-star">⭐</span>';
@@ -4743,8 +4867,8 @@
             const tr = e.target.closest('tr[data-rdr]');
             if (!tr) return;
             if (e.target.closest('input[type="checkbox"]')) return;
-            const i = parseInt(tr.dataset.i);
-            if (i >= 0 && i < data.length) navigateToSpecimen(data[i]);
+            const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
+            if (specimen) navigateToSpecimen(specimen);
         };
 
         body.addEventListener('click', handlers.click);
@@ -4948,7 +5072,7 @@
             try {
                 localStorage.setItem(K.auditQueue, JSON.stringify({ ...queue, time: Date.now() }));
             } catch(e) {}
-        }, 1000);
+        }, 200);
     }
     function saveAuditQueueNow(queue) {
         clearTimeout(_saveQueueTimer);
@@ -4988,9 +5112,9 @@
                 labno: row.Labno || '',
                 name: row.PatName || '',
                 testSet: row.TestSetDesc || '',
+                fingerprint: specimenFingerprint(row),
                 status: sp.status || '',
-                retry: 0,
-                row
+                retry: 0
             });
         });
         items.sort(compareAuditQueueItems);
@@ -5938,7 +6062,7 @@
                 arr.forEach(d => { freq[d] = (freq[d]||0)+1; });
                 return Object.keys(freq).sort((a,b) => freq[b]-freq[a])[0];
             });
-            const thDates = hdrDates.map(d => d ? `<th style="font-size:11px">${d}</th>` : '<th style="font-size:11px">-</th>').join('');
+            const thDates = hdrDates.map(d => d ? `<th style="font-size:11px">${esc(d)}</th>` : '<th style="font-size:11px">-</th>').join('');
 
             html += `<thead><tr><th style='width:20px'>QC</th><th>项目</th><th>结果</th><th>参考范围</th><th>状态</th>${thDates}</tr></thead>`;
             html += '<tbody>';
@@ -8174,7 +8298,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 if (status === '3' || status === '4') return false;
                 const complete = String(r.IsComplete || '');
                 if (complete !== '1') return false;
-                return !wsClassifiedCache[r.ReportDR];
+                return isClassificationStale(r);
             });
 
             if (toClassify.length === 0) {
@@ -8210,6 +8334,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 results.forEach(r => {
                     if (r && r.reportDR) {
                         r._accessTs = Date.now();
+                        if (!r.fingerprint && r.row) attachClassificationMeta(r, r.row);
                         wsClassifiedCache[r.reportDR] = r;
                         _classifyVersion++;
                     }
@@ -8304,19 +8429,19 @@ function fillNativeLoginForm(creds, lastWG) {
             // 传染病历史结果比对（x8 仪器）
             const isInfectionPanel = checkInfectionPanel(row, classifications);
             if (isInfectionPanel) {
-                return {
+                return attachClassificationMeta({
                     status: 'ABNORMAL',
                     items: classifications,
                     labInfo: labInfo[0] || {},
                     row,
                     reportDR,
                     infectionWarning: isInfectionPanel
-                };
+                }, row);
             }
 
             // 关键安全检查：无结果 → UNCERTAIN，绝不自动审核
             if (itemInfo.length === 0) {
-                return { status: 'UNCERTAIN', items: [], labInfo: labInfo[0] || {}, row, reportDR };
+                return attachClassificationMeta({ status: 'UNCERTAIN', items: [], labInfo: labInfo[0] || {}, row, reportDR }, row);
             }
 
             const hasAbnormal = classifications.some(c => c.status === 'HIGH' || c.status === 'LOW' || c.status === 'ABNORMAL' || c.status === 'CRITICAL');
@@ -8331,16 +8456,16 @@ function fillNativeLoginForm(creds, lastWG) {
             else if (hasAbnormal) overallStatus = 'ABNORMAL';
             else if (hasUncertain || !hasComplete || hasEmptyResults) overallStatus = 'UNCERTAIN';
 
-            return {
+            return attachClassificationMeta({
                 status: overallStatus,
                 items: classifications,
                 labInfo: labInfo[0] || {},
                 row,
                 reportDR
-            };
+            }, row);
         } catch(e) {
             dbg('获取标本详情失败:', row.PatName, e);
-            return { status: 'UNCERTAIN', items: [], row, reportDR, error: e.message };
+            return attachClassificationMeta({ status: 'UNCERTAIN', items: [], row, reportDR, error: e.message }, row);
         }
     }
 
@@ -8700,7 +8825,7 @@ function fillNativeLoginForm(creds, lastWG) {
             const toFetch = [];
             for (const r of eligible) {
                 const cached = wsClassifiedCache[r.ReportDR];
-                if (cached) {
+                if (cached && !isClassificationStale(r)) {
                     results.push(cached);
                 } else {
                     toFetch.push(r);
@@ -8731,13 +8856,17 @@ function fillNativeLoginForm(creds, lastWG) {
         if (Array.isArray(normal) && abnormal === undefined) {
             const specimens = normal;
             if (specimens.length === 0) { toast('没有可审核的标本', 'w'); return; }
-            const formatted = specimens.map(s => ({
-                status: 'NORMAL',
-                items: [],
-                row: s,
-                reportDR: s.ReportDR || s.reportDR || ''
-            }));
-            confirmAndBatchAudit(formatted);
+            const formatted = specimens.map(s => {
+                const cached = wsClassifiedCache[s.ReportDR];
+                if (cached && !isClassificationStale(s)) return { ...cached, row: s, reportDR: s.ReportDR };
+                return { status: 'UNCERTAIN', items: [], row: s, reportDR: s.ReportDR || '' };
+            });
+            const normalOnly = formatted.filter(isAutoAuditableClassified);
+            if (normalOnly.length !== specimens.length) {
+                showToast('部分标本不可自动审核，已取消批审', 'warning');
+                return;
+            }
+            confirmAndBatchAudit(normalOnly);
             return;
         }
         // 移除已有的对话框
@@ -9004,16 +9133,29 @@ function fillNativeLoginForm(creds, lastWG) {
 
     async function continueAuditQueue(queue) {
         if (!queue || !queue.items || queue.items.length === 0) return;
+        if (wsClassifying) {
+            showToast('标本正在分类中，稍候自动继续批审...', 'warning');
+            saveAuditQueueNow(queue);
+            setTimeout(() => continueAuditQueue(queue).catch(e => dbg('批审等待分类失败:', e)), 2000);
+            return;
+        }
         const auditLockId = acquireAuditLock('batchAudit');
         if (!auditLockId) { showToast('正在审核中，请稍候', 'warning'); return; }
+        if (!acquireQueueLock()) {
+            showToast('其他标签页正在批审，请稍候', 'warning');
+            releaseAuditLock(auditLockId);
+            return;
+        }
         if (_abnormalAuditInProgress) {
             showToast('正在审核异常标本中，请稍候', 'warning');
             releaseAuditLock(auditLockId);
+            releaseQueueLock();
             return;
         }
         if (_detailAuditInProgress) {
             showToast('正在详情面板审核中，请稍候', 'warning');
             releaseAuditLock(auditLockId);
+            releaseQueueLock();
             return;
         }
         if (queue.keepWS) keepWorkbenchOnTop('批审开始');
@@ -9100,14 +9242,33 @@ function fillNativeLoginForm(creds, lastWG) {
                 const item = currentQueueItem(queue);
                 if (!item) break;
 
-                const liveClassified = getLiveClassification(item.reportDR);
+                refreshQueueLock();
+                const liveRow = resolveQueueItemRow(item);
+                if (liveRow && String(liveRow.IsComplete || '') !== '1') {
+                    queue.skipped.push({ ...item, reason: '结果不完整' });
+                    skipCount++; queue.current++; saveAuditQueueNow(queue); continue;
+                }
+                let liveClassified = getLiveClassification(item.reportDR);
+                if (!liveClassified || (liveRow && isClassificationStale(liveRow))) {
+                    if (liveRow) {
+                        try {
+                            liveClassified = await fetchAndClassifySpecimen(liveRow);
+                            if (liveClassified && liveClassified.reportDR) {
+                                wsClassifiedCache[liveClassified.reportDR] = liveClassified;
+                                _classifyVersion++;
+                            }
+                        } catch(e) {
+                            dbg('批审前重分类失败:', item.reportDR, e.message);
+                        }
+                    }
+                }
                 if (!liveClassified) {
                     queue.skipped.push({ ...item, reason: '分类缓存缺失，需刷新后重试' });
-                    skipCount++; queue.current++; saveAuditQueue(queue); continue;
+                    skipCount++; queue.current++; saveAuditQueueNow(queue); continue;
                 }
                 if (!isAutoAuditableClassified(liveClassified)) {
                     queue.skipped.push({ ...item, reason: classifyStatusText(liveClassified.status) + '标本不可自动审核' });
-                    skipCount++; queue.current++; saveAuditQueue(queue); continue;
+                    skipCount++; queue.current++; saveAuditQueueNow(queue); continue;
                 }
 
                 if (item.wg && item.wg !== wgDR()) {
@@ -9189,7 +9350,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     }
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
-                    let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], batchMode: true, timeoutMs: 10000, keepWS: queue.keepWS, missingAsSuccess: true, targetReportDR: item.reportDR });
+                    let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], batchMode: true, timeoutMs: 10000, keepWS: queue.keepWS, missingAsSuccess: false, targetReportDR: item.reportDR });
                     if (!auditResult) {
                         dbg('批审单条首次未确认，继续确认原生状态:', item.name || item.reportDR);
                         iframeWin = getReportIframeWin() || iframeWin;
@@ -9215,7 +9376,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     dbg('逐行审核异常:', item.name, e.message);
                 } finally {
                     queue.current++;
-                    saveAuditQueue(queue);
+                    saveAuditQueueNow(queue);
                     await sleep(0);
                     try { iframeWin = getReportIframeWin(); if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; } } catch(e) {}
                 }
@@ -9246,6 +9407,7 @@ function fillNativeLoginForm(creds, lastWG) {
             dbg('批量审核失败:', e);
             showToast('审核失败: ' + e.message, 'error');
         } finally {
+            releaseQueueLock();
             releaseAuditLock(auditLockId);
             if (resumeWSRefresh && isWSVisible()) startWSRefresh();
             setTimeout(() => { const p = document.getElementById('lis-audit-progress'); if (p) p.remove(); }, 3000);
@@ -9402,7 +9564,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.28');
+        dbg('iMedicalLIS 增强助手 v7.20.29');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
