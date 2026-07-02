@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.33
+// @version      7.20.34
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4615,12 +4615,14 @@
     async function executeNativeAudit(iframeWin, specimen, options = {}) {
         const fast = options.fast !== false;
         const reportDR = specimen.ReportDR;
+        const caReady = isCASessionReady(iframeWin);
         let result = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
             action: 'audit',
             expectedStatuses: ['3'],
             batchMode: fast,
-            timeoutMs: fast ? 8000 : 15000,
+            timeoutMs: fast ? (caReady ? 5000 : 8000) : 15000,
             keepWS: !!options.keepWS,
+            caSessionReady: caReady,
             missingAsSuccess: true,
             targetReportDR: reportDR
         });
@@ -7563,12 +7565,13 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!jq) { dbg('原生 jQuery 不存在'); return false; }
 
         const batchMode = !!options.batchMode;
+        const caSessionReady = !!options.caSessionReady;
         const isAudit = btnId === 'btn_ReportAuth' || options.action === 'audit';
         const expectedStatuses = options.expectedStatuses || (isAudit ? ['3'] : []);
-        const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? 10000 : 15000) : 8000);
-        const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : false;
-        const maxPoll = batchMode ? 8 : 20;
-        const pollSleep = batchMode ? 60 : 200;
+        const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? (caSessionReady ? 5000 : 10000) : 15000) : 8000);
+        const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : (caSessionReady && isAudit);
+        const maxPoll = caSessionReady ? 4 : (batchMode ? 8 : 20);
+        const pollSleep = caSessionReady ? 40 : (batchMode ? 60 : 200);
         const missingStableMs = batchMode ? 450 : 900;
 
         let targetReportDR = options.targetReportDR ? String(options.targetReportDR) : '';
@@ -7577,7 +7580,7 @@ function fillNativeLoginForm(creds, lastWG) {
             if (!targetReportDR && sel) targetReportDR = String(sel.ReportDR || '');
         } catch(e) {}
         const targetWasPresent = !!targetReportDR && !!findNativeRowByReportDR(iframeWin, targetReportDR);
-        const waitOpts = { targetWasPresent, missingStableMs, failureGraceMs: batchMode ? 1200 : 3000, ignoreMessages: true, turbo: batchMode };
+        const waitOpts = { targetWasPresent, missingStableMs, failureGraceMs: caSessionReady ? 800 : (batchMode ? 1200 : 3000), ignoreMessages: true, turbo: batchMode || caSessionReady };
 
         if (isAudit && targetReportDR && !isReportDetailLoaded(iframeWin, targetReportDR)) {
             dbg('审核中止: 目标标本详情未就绪, targetReportDR=' + targetReportDR);
@@ -7665,6 +7668,28 @@ function fillNativeLoginForm(creds, lastWG) {
             showToast('出现审核登录窗口，请关闭后用原生审核按钮重新触发 CA', 'warning');
         }
         dbg('原生按钮点击完成，但未确认成功');
+        return false;
+    }
+
+    function isCASessionReady(iframeWin) {
+        try {
+            iframeWin = iframeWin || getReportIframeWin();
+            if (!iframeWin) return false;
+            const jq = iframeWin.jQuery || iframeWin.$;
+            if (jq) {
+                const caWin = jq('#win_CAUserLogin');
+                if (caWin.length && caWin.is(':visible')) return false;
+            }
+            if (iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray) {
+                const me = iframeWin.me;
+                const userDR = me?.AuthUserDR || uid();
+                if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) return true;
+            }
+            const cached = loadCAAuth();
+            if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) return true;
+            const authStatus = getAuditStatusText(iframeWin);
+            if (authStatus && authStatus.indexOf('未登录') === -1) return true;
+        } catch(e) {}
         return false;
     }
 
@@ -8765,7 +8790,11 @@ function fillNativeLoginForm(creds, lastWG) {
                 showToast('未找到报告处理页面，请先打开"报告处理"', 'error');
                 return;
             }
-            let auditOK = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 15000, missingAsSuccess: true, targetReportDR: reportDR });
+            const caReady = isCASessionReady(iframeWin);
+            let auditOK = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
+                action: 'audit', expectedStatuses: ['3'], timeoutMs: caReady ? 8000 : 15000,
+                caSessionReady: caReady, missingAsSuccess: true, targetReportDR: reportDR
+            });
             if (!auditOK) {
                 auditOK = await confirmAuditEventually(iframeWin, reportDR, selected.PatName || selected.Labno || '');
             }
@@ -9067,6 +9096,26 @@ function fillNativeLoginForm(creds, lastWG) {
         return false;
     }
 
+    async function refreshNativeWorkListAllMachines(iframeWin, options = {}) {
+        if (!iframeWin) return iframeWin;
+        const jq = iframeWin.jQuery || iframeWin.$;
+        const me = iframeWin.me;
+        if (!jq || !me) return iframeWin;
+        try {
+            if (me.WorkGroupMachineDR !== undefined) me.WorkGroupMachineDR = '';
+            try { jq('#cmb_WorkGroupMachine').combogrid('setValue', ''); } catch(e) {}
+            const dateStr = jq('#dt_wlReportDate').length ?
+                (jq('#dt_wlReportDate').datebox('getValue') || jq('#dt_wlReportDate').datebox('getText') || today()) : today();
+            const findStr = '&WorkGroupMachineDR=&ReportStatus=&SttAccDate=' + dateStr;
+            if (typeof iframeWin.ShowWorkList === 'function') iframeWin.ShowWorkList(findStr);
+            await sleep(options.fast ? 120 : 250);
+            dbg('原生工作列表已切换为全部仪器');
+        } catch(e) {
+            dbg('切换全部仪器列表异常:', e);
+        }
+        return getReportIframeWin() || iframeWin;
+    }
+
     async function refreshNativeWorkListForItem(iframeWin, item, options = {}) {
         if (!iframeWin || !item) return iframeWin;
         let jq = iframeWin.jQuery || iframeWin.$;
@@ -9260,24 +9309,21 @@ function fillNativeLoginForm(creds, lastWG) {
             let successCount = queue.done.length, failCount = queue.failed.length, skipCount = queue.skipped.length;
             let totalCount = queue.items.length;
             let queuePausedForSwitch = false;
-            let batchLastMdr = String(me.WorkGroupMachineDR || '');
+            let batchLastMdr = '';
             let batchListFresh = false;
             let batchSkipSelect = false;
+            let batchCAReady = isCASessionReady(iframeWin);
             _batchAbort = false;
-            // 按仪器分组排序剩余项，先审完一台仪器再切换
             if (queue.current < queue.items.length - 1) {
                 const remaining = queue.items.splice(queue.current);
                 remaining.sort(compareAuditQueueItems);
                 queue.items.push(...remaining);
             }
 
-            const firstItem = currentQueueItem(queue);
-            if (firstItem && firstItem.mdr && String(firstItem.mdr) !== batchLastMdr) {
-                iframeWin = await refreshNativeWorkListForItem(iframeWin, firstItem, { force: true });
-                if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
-                batchLastMdr = String(firstItem.mdr);
-                batchListFresh = true;
-            }
+            updateBatchProgress(batchCAReady ? 'CA 已认证，秒审模式...' : '对齐原生：全部仪器列表...', 0);
+            iframeWin = await refreshNativeWorkListAllMachines(iframeWin, { fast: true });
+            if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
+            batchListFresh = true;
 
             while (queue.current < queue.items.length) {
                 if (_batchAbort) { dbg('批审被用户中止'); saveAuditQueueNow(queue); break; }
@@ -9325,8 +9371,6 @@ function fillNativeLoginForm(creds, lastWG) {
                     break;
                 }
 
-                const mdrKey = String(item.mdr || '');
-                const machineChanged = !!(mdrKey && mdrKey !== batchLastMdr);
                 batchListFresh = false;
                 totalCount = queue.items.length;
                 let etaStr = '';
@@ -9337,15 +9381,8 @@ function fillNativeLoginForm(creds, lastWG) {
                     const sec = Math.ceil(remaining / 1000);
                     etaStr = sec > 60 ? ` · 剩余约${Math.ceil(sec/60)}分钟` : ` · 剩余约${sec}秒`;
                 }
-                updateBatchProgress(`${queue.current + 1} / ${totalCount} - ${item.name || item.labno || item.reportDR}${item.retry ? '（重试' + item.retry + '）' : ''}${etaStr}`, queue.current / totalCount * 100);
-
-                if (machineChanged) {
-                    updateBatchProgress(`${queue.current + 1} / ${totalCount} - 切换仪器...`, queue.current / totalCount * 100);
-                    iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true });
-                    if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
-                    batchLastMdr = mdrKey;
-                    batchListFresh = true;
-                }
+                const modeHint = batchCAReady ? ' · 秒审' : '';
+                updateBatchProgress(`${queue.current + 1} / ${totalCount} - ${item.name || item.labno || item.reportDR}${item.retry ? '（重试' + item.retry + '）' : ''}${modeHint}${etaStr}`, queue.current / totalCount * 100);
 
                 try {
                     if (!jq || !me) {
@@ -9366,13 +9403,23 @@ function fillNativeLoginForm(creds, lastWG) {
                     if (!selectedOk) {
                         updateBatchProgress(`${queue.current + 1} / ${totalCount} - 选中标本...`, queue.current / totalCount * 100);
                         const selectedResult = await waitAndSelectNativeRow(iframeWin, item, {
-                            timeoutMs: batchListFresh ? 4500 : 6000,
-                            pollMs: 50,
+                            timeoutMs: batchCAReady ? 3500 : (batchListFresh ? 4500 : 6000),
+                            pollMs: batchCAReady ? 35 : 50,
                             skipListRefresh: batchListFresh
                         });
                         iframeWin = selectedResult.iframeWin || iframeWin;
                         if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
                         selectedOk = selectedResult.ok;
+                        if (!selectedOk && item.mdr) {
+                            dbg('全部仪器列表未找到，回退切换仪器:', item.mdr);
+                            iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
+                            if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
+                            batchLastMdr = String(item.mdr);
+                            batchListFresh = true;
+                            const retrySel = await waitAndSelectNativeRow(iframeWin, item, { timeoutMs: 3500, pollMs: 40, skipListRefresh: true });
+                            iframeWin = retrySel.iframeWin || iframeWin;
+                            selectedOk = retrySel.ok;
+                        }
                     }
                     if (!selectedOk) {
                         if (!requeueAuditItem(queue, item, '原生列表未找到')) skipCount++;
@@ -9381,12 +9428,14 @@ function fillNativeLoginForm(creds, lastWG) {
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 加载详情...`, queue.current / totalCount * 100);
                     let detailReady = isReportDetailLoaded(iframeWin, item.reportDR);
+                    const detailTimeout = batchCAReady ? 3500 : 7000;
+                    const detailRetry = batchCAReady ? 2000 : 4000;
                     if (!detailReady) {
-                        detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 7000, { fastBatch: true });
+                        detailReady = await waitReportDetailReady(iframeWin, item.reportDR, detailTimeout, { fastBatch: true });
                     }
                     if (!detailReady) {
                         selectNativeRowByReportDR(iframeWin, item.reportDR);
-                        detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 4000, { fastBatch: true });
+                        detailReady = await waitReportDetailReady(iframeWin, item.reportDR, detailRetry, { fastBatch: true });
                     }
                     if (!detailReady) {
                         if (!requeueAuditItem(queue, item, '详情未加载完成')) skipCount++;
@@ -9395,7 +9444,12 @@ function fillNativeLoginForm(creds, lastWG) {
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
                     const hadTargetRow = true;
-                    let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], batchMode: true, timeoutMs: 10000, keepWS: queue.keepWS, missingAsSuccess: false, targetReportDR: item.reportDR });
+                    let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
+                        action: 'audit', expectedStatuses: ['3'], batchMode: true,
+                        timeoutMs: batchCAReady ? 6000 : 10000, keepWS: queue.keepWS,
+                        caSessionReady: batchCAReady,
+                        missingAsSuccess: batchCAReady, targetReportDR: item.reportDR
+                    });
                     if (!auditResult) {
                         dbg('批审单条首次未确认，继续确认原生状态:', item.name || item.reportDR);
                         iframeWin = getReportIframeWin() || iframeWin;
@@ -9411,6 +9465,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     } else if (auditResult) {
                         queue.done.push(item);
                         successCount++;
+                        batchCAReady = true;
                         if (prepareNextBatchItemAfterAudit(iframeWin, queue, item)) {
                             batchSkipSelect = true;
                             dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
@@ -9515,7 +9570,10 @@ function fillNativeLoginForm(creds, lastWG) {
             // 忽略如果对话框打开
             if (document.getElementById('lis-audit-confirm')) return;
 
-            if (e.altKey && (e.key === 'a' || e.key === 'A')) {
+            if (e.key === 'F5') {
+                e.preventDefault();
+                quickAuditCurrent();
+            } else if (e.altKey && (e.key === 'a' || e.key === 'A')) {
                 e.preventDefault();
                 quickAuditCurrent();
             } else if (e.altKey && (e.key === 'b' || e.key === 'B')) {
@@ -9613,7 +9671,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.33');
+        dbg('iMedicalLIS 增强助手 v7.20.34');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
