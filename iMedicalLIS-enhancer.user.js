@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.26
+// @version      7.20.27
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3093,6 +3093,8 @@
         if (DEBUG) console.trace('[WS] openWS 调用栈');
 
         applyWSState(loadWSState());
+        _abnormalPrewarmDR = '';
+        _abnormalNativeReadyDR = '';
         wsClassifiedCache = {};
         _classifyVersion++;
         wsClassifying = false;
@@ -3112,8 +3114,11 @@
         renderWSCategoryBar();
         renderWSTable();
         updateWSFooter();
-        loadWSData();
+        loadWSData().then(() => {
+            if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
+        });
         startWSRefresh();
+        if (wsCategory === 'abnormal') prefetchReportPageForWS();
     }
 
     function closeWS() {
@@ -3259,6 +3264,7 @@
         updateWSFooter();
         // 分类在后台进行，每批次完成后更新计数，最终更新表格
         classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
+        if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
         return { ok: true, count: wsData.length };
         } catch(e) {
             dbg('loadWSData 异常:', e);
@@ -3808,7 +3814,7 @@
             saveWSState();
             renderWSCategoryBar();
             renderWSTable();
-            if (wsCategory === 'abnormal') scheduleAbnormalAuditPrewarm();
+            if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
         }));
 
         // 一键批审按钮事件
@@ -4184,6 +4190,8 @@
     let _abnormalNativeReadyDR = '';
     let _abnormalPrewarmTimer = null;
     let _abnormalPrewarmDR = '';
+    let _abnormalPrewarmPromise = null;
+    let _reportPageLoadPromise = null;
 
     function markAbnormalAuditUI(specimen, phase) {
         if (!specimen) return;
@@ -4200,43 +4208,90 @@
         }
     }
 
-    function scheduleAbnormalAuditPrewarm() {
+    function prefetchReportPageForWS() {
+        if (getReportIframeWin()) return Promise.resolve(getReportIframeWin());
+        if (!_reportPageLoadPromise) {
+            _reportPageLoadPromise = ensureReportPageLoaded({ keepWS: true, fast: true }).finally(() => {
+                _reportPageLoadPromise = null;
+            });
+        }
+        return _reportPageLoadPromise;
+    }
+
+    function prefetchAbnormalAuditContext() {
+        if (wsCategory !== 'abnormal' || _abnormalAuditInProgress) return;
+        scheduleAbnormalAuditPrewarm(0);
+    }
+
+    function scheduleAbnormalAuditPrewarm(delayMs) {
         if (wsCategory !== 'abnormal' || _abnormalAuditInProgress) return;
         clearTimeout(_abnormalPrewarmTimer);
+        const delay = typeof delayMs === 'number' ? delayMs : 0;
         _abnormalPrewarmTimer = setTimeout(() => {
             const data = filteredData();
             if (!data.length) return;
             if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) wsAbnormalIndex = 0;
             prewarmAbnormalAuditNative(data[wsAbnormalIndex]).catch(() => {});
-        }, 180);
+        }, delay);
+    }
+
+    function isAbnormalSpecimenReady(reportDR) {
+        const iframeWin = getReportIframeWin();
+        return !!(iframeWin && reportDR && isReportDetailLoaded(iframeWin, reportDR));
     }
 
     async function prewarmAbnormalAuditNative(specimen) {
         if (!specimen || _abnormalAuditInProgress) return;
         const reportDR = String(specimen.ReportDR || '');
-        if (_abnormalPrewarmDR === reportDR) return;
-        let iframeWin = getReportIframeWin();
-        if (!iframeWin) {
-            iframeWin = await ensureReportPageLoaded({ keepWS: true });
-        }
-        if (!iframeWin) return;
-        const item = specimenToAuditItem(specimen);
-        const mdrKey = String(item.mdr || '');
-        if (mdrKey) {
-            const mdrChanged = mdrKey !== String(_abnormalLastMdr || '');
-            const nativeMismatch = !nativeMachineMatches(iframeWin, mdrKey);
-            if (mdrChanged || nativeMismatch) {
-                iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
-                _abnormalLastMdr = mdrKey;
-            } else {
-                _abnormalLastMdr = mdrKey;
-            }
-        }
-        iframeWin = getReportIframeWin() || iframeWin;
-        if (selectNativeRowByReportDR(iframeWin, reportDR)) {
+        if (isAbnormalSpecimenReady(reportDR)) {
             _abnormalNativeReadyDR = reportDR;
+            _abnormalPrewarmDR = reportDR;
+            return;
+        }
+        if (_abnormalPrewarmPromise && _abnormalPrewarmDR === reportDR) {
+            return _abnormalPrewarmPromise;
         }
         _abnormalPrewarmDR = reportDR;
+        _abnormalPrewarmPromise = (async () => {
+            let iframeWin = await prefetchReportPageForWS();
+            if (!iframeWin) iframeWin = getReportIframeWin();
+            if (!iframeWin) return;
+            const item = specimenToAuditItem(specimen);
+            const mdrKey = String(item.mdr || '');
+            if (mdrKey) {
+                const mdrChanged = mdrKey !== String(_abnormalLastMdr || '');
+                const nativeMismatch = !nativeMachineMatches(iframeWin, mdrKey);
+                if (mdrChanged || nativeMismatch) {
+                    iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
+                    _abnormalLastMdr = mdrKey;
+                } else {
+                    _abnormalLastMdr = mdrKey;
+                }
+            }
+            iframeWin = getReportIframeWin() || iframeWin;
+            if (item.labno && typeof iframeWin.FindFast === 'function') {
+                try { iframeWin.FindFast(item.labno); await sleep(60); } catch(e) {}
+                iframeWin = getReportIframeWin() || iframeWin;
+            }
+            if (!selectNativeRowByReportDR(iframeWin, reportDR)) {
+                await waitAndSelectNativeRow(iframeWin, item, { timeoutMs: 2800, pollMs: 30, skipListRefresh: !!mdrKey });
+                iframeWin = getReportIframeWin() || iframeWin;
+            }
+            if (!isReportDetailLoaded(iframeWin, reportDR)) {
+                await waitReportDetailReady(iframeWin, reportDR, 4500, { fastBatch: true });
+            }
+            iframeWin = getReportIframeWin() || iframeWin;
+            if (isReportDetailLoaded(iframeWin, reportDR)) {
+                _abnormalNativeReadyDR = reportDR;
+            }
+        })().finally(() => {
+            if (_abnormalPrewarmDR === reportDR) _abnormalPrewarmPromise = null;
+        });
+        return _abnormalPrewarmPromise;
+    }
+
+    async function awaitAbnormalPrewarm(specimen) {
+        try { await prewarmAbnormalAuditNative(specimen); } catch(e) {}
     }
 
     function specimenToAuditItem(specimen) {
@@ -4362,6 +4417,8 @@
         if (isReportDetailLoaded(iframeWin, next.ReportDR)) {
             _abnormalNativeReadyDR = String(next.ReportDR);
             dbg('异常审核: 原生已定位下一条', next.ReportDR);
+        } else {
+            prewarmAbnormalAuditNative(next).catch(() => {});
         }
     }
 
@@ -4456,14 +4513,17 @@
                 return;
             }
 
+            if (ft) ft.textContent = `异常审核：准备原生页面 ${specimen.PatName || specimen.Labno || targetDR}`;
+            await awaitAbnormalPrewarm(specimen);
+
             let iframeWin = getReportIframeWin();
             if (!iframeWin) {
                 if (ft) ft.textContent = `异常审核：加载报告页...`;
-                iframeWin = await ensureReportPageLoaded({ keepWS: true });
+                iframeWin = await ensureReportPageLoaded({ keepWS: true, fast: true });
             }
             if (!iframeWin) {
-                await sleep(120);
-                iframeWin = getReportIframeWin() || await ensureReportPageLoaded({ keepWS: true });
+                await sleep(80);
+                iframeWin = getReportIframeWin() || await ensureReportPageLoaded({ keepWS: true, fast: true });
             }
             if (!iframeWin) {
                 showToast('报告页面加载失败', 'error');
@@ -4471,10 +4531,16 @@
                 return;
             }
 
-            if (ft) ft.textContent = `异常审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;
-            const skipSelect = _abnormalNativeReadyDR === targetDR;
+            const detailReady = isReportDetailLoaded(iframeWin, targetDR);
+            if (ft) ft.textContent = detailReady
+                ? `异常审核：审核中 ${specimen.PatName || specimen.Labno || targetDR}`
+                : `异常审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;
+            const skipSelect = _abnormalNativeReadyDR === targetDR || detailReady;
+            let prep = { ok: detailReady, iframeWin, lastMdr: _abnormalLastMdr };
+            if (!prep.ok) {
+                prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, { lastMdr: _abnormalLastMdr, skipSelect, abnormalFast: true });
+            }
             _abnormalNativeReadyDR = '';
-            const prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, { lastMdr: _abnormalLastMdr, skipSelect, abnormalFast: true });
             iframeWin = prep.iframeWin || iframeWin;
             if (prep.lastMdr) _abnormalLastMdr = prep.lastMdr;
             if (!prep.ok) {
@@ -4525,7 +4591,7 @@
                     setTimeout(() => auditAbnormalSpecimen(data[idx]), 30);
                 }
             } else {
-                scheduleAbnormalAuditPrewarm();
+                prefetchAbnormalAuditContext();
             }
         }
     }
@@ -6708,12 +6774,15 @@ function fillNativeLoginForm(creds, lastWG) {
 
     // --- 确保报告处理页面已加载（异步版）---
     function ensureReportPageLoaded(options = {}) {
-        return new Promise((resolve) => {
-            // 已经加载
-            const win = getReportIframeWin();
-            if (win) { resolve(win); return; }
-
-            // 点击"报告处理"菜单加载页面
+        const existing = getReportIframeWin();
+        if (existing) return Promise.resolve(existing);
+        if (_reportPageLoadPromise && !options.force) {
+            return _reportPageLoadPromise.then(w => w || getReportIframeWin());
+        }
+        const fast = !!options.fast;
+        const pollMs = fast ? 60 : 150;
+        const maxWait = fast ? 12000 : 15000;
+        const run = () => new Promise((resolve) => {
             dbg('报告处理页面未加载，自动打开...');
             const links = document.querySelectorAll('a');
             for (const a of links) {
@@ -6722,24 +6791,30 @@ function fillNativeLoginForm(creds, lastWG) {
                     break;
                 }
             }
-
-            // 轮询等待 iframe 加载（最多 15 秒）
             let waited = 0;
-            const interval = setInterval(() => {
-                waited += 300;
+            const tick = () => {
                 const w = getReportIframeWin();
                 if (w) {
-                    clearInterval(interval);
                     dbg('报告处理页面加载完成');
                     if (options.keepWS) keepWorkbenchOnTop('报告处理页加载完成');
                     resolve(w);
-                } else if (waited >= 15000) {
-                    clearInterval(interval);
+                    return;
+                }
+                waited += pollMs;
+                if (waited >= maxWait) {
                     dbg('报告处理页面加载超时');
                     resolve(null);
+                    return;
                 }
-            }, 300);
+                setTimeout(tick, pollMs);
+            };
+            tick();
         });
+        if (!options.force) {
+            _reportPageLoadPromise = run().finally(() => { _reportPageLoadPromise = null; });
+            return _reportPageLoadPromise;
+        }
+        return run();
     }
 
     // --- 确保 me.selectedGrid 有值（选中工作列表当前行）---
@@ -7966,6 +8041,20 @@ function fillNativeLoginForm(creds, lastWG) {
                 return;
             }
 
+            if (wsCategory === 'abnormal' || wsCategory === 'normal') {
+                toClassify.sort((a, b) => {
+                    const score = r => {
+                        let s = 0;
+                        if (wsActiveWG && r._wg === wsActiveWG) s -= 100;
+                        if (wsActiveMachine && prWorkGroupMachineDR(r) === wsActiveMachine) s -= 50;
+                        return s;
+                    };
+                    const diff = score(a) - score(b);
+                    if (diff) return diff;
+                    return compareSpecimensByMachineGroup(a, b);
+                });
+            }
+
             dbg('开始分类', toClassify.length, '个标本...');
 
             // 批量分类（每批 8 个）
@@ -7991,6 +8080,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     });
                 }
                 invalidateCaches();
+                if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
                 await new Promise(r => setTimeout(r, 0)); // 仅 yield，不加额外延迟
             }
 
@@ -9158,7 +9248,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.26');
+        dbg('iMedicalLIS 增强助手 v7.20.27');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
