@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.23
+// @version      7.20.24
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3752,6 +3752,7 @@
             saveWSState();
             renderWSCategoryBar();
             renderWSTable();
+            if (wsCategory === 'abnormal') scheduleAbnormalAuditPrewarm();
         }));
 
         // 一键批审按钮事件
@@ -3814,12 +3815,9 @@
             if (_abnormalAuditInProgress) {
                 if (e.key === 'Enter') {
                     e.preventDefault(); e.stopImmediatePropagation();
-                    const now = Date.now();
-                    if (now - _abnormalAuditBlockedAt > 2500) {
-                        _abnormalAuditBlockedAt = now;
-                        const ft = document.getElementById('lis-ws-ft-stat');
-                        if (ft) ft.textContent = '上一条异常标本仍在审核中，请稍候...';
-                    }
+                    _abnormalAuditQueued = true;
+                    const ft = document.getElementById('lis-ws-ft-stat');
+                    if (ft) ft.textContent = '审核进行中，下一条已排队...';
                 }
                 return;
             }
@@ -3828,7 +3826,12 @@
             if (wsAbnormalIndex < 0 || wsAbnormalIndex >= curData.length) wsAbnormalIndex = 0;
             if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveAbnormalFocus(1, curData); }
             else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveAbnormalFocus(-1, curData); }
-            else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); auditAbnormalSpecimen(curData[wsAbnormalIndex]); }
+            else if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault(); e.stopImmediatePropagation();
+                const sp = curData[wsAbnormalIndex];
+                markAbnormalAuditUI(sp, 'start');
+                void auditAbnormalSpecimen(sp);
+            }
             else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); if (curData[wsAbnormalIndex]) openDetailPanel(curData[wsAbnormalIndex], 'abnormal', wsAbnormalIndex); }
             else if (e.key === 'Escape') { wsCategory = 'normal'; saveWSState(); renderWSCategoryBar(); renderWSTable(); }
         };
@@ -4053,6 +4056,7 @@
 
         // 滚动到聚焦卡片
         _scrollAbnormalFocus();
+        scheduleAbnormalAuditPrewarm();
     }
 
     function moveAbnormalFocus(dir, data) {
@@ -4065,6 +4069,7 @@
         // 添加新聚焦
         if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.add('focused');
         _scrollAbnormalFocus();
+        scheduleAbnormalAuditPrewarm();
     }
 
     function _scrollAbnormalFocus() {
@@ -4118,9 +4123,65 @@
     }
 
     let _abnormalAuditInProgress = false;
+    let _abnormalAuditQueued = false;
     let _abnormalLastMdr = '';
-    let _abnormalAuditBlockedAt = 0;
     let _abnormalNativeReadyDR = '';
+    let _abnormalPrewarmTimer = null;
+    let _abnormalPrewarmDR = '';
+
+    function markAbnormalAuditUI(specimen, phase) {
+        if (!specimen) return;
+        const targetDR = String(specimen.ReportDR || '');
+        const ft = document.getElementById('lis-ws-ft-stat');
+        const name = specimen.PatName || specimen.Labno || targetDR;
+        const card = [...document.querySelectorAll('.ws-abnormal-card[data-rdr]')].find(c => c.dataset.rdr === targetDR);
+        if (phase === 'start' && ft) ft.textContent = `异常审核：准备 ${name}`;
+        if (card && phase === 'start') {
+            card.classList.add('auditing');
+            card.setAttribute('aria-busy', 'true');
+            const hint = card.querySelector('.ab-card-hint');
+            if (hint) hint.textContent = '正在审核...';
+        }
+    }
+
+    function scheduleAbnormalAuditPrewarm() {
+        if (wsCategory !== 'abnormal' || _abnormalAuditInProgress) return;
+        clearTimeout(_abnormalPrewarmTimer);
+        _abnormalPrewarmTimer = setTimeout(() => {
+            const data = filteredData();
+            if (!data.length) return;
+            if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) wsAbnormalIndex = 0;
+            prewarmAbnormalAuditNative(data[wsAbnormalIndex]).catch(() => {});
+        }, 180);
+    }
+
+    async function prewarmAbnormalAuditNative(specimen) {
+        if (!specimen || _abnormalAuditInProgress) return;
+        const reportDR = String(specimen.ReportDR || '');
+        if (_abnormalPrewarmDR === reportDR) return;
+        let iframeWin = getReportIframeWin();
+        if (!iframeWin) {
+            iframeWin = await ensureReportPageLoaded({ keepWS: true });
+        }
+        if (!iframeWin) return;
+        const item = specimenToAuditItem(specimen);
+        const mdrKey = String(item.mdr || '');
+        if (mdrKey) {
+            const mdrChanged = mdrKey !== String(_abnormalLastMdr || '');
+            const nativeMismatch = !nativeMachineMatches(iframeWin, mdrKey);
+            if (mdrChanged || nativeMismatch) {
+                iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
+                _abnormalLastMdr = mdrKey;
+            } else {
+                _abnormalLastMdr = mdrKey;
+            }
+        }
+        iframeWin = getReportIframeWin() || iframeWin;
+        if (selectNativeRowByReportDR(iframeWin, reportDR)) {
+            _abnormalNativeReadyDR = reportDR;
+        }
+        _abnormalPrewarmDR = reportDR;
+    }
 
     function specimenToAuditItem(specimen) {
         return {
@@ -4139,23 +4200,28 @@
         const reportDR = specimen.ReportDR;
         const item = specimenToAuditItem(specimen);
         const mdrKey = String(item.mdr || '');
+        const fast = !!ctx.abnormalFast;
         iframeWin = getReportIframeWin() || iframeWin;
 
         if (isReportDetailLoaded(iframeWin, reportDR)) {
             return { ok: true, iframeWin, lastMdr: ctx.lastMdr || mdrKey };
         }
 
-        let listFresh = false;
-        if (mdrKey) {
-            const mdrChanged = mdrKey !== String(ctx.lastMdr || '');
-            const nativeMismatch = !nativeMachineMatches(iframeWin, mdrKey);
-            if (mdrChanged || nativeMismatch) {
-                iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true });
-                ctx.lastMdr = mdrKey;
-                listFresh = true;
-            } else {
-                ctx.lastMdr = mdrKey;
+        const mdrChanged = !!(mdrKey && mdrKey !== String(ctx.lastMdr || ''));
+        const nativeMismatch = !!(mdrKey && !nativeMachineMatches(iframeWin, mdrKey));
+        if (!mdrChanged && !nativeMismatch && selectNativeRowByReportDR(iframeWin, reportDR)) {
+            if (isReportDetailLoaded(iframeWin, reportDR)) {
+                return { ok: true, iframeWin, lastMdr: ctx.lastMdr || mdrKey };
             }
+        }
+
+        let listFresh = false;
+        if (mdrKey && (mdrChanged || nativeMismatch)) {
+            iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast });
+            ctx.lastMdr = mdrKey;
+            listFresh = true;
+        } else if (mdrKey) {
+            ctx.lastMdr = mdrKey;
         }
         iframeWin = getReportIframeWin() || iframeWin;
 
@@ -4165,18 +4231,20 @@
         }
         if (!selected && !selectNativeRowByReportDR(iframeWin, reportDR)) {
             const selResult = await waitAndSelectNativeRow(iframeWin, item, {
-                timeoutMs: listFresh ? 3500 : 5000,
-                pollMs: 40,
+                timeoutMs: fast ? (listFresh ? 2200 : 3000) : (listFresh ? 3500 : 5000),
+                pollMs: fast ? 30 : 40,
                 skipListRefresh: listFresh
             });
             if (!selResult.ok) return { ok: false, reason: 'select', iframeWin: selResult.iframeWin || iframeWin };
             iframeWin = selResult.iframeWin || iframeWin;
         }
         if (!isReportDetailLoaded(iframeWin, reportDR)) {
-            let ready = await waitReportDetailReady(iframeWin, reportDR, 5000, { fastBatch: true });
+            const t1 = fast ? 3000 : 5000;
+            const t2 = fast ? 1500 : 2500;
+            let ready = await waitReportDetailReady(iframeWin, reportDR, t1, { fastBatch: true });
             if (!ready) {
                 selectNativeRowByReportDR(iframeWin, reportDR);
-                ready = await waitReportDetailReady(iframeWin, reportDR, 2500, { fastBatch: true });
+                ready = await waitReportDetailReady(iframeWin, reportDR, t2, { fastBatch: true });
             }
             if (!ready) return { ok: false, reason: 'detail', iframeWin };
         }
@@ -4262,7 +4330,9 @@
 
     async function auditAbnormalSpecimen(specimen) {
         if (_abnormalAuditInProgress) {
-            showToast('正在审核上一条，请稍候', 'warning');
+            _abnormalAuditQueued = true;
+            const ft = document.getElementById('lis-ws-ft-stat');
+            if (ft) ft.textContent = '审核进行中，下一条已排队...';
             return;
         }
         if (_auditInProgress) {
@@ -4281,6 +4351,8 @@
             return;
         }
         _abnormalAuditInProgress = true;
+        _abnormalAuditQueued = false;
+        markAbnormalAuditUI(specimen, 'start');
         // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
         const _auditSafetyTimer = setTimeout(() => {
             if (_abnormalAuditInProgress) {
@@ -4295,13 +4367,6 @@
         try {
             const startIndex = Math.max(0, wsAbnormalIndex);
             const targetDR = String(specimen.ReportDR || '');
-            const card = [...document.querySelectorAll('.ws-abnormal-card[data-rdr]')].find(c => c.dataset.rdr === targetDR);
-            if (card) {
-                card.classList.add('auditing');
-                const hint = card.querySelector('.ab-card-hint');
-                if (hint) hint.textContent = '正在审核...';
-                card.setAttribute('aria-busy', 'true');
-            }
             const ft = document.getElementById('lis-ws-ft-stat');
             if (ft) ft.textContent = `异常审核：${specimen.PatName || specimen.Labno || targetDR}`;
 
@@ -4336,9 +4401,12 @@
             }
 
             let iframeWin = getReportIframeWin();
-            if (!iframeWin) iframeWin = await ensureReportPageLoaded({ keepWS: true });
             if (!iframeWin) {
-                await sleep(300);
+                if (ft) ft.textContent = `异常审核：加载报告页...`;
+                iframeWin = await ensureReportPageLoaded({ keepWS: true });
+            }
+            if (!iframeWin) {
+                await sleep(120);
                 iframeWin = getReportIframeWin() || await ensureReportPageLoaded({ keepWS: true });
             }
             if (!iframeWin) {
@@ -4350,7 +4418,7 @@
             if (ft) ft.textContent = `异常审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;
             const skipSelect = _abnormalNativeReadyDR === targetDR;
             _abnormalNativeReadyDR = '';
-            const prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, { lastMdr: _abnormalLastMdr, skipSelect });
+            const prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, { lastMdr: _abnormalLastMdr, skipSelect, abnormalFast: true });
             iframeWin = prep.iframeWin || iframeWin;
             if (prep.lastMdr) _abnormalLastMdr = prep.lastMdr;
             if (!prep.ok) {
@@ -4393,6 +4461,16 @@
             if (resumeWSRefresh && isWSVisible()) startWSRefresh();
             updateWSFooter();
             dbg('异常列表审核结束');
+            if (_abnormalAuditQueued) {
+                _abnormalAuditQueued = false;
+                const data = filteredData();
+                if (data.length) {
+                    const idx = Math.max(0, Math.min(wsAbnormalIndex, data.length - 1));
+                    setTimeout(() => auditAbnormalSpecimen(data[idx]), 30);
+                }
+            } else {
+                scheduleAbnormalAuditPrewarm();
+            }
         }
     }
 
@@ -8535,7 +8613,7 @@ function fillNativeLoginForm(creds, lastWG) {
             const findStr = '&WorkGroupMachineDR=' + (item.mdr || '') + '&ReportStatus=&SttAccDate=' + dateStr;
             if (typeof iframeWin.ShowWorkList === 'function') iframeWin.ShowWorkList(findStr);
             else if (typeof iframeWin.FindFast === 'function') iframeWin.FindFast(item.labno || findStr);
-            await sleep(options.force ? 120 : (machineChanged ? 100 : 60));
+            await sleep(options.fast ? 70 : (options.force ? 120 : (machineChanged ? 100 : 60)));
         } catch(e) {
             dbg('刷新原生工作列表异常:', e);
         }
@@ -9024,7 +9102,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.23');
+        dbg('iMedicalLIS 增强助手 v7.20.24');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
