@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.8
+// @version      7.20.13
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
 // @grant        GM_addStyle
+// @grant        unsafeWindow
 // @updateURL    http://localhost:8765/iMedicalLIS-enhancer.user.js
 // @downloadURL  http://localhost:8765/iMedicalLIS-enhancer.user.js
 // @run-at       document-idle
@@ -223,6 +224,19 @@
         }
     }
 
+    async function fetchJRetry(u, timeoutMs, externalSignal, tries, gapMs) {
+        const maxTries = Math.max(1, tries || 1);
+        for (let i = 1; i <= maxTries; i += 1) {
+            try {
+                return await fetchJ(u, timeoutMs, externalSignal);
+            } catch(e) {
+                if (e.name === 'AbortError' || i >= maxTries) throw e;
+                await new Promise(r => setTimeout(r, gapMs || 250));
+            }
+        }
+        return null;
+    }
+
     // 高亮搜索文本（自动转义防 XSS，缓存正则）
     let _hlQuery = '', _hlRegex = null;
     function highlightText(text, query) {
@@ -264,6 +278,15 @@
 #lis-pr-tools .pr-sm{width:104px}
 #lis-pr-tools .pr-md{width:132px}
 #lis-pr-tools .pr-lg{width:168px}
+#lis-pr-tools .pr-mach-tree-wrap{width:480px;align-self:stretch}
+#lis-pr-machine-tree{display:flex;gap:6px;align-items:stretch;border:1px solid #c3ced8;border-radius:4px;background:#fff;padding:4px;min-height:54px;max-height:86px;overflow:auto}
+.pr-wg-box{border:1px solid #d9e3ec;border-radius:4px;background:#fbfdff;min-width:148px;max-width:180px;flex:0 0 auto}
+.pr-wg-head{height:22px;display:flex;align-items:center;gap:5px;padding:0 7px;font-size:11px;font-weight:800;color:#246489;cursor:pointer;border-bottom:1px solid #edf1f5;user-select:none}
+.pr-wg-head input{width:12px!important;height:12px!important;margin:0}
+.pr-wg-body{padding:4px 6px;display:flex;flex-direction:column;gap:3px;max-height:56px;overflow:auto}
+.pr-wg-box.collapsed .pr-wg-body{display:none}
+.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:5px;font-size:11px!important;font-weight:600!important;color:#334155!important;line-height:1.2!important;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.pr-mach-option input{width:12px!important;height:12px!important;margin:0}
 #lis-pr-tools .pr-wide{width:208px}
 #lis-pr-tools .pr-xl{width:220px}
 #lis-pr-tools .pr-section{display:none}
@@ -660,17 +683,17 @@
         return location.href.indexOf('Login.aspx') > -1;
     }
 
-    function initAuth() {
-        // 恢复
+    let _authPersistenceInited = false;
+    function initAuthPersistence() {
+        if (_authPersistenceInited) return;
+        _authPersistenceInited = true;
         restoreAuth();
-        // 拦截 setItem
         const orig = sessionStorage.setItem.bind(sessionStorage);
         sessionStorage.setItem = function(k,v) {
             orig(k,v);
             if (k==='AuInfo')   { try { localStorage.setItem(K.au, v); } catch(e){} }
             if (k==='EntryInfo'){ try { localStorage.setItem(K.ent, v); } catch(e){} }
         };
-        // 拦截 clear
         const origC = sessionStorage.clear.bind(sessionStorage);
         sessionStorage.clear = function() {
             let a=null,e=null;
@@ -679,12 +702,12 @@
             try { if(a) orig('AuInfo',a); if(e) orig('EntryInfo',e); } catch(x){}
         };
         _authTimer = setInterval(restoreAuth, 3000);
+        dbg('认证持久化就绪');
+    }
 
-        // 密码自动填充
+    function initAuthFill() {
         if (isAuthPage()) fillAuthPage();
         else if (isReportPage()) fillBatchPage();
-
-        dbg('认证模块就绪');
     }
 
     function restoreAuth() {
@@ -1627,13 +1650,16 @@
     let prQuerySeq = 0;            // 查询序号，防止旧查询回写新结果
     let prPage = 1;                // 当前页码（从 1 开始）
     let prDatePickerCleanup = null;
+    let prLastDetailFailures = 0;
     const prPageSize = 100;        // 每页行数
     const _prDetailCache = new Map(); // 详情结果 LRU 缓存
     const _prDetailInflight = new Map(); // 正在读取的明细请求，防止重复点击重复请求
     const _prWorkListCache = new Map();  // 标本列表短缓存，切换筛选条件时复用
-    const _PR_DETAIL_MAX = 1000;      // PR 模块缓存上限（结果查询一次性查询量大）
+    const _PR_DETAIL_MAX = 12000;     // PR 模块缓存上限（结果查询一次性查询量大）
     const _PR_WORKLIST_MAX = 20;
     const _PR_WORKLIST_TTL = 120000;  // 2 分钟内同日期/工作组/仪器/状态复用标本列表
+    const PR_WORKLIST_PAGE_SIZE = 1000;
+    const PR_WORKLIST_MAX_PAGES = 500;
 
     function prTodayOffset(days) {
         const d = new Date();
@@ -1697,7 +1723,7 @@
     }
 
     function prWorkListCacheKey(filters) {
-        return [filters.start, filters.end, filters.wg || '', filters.machine || '', filters.status || ''].join('|');
+        return [filters.start, filters.end, (filters.wgs || []).join(','), (filters.machines || []).join(','), filters.status || ''].join('|');
     }
 
     function prWorkListCacheGet(key) {
@@ -1730,6 +1756,30 @@
         return text;
     }
 
+    function prSplitTerms(value) {
+        const text = prCleanFilterText(value);
+        if (!text) return [];
+        return text.split(/[\s,，、|；;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    }
+
+    function prTextMatchAny(value, queryOrTerms) {
+        const terms = Array.isArray(queryOrTerms) ? queryOrTerms : prSplitTerms(queryOrTerms);
+        if (!terms.length) return true;
+        const text = String(value || '').toLowerCase();
+        return terms.some(term => text.includes(term));
+    }
+
+    function prSelectedValues(id) {
+        const el = document.getElementById(id);
+        if (!el) return [];
+        if (el.multiple) return Array.from(el.selectedOptions || []).map(o => o.value).filter(Boolean);
+        return el.value ? [el.value] : [];
+    }
+
+    function prCheckedValues(selector) {
+        return Array.from(document.querySelectorAll(selector + ':checked')).map(el => el.value).filter(Boolean);
+    }
+
     function prLooksLikePatientType(text) {
         return /^(门诊|住院|体检|急诊|留观|住院病人|门诊病人)$/i.test(String(text || '').trim());
     }
@@ -1759,12 +1809,23 @@
         filters.specimen = prCleanFilterText(filters.specimen).toLowerCase();
         filters.item = prCleanFilterText(filters.item).toLowerCase();
         filters.resultText = prCleanFilterText(filters.resultText).toLowerCase();
+        filters.qTerms = prSplitTerms(filters.q);
+        filters.patientTypeTerms = prSplitTerms(filters.patientType);
+        filters.deptTerms = prSplitTerms(filters.dept);
+        filters.wardTerms = prSplitTerms(filters.ward);
+        filters.doctorTerms = prSplitTerms(filters.doctor);
+        filters.diagnosisTerms = prSplitTerms(filters.diagnosis);
+        filters.specimenTerms = prSplitTerms(filters.specimen);
+        filters.itemTerms = prSplitTerms(filters.item);
+        filters.resultTextTerms = prSplitTerms(filters.resultText);
 
         /* 常见误填：把“住院/门诊/体检”填到科室或病区时，自动按病人类型处理。 */
         ['dept', 'ward'].forEach(key => {
             if (!filters.patientType && prLooksLikePatientType(filters[key])) {
                 filters.patientType = filters[key];
+                filters.patientTypeTerms = prSplitTerms(filters.patientType);
                 filters[key] = '';
+                filters[key + 'Terms'] = [];
             }
         });
         return filters;
@@ -1773,12 +1834,15 @@
     function prActiveFilterSummary(filters) {
         const parts = [];
         parts.push(`${filters.start || today()} 至 ${filters.end || today()}`);
-        const wg = WG.find(w => String(w.dr) === String(filters.wg || ''));
-        parts.push(`工作组=${wg ? wg.name : '全部'}`);
-        const machineSel = document.getElementById('lis-pr-machine');
-        if (filters.machine && machineSel) {
-            const opt = machineSel.options[machineSel.selectedIndex];
-            parts.push(`仪器=${opt ? opt.textContent : filters.machine}`);
+        const wgNames = (filters.wgs || []).map(dr => (WG.find(w => String(w.dr) === String(dr)) || {}).name || dr);
+        parts.push(`工作组=${wgNames.length ? wgNames.join('/') : '全部'}`);
+        if ((filters.machines || []).length) {
+            const names = Array.from(document.querySelectorAll('.lis-pr-machine-check:checked')).map(o => {
+                const label = o.closest('label');
+                const wg = (WG_MAP[o.dataset.wg] || {}).name || o.dataset.wg || '';
+                return (wg ? wg + '-' : '') + ((label && label.textContent || o.value || '').trim());
+            });
+            parts.push(`仪器=${names.join('/')}`);
         }
         if (filters.status) parts.push(`状态=${prStatusText(filters.status)}`);
         if (filters.q) parts.push(`综合=${filters.q}`);
@@ -1807,8 +1871,8 @@
         return prNormalizeFilters({
             start: val('lis-pr-start') || today(),
             end: val('lis-pr-end') || today(),
-            wg: val('lis-pr-wg') !== undefined ? val('lis-pr-wg') : (wgDR() || ''),
-            machine: val('lis-pr-machine'),
+            wgs: prCheckedValues('.lis-pr-wg-check'),
+            machines: prCheckedValues('.lis-pr-machine-check'),
             status: val('lis-pr-status-filter'),
             q: val('lis-pr-q').toLowerCase(),
             patientType: val('lis-pr-patient-type').toLowerCase(),
@@ -1832,30 +1896,58 @@
     }
 
     async function prLoadMachinesForWG(wg) {
-        const sel = document.getElementById('lis-pr-machine');
-        if (!sel) return;
-        sel.innerHTML = '<option value="">全部仪器</option>';
-        if (!wg) return;
+        const box = document.getElementById('lis-pr-machine-tree');
+        if (!box) return;
+        const oldSelected = new Set(prCheckedValues('.lis-pr-machine-check'));
+        const oldWGs = new Set(prCheckedValues('.lis-pr-wg-check'));
+        box.innerHTML = '<span style="font-size:11px;color:#7b8b96;padding:4px 6px">仪器加载中...</span>';
+        const targetWGs = WG;
         try {
-            const machines = await loadMachines(wg);
-            sortWSMachines(machines.map(m => ({...m, _wg: wg}))).forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m.RowID || '';
-                opt.textContent = m.CName || m.Name || m.RowID || '';
-                sel.appendChild(opt);
+            const groups = await Promise.all(targetWGs.map(async w => {
+                const machines = await loadMachines(w.dr).catch(() => []);
+                return { wg: w, machines: sortWSMachines((Array.isArray(machines) ? machines : []).map(m => ({...m, _wg: w.dr, _wgn: w.name}))) };
+            }));
+            box.innerHTML = groups.map(g => {
+                const wgChecked = oldWGs.has(g.wg.dr) ? ' checked' : '';
+                const items = g.machines.length ? g.machines.map(m => {
+                    const value = (m._wg || '') + '|' + (m.RowID || '');
+                    const checked = oldSelected.has(value) ? ' checked' : '';
+                    return `<label class="pr-mach-option" title="${esc(m.CName || m.Name || m.RowID || '')}"><input type="checkbox" class="lis-pr-machine-check" data-wg="${esc(g.wg.dr)}" value="${esc(value)}"${checked}>${esc(m.CName || m.Name || m.RowID || '')}</label>`;
+                }).join('') : '<div style="font-size:11px;color:#9aa5b1;padding:2px 0">未加载到仪器</div>';
+                return `<div class="pr-wg-box" data-wg="${esc(g.wg.dr)}">
+                    <div class="pr-wg-head"><span class="pr-fold">▾</span><input type="checkbox" class="lis-pr-wg-check" value="${esc(g.wg.dr)}"${wgChecked}><span>${esc(g.wg.name)}</span></div>
+                    <div class="pr-wg-body">${items}</div>
+                </div>`;
+            }).join('');
+            box.querySelectorAll('.pr-wg-head').forEach(head => {
+                head.addEventListener('click', e => {
+                    if (e.target && e.target.classList && e.target.classList.contains('lis-pr-wg-check')) return;
+                    const group = head.closest('.pr-wg-box');
+                    if (!group) return;
+                    group.classList.toggle('collapsed');
+                    const f = head.querySelector('.pr-fold');
+                    if (f) f.textContent = group.classList.contains('collapsed') ? '▸' : '▾';
+                });
             });
         } catch(e) {
             prSetStatus('仪器列表加载失败: ' + e.message, 'error');
         }
     }
 
-    function prNormalizeWorkRow(r, wg, machine) {
+    function prNormalizeWorkRow(r, wg, machine, machineMap) {
+        const rowMdr = prWorkGroupMachineDR(r) || machine.RowID || '';
+        const known = rowMdr && machineMap ? machineMap.get(String(rowMdr)) : null;
+        const rowMachineName = prFirstText(
+            r.WorkGroupMachineName, r.WorkGroupMachineDesc, r.MachineName, r.MachName, r.Machine,
+            known && (known.CName || known.Name || known.RowID),
+            machine.CName, machine.Name, machine.RowID
+        );
         return {
             ...r,
             _wg: wg.dr,
             _wgn: wg.name,
-            _mn: machine.CName || machine.Name || machine.RowID || '',
-            _mdr: machine.RowID || ''
+            _mn: rowMachineName,
+            _mdr: rowMdr
         };
     }
 
@@ -1873,8 +1965,17 @@
             prSetStatus(`复用标本列表缓存：${cachedRows.length} 个标本。`, 'info');
             return cachedRows;
         }
-        const targetWGs = filters.wg ? WG.filter(w => w.dr === filters.wg) : WG;
+        const machinePairs = (filters.machines || []).map(v => {
+            const parts = String(v).split('|');
+            return { wg: parts[0] || '', mdr: parts.slice(1).join('|') || '' };
+        }).filter(x => x.wg && x.mdr);
+        const selectedWGs = filters.wgs || [];
+        const effectiveWGSet = new Set(selectedWGs);
+        machinePairs.forEach(x => effectiveWGSet.add(x.wg));
+        const effectiveWGs = Array.from(effectiveWGSet).filter(Boolean);
+        const targetWGs = effectiveWGs.length ? WG.filter(w => effectiveWGs.includes(w.dr)) : WG;
         const wgTotal = targetWGs.length;
+        dbg('prLoadRows 有效查询范围:', '工作组=' + (targetWGs.map(w => w.name).join('/') || '全部'), '仪器=' + (machinePairs.map(x => x.wg + '|' + x.mdr).join(',') || '全部'));
 
         /* 所有工作组并行加载 */
         let requestFailed = false;
@@ -1886,20 +1987,27 @@
             } catch(e) {
                 requestFailed = true;
                 dbg('病人结果仪器列表加载失败:', w.name, e.message);
-                return [];
+                machines = [];
             }
             machines = Array.isArray(machines) ? machines : [];
-            const targetMachines = filters.machine
-                ? machines.filter(m => String(m.RowID) === String(filters.machine))
+            const selectedMachineDRs = machinePairs.filter(x => x.wg === w.dr).map(x => String(x.mdr));
+            const machineMap = new Map(machines.map(m => [String(m.RowID || ''), m]));
+            const targetMachines = selectedMachineDRs.length
+                ? machines.filter(m => selectedMachineDRs.includes(String(m.RowID)))
                 : machines;
-            if (!targetMachines.length) return [];
-
+            if (selectedMachineDRs.length && !targetMachines.length) {
+                dbg('病人结果：已选择仪器但当前工作组未匹配到仪器，跳过:', w.name, selectedMachineDRs.join(','));
+                return [];
+            }
+            const useGroupFallback = !selectedMachineDRs.length;
+            const queryTargets = useGroupFallback
+                ? [{ RowID: '', CName: '全部仪器', Name: '全部仪器', _groupFallback: true }]
+                : targetMachines;
             const ss = buildSS(w.dr);
-            /* 当前工作组内的各仪器并行加载 */
-            const machinePromises = targetMachines.filter(m => m.RowID).map(async (m, mIdx) => {
+            const fetchTarget = async (m, mIdx, total) => {
                 if (signal && signal.aborted) return [];
                 const mname = m.CName || m.Name || m.RowID || '';
-                prSetStatus(`正在查询 [${w.name}] ${mname}（工作组 ${wgIdx + 1}/${wgTotal}，仪器 ${mIdx + 1}/${targetMachines.length}）...`, 'info');
+                prSetStatus(`正在查询 [${w.name}] ${mname}（工作组 ${wgIdx + 1}/${wgTotal}，仪器 ${mIdx + 1}/${total}）...`, 'info');
                 const p = new URLSearchParams();
                 p.set('ClassName','LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
                 p.set('QueryName','QryWorkList');
@@ -1911,19 +2019,32 @@
                 p.set('P11', 'N^^^^');
                 p.set('P14', ss);
                 try {
-                    const data = await fetchJ(CSP + '?' + p.toString(), 20000, signal);
-                    const list = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
-                    return list.map(r => prNormalizeWorkRow(r, w, m));
+                    const list = await prFetchWorkListRange(p, filters.start, filters.end, signal);
+                    return list.map(r => prNormalizeWorkRow(r, w, m, machineMap));
                 } catch(e) {
                     if (e.name === 'AbortError') return [];
                     requestFailed = true;
                     dbg('病人结果查询失败:', w.name, mname, e.message);
                     return [];
                 }
-            });
-            const results = await Promise.all(machinePromises);
+            };
+            let results;
+            if (useGroupFallback) {
+                const groupRows = await fetchTarget(queryTargets[0], 0, 1);
+                const taggedWgm = groupRows.filter(r => prWorkGroupMachineDR(r)).length;
+                if (groupRows.length > 0 && taggedWgm < groupRows.length && machines.length) {
+                    dbg('病人结果：整组查询缺少部分仪器DR，自动退回逐台仪器查询:', w.name, '标本数=' + groupRows.length, '带仪器DR=' + taggedWgm);
+                    const machinePromises = machines.filter(m => m.RowID).map((m, mIdx) => fetchTarget(m, mIdx, machines.length));
+                    results = await Promise.all(machinePromises);
+                } else {
+                    results = [groupRows];
+                }
+            } else {
+                const machinePromises = queryTargets.map((m, mIdx) => fetchTarget(m, mIdx, queryTargets.length));
+                results = await Promise.all(machinePromises);
+            }
             const wgCount = results.flat().length;
-            dbg('prLoadRows 工作组:', w.name, '仪器数=' + targetMachines.length, '标本数=' + wgCount);
+            dbg('prLoadRows 工作组:', w.name, '仪器数=' + queryTargets.length, '标本数=' + wgCount, 'fallback=' + useGroupFallback);
             return results.flat();
         });
 
@@ -1938,38 +2059,17 @@
     function prFilterRows(rows, filters) {
         let data = rows;
         if (filters.q) {
-            const q = filters.q;
             data = data.filter(r => [
                 r.PatName, r.Labno, r.EpisodeNo, r.RegNo, r.AdmNo, r.RecordNo,
                 r.TestSetDesc, r.Location, r.LocationName, r.Ward, r.WardName
-            ].some(v => String(v || '').toLowerCase().includes(q)));
+            ].some(v => prTextMatchAny(v, filters.qTerms)));
         }
         if (filters.sex) data = data.filter(r => {
             const sex = String(r.Sex || r.Species || '');
             return !sex || sex.includes(filters.sex);
         });
-        if (filters.patientType) {
-            data = data.filter(r => {
-                const type = prPatientTypeText(r, {});
-                return !type || prTextMatch(type, filters.patientType);
-            });
-        }
-        /* QryWorkList 能返回的字段在阶段1先过滤，减少阶段2请求量 */
-        if (filters.dept) {
-            data = data.filter(r => {
-                const dept = [r.Location, r.LocationName, r.Ward, r.WardName].filter(Boolean).join(' ');
-                return !dept || prTextMatch(dept, filters.dept);
-            });
-        }
-        if (filters.specimen) {
-            data = data.filter(r => {
-                const specimen = String(r.Specimen || r.SpecimenDesc || '');
-                return !specimen || prTextMatch(specimen, filters.specimen);
-            });
-        }
-        if (filters.ward) {
-            data = data.filter(r => prTextMatch(r.Ward || r.WardName || '', filters.ward));
-        }
+        /* 患者类型、科室、病区、诊断、标本等字段在工作列表中经常不完整。
+           这些条件统一放到明细读取后严格筛选，避免全年查询时提前漏标本。 */
         return data;
     }
 
@@ -1988,6 +2088,102 @@
 
     function prTextMatch(value, q) {
         return !q || String(value || '').toLowerCase().includes(q);
+    }
+
+    function prDateRanges(startText, endText) {
+        const start = prParseDateText(startText);
+        const end = prParseDateText(endText);
+        if (!start || !end || start > end) return [{ start: startText, end: endText }];
+        const ranges = [];
+        let cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+        while (cur <= end) {
+            const monthEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+            const segEnd = monthEnd < end ? monthEnd : end;
+            ranges.push({ start: prFormatDateObj(cur), end: prFormatDateObj(segEnd) });
+            cur = new Date(segEnd.getFullYear(), segEnd.getMonth(), segEnd.getDate() + 1);
+        }
+        return ranges;
+    }
+
+    function prWorkRowDedupeKey(r) {
+        const parts = [
+            r.ReportDR || r.TodoReportDR || '',
+            r.Labno || '',
+            r.EpisodeNo || '',
+            r.RegNo || r.AdmNo || r.RecordNo || '',
+            r._wg || r.WorkGroupDR || '',
+            r._mdr || prWorkGroupMachineDR(r) || '',
+            r.Status || r.ReportStatus || '',
+            r.AcceptDT || r.SttAccDate || r.AcceptDate || r.TransmitDate || ''
+        ];
+        if (parts.some(Boolean)) return parts.join('|');
+        try { return JSON.stringify(r); } catch(e) { return String(Math.random()); }
+    }
+
+    function prDedupeWorkRows(rows) {
+        const seen = new Set();
+        const out = [];
+        rows.forEach(r => {
+            const key = prWorkRowDedupeKey(r);
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(r);
+        });
+        return out;
+    }
+
+    function prRowsFromResponse(data) {
+        return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+    }
+
+    function prTotalFromResponse(data, fallback) {
+        const total = Number(data && data.total);
+        return Number.isFinite(total) && total >= 0 ? total : fallback;
+    }
+
+    async function prFetchWorkListPages(params, signal) {
+        const pageSize = PR_WORKLIST_PAGE_SIZE;
+        const out = [];
+        const seen = new Set();
+        for (let page = 1; page <= PR_WORKLIST_MAX_PAGES; page += 1) {
+            if (signal && signal.aborted) return out;
+            const p = new URLSearchParams(params.toString());
+            p.set('page', String(page));
+            p.set('rows', String(pageSize));
+            const data = await fetchJRetry(CSP + '?' + p.toString(), 30000, signal, 2, 300);
+            const rows = prRowsFromResponse(data);
+            let fresh = 0;
+            rows.forEach(r => {
+                const key = prWorkRowDedupeKey(r);
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    fresh += 1;
+                    out.push(r);
+                }
+            });
+            const total = prTotalFromResponse(data, 0);
+            if (rows.length < pageSize) break;
+            /* LIS 有时 total 不准：满页时主动多探一页；如果下一页全重复则停止，避免死循环。 */
+            if (page > 1 && rows.length > 0 && fresh === 0) break;
+            if (total > 0 && out.length >= total && rows.length < pageSize) break;
+        }
+        return out;
+    }
+
+    async function prFetchWorkListRange(baseParams, start, end, signal) {
+        const ranges = prDateRanges(start, end);
+        if (ranges.length <= 1) return prFetchWorkListPages(baseParams, signal);
+        const out = [];
+        for (let i = 0; i < ranges.length; i += 1) {
+            if (signal && signal.aborted) break;
+            const seg = ranges[i];
+            const p = new URLSearchParams(baseParams.toString());
+            p.set('P1', seg.start);
+            p.set('P2', seg.end);
+            prSetStatus(`正在分段查询 ${seg.start} 至 ${seg.end}（${i + 1}/${ranges.length}）...`, 'info');
+            out.push(...await prFetchWorkListPages(p, signal));
+        }
+        return prDedupeWorkRows(out);
     }
 
     function prFirstText() {
@@ -2055,15 +2251,15 @@
     }
 
     function prResultPass(row, filters) {
-        if (filters.patientType && !prTextMatch(row.patientType, filters.patientType)) return false;
+        if (filters.patientType && !prTextMatchAny(row.patientType, filters.patientTypeTerms)) return false;
         if (filters.sex && !String(row.sex || '').includes(filters.sex)) return false;
-        if (filters.dept && !prTextMatch([row.location, row.ward].filter(Boolean).join(' '), filters.dept)) return false;
-        if (filters.ward && !prTextMatch(row.ward, filters.ward)) return false;
-        if (filters.doctor && !prTextMatch(row.doctor, filters.doctor)) return false;
-        if (filters.specimen && !prTextMatch(row.specimen, filters.specimen)) return false;
-        if (filters.item && !prTextMatch([row.itemName, row.itemSynonym, row.testSet].filter(Boolean).join(' '), filters.item)) return false;
-        if (filters.resultText && !prTextMatch([row.result, row.abFlag, classifyStatusText(row.status)].filter(Boolean).join(' '), filters.resultText)) return false;
-        if (filters.diagnosis && !prTextMatch(row.diagnosis, filters.diagnosis)) return false;
+        if (filters.dept && !prTextMatchAny([row.location, row.ward].filter(Boolean).join(' '), filters.deptTerms)) return false;
+        if (filters.ward && !prTextMatchAny(row.ward, filters.wardTerms)) return false;
+        if (filters.doctor && !prTextMatchAny(row.doctor, filters.doctorTerms)) return false;
+        if (filters.specimen && !prTextMatchAny(row.specimen, filters.specimenTerms)) return false;
+        if (filters.item && !prTextMatchAny([row.itemName, row.itemSynonym, row.testSet].filter(Boolean).join(' '), filters.itemTerms)) return false;
+        if (filters.resultText && !prTextMatchAny([row.result, row.abFlag, classifyStatusText(row.status)].filter(Boolean).join(' '), filters.resultTextTerms)) return false;
+        if (filters.diagnosis && !prTextMatchAny(row.diagnosis, filters.diagnosisTerms)) return false;
         if (filters.judge && row.status !== filters.judge) return false;
         if (filters.abnormal && row.status === 'NORMAL') return false;
         /* 年龄筛选 */
@@ -2149,7 +2345,7 @@
         }
 
         const promise = (async () => {
-            const ss = buildSS(specimen._wg || filters.wg || wgDR());
+            const ss = buildSS(specimen._wg || (filters.wgs && filters.wgs[0]) || wgDR());
             const p = new URLSearchParams();
             p.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
             p.set('QueryName', 'GetReportInfoAll');
@@ -2161,11 +2357,11 @@
             p.set('P4', specimen.EpisodeNo || '');
             p.set('P5', specimen.TransmitDate || '');
             p.set('P14', ss);
-            let data = await fetchJ(CSP + '?' + p.toString(), 20000, signal);
+            let data = await fetchJRetry(CSP + '?' + p.toString(), 20000, signal, 2, 250);
             let itemInfo = prAsArray(data && data.ItemInfo);
             if (itemInfo.length === 0 && (specimen.Status || specimen.ReportStatus)) {
                 p.set('P3', '');
-                data = await fetchJ(CSP + '?' + p.toString(), 20000, signal);
+                data = await fetchJRetry(CSP + '?' + p.toString(), 20000, signal, 2, 250);
             }
             const rows = prRowsFromDetailData(specimen, data);
             prCacheSet(ck, rows);
@@ -2254,6 +2450,10 @@
 
     function prExportCSV() {
         if (!prData.length) { showToast('没有可导出的结果', 'warning'); return; }
+        if (prLastDetailFailures > 0) {
+            const ok = window.confirm(`本次查询有 ${prLastDetailFailures} 个标本明细读取失败，导出的结果可能不完整。仍然导出吗？`);
+            if (!ok) return;
+        }
         const headers = ['工作组','仪器','姓名','病人类型','性别','年龄','检验号','流水号','登记号','病案号','科室','病区','医生','诊断','标本','组合','核收时间','报告状态','项目','结果','单位','参考范围','异常标志','判断'];
         const rows = prData.map(r => [
             r.workGroup, r.machine, r.patient, r.patientType, r.sex, r.age, r.labno, r.episodeNo, r.regNo, r.recordNo,
@@ -2287,6 +2487,7 @@
             const el = document.getElementById(id);
             if (el) el.value = '';
         });
+        document.querySelectorAll('.lis-pr-wg-check,.lis-pr-machine-check').forEach(el => { el.checked = false; });
         const abnormal = document.getElementById('lis-pr-abnormal');
         if (abnormal) abnormal.checked = false;
         prSetStatus('筛选条件已清空。', 'info');
@@ -2486,10 +2687,11 @@
         prAbortCtrl = new AbortController();
         const signal = prAbortCtrl.signal;
         prData = [];
+        prLastDetailFailures = 0;
         prRenderTable([]);
         try {
             /* 阶段1：并行加载标本列表 */
-            prSetStatus(filters.wg ? '正在查询当前工作组标本列表...' : '正在并行查询所有工作组...', 'info');
+            prSetStatus((filters.wgs || []).length ? '正在查询选中工作组标本列表...' : '正在并行查询所有工作组...', 'info');
             const allRows = await prLoadRows(filters, signal);
             if (signal.aborted || querySeq !== prQuerySeq) return;
             const rows = prFilterRows(allRows, filters);
@@ -2509,25 +2711,27 @@
             /* 阶段2：批次读取明细（带节流 + 进度 + 缓存复用） */
             prSetStatus(`找到 ${rows.length} 个标本，${skippedNoResult ? '跳过 ' + skippedNoResult + ' 个暂无结果标本，' : ''}正在读取结果明细...`, 'info');
             let resultRows = [];
-            const batchSize = 15;
+            const batchSize = detailRows.length > 3000 ? 24 : (detailRows.length > 800 ? 20 : 15);
             let lastRenderAt = 0;
+            let detailFailures = 0;
             for (let i = 0; i < detailRows.length; i += batchSize) {
                 if (signal.aborted || querySeq !== prQuerySeq) return;
                 const batch = detailRows.slice(i, i + batchSize);
                 const lists = await Promise.all(batch.map(r => prFetchResultRows(r, filters, signal).catch(e => {
                     if (e.name === 'AbortError') return [];
                     dbg('病人结果明细失败:', r.Labno || r.ReportDR, e.message);
+                    detailFailures += 1;
                     return [];
                 })));
                 if (signal.aborted || querySeq !== prQuerySeq) return;
                 lists.forEach(list => resultRows.push(...list));
                 const done = Math.min(i + batch.length, detailRows.length);
-                if (resultRows.length && (resultRows.length - lastRenderAt >= 100 || done === detailRows.length)) {
+                if (resultRows.length && (resultRows.length - lastRenderAt >= 500 || done === detailRows.length)) {
                     prData = resultRows;
                     prRenderTable(prData);
                     lastRenderAt = resultRows.length;
                 }
-                prSetStatus(`正在读取结果明细 ${done} / ${detailRows.length}，已得到 ${resultRows.length} 条结果${skippedNoResult ? '，已跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}...`, 'info');
+                prSetStatus(`正在读取结果明细 ${done} / ${detailRows.length}，已得到 ${resultRows.length} 条结果${detailFailures ? '，失败 ' + detailFailures + ' 个标本' : ''}${skippedNoResult ? '，已跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}...`, detailFailures ? 'error' : 'info');
 
                 /* 批次间节流（避免服务端限流） */
                 if (i + batchSize < detailRows.length) {
@@ -2537,11 +2741,13 @@
 
             if (signal.aborted || querySeq !== prQuerySeq) return;
             prData = resultRows;
+            prLastDetailFailures = detailFailures;
             prPage = 1;
             prRenderTable(prData);
             const cacheHits = _prDetailCache.size;
             const zeroHint = prData.length ? '' : ` 当前生效：${activeSummary}`;
-            prSetStatus(`完成：${rows.length} 个标本，${prData.length} 条结果${skippedNoResult ? '，跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}。明细缓存 ${cacheHits} 个标本。${zeroHint}`, prData.length ? 'ok' : 'info');
+            const failHint = detailFailures ? `，${detailFailures} 个标本明细读取失败，请重查后再作为完整结果导出` : '';
+            prSetStatus(`完成：${rows.length} 个标本，${prData.length} 条结果${skippedNoResult ? '，跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}${failHint}。明细缓存 ${cacheHits} 个标本。${zeroHint}`, detailFailures ? 'error' : (prData.length ? 'ok' : 'info'));
         } catch(e) {
             if (querySeq !== prQuerySeq) return;
             if (e.name === 'AbortError') { prSetStatus('查询已取消。', 'info'); return; }
@@ -2581,17 +2787,13 @@
                     <button type="button" data-range="month">近一月</button>
                     <button type="button" data-range="year">近一年</button>
                 </div>
-                <label class="pr-md">工作组<select id="lis-pr-wg">
-                    ${WG.map(w => `<option value="${esc(w.dr)}">${esc(w.name)}</option>`).join('')}
-                    <option value="">全部工作组</option>
-                </select></label>
-                <label class="pr-lg">仪器<select id="lis-pr-machine"><option value="">全部仪器</option></select></label>
+                <label class="pr-mach-tree-wrap">工作组 / 仪器（不勾=全部；勾工作组=整组；展开后可只勾仪器）<div id="lis-pr-machine-tree"></div></label>
                 <label class="pr-sm">状态<select id="lis-pr-status-filter">
                     <option value="">全部</option><option value="1">登记</option><option value="2">初审</option><option value="3">审核</option><option value="4">复审</option>
                 </select></label>
                 <label class="pr-xl">综合搜索<input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 住院号"></label>
                 <div class="pr-section">患者信息</div>
-                <label class="pr-sm">病人类型<input type="text" id="lis-pr-patient-type" placeholder="门诊 / 住院"></label>
+                <label class="pr-sm">病人类型<input type="text" id="lis-pr-patient-type" placeholder="体检 职工体检"></label>
                 <label class="pr-md">科室<input type="text" id="lis-pr-dept" placeholder="科室"></label>
                 <label class="pr-sm">病区<input type="text" id="lis-pr-ward" placeholder="病区"></label>
                 <label class="pr-sm">医生<input type="text" id="lis-pr-doctor" placeholder="医生"></label>
@@ -2626,14 +2828,9 @@
 
         const start = document.getElementById('lis-pr-start');
         const end = document.getElementById('lis-pr-end');
-        const wgSel = document.getElementById('lis-pr-wg');
         if (start) start.value = today();
         if (end) end.value = today();
-        const defaultWG = '';
-        if (wgSel) {
-            wgSel.value = WG.some(w => w.dr === defaultWG) ? defaultWG : '';
-        }
-        prLoadMachinesForWG(wgSel ? wgSel.value : '');
+        prLoadMachinesForWG([]);
 
 
         document.getElementById('lis-pr-mini').addEventListener('click', () => {
@@ -2648,7 +2845,6 @@
         document.getElementById('lis-pr-cancel').addEventListener('click', prCancel);
         document.getElementById('lis-pr-clear').addEventListener('click', prClearFilters);
         document.getElementById('lis-pr-export').addEventListener('click', prExportCSV);
-        wgSel.addEventListener('change', () => prLoadMachinesForWG(wgSel.value));
         panel.querySelectorAll('.pr-date-shortcuts button').forEach(btn => {
             btn.addEventListener('click', () => prSetDateRange(btn.dataset.range || 'today'));
         });
@@ -2969,8 +3165,6 @@
         // 分类在后台进行，每批次完成后更新计数，最终更新表格
         classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
         return { ok: true, count: wsData.length };
-        
-        // 更新CA认证状态
         } catch(e) {
             dbg('loadWSData 异常:', e);
             if (qi) qi.textContent = '加载失败';
@@ -3789,12 +3983,13 @@
         if (hint && hint.textContent === '正在审核...') hint.textContent = 'Enter=审核';
     }
 
-    async function confirmAuditEventually(iframeWin, reportDR, patientName) {
+    async function confirmAuditEventually(iframeWin, reportDR, patientName, options = {}) {
+        const batchMode = !!options.batchMode;
         const ft = document.getElementById('lis-ws-ft-stat');
         if (ft) ft.textContent = `正在确认审核结果：${patientName || reportDR}`;
-        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], 12000, true, { targetWasPresent: true, missingStableMs: 900 });
+        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], batchMode ? 5000 : 12000, true, { targetWasPresent: true, missingStableMs: batchMode ? 500 : 900 });
         if (confirmed && confirmed !== 'incomplete') return true;
-        await sleep(1500);
+        await sleep(batchMode ? 300 : 1500);
         const latestWin = getReportIframeWin() || iframeWin;
         const found = findNativeRowByReportDR(latestWin, reportDR);
         if (!found) return true;
@@ -6414,8 +6609,11 @@ function fillNativeLoginForm(creds, lastWG) {
         return false;
     }
 
-    async function waitReportDetailReady(iframeWin, reportDR, timeoutMs = 5000) {
+    async function waitReportDetailReady(iframeWin, reportDR, timeoutMs = 5000, options = {}) {
         if (!iframeWin || !reportDR) return false;
+        const fastBatch = !!options.fastBatch;
+        const pollMs = fastBatch ? 80 : 150;
+        const requiredHits = fastBatch ? 1 : 3;
         const end = Date.now() + timeoutMs;
         const target = String(reportDR);
         let curHitCount = 0;
@@ -6430,7 +6628,7 @@ function fillNativeLoginForm(creds, lastWG) {
             }
         } catch(e) {}
         while (Date.now() < end) {
-            await sleep(150);
+            await sleep(pollMs);
             try {
                 const me = iframeWin.me;
                 if (me && String(me.curReportDR || '') === target) {
@@ -6439,7 +6637,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     const rightRows = jq && jq('#dgRightReportItem').length ? (jq('#dgRightReportItem').datagrid('getRows') || []) : [];
                     if (leftRows.length || rightRows.length) return true;
                     curHitCount++;
-                    if (curHitCount >= 3) return true;
+                    if (curHitCount >= requiredHits) return true;
                 } else {
                     curHitCount = 0;
                 }
@@ -6604,10 +6802,14 @@ function fillNativeLoginForm(creds, lastWG) {
 
         if (!jq) { dbg('原生 jQuery 不存在'); return false; }
 
+        const batchMode = !!options.batchMode;
         const isAudit = btnId === 'btn_ReportAuth' || options.action === 'audit';
         const expectedStatuses = options.expectedStatuses || (isAudit ? ['3'] : []);
-        const timeoutMs = options.timeoutMs || (isAudit ? 15000 : 8000);
+        const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? 8000 : 15000) : 8000);
         const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : false;
+        const maxPoll = batchMode ? 10 : 20;
+        const pollSleep = batchMode ? 100 : 200;
+        const missingStableMs = batchMode ? 500 : 900;
 
         // 记录当前选中行的 ReportDR（用于检测审核成功）
         let targetReportDR = options.targetReportDR ? String(options.targetReportDR) : '';
@@ -6624,8 +6826,8 @@ function fillNativeLoginForm(creds, lastWG) {
         // 轮询：检测 CA 窗口 / 审核登录窗口 / 操作结果
         let caDetected = false;
         let authLoginDetected = false;
-        for (let poll = 0; poll < 20; poll++) {
-            await sleep(200);
+        for (let poll = 0; poll < maxPoll; poll++) {
+            await sleep(pollSleep);
 
             // 检查 CA 窗口
             try {
@@ -6649,7 +6851,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
             } catch(e) {}
 
-            const early = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, 50, missingAsSuccess, { targetWasPresent, missingStableMs: 700, failureGraceMs: 2500, ignoreMessages: true });
+            const early = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, 50, missingAsSuccess, { targetWasPresent, missingStableMs: batchMode ? 400 : 700, failureGraceMs: batchMode ? 1500 : 2500, ignoreMessages: true });
             if (early !== false) return early;
         }
 
@@ -6661,13 +6863,13 @@ function fillNativeLoginForm(creds, lastWG) {
             if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
             dbg('CA 认证成功，等待审核回调...');
             // CA 认证后，原生回调自动调用 ReportSave → 审核完成
-            const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess, { targetWasPresent, missingStableMs: 900, failureGraceMs: 3000 });
+            const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess, { targetWasPresent, missingStableMs, failureGraceMs: batchMode ? 2000 : 3000 });
             if (caResult) return caResult;
             dbg('CA 审核等待超时，未确认成功');
             return false;
         }
 
-        const result = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess, { targetWasPresent, missingStableMs: 900, failureGraceMs: 3000 });
+        const result = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess, { targetWasPresent, missingStableMs, failureGraceMs: batchMode ? 2000 : 3000 });
         if (result) return result;
 
         if (authLoginDetected) {
@@ -8015,11 +8217,14 @@ function fillNativeLoginForm(creds, lastWG) {
         return false;
     }
 
-    async function refreshNativeWorkListForItem(iframeWin, item) {
+    async function refreshNativeWorkListForItem(iframeWin, item, options = {}) {
         if (!iframeWin || !item) return iframeWin;
         let jq = iframeWin.jQuery || iframeWin.$;
         const me = iframeWin.me;
         if (!jq || !me) return iframeWin;
+        const mdrKey = String(item.mdr || '');
+        const machineChanged = mdrKey && String(me.WorkGroupMachineDR || '') !== mdrKey;
+        if (!machineChanged && !options.force) return iframeWin;
         try {
             if (item.mdr) {
                 if (me.WorkGroupMachineDR !== undefined) me.WorkGroupMachineDR = item.mdr;
@@ -8030,27 +8235,30 @@ function fillNativeLoginForm(creds, lastWG) {
             const findStr = '&WorkGroupMachineDR=' + (item.mdr || '') + '&ReportStatus=&SttAccDate=' + dateStr;
             if (typeof iframeWin.ShowWorkList === 'function') iframeWin.ShowWorkList(findStr);
             else if (typeof iframeWin.FindFast === 'function') iframeWin.FindFast(item.labno || findStr);
-            await sleep(500);
+            await sleep(machineChanged ? 280 : 120);
         } catch(e) {
             dbg('刷新原生工作列表异常:', e);
         }
         return getReportIframeWin() || iframeWin;
     }
 
-    async function waitAndSelectNativeRow(iframeWin, item, timeoutMs) {
-        const end = Date.now() + (timeoutMs || 9000);
+    async function waitAndSelectNativeRow(iframeWin, item, options = {}) {
+        const timeoutMs = typeof options === 'number' ? options : (options.timeoutMs || 9000);
+        const skipRefresh = typeof options === 'object' && !!options.skipRefresh;
+        const pollMs = (typeof options === 'object' && options.pollMs) || 100;
+        const end = Date.now() + timeoutMs;
         let refreshed = false;
-        // 同步尝试一次（避免首次等待）
         iframeWin = getReportIframeWin() || iframeWin;
         if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
             return { ok: true, iframeWin };
         }
         while (Date.now() < end) {
-            if (!refreshed) {
+            if (!refreshed && !skipRefresh) {
                 refreshed = true;
                 iframeWin = await refreshNativeWorkListForItem(iframeWin, item);
+            } else {
+                await sleep(pollMs);
             }
-            await sleep(150);
             iframeWin = getReportIframeWin() || iframeWin;
             if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
                 return { ok: true, iframeWin };
@@ -8093,6 +8301,8 @@ function fillNativeLoginForm(creds, lastWG) {
             return;
         }
         if (queue.keepWS) keepWorkbenchOnTop('批审开始');
+        const resumeWSRefresh = !!wsTimer;
+        stopWSRefresh();
 
         // 显示进度条
         let progress = document.getElementById('lis-audit-progress');
@@ -8143,11 +8353,14 @@ function fillNativeLoginForm(creds, lastWG) {
                 releaseAuditLock(auditLockId); progress.remove(); return;
             }
 
+            await ensureCAAuthenticated();
+
             let successCount = queue.done.length, failCount = queue.failed.length, skipCount = queue.skipped.length;
             let totalCount = queue.items.length;
             let queuePausedForSwitch = false;
+            let batchLastMdr = String(me.WorkGroupMachineDR || '');
             _batchAbort = false;
-            // 按仪器分组排序剩余项，减少仪器切换次数（每次切换耗时 ~500ms）
+            // 按仪器分组排序剩余项，减少仪器切换次数
             if (queue.current < queue.items.length - 1) {
                 const remaining = queue.items.splice(queue.current);
                 remaining.sort((a, b) => {
@@ -8180,20 +8393,12 @@ function fillNativeLoginForm(creds, lastWG) {
                     break;
                 }
 
-                // 切换仪器
-                if (item.mdr) {
-                    try {
-                        if (me.WorkGroupMachineDR !== undefined) me.WorkGroupMachineDR = item.mdr;
-                        try { jq('#cmb_WorkGroupMachine').combogrid('setValue', item.mdr); } catch(e) {}
-                        const dateStr = jq('#dt_wlReportDate').length ?
-                            (jq('#dt_wlReportDate').datebox('getValue') || today()) : today();
-                        const findStr = '&WorkGroupMachineDR=' + item.mdr + '&ReportStatus=&SttAccDate=' + dateStr;
-                        if (typeof iframeWin.ShowWorkList === 'function') iframeWin.ShowWorkList(findStr);
-                        else if (typeof iframeWin.FindFast === 'function') iframeWin.FindFast(findStr);
-                        await sleep(500);
-                        iframeWin = getReportIframeWin();
-                        if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
-                    } catch(e) { dbg('切换仪器失败:', item.mdr, e); }
+                const mdrKey = String(item.mdr || '');
+                const machineChanged = !!(mdrKey && mdrKey !== batchLastMdr);
+                if (machineChanged) {
+                    iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true });
+                    if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
+                    batchLastMdr = mdrKey;
                 }
 
                 const fill2 = document.getElementById('lis-prog-fill');
@@ -8220,26 +8425,28 @@ function fillNativeLoginForm(creds, lastWG) {
                         failCount++; queue.current++; saveAuditQueue(queue); continue;
                     }
 
-                    const selectedResult = await waitAndSelectNativeRow(iframeWin, item, 9000);
+                    let selectedResult = await waitAndSelectNativeRow(iframeWin, item, { timeoutMs: machineChanged ? 4000 : 2500, skipRefresh: true, pollMs: 80 });
+                    if (!selectedResult.ok) {
+                        selectedResult = await waitAndSelectNativeRow(iframeWin, item, { timeoutMs: 4000, skipRefresh: false, pollMs: 100 });
+                    }
                     iframeWin = selectedResult.iframeWin || iframeWin;
                     if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
                     if (!selectedResult.ok) {
                         if (!requeueAuditItem(queue, item, '原生列表未找到')) skipCount++;
                         queue.current++; saveAuditQueue(queue); continue;
                     }
-                    const detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 9000);
+                    const detailReady = await waitReportDetailReady(iframeWin, item.reportDR, machineChanged ? 3500 : 2000, { fastBatch: true });
                     if (!detailReady) {
                         if (!requeueAuditItem(queue, item, '详情未加载完成')) skipCount++;
                         queue.current++; saveAuditQueue(queue); continue;
                     }
 
-                    let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], timeoutMs: 15000, keepWS: queue.keepWS, missingAsSuccess: true, targetReportDR: item.reportDR });
+                    let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], batchMode: true, keepWS: queue.keepWS, missingAsSuccess: true, targetReportDR: item.reportDR });
                     if (!auditResult) {
                         dbg('批审单条首次未确认，继续确认原生状态:', item.name || item.reportDR);
                         iframeWin = getReportIframeWin() || iframeWin;
-                        auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '');
+                        auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', { batchMode: true });
                     }
-                    if (queue.keepWS) keepWorkbenchOnTop('单个标本审核后');
                     if (auditResult === 'incomplete') {
                         queue.skipped.push({ ...item, reason: '结果不完整' });
                         skipCount++;
@@ -8288,6 +8495,7 @@ function fillNativeLoginForm(creds, lastWG) {
             showToast('审核失败: ' + e.message, 'error');
         } finally {
             releaseAuditLock(auditLockId);
+            if (resumeWSRefresh && isWSVisible()) startWSRefresh();
             setTimeout(() => { const p = document.getElementById('lis-audit-progress'); if (p) p.remove(); }, 3000);
         }
     }
@@ -8441,30 +8649,27 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.6');
+        dbg('iMedicalLIS 增强助手 v7.20.13');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
-        initAuth();
-        migratePwdStorage(); // 将旧 base64 密码迁移到 AES-GAM（异步，不阻塞）
+        let _isMain = false;
+        try { _isMain = (window === window.top) || !!document.getElementById('sl_changeworkgroup'); } catch(e) {}
 
-        if (isAuthPage()) return; // 在审核登录 iframe 中，只做密码填充
+        if (_isMain) {
+            initAuthPersistence();
+            migratePwdStorage();
+        }
+        initAuthFill();
+
+        if (isAuthPage()) return;
 
         if (isLoginPage()) {
             initLoginPage();
             return;
         }
 
-        // 检测是否在主框架中（非 iframe）
-        // UI 和工作组切换功能只在主框架中运行
-        let _isMain = false;
-        try { _isMain = (window === window.top) || !!document.getElementById('sl_changeworkgroup'); } catch(e) {}
-
-        if (!_isMain) {
-            // iframe 中只做认证，不创建 UI
-            // 质控页的 UI 由主框架的 probe 跨 iframe 初始化
-            return;
-        }
+        if (!_isMain) return;
 
         // initQBar(); // 已禁用：不需要顶部快速切换条
         createWS();
