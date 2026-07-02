@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.32
+// @version      7.20.33
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4317,18 +4317,45 @@
         if (hint && hint.textContent === '正在审核...') hint.textContent = 'Enter=审核';
     }
 
+    function verifyAuditSucceededByReportDR(iframeWin, reportDR) {
+        if (!reportDR) return false;
+        const latestWin = getReportIframeWin() || iframeWin;
+        if (latestWin) {
+            const found = findNativeRowByReportDR(latestWin, reportDR);
+            if (found && isExpectedNativeStatus(found.row, ['3', '4'])) return true;
+            try {
+                const me = latestWin.me;
+                if (me && String(me.curReportDR || '') === String(reportDR)) {
+                    const sel = me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
+                    if (sel && isExpectedNativeStatus(sel, ['3', '4'])) return true;
+                }
+            } catch(e) {}
+        }
+        const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
+        if (liveRow && ['3', '4'].includes(String(liveRow.Status || liveRow.ReportStatus || ''))) return true;
+        return false;
+    }
+
     async function confirmAuditEventually(iframeWin, reportDR, patientName, options = {}) {
         const batchMode = !!options.batchMode;
         const ft = document.getElementById('lis-ws-ft-stat');
         if (ft) ft.textContent = `正在确认审核结果：${patientName || reportDR}`;
-        const targetWasPresent = !!findNativeRowByReportDR(iframeWin, reportDR);
-        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], batchMode ? 2200 : 12000, true, { targetWasPresent, missingStableMs: batchMode ? 400 : 900, turbo: batchMode });
+        const targetWasPresent = options.targetWasPresent !== undefined
+            ? !!options.targetWasPresent
+            : !!findNativeRowByReportDR(iframeWin, reportDR);
+        const confirmTimeout = batchMode ? (options.afterCA ? 12000 : 8000) : 12000;
+        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, true, {
+            targetWasPresent,
+            missingStableMs: batchMode ? 700 : 900,
+            turbo: batchMode && !options.afterCA
+        });
         if (confirmed && confirmed !== 'incomplete') return true;
-        await sleep(batchMode ? 100 : 1500);
+        await sleep(batchMode ? 300 : 1500);
+        if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) return true;
         const latestWin = getReportIframeWin() || iframeWin;
         const found = findNativeRowByReportDR(latestWin, reportDR);
         if (!found) return targetWasPresent;
-        return isExpectedNativeStatus(found.row, ['3']);
+        return isExpectedNativeStatus(found.row, ['3', '4']);
     }
 
     let _abnormalAuditInProgress = false;
@@ -4599,7 +4626,7 @@
         });
         if (!result) {
             iframeWin = getReportIframeWin() || iframeWin;
-            result = await confirmAuditEventually(iframeWin, reportDR, specimen.PatName || specimen.Labno || '', { batchMode: fast });
+            result = await confirmAuditEventually(iframeWin, reportDR, specimen.PatName || specimen.Labno || '', { batchMode: fast, targetWasPresent: true });
         }
         return result;
     }
@@ -7618,9 +7645,15 @@ function fillNativeLoginForm(creds, lastWG) {
             saveCAAuth();
             if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
             dbg('CA 认证成功，等待审核回调...');
-            // CA 认证后，原生回调自动调用 ReportSave → 审核完成
-            const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, missingAsSuccess, { ...waitOpts, missingStableMs, failureGraceMs: batchMode ? 2000 : 3000 });
+            // CA 耗时较长时标本可能已审核并从列表消失，需结合 targetWasPresent 判定
+            const postCaMissing = missingAsSuccess || targetWasPresent;
+            const postCaTimeout = batchMode ? Math.max(timeoutMs, 20000) : timeoutMs;
+            const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, postCaTimeout, postCaMissing, { ...waitOpts, missingStableMs, failureGraceMs: batchMode ? 3000 : 4000 });
             if (caResult) return caResult;
+            if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {
+                dbg('CA 后二次校验：标本已审核');
+                return true;
+            }
             dbg('CA 审核等待超时，未确认成功');
             return false;
         }
@@ -9361,11 +9394,16 @@ function fillNativeLoginForm(creds, lastWG) {
                     }
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
+                    const hadTargetRow = true;
                     let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], batchMode: true, timeoutMs: 10000, keepWS: queue.keepWS, missingAsSuccess: false, targetReportDR: item.reportDR });
                     if (!auditResult) {
                         dbg('批审单条首次未确认，继续确认原生状态:', item.name || item.reportDR);
                         iframeWin = getReportIframeWin() || iframeWin;
-                        auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', { batchMode: true });
+                        auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', { batchMode: true, targetWasPresent: hadTargetRow, afterCA: true });
+                    }
+                    if (!auditResult && verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
+                        dbg('批审最终校验：标本实际已审核', item.reportDR);
+                        auditResult = true;
                     }
                     if (auditResult === 'incomplete') {
                         queue.skipped.push({ ...item, reason: '结果不完整' });
@@ -9575,7 +9613,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.32');
+        dbg('iMedicalLIS 增强助手 v7.20.33');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
