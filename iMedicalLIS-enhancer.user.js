@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.30
+// @version      7.20.31
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -281,7 +281,7 @@
 #lis-pr-hd button{height:30px;min-width:30px;border:1px solid #c5d6d0;background:#fff;color:#4a5f5a;border-radius:8px;padding:0 10px;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
 #lis-pr-hd button:hover{background:#f0f7f4;border-color:#168276;color:#0f6f65}
 #lis-pr-hd .pr-close{font-size:18px;line-height:1;padding:0 10px;color:#8a9a94}
-#lis-pr-filter-scroll{flex:0 1 auto;max-height:42vh;min-height:120px;overflow-y:auto;overflow-x:hidden;padding:12px 14px 6px;background:#e8edf2}
+#lis-pr-filter-scroll{flex:0 0 auto;overflow:visible;padding:12px 14px 6px;background:#e8edf2}
 #lis-pr-tools{display:flex;flex-direction:column;gap:10px}
 .pr-card{background:#fff;border:1px solid #dce6e2;border-radius:10px;box-shadow:0 1px 3px rgba(31,45,55,.05);overflow:hidden}
 .pr-card-hd{display:flex;align-items:center;gap:8px;padding:8px 12px;background:linear-gradient(180deg,#f8fbfa,#f2f7f5);border-bottom:1px solid #e8efec;font-size:12px;font-weight:800;color:#2a4a44;letter-spacing:.03em}
@@ -301,20 +301,18 @@
 .pr-mach-section{margin-top:10px}
 .pr-mach-label{font-size:11px;font-weight:800;color:#5a6b66;margin-bottom:6px}
 .pr-mach-hint{font-size:10px;color:#8a9a94;margin-top:6px;line-height:1.4}
-#lis-pr-machine-tree{display:flex;gap:8px;align-items:stretch;padding:8px;min-height:72px;max-height:132px;overflow-x:auto;overflow-y:hidden;background:#f6faf8;border:1px solid #d0ddd8;border-radius:8px;scrollbar-width:thin}
-.pr-wg-box{border:1px solid #d5e2dd;border-radius:8px;background:#fff;min-width:156px;max-width:200px;flex:0 0 auto;box-shadow:0 1px 2px rgba(0,0,0,.04);overflow:hidden}
-.pr-wg-box[data-wg="1"] .pr-wg-head{border-top:3px solid #e74c3c}
-.pr-wg-box[data-wg="3"] .pr-wg-head{border-top:3px solid #3498db}
-.pr-wg-box[data-wg="4"] .pr-wg-head{border-top:3px solid #2ecc71}
-.pr-wg-head{min-height:28px;display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:11px;font-weight:800;color:#2a4a44;cursor:pointer;background:#fafcfb;border-bottom:1px solid #edf2ef;user-select:none}
-.pr-wg-head input{width:14px!important;height:14px!important;margin:0;accent-color:#168276}
-.pr-wg-head .pr-fold{color:#8a9a94;font-size:10px;width:12px;text-align:center}
-.pr-wg-body{padding:6px 8px;display:flex;flex-direction:column;gap:4px;max-height:88px;overflow-y:auto;overflow-x:hidden}
-.pr-wg-box.collapsed .pr-wg-body{display:none}
-.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:6px;font-size:11px!important;font-weight:600!important;color:#334155!important;line-height:1.25!important;padding:2px 0;border-radius:4px;cursor:pointer}
-.pr-mach-option:hover{background:#f0f7f4}
-.pr-mach-option input{width:14px!important;height:14px!important;margin:0;flex-shrink:0;accent-color:#168276}
-.pr-mach-option span,.pr-mach-option{max-width:168px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#lis-pr-machine-tree{display:flex;flex-direction:column;gap:8px;padding:0;background:transparent;border:none;overflow:visible}
+.pr-wg-block{border:1px solid #d0ddd8;border-radius:8px;background:#f6faf8;padding:8px 10px 10px}
+.pr-wg-block[data-wg="1"]{border-top:3px solid #e74c3c}
+.pr-wg-block[data-wg="3"]{border-top:3px solid #3498db}
+.pr-wg-block[data-wg="4"]{border-top:3px solid #2ecc71}
+.pr-wg-title{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;margin:0 0 8px;font-size:12px;font-weight:800;color:#2a4a44;line-height:1.3;cursor:pointer;user-select:none}
+.pr-wg-title input{width:15px!important;height:15px!important;margin:0;flex-shrink:0;accent-color:#168276}
+.pr-wg-mach-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px 8px}
+.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:flex-start;gap:7px;margin:0;padding:7px 9px;font-size:12px!important;font-weight:600!important;color:#2c3e46!important;line-height:1.4!important;background:#fff;border:1px solid #dde5e1;border-radius:7px;cursor:pointer;white-space:normal!important;word-break:break-word;overflow:visible!important;max-width:none!important;text-overflow:unset!important;transition:border-color .12s,background .12s}
+.pr-mach-option:hover{border-color:#168276;background:#f0f7f4}
+.pr-mach-option:has(input:checked){border-color:#168276;background:#e8f5f1;box-shadow:inset 0 0 0 1px rgba(22,130,118,.15)}
+.pr-mach-option input{width:15px!important;height:15px!important;margin:2px 0 0;flex-shrink:0;accent-color:#168276}
 #lis-pr-tools .pr-toggle{grid-column:span 2;height:32px;flex-direction:row!important;align-items:center;justify-content:flex-start;gap:8px;border:1px solid #cdd8d4;border-radius:8px;background:#fafcfb;padding:0 10px;cursor:pointer;align-self:end}
 #lis-pr-tools .pr-toggle:hover{border-color:#168276;background:#f0f7f4}
 #lis-pr-tools .pr-toggle input{width:15px;height:15px;margin:0;accent-color:#168276}
@@ -2008,23 +2006,14 @@
                 const items = g.machines.length ? g.machines.map(m => {
                     const value = (m._wg || '') + '|' + (m.RowID || '');
                     const checked = oldSelected.has(value) ? ' checked' : '';
-                    return `<label class="pr-mach-option" title="${esc(m.CName || m.Name || m.RowID || '')}"><input type="checkbox" class="lis-pr-machine-check" data-wg="${esc(g.wg.dr)}" value="${esc(value)}"${checked}>${esc(m.CName || m.Name || m.RowID || '')}</label>`;
-                }).join('') : '<div style="font-size:11px;color:#9aa5b1;padding:2px 0">未加载到仪器</div>';
-                return `<div class="pr-wg-box" data-wg="${esc(g.wg.dr)}">
-                    <div class="pr-wg-head"><span class="pr-fold">▾</span><input type="checkbox" class="lis-pr-wg-check" value="${esc(g.wg.dr)}"${wgChecked}><span>${esc(g.wg.name)}</span></div>
-                    <div class="pr-wg-body">${items}</div>
+                    const name = esc(m.CName || m.Name || m.RowID || '');
+                    return `<label class="pr-mach-option"><input type="checkbox" class="lis-pr-machine-check" data-wg="${esc(g.wg.dr)}" value="${esc(value)}"${checked}><span>${name}</span></label>`;
+                }).join('') : '<div style="font-size:12px;color:#9aa5b1;padding:4px 0">未加载到仪器</div>';
+                return `<div class="pr-wg-block" data-wg="${esc(g.wg.dr)}">
+                    <label class="pr-wg-title"><input type="checkbox" class="lis-pr-wg-check" value="${esc(g.wg.dr)}"${wgChecked}><span>${esc(g.wg.name)}</span></label>
+                    <div class="pr-wg-mach-grid">${items}</div>
                 </div>`;
             }).join('');
-            box.querySelectorAll('.pr-wg-head').forEach(head => {
-                head.addEventListener('click', e => {
-                    if (e.target && e.target.classList && e.target.classList.contains('lis-pr-wg-check')) return;
-                    const group = head.closest('.pr-wg-box');
-                    if (!group) return;
-                    group.classList.toggle('collapsed');
-                    const f = head.querySelector('.pr-fold');
-                    if (f) f.textContent = group.classList.contains('collapsed') ? '▸' : '▾';
-                });
-            });
         } catch(e) {
             prSetStatus('仪器列表加载失败: ' + e.message, 'error');
         }
@@ -2751,18 +2740,7 @@
     /* 修复：只拦截工具栏区域的滚轮（工具栏 overflow:visible 需手动滚动），
        #lis-pr-body 使用原生 overflow:auto 滚动，不阻止默认行为 */
     function prBindWheelScroll(panel) {
-        panel.addEventListener('wheel', e => {
-            const tools = document.getElementById('lis-pr-tools');
-            if (tools && e.target && e.target.closest && e.target.closest('#lis-pr-tools')) {
-                /* 工具栏区域：需要手动处理滚动 */
-                if (tools.scrollHeight > tools.clientHeight) {
-                    tools.scrollTop += e.deltaY;
-                    e.preventDefault();
-                }
-                e.stopPropagation();
-            }
-            /* #lis-pr-body 区域：不拦截，让浏览器原生滚动处理 */
-        }, { passive: false, capture: true });
+        /* 筛选区一次性展示，滚轮交给结果区原生滚动 */
     }
 
     /* 批次节流延迟（ms） */
@@ -2894,7 +2872,7 @@
                             <div class="pr-mach-section">
                                 <div class="pr-mach-label">工作组 / 仪器</div>
                                 <div id="lis-pr-machine-tree"></div>
-                                <div class="pr-mach-hint">不勾选 = 全部；勾选工作组 = 整组；展开后可只勾选单台仪器</div>
+                                <div class="pr-mach-hint">不勾选 = 全部；勾选工作组名 = 整组；也可单独勾选仪器</div>
                             </div>
                             <div class="pr-grid" style="margin-top:10px">
                                 <label>状态<select id="lis-pr-status-filter">
@@ -9623,7 +9601,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.30');
+        dbg('iMedicalLIS 增强助手 v7.20.31');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
