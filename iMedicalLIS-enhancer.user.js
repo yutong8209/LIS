@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.27
+// @version      7.20.28
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -31,7 +31,8 @@
     const WGM  = BASE + '/sys/ashx/ashBTWorkGroupMachine.ashx';
     const RPT  = BASE + '/sys/ashx/ashReportCommon.ashx';
 
-    const DATAGRID_SELECTORS = ['#dgWorkList', '#dg', '#dgReport', '.datagrid-f'];
+    const NATIVE_WORKLIST_SEL = '#dgWorkList';
+    const DATAGRID_SELECTORS = [NATIVE_WORKLIST_SEL, '#dg', '#dgReport', '.datagrid-f'];
     const DATAGRID_SELECTORS_EXTENDED = ['#dg', '#dgReport', '.datagrid-f', 'table.datagrid-f', '#workList', '.datagrid-view'];
 
     const WG = [
@@ -3139,7 +3140,17 @@
             _normalKeyHandler = null;
         }
         _removeDetailKeyHandler();
+        clearTimeout(_abnormalPrewarmTimer);
+        _abnormalPrewarmTimer = null;
         wsLoading = false; // 重置加载状态，防止下次 openWS 被阻塞
+    }
+
+    function findWSSpecimenByReportDR(reportDR) {
+        const target = String(reportDR || '');
+        if (!target) return null;
+        const fromFiltered = filteredData().find(r => String(r.ReportDR || '') === target);
+        if (fromFiltered) return fromFiltered;
+        return wsData.find(r => String(r.ReportDR || '') === target) || null;
     }
 
     function isWSVisible() {
@@ -4103,13 +4114,14 @@
         body.querySelectorAll('.ws-abnormal-card').forEach(card => {
             card.addEventListener('click', () => {
                 const i = parseInt(card.dataset.i);
-                if (i < 0 || i >= data.length) return;
-                // 更新聚焦状态
+                const specimen = findWSSpecimenByReportDR(card.dataset.rdr) || (i >= 0 && i < data.length ? data[i] : null);
+                if (!specimen) return;
                 const cards = document.querySelectorAll('.ws-abnormal-card');
                 if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.remove('focused');
-                wsAbnormalIndex = i;
+                wsAbnormalIndex = Math.max(0, filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR)));
+                if (wsAbnormalIndex < 0) wsAbnormalIndex = i;
                 if (cards[wsAbnormalIndex]) cards[wsAbnormalIndex].classList.add('focused');
-                openDetailPanel(data[i], 'abnormal', i);
+                openDetailPanel(specimen, 'abnormal', wsAbnormalIndex);
             });
         });
 
@@ -4192,6 +4204,9 @@
     let _abnormalPrewarmDR = '';
     let _abnormalPrewarmPromise = null;
     let _reportPageLoadPromise = null;
+    let _nativeUserSelectDR = '';
+    let _nativeUserSelectAt = 0;
+    let _nativeGuardTimer = null;
 
     function markAbnormalAuditUI(specimen, phase) {
         if (!specimen) return;
@@ -4209,9 +4224,17 @@
     }
 
     function prefetchReportPageForWS() {
-        if (getReportIframeWin()) return Promise.resolve(getReportIframeWin());
+        const existing = getReportIframeWin();
+        if (existing) {
+            installNativeDetailGuard(existing);
+            return Promise.resolve(existing);
+        }
         if (!_reportPageLoadPromise) {
-            _reportPageLoadPromise = ensureReportPageLoaded({ keepWS: true, fast: true }).finally(() => {
+            _reportPageLoadPromise = ensureReportPageLoaded({ keepWS: true, fast: true }).then(w => {
+                if (w) installNativeDetailGuard(w);
+                scheduleNativeDetailGuardInstall();
+                return w;
+            }).finally(() => {
                 _reportPageLoadPromise = null;
             });
         }
@@ -4224,7 +4247,7 @@
     }
 
     function scheduleAbnormalAuditPrewarm(delayMs) {
-        if (wsCategory !== 'abnormal' || _abnormalAuditInProgress) return;
+        if (wsCategory !== 'abnormal' || _abnormalAuditInProgress || !isWSVisible()) return;
         clearTimeout(_abnormalPrewarmTimer);
         const delay = typeof delayMs === 'number' ? delayMs : 0;
         _abnormalPrewarmTimer = setTimeout(() => {
@@ -4241,7 +4264,7 @@
     }
 
     async function prewarmAbnormalAuditNative(specimen) {
-        if (!specimen || _abnormalAuditInProgress) return;
+        if (!specimen || _abnormalAuditInProgress || !isWSVisible()) return;
         const reportDR = String(specimen.ReportDR || '');
         if (isAbnormalSpecimenReady(reportDR)) {
             _abnormalNativeReadyDR = reportDR;
@@ -4269,6 +4292,11 @@
                 }
             }
             iframeWin = getReportIframeWin() || iframeWin;
+            installNativeDetailGuard(iframeWin);
+            if (!canScriptSelectNativeRow(iframeWin, reportDR)) {
+                dbg('预热跳过：用户正在原生列表查看其他标本');
+                return;
+            }
             if (item.labno && typeof iframeWin.FindFast === 'function') {
                 try { iframeWin.FindFast(item.labno); await sleep(60); } catch(e) {}
                 iframeWin = getReportIframeWin() || iframeWin;
@@ -4625,8 +4653,8 @@
 
         // 行点击 → 详情
         body.querySelectorAll('tr[data-rdr]').forEach(tr => tr.addEventListener('click', e => {
-            const i = parseInt(tr.dataset.i);
-            if (i >= 0 && i < data.length) openDetailPanel(data[i]);
+            const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
+            if (specimen) openDetailPanel(specimen);
         }));
     }
 
@@ -4689,8 +4717,10 @@
             if (e.target.closest('input[type="checkbox"]')) return;
             body.querySelectorAll('tr.active-row').forEach(r => r.classList.remove('active-row'));
             tr.classList.add('active-row');
-            const i = parseInt(tr.dataset.i);
-            if (i >= 0 && i < data.length) openDetailPanel(data[i], source || 'all', i);
+            const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
+            if (!specimen) return;
+            const idx = filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR));
+            openDetailPanel(specimen, source || 'all', idx >= 0 ? idx : parseInt(tr.dataset.i));
         };
 
         // change 委托：checkbox 选中
@@ -6853,11 +6883,125 @@ function fillNativeLoginForm(creds, lastWG) {
         } catch(e) {}
     }
 
+    function getNativeWorkListSelectedDR(iframeWin) {
+        try {
+            const jq = iframeWin && (iframeWin.jQuery || iframeWin.$);
+            if (!jq) return '';
+            const wl = jq(NATIVE_WORKLIST_SEL);
+            if (!wl.length || !wl.datagrid) return '';
+            const selected = wl.datagrid('getSelected');
+            return selected ? String(selected.ReportDR || '') : '';
+        } catch(e) {
+            return '';
+        }
+    }
+
+    function isScriptOwnedNativeSelection() {
+        return !!(_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress);
+    }
+
+    function onNativeUserRowSelect(reportDR) {
+        _nativeUserSelectDR = String(reportDR || '');
+        _nativeUserSelectAt = Date.now();
+        if (!isScriptOwnedNativeSelection()) {
+            clearTimeout(_abnormalPrewarmTimer);
+            _abnormalPrewarmTimer = null;
+        }
+    }
+
+    function canScriptSelectNativeRow(iframeWin, reportDR) {
+        if (isScriptOwnedNativeSelection()) return true;
+        const target = String(reportDR || '');
+        if (!target) return false;
+        const selDR = getNativeWorkListSelectedDR(iframeWin);
+        if (selDR && selDR !== target) return false;
+        if (_nativeUserSelectDR && _nativeUserSelectAt && Date.now() - _nativeUserSelectAt < 30000) {
+            if (_nativeUserSelectDR !== target) return false;
+        }
+        return true;
+    }
+
+    function installNativeDetailGuard(iframeWin) {
+        if (!iframeWin || iframeWin.__lisEnhancerGuard) return !!iframeWin.__lisEnhancerGuard;
+        const jq = iframeWin.jQuery || iframeWin.$;
+        if (!jq) return false;
+        try {
+            const wl = jq(NATIVE_WORKLIST_SEL);
+            if (wl.length && wl.datagrid) {
+                const opts = wl.datagrid('options') || {};
+                if (!opts.__lisOnSelectWrapped) {
+                    const origOnSelect = opts.onSelect;
+                    opts.onSelect = function(rowIndex, rowData) {
+                        if (rowData && rowData.ReportDR) onNativeUserRowSelect(rowData.ReportDR);
+                        if (typeof origOnSelect === 'function') return origOnSelect.apply(this, arguments);
+                    };
+                    opts.__lisOnSelectWrapped = true;
+                }
+            }
+            if (!jq.__lisDetailAjaxGuard) {
+                jq.ajaxPrefilter(function(options) {
+                    const d = options && options.data;
+                    if (!d || d.QueryName !== 'GetReportInfoAll') return;
+                    const captured = String(d.P0 || '');
+                    const origSuccess = options.success;
+                    options.success = function(RetData, textStatus) {
+                        const me = iframeWin.me;
+                        const cur = String((me && me.curReportDR) || '');
+                        const sel = getNativeWorkListSelectedDR(iframeWin);
+                        if (captured && cur !== captured && sel !== captured) {
+                            dbg('丢弃过期标本详情响应:', captured, 'cur=', cur, 'sel=', sel);
+                            try { if (typeof iframeWin.ajaxLoadEnd === 'function') iframeWin.ajaxLoadEnd(); } catch(e) {}
+                            return;
+                        }
+                        if (origSuccess) return origSuccess.apply(this, arguments);
+                    };
+                });
+                jq.__lisDetailAjaxGuard = true;
+            }
+            iframeWin.__lisEnhancerGuard = true;
+            dbg('原生详情防竞态已安装');
+            return true;
+        } catch(e) {
+            dbg('安装原生详情防护失败:', e.message);
+            return false;
+        }
+    }
+
+    function scheduleNativeDetailGuardInstall() {
+        if (_nativeGuardTimer) return;
+        let attempts = 0;
+        const tick = () => {
+            const w = getReportIframeWin();
+            if (w && installNativeDetailGuard(w)) {
+                _nativeGuardTimer = null;
+                return;
+            }
+            attempts++;
+            if (attempts < 120) _nativeGuardTimer = setTimeout(tick, 500);
+            else _nativeGuardTimer = null;
+        };
+        tick();
+    }
+
     function findNativeRowByReportDR(iframeWin, reportDR) {
         if (!iframeWin || !reportDR) return null;
         const jq = iframeWin.jQuery || iframeWin.$;
         const me = iframeWin.me;
         const target = String(reportDR);
+
+        try {
+            if (jq) {
+                const wl = jq(NATIVE_WORKLIST_SEL);
+                if (wl.length && wl.datagrid) {
+                    const rows = wl.datagrid('getRows') || [];
+                    for (let i = 0; i < rows.length; i++) {
+                        if (String(rows[i].ReportDR || '') === target) {
+                            return { row: rows[i], index: i, grid: wl };
+                        }
+                    }
+                }
+            }
+        } catch(e) {}
 
         try {
             if (me && me.selectedGrid && me.selectedGrid.datagrid) {
@@ -8709,11 +8853,16 @@ function fillNativeLoginForm(creds, lastWG) {
         });
     }
 
-    // --- 按 ReportDR 在原生 datagrid 中选中行 ---
-    function selectNativeRowByReportDR(iframeWin, reportDR) {
+    // --- 按 ReportDR 在原生工作列表中选中行 ---
+    function selectNativeRowByReportDR(iframeWin, reportDR, options = {}) {
         const jq = iframeWin.jQuery || iframeWin.$;
         if (!jq) { dbg('selectNativeRow: jq 不存在'); return false; }
-        const selectors = DATAGRID_SELECTORS;
+        installNativeDetailGuard(iframeWin);
+        if (!options.force && !canScriptSelectNativeRow(iframeWin, reportDR)) {
+            dbg('selectNativeRow: 用户正在查看其他标本，跳过自动选行');
+            return false;
+        }
+        const selectors = options.allGrids ? DATAGRID_SELECTORS : [NATIVE_WORKLIST_SEL];
         for (const sel of selectors) {
             const el = jq(sel);
             if (el.length && el.datagrid) {
@@ -8724,12 +8873,16 @@ function fillNativeLoginForm(creds, lastWG) {
                         if (String(rows[i].ReportDR) === String(reportDR)) {
                             const opts = el.datagrid('options') || {};
                             el.datagrid('selectRow', i);
-                            if (iframeWin.me) iframeWin.me.selectedGrid = el;
+                            if (iframeWin.me) {
+                                iframeWin.me.selectedGrid = el;
+                                iframeWin.me.curReportDR = String(reportDR);
+                            }
                             try {
-                                if (typeof opts.onClickRow === 'function') opts.onClickRow.call(el[0], i, rows[i]);
-                                else if (typeof opts.onSelect === 'function') opts.onSelect.call(el[0], i, rows[i]);
+                                if (typeof opts.onSelect === 'function') opts.onSelect.call(el[0], i, rows[i]);
+                                else if (typeof opts.onClickRow === 'function') opts.onClickRow.call(el[0], i, rows[i]);
                             } catch(e) { dbg('触发行选择回调异常:', e.message); }
-                            dbg('选中原生行:', i, 'ReportDR:', reportDR, 'selector:', sel);
+                            const loaded = isReportDetailLoaded(iframeWin, reportDR);
+                            dbg('选中原生行:', i, 'ReportDR:', reportDR, 'selector:', sel, 'detailReady=', loaded);
                             return true;
                         }
                     }
@@ -8737,7 +8890,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 } catch(e) { dbg('selectNativeRow error:', sel, e); }
             }
         }
-        dbg('selectNativeRow: 所有选择器都未找到 datagrid');
+        dbg('selectNativeRow: 工作列表未找到 datagrid 或目标行');
         return false;
     }
 
@@ -9234,6 +9387,7 @@ function fillNativeLoginForm(creds, lastWG) {
         }
 
         registerAuditShortcuts();
+        scheduleNativeDetailGuardInstall();
         dbg('报告处理页增强已加载');
     }
 
@@ -9248,7 +9402,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.27');
+        dbg('iMedicalLIS 增强助手 v7.20.28');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
