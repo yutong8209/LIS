@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.19
+// @version      7.20.20
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4262,9 +4262,9 @@
             const ft = document.getElementById('lis-ws-ft-stat');
             if (ft) ft.textContent = `异常审核：${specimen.PatName || specimen.Labno || targetDR}`;
 
-            const cached = wsClassifiedCache[specimen.ReportDR];
-            if (cached && cached.status === 'CRITICAL') {
-                showToast(`🚨 ${specimen.PatName} 有危急值，必须在原始LIS中审核`, 'error');
+            const classCheck = validateAuditClassification(specimen.ReportDR, 'abnormal');
+            if (!classCheck.ok) {
+                showToast(classCheck.msg, classCheck.msg.indexOf('危急') !== -1 ? 'error' : 'warning');
                 advanceAbnormalFocusAfterSkip(startIndex);
                 return;
             }
@@ -4483,7 +4483,17 @@
     // --- 确认并批量审核 ---
     function confirmAndBatchAudit(normalData) {
         dbg('confirmAndBatchAudit 被调用, normalData.length:', normalData.length);
+        if (wsClassifying) {
+            showToast('标本正在分类中，请等候分类完成后再批审', 'warning');
+            return;
+        }
         normalData = [...(normalData || [])].sort((a, b) => compareSpecimensForAudit(a.row || a, b.row || b));
+        const stale = normalData.filter(sp => !isLiveNormalForBatch(sp.reportDR || (sp.row && sp.row.ReportDR)));
+        if (stale.length > 0) {
+            const first = stale[0].row || stale[0];
+            showToast(`分类状态已变化或未完成：${first.PatName || first.Labno || ''}，请刷新工作台后重试`, 'error');
+            return;
+        }
         const blocked = normalData.filter(r => !isAutoAuditableClassified(r));
         if (blocked.length > 0) {
             const first = blocked[0];
@@ -5135,9 +5145,10 @@
             }
 
             const reportDR = specimen.ReportDR;
-            const cached = wsClassifiedCache[reportDR];
-            if (cached && cached.status === 'CRITICAL') {
-                showToast(getAutoAuditBlockReason(cached, specimen), 'error');
+            const classCtx = detailSource === 'abnormal' ? 'abnormal' : 'normal';
+            const classCheck = validateAuditClassification(reportDR, classCtx);
+            if (!classCheck.ok) {
+                showToast(classCheck.msg, classCtx === 'abnormal' ? 'warning' : 'error');
                 return;
             }
             if (detailPanel && detailPanel.dataset.rdr === String(reportDR) && detailPanel.dataset.hasCritical === '1') {
@@ -6671,17 +6682,22 @@ function fillNativeLoginForm(creds, lastWG) {
                     dbg('原生操作成功（IsSaveSuccess）');
                     return true;
                 }
-                if (expectedStatuses.includes('3') && (me.IsAuthed === true || me.IsAuthed === 1)) {
-                    dbg('原生操作成功（IsSaveSuccess + IsAuthed）');
-                    return true;
-                }
-                if (!found && (!targetReportDR || (missingAsSuccess && sawTargetRow))) {
+                if (!found && targetReportDR && missingAsSuccess && sawTargetRow) {
                     dbg('原生操作成功（IsSaveSuccess，目标行已移出）');
                     return true;
                 }
-                if (expectedStatuses.includes('3')) {
-                    dbg('原生操作成功（IsSaveSuccess，信任审核回调）');
-                    return true;
+                if (targetReportDR && String(me.curReportDR || '') === String(targetReportDR)) {
+                    const sel = me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
+                    if (sel && String(sel.ReportDR || '') === String(targetReportDR)) {
+                        if (isExpectedNativeStatus(sel, expectedStatuses)) {
+                            dbg('原生操作成功（IsSaveSuccess + 当前选中行状态）');
+                            return true;
+                        }
+                        if (!found && missingAsSuccess && sawTargetRow) {
+                            dbg('原生操作成功（IsSaveSuccess + curReportDR 匹配，行已移出）');
+                            return true;
+                        }
+                    }
                 }
             }
 
@@ -6936,6 +6952,11 @@ function fillNativeLoginForm(creds, lastWG) {
         } catch(e) {}
         const targetWasPresent = !!targetReportDR && !!findNativeRowByReportDR(iframeWin, targetReportDR);
         const waitOpts = { targetWasPresent, missingStableMs, failureGraceMs: batchMode ? 1200 : 3000, ignoreMessages: true, turbo: batchMode };
+
+        if (isAudit && targetReportDR && !isReportDetailLoaded(iframeWin, targetReportDR)) {
+            dbg('审核中止: 目标标本详情未就绪, targetReportDR=' + targetReportDR);
+            return false;
+        }
 
         // 优先直接调用原生 ReportSave（与按钮点击等价，避免 EasyUI 事件未触发）
         let auditTriggered = false;
@@ -7596,6 +7617,37 @@ function fillNativeLoginForm(creds, lastWG) {
 
     function isAutoAuditableClassified(result) {
         return !!result && result.status === 'NORMAL';
+    }
+
+    function getLiveClassification(reportDR) {
+        if (!reportDR) return null;
+        return wsClassifiedCache[String(reportDR)] || null;
+    }
+
+    function isLiveNormalForBatch(reportDR) {
+        const live = getLiveClassification(reportDR);
+        return !!live && live.status === 'NORMAL';
+    }
+
+    function validateAuditClassification(reportDR, context) {
+        const live = getLiveClassification(reportDR);
+        if (!live) return { ok: false, msg: '分类未完成，请稍候刷新' };
+        if (live.status === 'CRITICAL') {
+            return { ok: false, msg: getAutoAuditBlockReason(live, live.row) };
+        }
+        if (context === 'abnormal') {
+            if (live.status === 'NORMAL') {
+                return { ok: false, msg: '该标本已分类为正常，请到正常可审视图批审' };
+            }
+            if (live.status === 'UNCERTAIN') {
+                return { ok: false, msg: '结果待定，需人工确认后再审核' };
+            }
+            return { ok: true };
+        }
+        if (live.status !== 'NORMAL') {
+            return { ok: false, msg: getAutoAuditBlockReason(live, live.row) };
+        }
+        return { ok: true };
     }
 
     function getAutoAuditBlockReason(result, row) {
@@ -8448,6 +8500,10 @@ function fillNativeLoginForm(creds, lastWG) {
     // --- 执行批量审核（逐行审核）---
     async function executeBatchAudit(normalSpecimens) {
         if (normalSpecimens.length === 0) return;
+        if (wsClassifying) {
+            showToast('标本正在分类中，请等候分类完成后再批审', 'warning');
+            return;
+        }
         const queue = makeAuditQueue(normalSpecimens, 'batch');
         if (queue.items.length === 0) { showToast('没有可审核的标本', 'warning'); return; }
         await continueAuditQueue(queue);
@@ -8551,9 +8607,13 @@ function fillNativeLoginForm(creds, lastWG) {
                 const item = currentQueueItem(queue);
                 if (!item) break;
 
-                const itemClassified = wsClassifiedCache[item.reportDR] || (item.status ? { status: item.status, row: item.row } : null);
-                if (itemClassified && !isAutoAuditableClassified(itemClassified)) {
-                    queue.skipped.push({ ...item, reason: classifyStatusText(itemClassified.status) + '标本不可自动审核' });
+                const liveClassified = getLiveClassification(item.reportDR);
+                if (!liveClassified) {
+                    queue.skipped.push({ ...item, reason: '分类缓存缺失，需刷新后重试' });
+                    skipCount++; queue.current++; saveAuditQueue(queue); continue;
+                }
+                if (!isAutoAuditableClassified(liveClassified)) {
+                    queue.skipped.push({ ...item, reason: classifyStatusText(liveClassified.status) + '标本不可自动审核' });
                     skipCount++; queue.current++; saveAuditQueue(queue); continue;
                 }
 
@@ -8600,6 +8660,10 @@ function fillNativeLoginForm(creds, lastWG) {
 
                     let selectedOk = batchSkipSelect;
                     batchSkipSelect = false;
+                    if (selectedOk && !isReportDetailLoaded(iframeWin, item.reportDR)) {
+                        dbg('批审: 自动跳下一条校验失败，重新选行', item.reportDR);
+                        selectedOk = false;
+                    }
                     if (!selectedOk) {
                         updateBatchProgress(`${queue.current + 1} / ${totalCount} - 选中标本...`, queue.current / totalCount * 100);
                         const selectedResult = await waitAndSelectNativeRow(iframeWin, item, {
@@ -8843,7 +8907,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.19');
+        dbg('iMedicalLIS 增强助手 v7.20.20');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
