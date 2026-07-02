@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.14
+// @version      7.20.15
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6559,8 +6559,16 @@ function fillNativeLoginForm(creds, lastWG) {
                     dbg('原生操作成功（IsSaveSuccess）');
                     return true;
                 }
+                if (expectedStatuses.includes('3') && (me.IsAuthed === true || me.IsAuthed === 1)) {
+                    dbg('原生操作成功（IsSaveSuccess + IsAuthed）');
+                    return true;
+                }
                 if (!found && (!targetReportDR || (missingAsSuccess && sawTargetRow))) {
                     dbg('原生操作成功（IsSaveSuccess，目标行已移出）');
+                    return true;
+                }
+                if (expectedStatuses.includes('3')) {
+                    dbg('原生操作成功（IsSaveSuccess，信任审核回调）');
                     return true;
                 }
             }
@@ -6609,45 +6617,40 @@ function fillNativeLoginForm(creds, lastWG) {
         return false;
     }
 
+    function isReportDetailLoaded(iframeWin, reportDR) {
+        if (!iframeWin || !reportDR) return false;
+        try {
+            const me = iframeWin.me;
+            const target = String(reportDR);
+            if (!me || String(me.curReportDR || '') !== target) return false;
+            const jq = iframeWin.jQuery || iframeWin.$;
+            if (!jq) return false;
+            const leftRows = jq('#dgLeftReportItem').datagrid('getRows') || [];
+            const rightRows = jq('#dgRightReportItem').length ? (jq('#dgRightReportItem').datagrid('getRows') || []) : [];
+            if (!(leftRows.length || rightRows.length)) return false;
+            const selected = me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
+            return !!(selected && String(selected.ReportDR || '') === target);
+        } catch(e) {
+            return false;
+        }
+    }
+
     async function waitReportDetailReady(iframeWin, reportDR, timeoutMs = 5000, options = {}) {
         if (!iframeWin || !reportDR) return false;
         const fastBatch = !!options.fastBatch;
-        const pollMs = fastBatch ? 80 : 150;
-        const requiredHits = fastBatch ? 1 : 3;
+        const pollMs = fastBatch ? 100 : 150;
         const end = Date.now() + timeoutMs;
-        const target = String(reportDR);
-        let curHitCount = 0;
-        // 同步检查一次（避免首次等待）
-        try {
-            const me = iframeWin.me;
-            if (me && String(me.curReportDR || '') === target) {
-                const jq = iframeWin.jQuery || iframeWin.$;
-                const leftRows = jq ? (jq('#dgLeftReportItem').datagrid('getRows') || []) : [];
-                const rightRows = jq && jq('#dgRightReportItem').length ? (jq('#dgRightReportItem').datagrid('getRows') || []) : [];
-                if (leftRows.length || rightRows.length) return true;
-            }
-        } catch(e) {}
+        if (isReportDetailLoaded(iframeWin, reportDR)) return true;
         while (Date.now() < end) {
             await sleep(pollMs);
-            try {
-                const me = iframeWin.me;
-                if (me && String(me.curReportDR || '') === target) {
-                    const jq = iframeWin.jQuery || iframeWin.$;
-                    const leftRows = jq ? (jq('#dgLeftReportItem').datagrid('getRows') || []) : [];
-                    const rightRows = jq && jq('#dgRightReportItem').length ? (jq('#dgRightReportItem').datagrid('getRows') || []) : [];
-                    if (leftRows.length || rightRows.length) return true;
-                    curHitCount++;
-                    if (curHitCount >= requiredHits) return true;
-                } else {
-                    curHitCount = 0;
-                }
-            } catch(e) {}
+            if (isReportDetailLoaded(iframeWin, reportDR)) return true;
         }
         return false;
     }
 
 
-    async function handleCALogin(iframeWin) {
+    async function handleCALogin(iframeWin, options = {}) {
+        const fast = !!options.fast;
         const doc = iframeWin.document;
         const jq = iframeWin.jQuery || iframeWin.$;
         const caWin = jq('#win_CAUserLogin');
@@ -6660,7 +6663,8 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!caUser) { showToast('无法获取用户名', 'error'); return false; }
 
         dbg('CA: 检测到 CA 窗口');
-        const totalDeadline = Date.now() + 90000;
+        updateBatchProgress('CA 认证中...', null);
+        const totalDeadline = Date.now() + (fast ? 35000 : 90000);
 
         // 最多重试 3 次
         for (let attempt = 1; attempt <= 3; attempt++) {
@@ -6671,12 +6675,12 @@ function fillNativeLoginForm(creds, lastWG) {
             }
             dbg('CA 尝试 ' + attempt + '/3');
 
-            // 等待 iframe 加载（最多 15 秒）
             let caIframe = null;
-            for (let i = 0; i < 50; i++) {
+            const iframeWaitLoops = fast ? 20 : 50;
+            for (let i = 0; i < iframeWaitLoops; i++) {
                 caIframe = doc.querySelector('#win_CAUserLogin iframe');
                 if (caIframe && caIframe.contentDocument && caIframe.contentDocument.body && caIframe.contentDocument.body.childElementCount > 0) break;
-                await sleep(300);
+                await sleep(fast ? 150 : 300);
             }
 
             let caDoc = null;
@@ -6819,9 +6823,21 @@ function fillNativeLoginForm(creds, lastWG) {
         } catch(e) {}
         const targetWasPresent = !!targetReportDR && !!findNativeRowByReportDR(iframeWin, targetReportDR);
 
-        // 点击审核按钮
-        jq(btn).click();
-        dbg('已点击审核按钮, targetReportDR=' + targetReportDR);
+        // 优先直接调用原生 ReportSave（与按钮点击等价，避免 EasyUI 事件未触发）
+        let auditTriggered = false;
+        try {
+            if (isAudit && typeof iframeWin.ReportSave === 'function') {
+                iframeWin.ReportSave('A', '');
+                auditTriggered = true;
+                dbg('已调用 ReportSave(A), targetReportDR=' + targetReportDR);
+            }
+        } catch(e) {
+            dbg('ReportSave 调用失败，回退按钮点击:', e.message);
+        }
+        if (!auditTriggered) {
+            jq(btn).click();
+            dbg('已点击审核按钮, targetReportDR=' + targetReportDR);
+        }
 
         // 轮询：检测 CA 窗口 / 审核登录窗口 / 操作结果
         let caDetected = false;
@@ -6858,8 +6874,9 @@ function fillNativeLoginForm(creds, lastWG) {
         // 如果检测到 CA 窗口，自动完成 CA 登录
         if (caDetected) {
             dbg('开始自动 CA 认证...');
-            const caOK = await handleCALogin(iframeWin);
+            const caOK = await handleCALogin(iframeWin, { fast: batchMode });
             if (!caOK) { clearCAAuth(); return false; }
+            saveCAAuth();
             if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
             dbg('CA 认证成功，等待审核回调...');
             // CA 认证后，原生回调自动调用 ReportSave → 审核完成
@@ -8438,14 +8455,18 @@ function fillNativeLoginForm(creds, lastWG) {
                         queue.current++; saveAuditQueue(queue); continue;
                     }
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 加载详情...`, queue.current / totalCount * 100);
-                    const detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 5000, { fastBatch: true });
+                    let detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 10000, { fastBatch: true });
+                    if (!detailReady) {
+                        const selAgain = selectNativeRowByReportDR(iframeWin, item.reportDR);
+                        if (selAgain) detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 6000, { fastBatch: true });
+                    }
                     if (!detailReady) {
                         if (!requeueAuditItem(queue, item, '详情未加载完成')) skipCount++;
                         queue.current++; saveAuditQueue(queue); continue;
                     }
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
-                    let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], batchMode: true, timeoutMs: 12000, keepWS: queue.keepWS, missingAsSuccess: true, targetReportDR: item.reportDR });
+                    let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'], batchMode: true, timeoutMs: 15000, keepWS: queue.keepWS, missingAsSuccess: true, targetReportDR: item.reportDR });
                     if (!auditResult) {
                         dbg('批审单条首次未确认，继续确认原生状态:', item.name || item.reportDR);
                         iframeWin = getReportIframeWin() || iframeWin;
@@ -8653,7 +8674,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.14');
+        dbg('iMedicalLIS 增强助手 v7.20.15');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
