@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.37
+// @version      7.20.38
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1833,6 +1833,7 @@
         if (/^(如|例如|示例)\s*/.test(text)) return '';
         if (lower === '姓名 / 检验号 / 住院号' || lower === '姓名 / 检验号 / 登记号 / 病案号') return '';
         if (text === '门诊 / 住院' || text === '诊断关键字') return '';
+        if (text === '如 传染病八项' || text === '如 梅毒（仅单项名）') return '';
         return text;
     }
 
@@ -3524,6 +3525,7 @@
         if (complete !== '1') return 'incomplete';
         const cached = wsClassifiedCache[r.ReportDR];
         if (!cached) return 'incomplete'; // 分类未完成时不进入正常可审，避免误批审
+        if (isClassificationStale(r)) return 'incomplete';
         if (cached.status === 'NORMAL') return 'normal';
         if (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL') return 'abnormal';
         return 'incomplete';
@@ -3966,7 +3968,7 @@
                         const complete = String(r.IsComplete || '');
                         if (complete !== '1') return false;
                         const cached = wsClassifiedCache[r.ReportDR];
-                        return cached && cached.status === 'NORMAL';
+                        return cached && cached.status === 'NORMAL' && !isClassificationStale(r);
                     }).map(r => ({ status: 'NORMAL', items: [], row: r, reportDR: r.ReportDR }));
                     if (normalData.length === 0) {
                         if (wsClassifying) {
@@ -4128,7 +4130,10 @@
         if (batchBtn) {
             batchBtn.addEventListener('click', () => {
                 const formatted = data
-                    .map(r => wsClassifiedCache[r.ReportDR])
+                    .map(r => {
+                        const c = wsClassifiedCache[r.ReportDR];
+                        return (c && !isClassificationStale(r)) ? c : null;
+                    })
                     .filter(c => c && c.status === 'NORMAL');
                 if (formatted.length !== data.length) {
                     showToast('部分标本尚未完成正常分类，请稍候刷新后再批审', 'warning');
@@ -5198,6 +5203,7 @@
         const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
         showToast('切换到' + wgName + '继续审核...', 'warning');
         switchWG(item.wg);
+        runAuditQueueResume(2500);
         return false;
     }
 
@@ -5289,7 +5295,7 @@
         const formatted = unreviewed.map(r => {
             const cached = wsClassifiedCache[r.ReportDR];
             if (cached) cached._accessTs = Date.now();
-            return cached
+            return (cached && !isClassificationStale(r))
                 ? { status: cached.status, items: cached.items || [], row: r, reportDR: r.ReportDR }
                 : { status: 'UNCERTAIN', items: [], row: r, reportDR: r.ReportDR };
         });
@@ -8305,12 +8311,17 @@ function fillNativeLoginForm(creds, lastWG) {
 
     function isLiveNormalForBatch(reportDR) {
         const live = getLiveClassification(reportDR);
-        return !!live && live.status === 'NORMAL';
+        if (!live || live.status !== 'NORMAL') return false;
+        const row = live.row || findWSSpecimenByReportDR(reportDR);
+        if (row && isClassificationStale(row)) return false;
+        return true;
     }
 
     function validateAuditClassification(reportDR, context) {
         const live = getLiveClassification(reportDR);
         if (!live) return { ok: false, msg: '分类未完成，请稍候刷新' };
+        const row = live.row || findWSSpecimenByReportDR(reportDR);
+        if (row && isClassificationStale(row)) return { ok: false, msg: '分类已过期，请刷新工作台后重试' };
         if (live.status === 'CRITICAL') {
             return { ok: false, msg: getAutoAuditBlockReason(live, live.row) };
         }
@@ -8777,9 +8788,10 @@ function fillNativeLoginForm(creds, lastWG) {
         if (btn) { btn.disabled = true; btn.textContent = '⏳ 审核中...'; }
 
         try {
-            // 优先使用已缓存的分类结果
             const cached = wsClassifiedCache[selected.ReportDR];
-            const result = cached || await fetchAndClassifySpecimen(selected);
+            const result = (cached && !isClassificationStale(selected))
+                ? cached
+                : await fetchAndClassifySpecimen(selected);
 
             if (result.status === 'CRITICAL') {
                 showToast(getAutoAuditBlockReason(result, selected), 'error');
@@ -8813,7 +8825,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 caSessionReady: caReady, missingAsSuccess: true, targetReportDR: reportDR
             });
             if (!auditOK) {
-                auditOK = await confirmAuditEventually(iframeWin, reportDR, selected.PatName || selected.Labno || '');
+                auditOK = await confirmAuditEventually(iframeWin, reportDR, selected.PatName || selected.Labno || '', { targetWasPresent: true });
             }
             if (auditOK === 'incomplete') {
                 showToast(`⚠️ 跳过: ${selected.PatName || ''} — 结果不完整，不可审核`, 'warning');
@@ -9292,7 +9304,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
         try {
             const sameWG = await ensureAuditQueueWorkGroup(queue);
-            if (!sameWG) { progress.remove(); return; }
+            if (!sameWG) { progress.remove(); return; } /* ensureAuditQueueWorkGroup 内已 schedule 续跑 */
 
             let iframeWin = getReportIframeWin();
             if (!iframeWin) {
@@ -9389,6 +9401,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
                     queuePausedForSwitch = true;
                     switchWG(item.wg);
+                    runAuditQueueResume(2500);
                     break;
                 }
 
@@ -9696,7 +9709,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.37');
+        dbg('iMedicalLIS 增强助手 v7.20.38');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
