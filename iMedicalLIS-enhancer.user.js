@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.42
+// @version      7.20.43
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3223,6 +3223,7 @@
         wsEl.style.cssText = 'display:none!important';
         document.body.style.overflow = '';
         stopWSRefresh();
+        updateAbnormalEnterBridge();
         // 清理键盘监听器
         _removeAbnormalKeyHandler();
         if (_normalKeyHandler) {
@@ -3952,6 +3953,7 @@
             saveWSState();
             renderWSCategoryBar();
             renderWSTable();
+            updateAbnormalEnterBridge();
             if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
         }));
 
@@ -4010,12 +4012,23 @@
         return !!(detailPanel && detailPanel.classList.contains('show'));
     }
 
+    function updateAbnormalEnterBridge() {
+        try { window.__lisAbnormalEnterActive = (wsCategory === 'abnormal' && !isDetailPanelVisible()); } catch(e) {}
+    }
+
     function releaseNativeReportFocus(iframeWin) {
         iframeWin = iframeWin || getReportIframeWin();
         if (!iframeWin) return;
+        try {
+            if (typeof iframeWin.__lisEnhancerReleaseReportFocus === 'function') {
+                iframeWin.__lisEnhancerReleaseReportFocus();
+                return;
+            }
+        } catch(e) {}
         const jq = iframeWin.jQuery || iframeWin.$;
         if (!jq) return;
         try {
+            jq('.datagrid-editable-input').blur();
             jq('#dgLeftReportItem, #dgRightReportItem').each(function() {
                 const grid = jq(this);
                 if (!grid.length || !grid.datagrid) return;
@@ -4028,17 +4041,18 @@
             });
         } catch(e) {}
         try {
+            if (iframeWin.editIndex !== undefined) iframeWin.editIndex = undefined;
+            if (iframeWin.editDatagrid !== undefined) iframeWin.editDatagrid = undefined;
+        } catch(e) {}
+        try {
             const ae = iframeWin.document.activeElement;
             if (ae && ae !== iframeWin.document.body && typeof ae.blur === 'function') ae.blur();
         } catch(e) {}
     }
 
-    function handleAbnormalEnterAudit(e) {
-        if (wsCategory !== 'abnormal' || !isWSVisible() || isDetailPanelVisible()) return false;
-        if (!e || e.key !== 'Enter' || e.shiftKey) return false;
-        if (shouldIgnoreAbnormalKeyEvent(e)) return false;
-        e.preventDefault();
-        e.stopImmediatePropagation();
+    function triggerAbnormalEnterAudit() {
+        updateAbnormalEnterBridge();
+        if (wsCategory !== 'abnormal' || isDetailPanelVisible()) return false;
         if (_abnormalAuditInProgress) {
             if (!_abnormalAuditQueued) {
                 _abnormalAuditQueued = true;
@@ -4049,33 +4063,90 @@
             return true;
         }
         const curData = filteredData();
-        if (!curData.length) return true;
+        if (!curData.length) return false;
         if (wsAbnormalIndex < 0 || wsAbnormalIndex >= curData.length) wsAbnormalIndex = 0;
         const sp = getAbnormalFocusSpecimen(curData);
-        if (!sp) return true;
+        if (!sp) return false;
         markAbnormalAuditUI(sp, 'start');
         void auditAbnormalSpecimen(sp);
         return true;
     }
 
+    function handleAbnormalEnterAudit(e) {
+        if (wsCategory !== 'abnormal' || isDetailPanelVisible()) return false;
+        if (!e || e.key !== 'Enter' || e.shiftKey) return false;
+        if (shouldIgnoreAbnormalKeyEvent(e)) return false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return triggerAbnormalEnterAudit() || true;
+    }
+
+    function installPageContextAbnormalEnterHijack(iframeWin) {
+        iframeWin = iframeWin || getReportIframeWin();
+        if (!iframeWin) return;
+        try {
+            if (iframeWin.__lisPageEnterHijack) return;
+            const doc = iframeWin.document;
+            const s = doc.createElement('script');
+            s.setAttribute('data-lis-enhancer', 'abnormal-enter');
+            s.textContent = `(function(){
+var KEY='__lisEnhancerAbnormalEnter';
+if(window[KEY])return;
+window[KEY]=true;
+window.__lisEnhancerReleaseReportFocus=function(){
+  try{
+    var jq=window.jQuery||window.$;
+    if(jq){
+      jq('.datagrid-editable-input').blur();
+      jq('#dgLeftReportItem,#dgRightReportItem').each(function(){
+        try{jq(this).datagrid('endEdit');jq(this).datagrid('clearSelections');}catch(e){}
+      });
+    }
+    if(typeof editIndex!=='undefined')editIndex=undefined;
+    if(typeof editDatagrid!=='undefined')editDatagrid=undefined;
+    var ae=document.activeElement;
+    if(ae&&ae!==document.body&&ae.blur)ae.blur();
+  }catch(e){}
+};
+window.addEventListener('keydown',function(e){
+  if(e.key!=='Enter'||e.shiftKey)return;
+  var active=false;
+  try{active=!!(window.parent&&window.parent.__lisAbnormalEnterActive);}catch(err){}
+  if(!active)return;
+  try{window.parent.postMessage({type:'lis-enhancer-abnormal-enter'},'*');}catch(err){}
+  e.preventDefault();
+  e.stopImmediatePropagation();
+},true);
+})();`;
+            (doc.head || doc.documentElement).appendChild(s);
+            s.remove();
+            iframeWin.__lisPageEnterHijack = true;
+            dbg('报告页页面上下文 Enter 劫持已注入');
+        } catch(e) {
+            dbg('注入报告页 Enter 劫持失败:', e.message);
+        }
+    }
+
     function installAbnormalResultGridEnterHijack(iframeWin) {
+        installPageContextAbnormalEnterHijack(iframeWin);
         iframeWin = iframeWin || getReportIframeWin();
         if (!iframeWin) return;
         const jq = iframeWin.jQuery || iframeWin.$;
         if (!jq) return;
         if (!_abnormalGridHijackHandler) {
-            _abnormalGridHijackHandler = e => {
-                if (handleAbnormalEnterAudit(e)) return;
-            };
+            _abnormalGridHijackHandler = e => { handleAbnormalEnterAudit(e); };
         }
         ['#dgLeftReportItem', '#dgRightReportItem'].forEach(sel => {
             try {
                 const grid = jq(sel);
                 if (!grid.length || !grid.datagrid) return;
                 const panel = grid.datagrid('getPanel').panel('panel')[0];
-                if (!panel || panel.__lisAbnormalEnterHijack) return;
+                if (!panel) return;
+                if (panel.__lisAbnormalEnterHandler) {
+                    panel.removeEventListener('keydown', panel.__lisAbnormalEnterHandler, true);
+                }
+                panel.__lisAbnormalEnterHandler = _abnormalGridHijackHandler;
                 panel.addEventListener('keydown', _abnormalGridHijackHandler, true);
-                panel.__lisAbnormalEnterHijack = true;
             } catch(e) {}
         });
     }
@@ -4127,11 +4198,14 @@
     }
 
     function scheduleAbnormalFocusRecovery() {
+        updateAbnormalEnterBridge();
+        releaseNativeReportFocus();
         refocusAbnormalWorkbench();
         installAbnormalResultGridEnterHijack();
-        [120, 350, 700, 1400].forEach(ms => {
+        [80, 200, 450, 900, 1800].forEach(ms => {
             setTimeout(() => {
                 if (wsCategory !== 'abnormal' || _abnormalAuditInProgress) return;
+                updateAbnormalEnterBridge();
                 releaseNativeReportFocus();
                 refocusAbnormalWorkbench();
                 installAbnormalResultGridEnterHijack();
@@ -4166,7 +4240,7 @@
                 const sp = getAbnormalFocusSpecimen(curData);
                 if (sp) openDetailPanel(sp, 'abnormal', wsAbnormalIndex);
             }
-            else if (e.key === 'Escape') { wsCategory = 'normal'; saveWSState(); renderWSCategoryBar(); renderWSTable(); }
+            else if (e.key === 'Escape') { wsCategory = 'normal'; updateAbnormalEnterBridge(); saveWSState(); renderWSCategoryBar(); renderWSTable(); }
         };
         _abnormalKeyTargets = [document];
         try { document.addEventListener('keydown', _abnormalKeyHandler, true); } catch(e) {}
@@ -4415,6 +4489,7 @@
 
         // 滚动到聚焦卡片
         _scrollAbnormalFocus();
+        updateAbnormalEnterBridge();
         scheduleAbnormalAuditPrewarm();
         installAbnormalResultGridEnterHijack();
     }
@@ -4843,6 +4918,8 @@
         _abnormalAuditInProgress = true;
         _abnormalAuditQueued = false;
         clearNativeUserSelectLock();
+        updateAbnormalEnterBridge();
+        keepWorkbenchOnTop('异常审核');
         markAbnormalAuditUI(specimen, 'start');
         // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
         const _auditSafetyTimer = setTimeout(() => {
@@ -7325,7 +7402,11 @@ function fillNativeLoginForm(creds, lastWG) {
                             try { if (typeof iframeWin.ajaxLoadEnd === 'function') iframeWin.ajaxLoadEnd(); } catch(e) {}
                             return;
                         }
-                        if (origSuccess) return origSuccess.apply(this, arguments);
+                        const ret = origSuccess ? origSuccess.apply(this, arguments) : undefined;
+                        if (wsCategory === 'abnormal') {
+                            setTimeout(() => scheduleAbnormalFocusRecovery(), 30);
+                        }
+                        return ret;
                     };
                 });
                 jq.__lisDetailAjaxGuard = true;
@@ -9909,6 +9990,16 @@ function fillNativeLoginForm(creds, lastWG) {
         dbg('报告处理页增强已加载');
     }
 
+    function initAbnormalEnterBridge() {
+        if (window.__lisAbnormalEnterBridge) return;
+        window.__lisAbnormalEnterBridge = true;
+        window.addEventListener('message', e => {
+            if (!e.data || e.data.type !== 'lis-enhancer-abnormal-enter') return;
+            triggerAbnormalEnterAudit();
+        });
+        updateAbnormalEnterBridge();
+    }
+
 
     // ============================================================
     //  初始化
@@ -9920,7 +10011,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.42');
+        dbg('iMedicalLIS 增强助手 v7.20.43');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
@@ -9945,6 +10036,7 @@ function fillNativeLoginForm(creds, lastWG) {
         // initQBar(); // 已禁用：不需要顶部快速切换条
         createWS();
         createPatientResultTool();
+        initAbnormalEnterBridge();
         checkNavigateTarget();
         checkAuditQueueResume();
         startQCInputProbe();
