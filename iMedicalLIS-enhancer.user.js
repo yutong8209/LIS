@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.39
+// @version      7.20.40
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4339,7 +4339,8 @@
         }
         const rowPresent = !!findNativeRowByReportDR(iframeWin, reportDR);
         const detailReady = isReportDetailLoaded(iframeWin, reportDR);
-        return { rowPresent, detailReady, allowMissingSuccess: rowPresent && detailReady };
+        // 详情已就绪即可认定「行消失=审核成功」；全部仪器列表里行可能找不到但详情仍有效
+        return { rowPresent, detailReady, allowMissingSuccess: detailReady };
     }
 
     function verifyAuditSucceededByReportDR(iframeWin, reportDR) {
@@ -4368,7 +4369,7 @@
         const ctx = auditTargetContext(iframeWin, reportDR);
         const targetWasPresent = options.targetWasPresent !== undefined ? !!options.targetWasPresent : ctx.rowPresent;
         const detailWasReady = options.detailWasReady !== undefined ? !!options.detailWasReady : ctx.detailReady;
-        const allowMissing = targetWasPresent && detailWasReady;
+        const allowMissing = detailWasReady;
         const confirmTimeout = batchMode ? (options.afterCA ? 12000 : 8000) : 12000;
         const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, allowMissing, {
             targetWasPresent,
@@ -4493,8 +4494,8 @@
                 try { iframeWin.FindFast(item.labno); await sleep(60); } catch(e) {}
                 iframeWin = getReportIframeWin() || iframeWin;
             }
-            if (!selectNativeRowByReportDR(iframeWin, reportDR)) {
-                await waitAndSelectNativeRow(iframeWin, item, { timeoutMs: 2800, pollMs: 30, skipListRefresh: !!mdrKey });
+            if (!selectNativeRowByReportDR(iframeWin, reportDR, { force: true })) {
+                await waitAndSelectNativeRow(iframeWin, item, { timeoutMs: 2800, pollMs: 30, skipListRefresh: !!mdrKey, force: true });
                 iframeWin = getReportIframeWin() || iframeWin;
             }
             if (!isReportDetailLoaded(iframeWin, reportDR)) {
@@ -4540,7 +4541,8 @@
 
         const mdrChanged = !!(mdrKey && mdrKey !== String(ctx.lastMdr || ''));
         const nativeMismatch = !!(mdrKey && !nativeMachineMatches(iframeWin, mdrKey));
-        if (!mdrChanged && !nativeMismatch && selectNativeRowByReportDR(iframeWin, reportDR)) {
+        const selOpts = ctx.forceSelect ? { force: true } : {};
+        if (!mdrChanged && !nativeMismatch && selectNativeRowByReportDR(iframeWin, reportDR, selOpts)) {
             if (isReportDetailLoaded(iframeWin, reportDR)) {
                 return { ok: true, iframeWin, lastMdr: ctx.lastMdr || mdrKey };
             }
@@ -4558,13 +4560,14 @@
 
         let selected = false;
         if (ctx.skipSelect) {
-            selected = selectNativeRowByReportDR(iframeWin, reportDR);
+            selected = selectNativeRowByReportDR(iframeWin, reportDR, selOpts);
         }
-        if (!selected && !selectNativeRowByReportDR(iframeWin, reportDR)) {
+        if (!selected && !selectNativeRowByReportDR(iframeWin, reportDR, selOpts)) {
             const selResult = await waitAndSelectNativeRow(iframeWin, item, {
                 timeoutMs: fast ? (listFresh ? 2200 : 3000) : (listFresh ? 3500 : 5000),
                 pollMs: fast ? 30 : 40,
-                skipListRefresh: listFresh
+                skipListRefresh: listFresh,
+                force: !!ctx.forceSelect
             });
             if (!selResult.ok) return { ok: false, reason: 'select', iframeWin: selResult.iframeWin || iframeWin };
             iframeWin = selResult.iframeWin || iframeWin;
@@ -4574,7 +4577,7 @@
             const t2 = fast ? 1500 : 2500;
             let ready = await waitReportDetailReady(iframeWin, reportDR, t1, { fastBatch: true });
             if (!ready) {
-                selectNativeRowByReportDR(iframeWin, reportDR);
+                selectNativeRowByReportDR(iframeWin, reportDR, selOpts);
                 ready = await waitReportDetailReady(iframeWin, reportDR, t2, { fastBatch: true });
             }
             if (!ready) return { ok: false, reason: 'detail', iframeWin };
@@ -4630,6 +4633,7 @@
 
     function noteAbnormalNativeReadyAfterAudit(iframeWin, removedDR) {
         _abnormalNativeReadyDR = '';
+        clearNativeUserSelectLock();
         const data = filteredData();
         if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) return;
         const next = data[wsAbnormalIndex];
@@ -4662,7 +4666,8 @@
             result = await confirmAuditEventually(iframeWin, reportDR, specimen.PatName || specimen.Labno || '', {
                 batchMode: fast,
                 targetWasPresent: auditCtx.rowPresent,
-                detailWasReady: auditCtx.detailReady
+                detailWasReady: auditCtx.detailReady,
+                afterCA: !caReady
             });
         }
         return result;
@@ -4692,6 +4697,7 @@
         }
         _abnormalAuditInProgress = true;
         _abnormalAuditQueued = false;
+        clearNativeUserSelectLock();
         markAbnormalAuditUI(specimen, 'start');
         // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
         const _auditSafetyTimer = setTimeout(() => {
@@ -4765,7 +4771,7 @@
             const skipSelect = _abnormalNativeReadyDR === targetDR || detailReady;
             let prep = { ok: detailReady, iframeWin, lastMdr: _abnormalLastMdr };
             if (!prep.ok) {
-                prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, { lastMdr: _abnormalLastMdr, skipSelect, abnormalFast: true });
+                prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, { lastMdr: _abnormalLastMdr, skipSelect, abnormalFast: true, forceSelect: true });
             }
             _abnormalNativeReadyDR = '';
             iframeWin = prep.iframeWin || iframeWin;
@@ -7109,6 +7115,11 @@ function fillNativeLoginForm(creds, lastWG) {
         return !!(_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress);
     }
 
+    function clearNativeUserSelectLock() {
+        _nativeUserSelectDR = '';
+        _nativeUserSelectAt = 0;
+    }
+
     function onNativeUserRowSelect(reportDR) {
         _nativeUserSelectDR = String(reportDR || '');
         _nativeUserSelectAt = Date.now();
@@ -7120,6 +7131,8 @@ function fillNativeLoginForm(creds, lastWG) {
 
     function canScriptSelectNativeRow(iframeWin, reportDR) {
         if (isScriptOwnedNativeSelection()) return true;
+        // 异常工作台驱动审核时，原生自动跳下一条不算用户手动选行
+        if (wsCategory === 'abnormal' && isWSVisible()) return true;
         const target = String(reportDR || '');
         if (!target) return false;
         const selDR = getNativeWorkListSelectedDR(iframeWin);
@@ -7691,19 +7704,33 @@ function fillNativeLoginForm(creds, lastWG) {
         if (caDetected) {
             dbg('开始自动 CA 认证...');
             const caOK = await handleCALogin(iframeWin, { fast: batchMode });
-            if (!caOK) { clearCAAuth(); return false; }
-            saveCAAuth();
-            if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
-            dbg('CA 认证成功，等待审核回调...');
-            const postCaMissing = allowMissingSuccess;
-            const postCaTimeout = batchMode ? Math.max(timeoutMs, 20000) : timeoutMs;
-            const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, postCaTimeout, postCaMissing, { ...waitOpts, missingStableMs, failureGraceMs: batchMode ? 3000 : 4000 });
+            if (caOK) {
+                saveCAAuth();
+                if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
+                dbg('CA 认证成功，等待审核回调...');
+            } else {
+                dbg('CA 自动登录未确认，继续等待原生异步审核（可能已报错但仍会完成）...');
+            }
+            const postCaCtx = auditTargetContext(iframeWin, targetReportDR);
+            const postCaMissing = allowMissingSuccess || postCaCtx.detailReady;
+            const postCaTimeout = batchMode
+                ? Math.max(timeoutMs, caOK ? 20000 : 45000)
+                : Math.max(timeoutMs, caOK ? 15000 : 35000);
+            const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, postCaTimeout, postCaMissing, {
+                ...waitOpts,
+                targetWasPresent: waitOpts.targetWasPresent || postCaCtx.rowPresent,
+                missingStableMs: batchMode ? 700 : missingStableMs,
+                failureGraceMs: batchMode ? (caOK ? 3000 : 6000) : (caOK ? 4000 : 8000)
+            });
             if (caResult) return caResult;
+            await sleep(batchMode ? 500 : 1500);
             if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {
                 dbg('CA 后二次校验：标本已审核');
+                if (caOK) saveCAAuth();
                 return true;
             }
             dbg('CA 审核等待超时，未确认成功');
+            if (!caOK) clearCAAuth();
             return false;
         }
 
@@ -9208,10 +9235,11 @@ function fillNativeLoginForm(creds, lastWG) {
         const timeoutMs = typeof options === 'number' ? options : (options.timeoutMs || 9000);
         const pollMs = (typeof options === 'object' && options.pollMs) || 60;
         const skipListRefresh = typeof options === 'object' && !!options.skipListRefresh;
+        const selOpts = (typeof options === 'object' && options.force) ? { force: true } : {};
         const end = Date.now() + timeoutMs;
         let refreshed = skipListRefresh;
         iframeWin = getReportIframeWin() || iframeWin;
-        if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+        if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
             return { ok: true, iframeWin };
         }
         if (item.labno && iframeWin && typeof iframeWin.FindFast === 'function') {
@@ -9219,7 +9247,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 iframeWin.FindFast(item.labno);
                 await sleep(80);
                 iframeWin = getReportIframeWin() || iframeWin;
-                if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+                if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
                     return { ok: true, iframeWin };
                 }
             } catch(e) {}
@@ -9232,7 +9260,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 await sleep(pollMs);
             }
             iframeWin = getReportIframeWin() || iframeWin;
-            if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+            if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
                 return { ok: true, iframeWin };
             }
         }
@@ -9512,7 +9540,7 @@ function fillNativeLoginForm(creds, lastWG) {
                         action: 'audit', expectedStatuses: ['3'], batchMode: true,
                         timeoutMs: batchCAReady ? 6000 : 10000, keepWS: queue.keepWS,
                         caSessionReady: batchCAReady,
-                        missingAsSuccess: batchCAReady && auditCtx.allowMissingSuccess,
+                        missingAsSuccess: auditCtx.allowMissingSuccess,
                         targetReportDR: item.reportDR
                     });
                     if (!auditResult) {
