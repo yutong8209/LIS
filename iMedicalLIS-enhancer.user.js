@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.40
+// @version      7.20.41
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -70,6 +70,16 @@
         if (!t) return false;
         const tag = String(t.tagName || '').toUpperCase();
         return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!t.isContentEditable;
+    };
+    // 异常工作台 Enter 审核：仅忽略本工作台内的可编辑控件，不拦截 LIS 报告页 iframe 里的输入框
+    const shouldIgnoreAbnormalKeyEvent = e => {
+        if (isPatientResultPanelEvent(e)) return true;
+        const t = e && e.target;
+        if (!t || !t.closest) return false;
+        if (t.closest('#lis-pr-panel')) return true;
+        if (t.closest('#lis-detail-panel')) return isEditableEventTarget(e);
+        if (t.closest('#lis-ws-search')) return true;
+        return false;
     };
 
     // ==================== AES-GCM 密码加密 ====================
@@ -3992,11 +4002,45 @@
     // --- 渲染：数据表（分发到各分类视图）---
     let _abnormalKeyHandler = null; // 异常视图键盘监听器
     let _abnormalKeyTargets = [];
+    function _attachAbnormalKeyToIframe() {
+        if (!_abnormalKeyHandler) return;
+        const iframeWin = getReportIframeWin();
+        if (!iframeWin || !iframeWin.document || iframeWin.document === document) return;
+        if (_abnormalKeyTargets.includes(iframeWin.document)) return;
+        try {
+            iframeWin.document.addEventListener('keydown', _abnormalKeyHandler, true);
+            _abnormalKeyTargets.push(iframeWin.document);
+        } catch(e) {}
+    }
+    function refocusAbnormalWorkbench() {
+        try {
+            const iframeWin = getReportIframeWin();
+            const ae = iframeWin && iframeWin.document && iframeWin.document.activeElement;
+            if (ae && ae !== iframeWin.document.body && typeof ae.blur === 'function') ae.blur();
+        } catch(e) {}
+        try { window.focus(); } catch(e) {}
+        const wsEl = document.getElementById('lis-ws');
+        if (wsEl) {
+            if (!wsEl.hasAttribute('tabindex')) wsEl.setAttribute('tabindex', '-1');
+            try { wsEl.focus({ preventScroll: true }); } catch(e) { try { wsEl.focus(); } catch(e2) {} }
+        }
+        syncAbnormalFocusFromDOM();
+    }
+    function syncAbnormalFocusFromDOM() {
+        const card = document.querySelector('.ws-abnormal-card.focused');
+        if (!card) return;
+        _abnormalFocusDR = String(card.dataset.rdr || '');
+        const data = filteredData();
+        const idx = data.findIndex(r => String(r.ReportDR) === _abnormalFocusDR);
+        if (idx >= 0) wsAbnormalIndex = idx;
+    }
     function _rebindAbnormalKeyHandler() {
-        if (_abnormalKeyHandler) return;
+        if (_abnormalKeyHandler) {
+            _attachAbnormalKeyToIframe();
+            return;
+        }
         _abnormalKeyHandler = e => {
-            if (isPatientResultPanelEvent(e)) return;
-            if (isEditableEventTarget(e)) return;
+            if (shouldIgnoreAbnormalKeyEvent(e)) return;
             if (wsCategory !== 'abnormal') return;
             if (detailPanel && detailPanel.classList.contains('show')) return;
             if (e.defaultPrevented) return;
@@ -4032,11 +4076,8 @@
             else if (e.key === 'Escape') { wsCategory = 'normal'; saveWSState(); renderWSCategoryBar(); renderWSTable(); }
         };
         _abnormalKeyTargets = [document];
-        const iframeWin = getReportIframeWin();
-        if (iframeWin && iframeWin.document && iframeWin.document !== document) _abnormalKeyTargets.push(iframeWin.document);
-        _abnormalKeyTargets.forEach(doc => {
-            try { doc.addEventListener('keydown', _abnormalKeyHandler, true); } catch(e) {}
-        });
+        try { document.addEventListener('keydown', _abnormalKeyHandler, true); } catch(e) {}
+        _attachAbnormalKeyToIframe();
     }
 
     function _removeAbnormalKeyHandler() {
@@ -4622,6 +4663,7 @@
         });
         if (cards[wsAbnormalIndex]) {
             cards[wsAbnormalIndex].classList.add('focused');
+            _abnormalFocusDR = String(cards[wsAbnormalIndex].dataset.rdr || '');
             _scrollAbnormalFocus();
         } else {
             renderWSTable();
@@ -4629,6 +4671,8 @@
         }
         renderWSCategoryBar();
         updateWSFooter();
+        refocusAbnormalWorkbench();
+        _rebindAbnormalKeyHandler();
     }
 
     function noteAbnormalNativeReadyAfterAudit(iframeWin, removedDR) {
@@ -4768,10 +4812,17 @@
             if (ft) ft.textContent = detailReady
                 ? `异常审核：审核中 ${specimen.PatName || specimen.Labno || targetDR}`
                 : `异常审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;
-            const skipSelect = _abnormalNativeReadyDR === targetDR || detailReady;
-            let prep = { ok: detailReady, iframeWin, lastMdr: _abnormalLastMdr };
-            if (!prep.ok) {
-                prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, { lastMdr: _abnormalLastMdr, skipSelect, abnormalFast: true, forceSelect: true });
+            const skipSelect = _abnormalNativeReadyDR === targetDR;
+            let prep = { ok: false, iframeWin, lastMdr: _abnormalLastMdr };
+            if (detailReady && skipSelect) {
+                prep.ok = true;
+            } else {
+                prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, {
+                    lastMdr: _abnormalLastMdr,
+                    skipSelect: detailReady || skipSelect,
+                    abnormalFast: true,
+                    forceSelect: true
+                });
             }
             _abnormalNativeReadyDR = '';
             iframeWin = prep.iframeWin || iframeWin;
@@ -4797,9 +4848,6 @@
             }
             if (ft) ft.textContent = `已审核: ${specimen.PatName || specimen.Labno || targetDR}`;
 
-            // 确保焦点在主页面
-            try { window.focus(); } catch(e) {}
-
             delete wsClassifiedCache[specimen.ReportDR];
             wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
             invalidateCaches();
@@ -4816,6 +4864,10 @@
             if (resumeWSRefresh && isWSVisible()) startWSRefresh();
             updateWSFooter();
             dbg('异常列表审核结束');
+            if (wsCategory === 'abnormal') {
+                refocusAbnormalWorkbench();
+                _rebindAbnormalKeyHandler();
+            }
             if (_abnormalAuditQueued) {
                 _abnormalAuditQueued = false;
                 const data = filteredData();
