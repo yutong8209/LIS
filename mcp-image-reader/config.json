@@ -1,9 +1,13 @@
 {
   "mcpServers": {
     "image-reader": {
-      "command": "python3",
+      "command": "python3.12",
       "args": ["/Users/yutong/脚本/mcp-image-reader/server.py"],
-      "env": {}
+      "env": {
+        "VISION_API_BASE": "https://token-plan-cn.xiaomimimo.com/anthropic",
+        "VISION_API_KEY": "***REMOVED-API-KEY***",
+        "VISION_MODEL": "mimo-v2.5"
+      }
     }
   }
 }
