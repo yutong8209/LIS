@@ -2,13 +2,14 @@
 """本地脚本服务器 - 配合 Tampermonkey 自动更新"""
 import http.server
 import os
+from urllib.parse import urlparse
 
 PORT = 8765
 FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'iMedicalLIS-enhancer.user.js')
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path in ('/', '/iMedicalLIS-enhancer.user.js'):
+        if urlparse(self.path).path in ('/', '/iMedicalLIS-enhancer.user.js'):
             try:
                 with open(FILE, 'r', encoding='utf-8') as f:
                     content = f.read()

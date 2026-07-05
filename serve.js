@@ -12,7 +12,8 @@ const PORT = 8765;
 const FILE = path.join(__dirname, 'iMedicalLIS-enhancer.user.js');
 
 const server = http.createServer((req, res) => {
-    if (req.url === '/' || req.url === '/iMedicalLIS-enhancer.user.js') {
+    const path = new URL(req.url, 'http://127.0.0.1').pathname;
+    if (path === '/' || path === '/iMedicalLIS-enhancer.user.js') {
         try {
             const content = fs.readFileSync(FILE, 'utf-8');
             res.writeHead(200, {

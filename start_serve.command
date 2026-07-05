@@ -1,5 +1,5 @@
 #!/bin/bash
-cd "/Volumes/脚本"
+cd "$HOME/脚本"
 echo "========================================="
 echo "  脚本服务器已启动"
 echo "  地址: http://localhost:8765/"

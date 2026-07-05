@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.46
+// @version      7.20.47
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3247,6 +3247,7 @@
         _classifyVersion++;
         wsClassifying = false;
         wsLoading = false; // 重置加载状态，防止上次 closeWS 时 loadWSData 还在运行
+        _wsLoadSeq++; // 作废关闭前可能仍在飞行的 loadWSData
         wsAbnormalIndex = -1;
         wsChecked.clear();
         wsData = [];
@@ -3291,6 +3292,7 @@
         clearTimeout(_abnormalPrewarmTimer);
         _abnormalPrewarmTimer = null;
         wsLoading = false; // 重置加载状态，防止下次 openWS 被阻塞
+        _wsLoadSeq++; // 作废关闭时仍在飞行的 loadWSData
     }
 
     function findWSSpecimenByReportDR(reportDR) {
@@ -3365,7 +3367,7 @@
     async function loadWSData(options = {}) {
         const force = !!(options && options.force);
         if (wsLoading && !force) return { skipped: true };
-        const seq = force ? ++_wsLoadSeq : _wsLoadSeq;
+        const seq = ++_wsLoadSeq;
         if (force) {
             wsLoading = false;
             wsClassifying = false;
@@ -3433,6 +3435,7 @@
             allMachines.push(...r.machines);
         }
         if (seq !== _wsLoadSeq) return;
+        if (!isWSVisible()) return;
 
         // 防止空数据覆盖已有数据（网络异常/会话过期时服务器可能返回空）
         if (allData.length === 0 && wsData.length > 0) {
@@ -4115,7 +4118,22 @@
     }
 
     function updateAbnormalEnterBridge() {
-        try { window.__lisAbnormalEnterActive = (wsCategory === 'abnormal' && isWSVisible() && !isDetailPanelVisible()); } catch(e) {}
+        const active = wsCategory === 'abnormal' && isWSVisible() && !isDetailPanelVisible();
+        try {
+            window.__lisAbnormalEnterActive = active;
+            window.__lisAbnormalEnterToken = active
+                ? (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12))
+                : '';
+        } catch(e) {}
+    }
+
+    function isTrustedAbnormalEnterMessage(e) {
+        if (!e || !e.data || e.data.type !== 'lis-enhancer-abnormal-enter') return false;
+        const reportWin = getReportIframeWin();
+        if (!reportWin || e.source !== reportWin) return false;
+        if (e.origin !== window.location.origin) return false;
+        const token = window.__lisAbnormalEnterToken;
+        return !!(token && e.data.token === token);
     }
 
     function releaseNativeReportFocus(iframeWin) {
@@ -4216,9 +4234,14 @@ window.__lisEnhancerReleaseReportFocus=function(){
 window.addEventListener('keydown',function(e){
   if(e.key!=='Enter'||e.shiftKey)return;
   var active=false;
-  try{active=!!(window.parent&&window.parent.__lisAbnormalEnterActive);}catch(err){}
-  if(!active)return;
-  try{window.parent.postMessage({type:'lis-enhancer-abnormal-enter'},'*');}catch(err){}
+  var active=false,token='',origin='';
+  try{
+    active=!!(window.parent&&window.parent.__lisAbnormalEnterActive);
+    token=String(window.parent.__lisAbnormalEnterToken||'');
+    origin=window.parent.location.origin;
+  }catch(err){}
+  if(!active||!token)return;
+  try{window.parent.postMessage({type:'lis-enhancer-abnormal-enter',token:token},origin);}catch(err){}
   e.preventDefault();
   e.stopImmediatePropagation();
 },true);
@@ -10229,7 +10252,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (window.__lisAbnormalEnterBridge) return;
         window.__lisAbnormalEnterBridge = true;
         window.addEventListener('message', e => {
-            if (!e.data || e.data.type !== 'lis-enhancer-abnormal-enter') return;
+            if (!isTrustedAbnormalEnterMessage(e)) return;
             triggerAbnormalEnterAudit();
         });
         updateAbnormalEnterBridge();
@@ -10246,7 +10269,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.46');
+        dbg('iMedicalLIS 增强助手 v7.20.47');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
