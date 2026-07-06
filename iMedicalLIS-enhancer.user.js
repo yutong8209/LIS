@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.22.2
+// @version      7.22.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3128,14 +3128,15 @@
         },
         {
             id: 'coag', name: '凝血', file: '凝血转换_直接上传.xlsx',
-            concentrations: 1, lotMode: 'perProject',
+            concentrations: 1, lotMode: 'coag', defaultLot: '84772',
+            dDimLot: '74442',
             defaultOperator: '',
             projects: [
-                { code: '1102', name: 'INR', defaultLot: '84772' },
-                { code: '1103', name: 'APTT', defaultLot: '84772' },
-                { code: '1101', name: 'PT', defaultLot: '84772' },
-                { code: '1104', name: 'FIB', defaultLot: '84772' },
-                { code: '1107', name: 'D-二聚体（FEU)', defaultLot: '74442' },
+                { code: '1102', name: 'INR' },
+                { code: '1103', name: 'APTT' },
+                { code: '1101', name: 'PT' },
+                { code: '1104', name: 'FIB' },
+                { code: '1107', name: 'D-二聚体（FEU)', isDDimer: true },
             ]
         },
         {
@@ -3248,6 +3249,13 @@
             });
             return result;
         }
+        if (group.lotMode === 'coag') {
+            // 凝血模式: 主项目共用一个批号，D-二聚体单独一个
+            return {
+                _main: (gc && gc._main) || group.defaultLot || '',
+                _dimer: (gc && gc._dimer) || group.dDimLot || '',
+            };
+        }
         if (group.lotMode === 'immune') {
             const result = {};
             group.projects.forEach(p => {
@@ -3281,66 +3289,57 @@
         } catch(e) { console.error('[LIS-QE] qeGetMachines error:', e); return []; }
     }
 
-    // 遍历所有工作组获取全部仪器
+    // 遍历所有工作组获取全部仪器（使用 API 直接查询）
     async function qeGetAllMachines() {
-        const jq = qeGetJQ();
-        if (!jq) return [];
         const allMachines = [];
-        const seen = new Set();
         const wgs = [
             { dr: '1', name: '临检' },
             { dr: '3', name: '生化' },
             { dr: '4', name: '免疫' },
         ];
-        const origWG = wgDR();
         for (const w of wgs) {
-            // 切换工作组
-            try { uw().WorkGroupDR = w.dr; } catch(e) {}
-            // 重新加载仪器列表
             try {
-                jq('#cmbMach').combobox('reload');
-            } catch(e) {}
-            await new Promise(r => setTimeout(r, 1500));
-            const machines = qeGetMachines();
-            console.log(`[LIS-QE] 工作组 ${w.name}(${w.dr}): ${machines.length} 台仪器`);
-            machines.forEach(m => {
-                if (!seen.has(m.id)) {
-                    seen.add(m.id);
-                    allMachines.push({ ...m, wgDR: w.dr, wgName: w.name });
-                }
-            });
+                const rows = await loadMachines(w.dr).catch(() => []);
+                console.log(`[LIS-QE] 工作组 ${w.name}(${w.dr}): ${rows.length} 台仪器`);
+                rows.forEach(m => {
+                    allMachines.push({
+                        id: String(m.RowID || ''),
+                        text: String(m.CName || m.Name || m.RowID || ''),
+                        wgDR: w.dr,
+                        wgName: w.name,
+                        raw: m,
+                    });
+                });
+            } catch(e) { console.error(`[LIS-QE] 加载工作组 ${w.name} 失败:`, e); }
         }
-        // 恢复原工作组
-        try { uw().WorkGroupDR = origWG; } catch(e) {}
-        try { jq('#cmbMach').combobox('reload'); } catch(e) {}
-        console.log(`[LIS-QE] 共找到 ${allMachines.length} 台仪器（去重后）`);
+        console.log(`[LIS-QE] 共找到 ${allMachines.length} 台仪器`);
         return allMachines;
     }
 
-    // 设置仪器选择
+    // 设置仪器选择（通过 loadData 注入数据再 setValue）
     function qeSelectMachine(machineObj) {
         return new Promise(resolve => {
             const jq = qeGetJQ();
             if (!jq) { resolve(); return; }
             try {
-                // 切换工作组
-                if (machineObj.wgDR) {
-                    try { uw().WorkGroupDR = machineObj.wgDR; } catch(e) {}
-                    jq('#cmbMach').combobox('reload');
+                // 将目标仪器注入 combobox 数据源
+                const item = {
+                    RowID: machineObj.id,
+                    Code: machineObj.raw && machineObj.raw.Code || '',
+                    CName: machineObj.text,
+                    value: machineObj.id,
+                    text: machineObj.text,
+                };
+                jq('#cmbMach').combobox('loadData', [item]);
+                jq('#cmbMach').combobox('setValue', machineObj.id);
+                // 手动触发 onSelect
+                const opts = jq('#cmbMach').combobox('options');
+                if (opts && opts.onSelect) {
+                    opts.onSelect.call(jq('#cmbMach')[0], item);
                 }
-                setTimeout(() => {
-                    try {
-                        jq('#cmbMach').combobox('setValue', machineObj.id);
-                        // 手动触发 onSelect
-                        const data = jq('#cmbMach').combobox('getData') || [];
-                        const item = data.find(d => String(d.RowID || d.value || '') === machineObj.id);
-                        if (item && jq('#cmbMach').combobox('options').onSelect) {
-                            jq('#cmbMach').combobox('options').onSelect.call(jq('#cmbMach')[0], item);
-                        }
-                    } catch(e) { console.error('[LIS-QE] qeSelectMachine error:', e); }
-                    resolve();
-                }, 800);
-            } catch(e) { resolve(); }
+            } catch(e) { console.error('[LIS-QE] qeSelectMachine error:', e); }
+            // 等待测试项目列表加载
+            setTimeout(resolve, 1200);
         });
     }
 
@@ -3572,6 +3571,9 @@
                 } else if (group.lotMode === 'perProject' || group.lotMode === 'immune') {
                     const lots = qeGetLot(cfg, group);
                     lot = lots[proj.code] || '';
+                } else if (group.lotMode === 'coag') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = proj.isDDimer ? lots._dimer : lots._main;
                 }
 
                 lvData.sort((a, b) => a.day - b.day);
@@ -3700,6 +3702,11 @@
                     const lot = gc[p.code] || p.defaultLot || '';
                     lotsHtml += `<div class="qe-lot-item"><span>${p.name}</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="proj" data-code="${p.code}" value="${esc(lot)}"></div>`;
                 });
+            } else if (g.lotMode === 'coag') {
+                const mainLot = gc._main || g.defaultLot || '';
+                const dimerLot = gc._dimer || g.dDimLot || '';
+                lotsHtml += `<div class="qe-lot-item"><span>凝血四项(INR/APTT/PT/FIB)</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="coag_main" value="${esc(mainLot)}"></div>`;
+                lotsHtml += `<div class="qe-lot-item"><span>D-二聚体</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="coag_dimer" value="${esc(dimerLot)}"></div>`;
             } else if (g.lotMode === 'immune') {
                 // 免疫组：可展开的批号设置
                 let projLotsHtml = '';
@@ -3757,7 +3764,7 @@
                         <button id="lis-qe-export" class="primary" title="开始导出">▶ 开始导出</button>
                         <button id="lis-qe-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">⏹ 停止</button>
                     </div>
-                    <div id="lis-qe-status">请先在质控数据录入页面点击"检测映射"，再点击"开始导出"。</div>
+                    <div id="lis-qe-status">选择月份和项目后，点击"检测映射"开始。</div>
                     <div class="qe-progress" id="lis-qe-progress"><div class="qe-progress-bar" id="lis-qe-pbar"></div><div class="qe-progress-text" id="lis-qe-ptext"></div></div>
                     <div class="qe-mapping-info" id="lis-qe-mapinfo"></div>
                 </div>
@@ -3792,8 +3799,10 @@
 
         // 检测映射
         document.getElementById('lis-qe-detect').addEventListener('click', async () => {
-            if (!qeIsQCPage()) {
-                qeSetStatus('请先打开质控数据录入页面（frmQCDataInputNew）后再检测。', 'error');
+            // 检查是否能访问质控页面上下文
+            const jq = qeGetJQ();
+            if (!jq) {
+                qeSetStatus('无法访问质控页面上下文。请确保已登录 LIS 系统。', 'error');
                 return;
             }
             qeSetStatus('正在检测项目映射...', 'info');
@@ -3877,6 +3886,8 @@
             else if (type === 'lot0') { if (!cfg.lots[gid].lots) cfg.lots[gid].lots = []; cfg.lots[gid].lots[0] = val; }
             else if (type === 'lot1') { if (!cfg.lots[gid].lots) cfg.lots[gid].lots = []; cfg.lots[gid].lots[1] = val; }
             else if (type === 'lot') cfg.lots[gid].lot = val;
+            else if (type === 'coag_main') cfg.lots[gid]._main = val;
+            else if (type === 'coag_dimer') cfg.lots[gid]._dimer = val;
             else if (type === 'proj' && code) cfg.lots[gid][code] = val;
         });
 
@@ -3907,8 +3918,10 @@
     // 主导出流程
     async function qeStartExport() {
         if (qeExporting) return;
-        if (!qeIsQCPage()) {
-            qeSetStatus('请先打开质控数据录入页面（frmQCDataInputNew）后再导出。', 'error');
+        // 检查是否能访问质控页面上下文
+        const jq = qeGetJQ();
+        if (!jq) {
+            qeSetStatus('无法访问质控页面上下文。请确保已登录 LIS 系统。', 'error');
             return;
         }
 
@@ -4012,7 +4025,6 @@
     // --- 初始化 ---
     function initQEExport() {
         if (qeInited) return;
-        if (!qeIsQCPage()) return;
         qeInited = true;
         qeCreateFab();
         qeCreatePanel();
@@ -4023,10 +4035,9 @@
     function startQEProbe() {
         if (qeProbeTimer) return;
         const probe = () => {
-            const isQC = qeIsQCPage();
             const fab = document.getElementById('lis-qe-fab');
-            if (isQC && !qeInited) initQEExport();
-            if (fab) fab.style.display = isQC ? 'flex' : 'none';
+            if (!qeInited) initQEExport();
+            if (fab) fab.style.display = 'flex';
         };
         probe();
         qeProbeTimer = setInterval(probe, 2000);
