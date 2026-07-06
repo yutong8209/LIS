@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.0
+// @version      7.30.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3656,97 +3656,75 @@
         });
     }
 
-    // --- 核心：获取某组的质控数据（半自动：读取当前 datagrid 数据） ---
+    // --- 核心：获取某组的质控数据 ---
     async function qeFetchGroupData(group, cfg, mappings, statusCb) {
         const rows = []; // 最终输出行
         const month = cfg._month || (new Date().getMonth() + 1);
         const year = cfg._year || new Date().getFullYear();
         const operator = qeGetOperator(cfg, group);
+        const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
+        const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
 
-        // 获取质控页面上下文
-        const jq = qeGetJQ();
-        if (!jq || !jq('#dgData').datagrid) {
-            if (statusCb) statusCb('无法访问质控页面，请先打开质控数据录入页面', 'error');
-            return rows;
-        }
-
-        // 读取当前 dgData 中的数据（用户已选择的仪器/项目）
-        const dataRows = jq('#dgData').datagrid('getRows') || [];
-        if (!dataRows.length) {
-            if (statusCb) statusCb('当前页面无数据，请先选择仪器和项目', 'info');
-            return rows;
-        }
-
-        // 获取当前选中的测试项目信息
-        const selectedTest = jq('#dgTestCode').datagrid('getSelected');
-        const currentTestCodeDR = selectedTest ? String(selectedTest.RowID || '') : '';
-        const currentCName = selectedTest ? String(selectedTest.CName || '').replace(/\*+$/, '').trim() : '';
-
-        // 尝试匹配当前选中的项目到某个组的项目
-        let matchedProject = null;
-        for (const proj of group.projects) {
+        for (let pi = 0; pi < group.projects.length; pi++) {
+            if (qeAbortFlag) break;
+            const proj = group.projects[pi];
             const map = mappings[proj.code];
-            if (!map) continue;
-            if (map.testCodeDR === currentTestCodeDR) { matchedProject = proj; break; }
-            if (currentCName === proj.name || currentCName.includes(proj.name) || proj.name.includes(currentCName)) {
-                matchedProject = proj; break;
+            if (!map) {
+                if (statusCb) statusCb(`  跳过 ${proj.name}（未找到映射）`, 'error');
+                continue;
             }
-        }
 
-        if (!matchedProject) {
-            if (statusCb) statusCb(`当前选中的项目不属于 ${group.name}，请手动切换`, 'info');
-            return rows;
-        }
+            if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
-        if (statusCb) statusCb(`  读取 ${matchedProject.name}...`, 'info');
+            // 通过 API 查询质控数据
+            const dataRows = await qeApiQCData(map.machineDR, map.testCodeDR, map.matDR, startDate, endDate);
+            if (!dataRows.length) {
+                if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
+                continue;
+            }
 
-        // 按浓度分组
-        const levels = {};
-        dataRows.forEach(r => {
-            const lv = String(r.LevelNo || '1');
-            if (!levels[lv]) levels[lv] = [];
-            const val = qeCalcValue(r);
-            if (val !== null && !Number.isNaN(val)) {
-                const date = r.TestDate || r.AddDate || '';
-                const m = qeExtractMonth(date);
-                const d = qeExtractDay(date);
-                if (m === month && d > 0) {
-                    levels[lv].push({ day: d, value: val });
+            // 按浓度分组
+            const levels = {};
+            dataRows.forEach(r => {
+                const lv = String(r.LevelNo || '1');
+                if (!levels[lv]) levels[lv] = [];
+                const val = qeCalcValue(r);
+                if (val !== null && !Number.isNaN(val)) {
+                    const date = r.TestDate || r.AddDate || '';
+                    const m = qeExtractMonth(date);
+                    const d = qeExtractDay(date);
+                    if (m === month && d > 0) {
+                        levels[lv].push({ day: d, value: val });
+                    }
                 }
-            }
-        });
-
-        // 生成输出行
-        const conc = group.concentrations || 1;
-        for (let li = 0; li < conc; li++) {
-            const lvNo = String(li + 1);
-            const lvData = levels[lvNo] || [];
-            let lot = '';
-            if (group.lotMode === 'suffix') {
-                const base = qeGetLot(cfg, group);
-                lot = base + (li === 0 ? 'N' : 'H');
-            } else if (group.lotMode === 'dual') {
-                const lots = qeGetLot(cfg, group);
-                lot = Array.isArray(lots) ? lots[li] || '' : '';
-            } else if (group.lotMode === 'single') {
-                lot = qeGetLot(cfg, group);
-            } else if (group.lotMode === 'perProject' || group.lotMode === 'immune') {
-                const lots = qeGetLot(cfg, group);
-                lot = lots[matchedProject.code] || '';
-            } else if (group.lotMode === 'coag') {
-                const lots = qeGetLot(cfg, group);
-                lot = matchedProject.isDDimer ? lots._dimer : lots._main;
-            }
-            lvData.sort((a, b) => a.day - b.day);
-            lvData.forEach(pt => {
-                rows.push([matchedProject.code, month, pt.day, 1, lot, pt.value, matchedProject.name, operator]);
             });
-        }
 
-        if (rows.length > 0) {
-            if (statusCb) statusCb(`  ${matchedProject.name}: ${rows.length} 行`, 'ok');
-        } else {
-            if (statusCb) statusCb(`  ${matchedProject.name}: 当前页面无当月数据`, 'info');
+            // 生成输出行
+            const conc = group.concentrations || 1;
+            for (let li = 0; li < conc; li++) {
+                const lvNo = String(li + 1);
+                const lvData = levels[lvNo] || [];
+                let lot = '';
+                if (group.lotMode === 'suffix') {
+                    const base = qeGetLot(cfg, group);
+                    lot = base + (li === 0 ? 'N' : 'H');
+                } else if (group.lotMode === 'dual') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = Array.isArray(lots) ? lots[li] || '' : '';
+                } else if (group.lotMode === 'single') {
+                    lot = qeGetLot(cfg, group);
+                } else if (group.lotMode === 'perProject' || group.lotMode === 'immune') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = lots[proj.code] || '';
+                } else if (group.lotMode === 'coag') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = proj.isDDimer ? lots._dimer : lots._main;
+                }
+                lvData.sort((a, b) => a.day - b.day);
+                lvData.forEach(pt => {
+                    rows.push([proj.code, month, pt.day, 1, lot, pt.value, proj.name, operator]);
+                });
+            }
         }
         return rows;
     }
@@ -4069,12 +4047,6 @@
     // 主导出流程
     async function qeStartExport() {
         if (qeExporting) return;
-        // 检查是否在质控录入页面
-        const jq = qeGetJQ();
-        if (!jq || !jq('#dgData').datagrid || !jq('#dgTestCode').datagrid) {
-            qeSetStatus('请先打开质控数据录入页面（frmQCDataInputNew）后再导出。', 'error');
-            return;
-        }
 
         const cfg = qeCollectConfig();
         if (!cfg.selectedGroups || !cfg.selectedGroups.length) {
