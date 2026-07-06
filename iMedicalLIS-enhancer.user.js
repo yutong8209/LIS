@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.49
+// @version      7.20.51
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5130,12 +5130,16 @@ window.addEventListener('keydown',function(e){
                 : `异常审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;
             const skipSelect = _abnormalNativeReadyDR === targetDR;
             let prep = { ok: false, iframeWin, lastMdr: _abnormalLastMdr };
-            if (detailReady && skipSelect) {
+            // 关键：详情已加载就跳过选行（和详情面板审核一样），直接审核
+            if (detailReady) {
                 prep.ok = true;
+                prep.iframeWin = iframeWin;
+                prep.lastMdr = _abnormalLastMdr;
+                dbg('异常审核: 详情已加载，跳过选行');
             } else {
                 prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, {
                     lastMdr: _abnormalLastMdr,
-                    skipSelect: detailReady || skipSelect,
+                    skipSelect: skipSelect,
                     abnormalFast: true,
                     forceSelect: true
                 });
@@ -9641,68 +9645,72 @@ function fillNativeLoginForm(creds, lastWG) {
             const el = jq(sel);
             if (el.length && el.datagrid) {
                 try {
-                    // 尝试用 getData 获取原始数据（不受展开行影响）
+                    // 用 getData 获取原始数据（不受展开行影响）
                     let dataRows;
                     try {
                         const data = el.datagrid('getData');
                         dataRows = data && data.rows ? data.rows : null;
                     } catch(e) {}
-                    // 回退到 getRows
                     if (!dataRows) dataRows = el.datagrid('getRows');
-                    if (!dataRows || dataRows.length === 0) { dbg('selectNativeRow:', sel, '无行数据'); continue; }
+                    if (!dataRows || dataRows.length === 0) { dbg('selectNativeRow:', sel, '无行行数据'); continue; }
 
+                    let targetIdx = -1;
+                    let targetRow = null;
                     for (let i = 0; i < dataRows.length; i++) {
                         if (String(dataRows[i].ReportDR) === String(reportDR)) {
-                            const row = dataRows[i];
-                            const opts = el.datagrid('options') || {};
-
-                            // 先折叠所有展开的详情行
-                            try {
-                                const allRows = el.datagrid('getRows');
-                                if (allRows) {
-                                    for (let j = 0; j < allRows.length; j++) {
-                                        if (allRows[j]._parentId || allRows[j].parentReportDR) continue;
-                                        try { el.datagrid('collapseRow', j); } catch(e2) {}
-                                    }
-                                }
-                            } catch(e) {}
-
-                            // 清除选中
-                            try { el.datagrid('clearSelections'); } catch(e) {}
-
-                            // 重新获取行索引（折叠后索引可能变化）
-                            const freshRows = el.datagrid('getRows');
-                            let targetIdx = -1;
-                            if (freshRows) {
-                                for (let k = 0; k < freshRows.length; k++) {
-                                    if (String(freshRows[k].ReportDR) === String(reportDR)) {
-                                        targetIdx = k;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if (targetIdx >= 0) {
-                                el.datagrid('selectRow', targetIdx);
-                            } else {
-                                // 回退：用原始索引
-                                el.datagrid('selectRow', i);
-                            }
-
-                            if (iframeWin.me) {
-                                iframeWin.me.selectedGrid = el;
-                                iframeWin.me.curReportDR = String(reportDR);
-                            }
-                            try {
-                                if (typeof opts.onSelect === 'function') opts.onSelect.call(el[0], targetIdx >= 0 ? targetIdx : i, row);
-                                else if (typeof opts.onClickRow === 'function') opts.onClickRow.call(el[0], targetIdx >= 0 ? targetIdx : i, row);
-                            } catch(e) { dbg('触发行选择回调异常:', e.message); }
-                            const loaded = isReportDetailLoaded(iframeWin, reportDR);
-                            dbg('选中原生行:', targetIdx >= 0 ? targetIdx : i, 'ReportDR:', reportDR, 'PatName:', row.PatName || '', 'selector:', sel, 'detailReady=', loaded);
-                            return true;
+                            targetIdx = i;
+                            targetRow = dataRows[i];
+                            break;
                         }
                     }
-                    dbg('selectNativeRow:', sel, '未找到 ReportDR:', reportDR, '共', dataRows.length, '行');
+                    if (targetIdx < 0) { dbg('selectNativeRow:', sel, '未找到 ReportDR:', reportDR, '共', dataRows.length, '行'); continue; }
+
+                    const opts = el.datagrid('options') || {};
+
+                    // 清除选中
+                    try { el.datagrid('clearSelections'); } catch(e) {}
+
+                    // 尝试用 DOM 直接点击目标行（绕过索引问题）
+                    let domClicked = false;
+                    try {
+                        const gridBody = el.closest('.datagrid').find('.datagrid-body');
+                        const rows = gridBody.find('tr.datagrid-row');
+                        rows.each(function() {
+                            const rowJq = jq(this);
+                            const rowIdx = rowJq.attr('datagrid-row-index');
+                            if (rowIdx !== undefined) {
+                                const rowData = el.datagrid('getRows')[parseInt(rowIdx)];
+                                if (rowData && String(rowData.ReportDR) === String(reportDR)) {
+                                    // 确认是父行（非子行）
+                                    if (!rowJq.hasClass('treegrid-tr-tree') && !rowJq.hasClass('datagrid-row-child')) {
+                                        rowJq.trigger('click');
+                                        domClicked = true;
+                                        dbg('selectNativeRow: DOM 点击行 index=' + rowIdx, 'ReportDR=' + reportDR);
+                                        return false; // break each
+                                    }
+                                }
+                            }
+                        });
+                    } catch(e) { dbg('selectNativeRow: DOM 点击失败', e.message); }
+
+                    if (!domClicked) {
+                        // 回退：用 selectRow
+                        el.datagrid('selectRow', targetIdx);
+                    }
+
+                    if (iframeWin.me) {
+                        iframeWin.me.selectedGrid = el;
+                        iframeWin.me.curReportDR = String(reportDR);
+                    }
+                    if (!domClicked) {
+                        try {
+                            if (typeof opts.onSelect === 'function') opts.onSelect.call(el[0], targetIdx, targetRow);
+                            else if (typeof opts.onClickRow === 'function') opts.onClickRow.call(el[0], targetIdx, targetRow);
+                        } catch(e) { dbg('触发行选择回调异常:', e.message); }
+                    }
+                    const loaded = isReportDetailLoaded(iframeWin, reportDR);
+                    dbg('选中原生行:', targetIdx, 'ReportDR:', reportDR, 'PatName:', targetRow.PatName || '', 'domClicked:', domClicked, 'selector:', sel, 'detailReady=', loaded);
+                    return true;
                 } catch(e) { dbg('selectNativeRow error:', sel, e); }
             }
         }
