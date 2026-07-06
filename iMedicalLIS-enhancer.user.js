@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.29.0
+// @version      7.29.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3683,14 +3683,9 @@
             if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
             try {
-                // 选择仪器
+                // 选择仪器（setValue 触发页面加载）
                 jq('#cmbMach').combobox('setValue', map.machineDR);
-                const machData = jq('#cmbMach').combobox('getData') || [];
-                const machItem = machData.find(d => String(d.RowID || d.value || '') === map.machineDR);
-                if (machItem && jq('#cmbMach').combobox('options').onSelect) {
-                    jq('#cmbMach').combobox('options').onSelect.call(jq('#cmbMach')[0], machItem);
-                }
-                await new Promise(r => setTimeout(r, 1500));
+                await new Promise(r => setTimeout(r, 2000));
 
                 // 找到并选中测试项目
                 const testCodes = jq('#dgTestCode').datagrid('getRows') || [];
@@ -3712,10 +3707,11 @@
                     continue;
                 }
 
+                // 选中测试项目（触发 dgData 加载）
                 jq('#dgTestCode').datagrid('selectRow', targetIdx);
-                await new Promise(r => setTimeout(r, 1500));
+                await new Promise(r => setTimeout(r, 2000));
 
-                // 从 dgData datagrid 读取数据（和质控图模块一样）
+                // 从 dgData datagrid 读取数据
                 const dataRows = jq('#dgData').datagrid('getRows') || [];
                 if (!dataRows.length) {
                     if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
