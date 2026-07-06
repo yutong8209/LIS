@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.23.5
+// @version      7.23.6
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3350,9 +3350,21 @@
     // 通过 API 查询某项目某浓度的质控结果数据
     async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate) {
         const url = qeQCApiUrl() + '?Method=QueryQCLeaveData&MachineParameterDR=' + machineDR + '&TestCodeDR=' + testCodeDR + '&StartDate=' + startDate + '&EndDate=' + endDate + '&MaterialCode=' + (matDR || '') + '&BatchCode=';
+        console.log('[LIS-QE] qeApiQCData:', 'MP=' + machineDR, 'TC=' + testCodeDR, 'Mat=' + matDR, 'Date=' + startDate + '~' + endDate);
         try {
-            const data = await fetchJ(url, 15000);
-            return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+            const resp = await fetch(url, { credentials: 'same-origin' });
+            const text = await resp.text();
+            console.log('[LIS-QE] 响应状态:', resp.status, '长度:', text.length, '前200字:', text.substring(0, 200));
+            if (!text || text.trim() === '') return [];
+            let data;
+            try { data = JSON.parse(text); } catch(e) { console.error('[LIS-QE] JSON解析失败:', text.substring(0, 100)); return []; }
+            const rows = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+            console.log('[LIS-QE] 解析后:', rows.length, '行');
+            if (rows.length > 0) {
+                console.log('[LIS-QE] 首行字段:', Object.keys(rows[0]).join(', '));
+                console.log('[LIS-QE] 首行:', JSON.stringify(rows[0]).substring(0, 400));
+            }
+            return rows;
         } catch(e) { console.error('[LIS-QE] qeApiQCData error:', e); return []; }
     }
 
@@ -3603,6 +3615,7 @@
 
             // 通过 API 直接查询质控数据
             const dataRows = await qeApiQCData(map.machineDR, map.testCodeDR, map.matDR, startDate, endDate);
+            console.log(`[LIS-QE] ${proj.name}: API返回 ${dataRows.length} 行, machineDR=${map.machineDR}, testCodeDR=${map.testCodeDR}, matDR=${map.matDR}`);
             if (!dataRows.length) {
                 if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
                 continue;
