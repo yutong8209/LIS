@@ -6,6 +6,7 @@
 !image-reader-hook.py
 !mcp-image-reader/server.py
 !lis_proxy.py
+!qc_export.py
 !browser-act-ocr/server.py
 
 # IDE

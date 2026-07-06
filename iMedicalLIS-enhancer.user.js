@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.20.51
-// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
+// @version      7.21.0
+// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
+// @connect      127.0.0.1
+// @connect      localhost
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -591,6 +593,32 @@
 .qc-tip-val{color:#f0e68c}
 #lis-qc-fab{position:fixed;right:20px;bottom:20px;z-index:100004;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#2980b9,#1a6ea0);color:#fff;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.25);transition:transform .15s}
 #lis-qc-fab:hover{transform:scale(1.15);background:linear-gradient(135deg,#3498db,#2471a3)}
+/* --- 质控数据导出 --- */
+#lis-qce-fab{position:fixed;right:20px;bottom:62px;z-index:100004;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#16a085,#0e7a68);color:#fff;font-size:10px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.25);transition:transform .15s}
+#lis-qce-fab:hover{transform:scale(1.15);background:linear-gradient(135deg,#1abc9c,#16a085)}
+#lis-qce-panel{position:fixed;top:48px;right:24px;width:420px;max-height:78vh;z-index:100005;background:#fff;border:1px solid #9fd9cc;border-radius:8px;box-shadow:0 6px 22px rgba(22,160,133,.2);display:none;flex-direction:column;overflow:hidden;font-family:'Microsoft YaHei','Segoe UI',sans-serif;color:#213547;box-sizing:border-box}
+#lis-qce-panel.show{display:flex}
+#lis-qce-head{height:36px;flex-shrink:0;display:flex;align-items:center;gap:6px;padding:0 10px;background:linear-gradient(180deg,#e8f8f4,#d4f0e8);border-bottom:1px solid #9fd9cc;cursor:move;user-select:none;touch-action:none}
+#lis-qce-title{flex:1;font-size:13px;font-weight:700;color:#0e6b5a}
+#lis-qce-head button{border:1px solid #7ecbb8;background:#fff;color:#0e6b5a;border-radius:4px;height:24px;min-width:26px;padding:0 8px;font-size:12px;cursor:pointer}
+#lis-qce-body{flex:1;overflow-y:auto;padding:10px;font-size:12px}
+#lis-qce-body label{display:block;margin:6px 0 3px;color:#4a635c;font-weight:600}
+#lis-qce-body input[type=text],#lis-qce-body input[type=month],#lis-qce-body select{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #c5e6db;border-radius:4px;font-size:12px}
+.qce-table-row{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #eef7f3}
+.qce-table-row input[type=checkbox]{flex:0 0 auto}
+.qce-table-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qce-table-stat{flex:0 0 auto;font-size:11px;color:#6a8a80}
+.qce-table-stat.warn{color:#c0392b}
+.qce-table-stat.ok{color:#16a085}
+.qce-settings{margin-top:8px;padding:8px;background:#f4fbf8;border:1px solid #d4efe6;border-radius:6px}
+.qce-settings h4{margin:0 0 6px;font-size:12px;color:#0e6b5a}
+.qce-row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#lis-qce-actions{display:flex;gap:8px;margin-top:10px}
+#lis-qce-actions button{flex:1;height:32px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer}
+#lis-qce-fetch{background:#3498db;color:#fff}
+#lis-qce-export{background:#16a085;color:#fff}
+#lis-qce-export:disabled,#lis-qce-fetch:disabled{opacity:.5;cursor:not-allowed}
+#lis-qce-log{margin-top:8px;max-height:100px;overflow-y:auto;font-size:11px;color:#5a726a;line-height:1.5;background:#f8fcfa;padding:6px 8px;border-radius:4px}
 
 
     
@@ -1729,6 +1757,535 @@
         };
         probe();
         qcProbeTimer = setInterval(probe, 1000);
+    }
+
+
+    // ============================================================
+    //  模块 QCE：质控数据导出（月度上传表）
+    // ============================================================
+    const QCE_SERVE = 'http://127.0.0.1:8765';
+    const QCE_ASH = BASE + '/qc/ashx/ashQCDataInputNew.ashx';
+    const QCE_SETTINGS_KEY = 'lis-qce-settings';
+    const QCE_MPDR_KEY = 'lis-qce-mpdr';
+    const QCE_POS_KEY = 'lis-qce-panel-pos';
+    const QCE_FAB_POS_KEY = 'lis-qce-fab-pos';
+    let qceConfig = null;
+    let qceMachines = null;
+    let qceTableData = {};
+    let qceBusy = false;
+    let qceInited = false;
+
+    function qceLoadSettings() {
+        try { return JSON.parse(localStorage.getItem(QCE_SETTINGS_KEY) || '{}') || {}; } catch(e) { return {}; }
+    }
+    function qceSaveSettings(s) {
+        try { localStorage.setItem(QCE_SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
+    }
+    function qceLoadMpdrMap() {
+        try { return JSON.parse(localStorage.getItem(QCE_MPDR_KEY) || '{}') || {}; } catch(e) { return {}; }
+    }
+    function qceSaveMpdrMap(m) {
+        try { localStorage.setItem(QCE_MPDR_KEY, JSON.stringify(m)); } catch(e) {}
+    }
+
+    function qceMonthRange(year, month) {
+        const m = String(month).padStart(2, '0');
+        const last = new Date(year, month, 0).getDate();
+        return { start: `${year}-${m}-01`, end: `${year}-${m}-${String(last).padStart(2, '0')}` };
+    }
+
+    function qceParseTestDate(s) {
+        const d = String(s || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(d)) {
+            const p = d.slice(0, 10).split('-');
+            return { month: parseInt(p[1], 10), day: parseInt(p[2], 10) };
+        }
+        if (/^\d{8}$/.test(d)) {
+            return { month: parseInt(d.slice(4, 6), 10), day: parseInt(d.slice(6, 8), 10) };
+        }
+        return null;
+    }
+
+    function qceAverageValue(row) {
+        const vals = [];
+        for (let i = 1; i <= 7; i++) {
+            const n = parseFloat(row['Result' + i]);
+            if (!Number.isNaN(n)) vals.push(n);
+        }
+        if (vals.length) return vals.reduce((a, b) => a + b, 0) / vals.length;
+        const candidates = [row.DayAve, row.Result, row.TextRes, row.TestResultPosNeg];
+        for (const v of candidates) {
+            const n = parseFloat(v);
+            if (!Number.isNaN(n)) return n;
+        }
+        return null;
+    }
+
+    function qceMachineName(m) {
+        return String(m.CName || m.Name || m.MachineName || '').trim();
+    }
+
+    function qceMatchMachine(table, machines) {
+        const patterns = (table.machineMatch || []).map(s => String(s).toLowerCase());
+        if (!patterns.length) return null;
+        for (const m of machines) {
+            const name = qceMachineName(m).toLowerCase();
+            if (!name) continue;
+            if (patterns.some(p => name.includes(p) || p.includes(name))) return m;
+        }
+        return null;
+    }
+
+    function qceMatchTest(project, tests) {
+        const keys = [...(project.match || []), project.remark].filter(Boolean).map(s => String(s).toLowerCase());
+        for (const t of tests) {
+            const names = [t.CName, t.Synonym, t.Code, t.EngName, t.TCName].filter(Boolean).map(s => String(s).toLowerCase());
+            for (const k of keys) {
+                if (!k) continue;
+                for (const n of names) {
+                    if (n === k || n.includes(k) || k.includes(n)) return t;
+                }
+            }
+        }
+        return null;
+    }
+
+    function qceResolveBatch(table, project, levelNo, row, settings) {
+        if (table.batchMode === 'manual') {
+            return String(settings.batches && settings.batches[table.id] || '').trim();
+        }
+        let lot = String(row.MaterialLotName || row.BatchCode || row.LotNo || row.MaterialLotCode || '').trim();
+        if (table.batchMode === 'qc_suffix') {
+            const base = lot.replace(/[NH]$/i, '');
+            const suffix = (table.levelSuffix || {})[String(levelNo)] || '';
+            return base + suffix;
+        }
+        if (table.batchMode === 'qc_by_project' && table.projectBatchGroups && settings.batchGroups) {
+            const grp = table.projectBatchGroups.find(g => (g.projects || []).includes(project.code));
+            if (grp && settings.batchGroups[grp.label]) return String(settings.batchGroups[grp.label]).trim();
+        }
+        return lot;
+    }
+
+    async function qceLoadConfig() {
+        const r = await fetch(QCE_SERVE + '/qc-export/config.json', { cache: 'no-cache' });
+        if (!r.ok) throw new Error('无法读取导出配置，请确认 serve.py 已启动');
+        qceConfig = await r.json();
+        return qceConfig;
+    }
+
+    async function qceFetchAllMachines() {
+        if (qceMachines) return qceMachines;
+        const wgs = await fetchJ(QCE_ASH + '?Method=QueryWorkGroupData', 15000);
+        const wgList = Array.isArray(wgs) ? wgs : (wgs && wgs.rows) || [];
+        const machines = [];
+        for (const wg of wgList) {
+            const dr = wg.RowID || wg.WorkGroupDR || wg.DR;
+            if (!dr) continue;
+            try {
+                const ms = await fetchJ(QCE_ASH + '?Method=QryMachineParameter&WorkGroupDR=' + encodeURIComponent(dr), 15000);
+                const rows = Array.isArray(ms) ? ms : (ms && ms.rows) || [];
+                rows.forEach(m => machines.push(m));
+            } catch(e) { dbg('QCE 仪器列表失败 WG', dr, e.message); }
+        }
+        qceMachines = machines;
+        return machines;
+    }
+
+    async function qceFetchTests(mpdr, start, end) {
+        const url = QCE_ASH + '?Method=QryMachineTestCode&MachineParameterDR=' + encodeURIComponent(mpdr)
+            + '&MatDR=&MatLotDR=&StartDate=' + encodeURIComponent(start) + '&EndDate=' + encodeURIComponent(end);
+        const result = await fetchJ(url, 20000);
+        return Array.isArray(result) ? result : (result && result.rows) || [];
+    }
+
+    async function qceFetchLevels(mpdr, testCodeDR, matDR, start, end) {
+        const url = QCE_ASH + '?Method=QueryQCLeaveData&MachineParameterDR=' + encodeURIComponent(mpdr)
+            + '&TestCodeDR=' + encodeURIComponent(testCodeDR)
+            + '&StartDate=' + encodeURIComponent(start) + '&EndDate=' + encodeURIComponent(end)
+            + '&MaterialCode=' + encodeURIComponent(matDR || '') + '&BatchCode=';
+        try {
+            const result = await fetchJ(url, 15000);
+            const levels = Array.isArray(result) ? result.map(l => String(l.LevelNo)) : [];
+            return levels.length ? levels : ['1'];
+        } catch(e) {
+            return ['1'];
+        }
+    }
+
+    async function qceFetchResultRows(mpdr, testCodeDR, matDR, levelNo, start, end) {
+        const url = QCE_ASH + '?Method=QueryTestResultData&StartDate=' + encodeURIComponent(start)
+            + '&EndDate=' + encodeURIComponent(end)
+            + '&InstrumentCode=' + encodeURIComponent(mpdr)
+            + '&Leavel=' + encodeURIComponent(levelNo)
+            + '&TCCode=' + encodeURIComponent(testCodeDR)
+            + '&QcRule=&MatDR=' + encodeURIComponent(matDR || '') + '&BatchCode=';
+        const result = await fetchJ(url, 25000);
+        return Array.isArray(result) ? result : [];
+    }
+
+    function qceLog(msg) {
+        const el = document.getElementById('lis-qce-log');
+        if (el) {
+            const line = document.createElement('div');
+            line.textContent = msg;
+            el.appendChild(line);
+            el.scrollTop = el.scrollHeight;
+        }
+        dbg('[QCE]', msg);
+    }
+
+    function qceGetYearMonth() {
+        const inp = document.getElementById('lis-qce-month');
+        const v = inp && inp.value;
+        if (!v) return null;
+        const [y, m] = v.split('-').map(Number);
+        if (!y || !m) return null;
+        return { year: y, month: m };
+    }
+
+    function qceCollectSettingsFromUI() {
+        const settings = qceLoadSettings();
+        settings.batches = settings.batches || {};
+        settings.operators = settings.operators || {};
+        settings.batchGroups = settings.batchGroups || {};
+        (qceConfig && qceConfig.tables || []).forEach(t => {
+            const op = document.getElementById('lis-qce-op-' + t.id);
+            if (op) settings.operators[t.id] = op.value.trim();
+            if (t.batchMode === 'manual') {
+                const b = document.getElementById('lis-qce-batch-' + t.id);
+                if (b) settings.batches[t.id] = b.value.trim();
+            }
+            if (t.projectBatchGroups) {
+                t.projectBatchGroups.forEach((g, gi) => {
+                    const el = document.getElementById('lis-qce-bgrp-' + t.id + '-' + gi);
+                    if (el) settings.batchGroups[g.label] = el.value.trim();
+                });
+            }
+        });
+        qceSaveSettings(settings);
+        return settings;
+    }
+
+    function qceUpdateTableStats() {
+        (qceConfig && qceConfig.tables || []).forEach(t => {
+            const stat = document.getElementById('lis-qce-stat-' + t.id);
+            if (!stat) return;
+            const data = qceTableData[t.id];
+            if (!data) { stat.textContent = '未拉取'; stat.className = 'qce-table-stat'; return; }
+            if (data.missing && data.missing.length) {
+                stat.textContent = `${data.rows.length}行 缺${data.missing.length}项`;
+                stat.className = 'qce-table-stat warn';
+            } else {
+                stat.textContent = `${data.rows.length}行`;
+                stat.className = 'qce-table-stat ok';
+            }
+        });
+        const exportBtn = document.getElementById('lis-qce-export');
+        if (exportBtn) exportBtn.disabled = !Object.keys(qceTableData).length;
+    }
+
+    async function qceFetchAllData() {
+        if (qceBusy) return;
+        const ym = qceGetYearMonth();
+        if (!ym) { showToast('请选择年月', 'warning'); return; }
+        qceBusy = true;
+        const fetchBtn = document.getElementById('lis-qce-fetch');
+        const exportBtn = document.getElementById('lis-qce-export');
+        if (fetchBtn) fetchBtn.disabled = true;
+        if (exportBtn) exportBtn.disabled = true;
+        const logEl = document.getElementById('lis-qce-log');
+        if (logEl) logEl.innerHTML = '';
+        qceTableData = {};
+        try {
+            if (!qceConfig) await qceLoadConfig();
+            const settings = qceCollectSettingsFromUI();
+            const machines = await qceFetchAllMachines();
+            const mpdrMap = qceLoadMpdrMap();
+            const { start, end } = qceMonthRange(ym.year, ym.month);
+            qceLog(`拉取 ${ym.year}-${String(ym.month).padStart(2, '0')} 质控数据...`);
+
+            for (const table of (qceConfig.tables || [])) {
+                const cb = document.getElementById('lis-qce-chk-' + table.id);
+                if (cb && !cb.checked) continue;
+
+                let mpdr = mpdrMap[table.id] || '';
+                if (!mpdr) {
+                    const mach = qceMatchMachine(table, machines);
+                    mpdr = mach && (mach.RowID || mach.MachineParameterDR || mach.DR) || '';
+                    if (mpdr) { mpdrMap[table.id] = String(mpdr); qceSaveMpdrMap(mpdrMap); }
+                }
+                if (!mpdr) {
+                    qceLog(`✗ ${table.name}：未找到匹配仪器`);
+                    qceTableData[table.id] = { rows: [], missing: ['仪器未匹配'] };
+                    continue;
+                }
+
+                qceLog(`${table.name}：仪器 MPDR=${mpdr}`);
+                const tests = await qceFetchTests(mpdr, start, end);
+                const rows = [];
+                const missing = [];
+                const operator = (settings.operators && settings.operators[table.id]) || table.defaultOperator || '';
+
+                for (const project of (table.projects || [])) {
+                    const test = qceMatchTest(project, tests);
+                    if (!test) { missing.push(project.remark || project.code); continue; }
+                    const testCodeDR = test.RowID || test.TestCodeDR || test.TCCode;
+                    const matDR = test.MatDR || '';
+                    let levels = ['1'];
+                    if (table.batchMode === 'qc_suffix' || table.batchMode === 'qc_level') {
+                        levels = await qceFetchLevels(mpdr, testCodeDR, matDR, start, end);
+                        if (levels.length > 2) levels = levels.slice(0, 2);
+                    }
+                    for (const levelNo of levels) {
+                        const resultRows = await qceFetchResultRows(mpdr, testCodeDR, matDR, levelNo, start, end);
+                        let count = 0;
+                        for (const rr of resultRows) {
+                            const val = qceAverageValue(rr);
+                            if (val === null || Number.isNaN(val)) continue;
+                            const dt = qceParseTestDate(rr.TestDate || rr.AddDate || rr.QCDate);
+                            if (!dt) continue;
+                            const batch = qceResolveBatch(table, project, levelNo, rr, settings);
+                            rows.push({
+                                code: project.code,
+                                month: dt.month,
+                                day: dt.day,
+                                seq: 1,
+                                batch: batch,
+                                value: val,
+                                remark: project.remark,
+                                operator: operator
+                            });
+                            count++;
+                        }
+                        if (!count) missing.push((project.remark || project.code) + (levels.length > 1 ? '(L' + levelNo + ')' : ''));
+                    }
+                }
+                rows.sort((a, b) => a.code.localeCompare(b.code) || a.month - b.month || a.day - b.day || String(a.batch).localeCompare(String(b.batch)));
+                qceTableData[table.id] = { rows, missing: [...new Set(missing)] };
+                qceLog(`✓ ${table.name}：${rows.length} 行` + (missing.length ? `，缺 ${missing.length} 项` : ''));
+            }
+            qceUpdateTableStats();
+            showToast('质控数据拉取完成', 'success');
+        } catch(e) {
+            qceLog('拉取失败: ' + e.message);
+            showToast('拉取失败: ' + e.message, 'error');
+        } finally {
+            qceBusy = false;
+            if (fetchBtn) fetchBtn.disabled = false;
+            qceUpdateTableStats();
+        }
+    }
+
+    async function qceExportZip() {
+        if (qceBusy) return;
+        const ym = qceGetYearMonth();
+        if (!ym) { showToast('请选择年月', 'warning'); return; }
+        if (!Object.keys(qceTableData).length) { showToast('请先拉取数据', 'warning'); return; }
+        qceBusy = true;
+        const exportBtn = document.getElementById('lis-qce-export');
+        if (exportBtn) exportBtn.disabled = true;
+        try {
+            const settings = qceCollectSettingsFromUI();
+            const tables = [];
+            for (const table of (qceConfig && qceConfig.tables || [])) {
+                const cb = document.getElementById('lis-qce-chk-' + table.id);
+                if (cb && !cb.checked) continue;
+                const data = qceTableData[table.id];
+                if (!data || !data.rows.length) continue;
+                tables.push({ id: table.id, template: table.template, rows: data.rows, operator: settings.operators[table.id] });
+            }
+            if (!tables.length) { showToast('没有可导出的数据', 'warning'); return; }
+            const resp = await fetch(QCE_SERVE + '/qc-export/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ year: ym.year, month: ym.month, tables })
+            });
+            if (!resp.ok) {
+                const err = await resp.text();
+                throw new Error(err || ('HTTP ' + resp.status));
+            }
+            const blob = await resp.blob();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `质控上传_${ym.year}-${String(ym.month).padStart(2, '0')}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+            showToast('已生成 zip 下载', 'success');
+            qceLog('已下载 zip');
+        } catch(e) {
+            qceLog('导出失败: ' + e.message);
+            showToast('导出失败: ' + e.message, 'error');
+        } finally {
+            qceBusy = false;
+            qceUpdateTableStats();
+        }
+    }
+
+    function qceRenderSettings() {
+        const host = document.getElementById('lis-qce-settings');
+        if (!host || !qceConfig) return;
+        const settings = qceLoadSettings();
+        let h = '';
+        const immuno = (qceConfig.tables || []).filter(t => t.batchMode === 'manual');
+        if (immuno.length) {
+            h += '<h4>免疫组上传批号（与质控系统可不同）</h4><div class="qce-row2">';
+            immuno.forEach(t => {
+                const v = escAttr((settings.batches && settings.batches[t.id]) || '');
+                h += `<div><label>${esc(t.name)}</label><input type="text" id="lis-qce-batch-${escAttr(t.id)}" value="${v}" placeholder="上传批号"></div>`;
+            });
+            h += '</div>';
+        }
+        const coag = (qceConfig.tables || []).find(t => t.id === 'coag');
+        if (coag && coag.projectBatchGroups) {
+            h += '<h4 style="margin-top:8px">凝血批号（默认识别质控系统，可覆盖）</h4><div class="qce-row2">';
+            coag.projectBatchGroups.forEach((g, gi) => {
+                const v = escAttr((settings.batchGroups && settings.batchGroups[g.label]) || '');
+                h += `<div><label>${esc(g.label)}</label><input type="text" id="lis-qce-bgrp-coag-${gi}" value="${v}" placeholder="留空=用质控系统"></div>`;
+            });
+            h += '</div>';
+        }
+        h += '<h4 style="margin-top:8px">操作者</h4><div class="qce-row2">';
+        (qceConfig.tables || []).forEach(t => {
+            const v = escAttr((settings.operators && settings.operators[t.id]) || t.defaultOperator || '');
+            h += `<div><label>${esc(t.name)}</label><input type="text" id="lis-qce-op-${escAttr(t.id)}" value="${v}"></div>`;
+        });
+        h += '</div>';
+        host.innerHTML = h;
+    }
+
+    function qceRenderTableList() {
+        const host = document.getElementById('lis-qce-tables');
+        if (!host || !qceConfig) return;
+        host.innerHTML = (qceConfig.tables || []).map(t =>
+            `<div class="qce-table-row">
+                <input type="checkbox" id="lis-qce-chk-${escAttr(t.id)}" checked>
+                <span class="qce-table-name">${esc(t.name)}</span>
+                <span class="qce-table-stat" id="lis-qce-stat-${escAttr(t.id)}">未拉取</span>
+            </div>`
+        ).join('');
+    }
+
+    function qceBindFabDrag(fab) {
+        let dragging = false, moved = false, sx, sy, ol, ot;
+        fab.addEventListener('pointerdown', e => {
+            dragging = true; moved = false;
+            sx = e.clientX; sy = e.clientY;
+            ol = fab.offsetLeft; ot = fab.offsetTop;
+            fab.setPointerCapture(e.pointerId);
+            fab.style.transition = 'none';
+            e.preventDefault();
+        });
+        fab.addEventListener('pointermove', e => {
+            if (!dragging) return;
+            const dx = e.clientX - sx, dy = e.clientY - sy;
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+            if (moved) {
+                fab.style.left = Math.max(0, ol + dx) + 'px';
+                fab.style.top = Math.max(0, ot + dy) + 'px';
+                fab.style.right = 'auto'; fab.style.bottom = 'auto';
+            }
+        });
+        fab.addEventListener('pointerup', () => {
+            dragging = false; fab.style.transition = '';
+            if (moved) {
+                try { localStorage.setItem(QCE_FAB_POS_KEY, JSON.stringify({ l: fab.offsetLeft, t: fab.offsetTop })); } catch(e) {}
+            }
+        });
+        fab.addEventListener('click', () => {
+            if (moved) return;
+            const panel = document.getElementById('lis-qce-panel');
+            if (panel) {
+                panel.classList.add('show');
+                if (!qceConfig) qceLoadConfig().then(() => { qceRenderTableList(); qceRenderSettings(); }).catch(e => showToast(e.message, 'error'));
+            }
+        });
+    }
+
+    function qceBindPanelDrag(panel, head) {
+        head.addEventListener('pointerdown', e => {
+            if (e.target.tagName === 'BUTTON') return;
+            const startX = e.clientX, startY = e.clientY;
+            const startL = panel.offsetLeft, startT = panel.offsetTop;
+            const w = panel.offsetWidth, h = panel.offsetHeight;
+            head.setPointerCapture(e.pointerId);
+            const move = ev => {
+                const vw = window.innerWidth, vh = window.innerHeight;
+                panel.style.left = Math.max(0, Math.min(startL + (ev.clientX - startX), vw - w)) + 'px';
+                panel.style.top = Math.max(0, Math.min(startT + (ev.clientY - startY), vh - h)) + 'px';
+            };
+            const up = () => {
+                head.removeEventListener('pointermove', move);
+                head.removeEventListener('pointerup', up);
+                try { localStorage.setItem(QCE_POS_KEY, JSON.stringify({ l: panel.offsetLeft, t: panel.offsetTop })); } catch(e) {}
+            };
+            head.addEventListener('pointermove', move);
+            head.addEventListener('pointerup', up);
+            e.preventDefault();
+        });
+    }
+
+    function initQCExportModule() {
+        if (qceInited) return;
+        qceInited = true;
+
+        const fab = document.createElement('div');
+        fab.id = 'lis-qce-fab';
+        fab.textContent = '导出';
+        fab.title = '拖动移动 | 点击打开质控数据导出';
+        try {
+            const fp = JSON.parse(localStorage.getItem(QCE_FAB_POS_KEY) || 'null');
+            if (fp && typeof fp.l === 'number') {
+                fab.style.left = fp.l + 'px'; fab.style.top = fp.t + 'px';
+                fab.style.right = 'auto'; fab.style.bottom = 'auto';
+            }
+        } catch(e) {}
+        document.body.appendChild(fab);
+        qceBindFabDrag(fab);
+
+        const panel = document.createElement('div');
+        panel.id = 'lis-qce-panel';
+        const now = new Date();
+        const defMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        panel.innerHTML = `
+            <div id="lis-qce-head">
+                <span id="lis-qce-title">质控数据导出</span>
+                <button id="lis-qce-close" title="关闭">&times;</button>
+            </div>
+            <div id="lis-qce-body">
+                <label>导出月份</label>
+                <input type="month" id="lis-qce-month" value="${defMonth}">
+                <label style="margin-top:8px">上传表（9 张）</label>
+                <div id="lis-qce-tables"></div>
+                <div class="qce-settings" id="lis-qce-settings"></div>
+                <div id="lis-qce-actions">
+                    <button id="lis-qce-fetch">拉取数据</button>
+                    <button id="lis-qce-export" disabled>生成 zip</button>
+                </div>
+                <div id="lis-qce-log"></div>
+            </div>`;
+        document.body.appendChild(panel);
+        try {
+            const pos = JSON.parse(localStorage.getItem(QCE_POS_KEY) || 'null');
+            if (pos && typeof pos.l === 'number') {
+                panel.style.left = pos.l + 'px'; panel.style.top = pos.t + 'px';
+                panel.style.right = 'auto';
+            }
+        } catch(e) {}
+
+        qceBindPanelDrag(panel, document.getElementById('lis-qce-head'));
+        document.getElementById('lis-qce-close').addEventListener('click', () => panel.classList.remove('show'));
+        document.getElementById('lis-qce-fetch').addEventListener('click', () => qceFetchAllData());
+        document.getElementById('lis-qce-export').addEventListener('click', () => qceExportZip());
+
+        qceLoadConfig().then(() => {
+            qceRenderTableList();
+            qceRenderSettings();
+        }).catch(() => {
+            qceLog('本地服务未启动，导出前请先运行 serve.py');
+        });
+        dbg('[LIS-QCE] 质控数据导出模块已加载');
     }
 
 
@@ -5758,6 +6315,7 @@ window.addEventListener('keydown',function(e){
         document.getElementById('lis-detail-close').addEventListener('click', closeDetailPanel);
         document.getElementById('lis-detail-close-btn').addEventListener('click', closeDetailPanel);
         document.getElementById('lis-detail-audit').addEventListener('click', () => {
+            dbg('详情审核按钮点击: specimen=', !!currentDetailSpecimen, 'inProgress=', _detailAuditInProgress, 'auditInProgress=', _auditInProgress, 'abnormalInProgress=', _abnormalAuditInProgress);
             if (currentDetailSpecimen) {
                 _auditFromDetailPanel();
             }
@@ -6011,9 +6569,16 @@ window.addEventListener('keydown',function(e){
     }
 
     let _detailAuditInProgress = false;
+    let _detailAuditLockTs = 0; // 记录锁获取时间
 
     // 从详情面板审核当前标本并自动跳转下一个
     async function _auditFromDetailPanel() {
+        // 安全检查：如果锁卡住超过 30 秒，强制重置
+        if (_detailAuditInProgress && _detailAuditLockTs && (Date.now() - _detailAuditLockTs > 30000)) {
+            dbg('详情审核锁卡住超过 30 秒，强制重置');
+            _detailAuditInProgress = false;
+            _detailAuditLockTs = 0;
+        }
         if (!currentDetailSpecimen || _detailAuditInProgress) {
             dbg('详情审核跳过: specimen=', !!currentDetailSpecimen, 'inProgress=', _detailAuditInProgress);
             return;
@@ -6027,6 +6592,7 @@ window.addEventListener('keydown',function(e){
             return;
         }
         _detailAuditInProgress = true;
+        _detailAuditLockTs = Date.now();
         // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
         const _detailSafetyTimer = setTimeout(() => {
             if (_detailAuditInProgress) {
@@ -10319,7 +10885,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.47');
+        dbg('iMedicalLIS 增强助手 v7.21.0');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
@@ -10344,6 +10910,7 @@ function fillNativeLoginForm(creds, lastWG) {
         // initQBar(); // 已禁用：不需要顶部快速切换条
         createWS();
         createPatientResultTool();
+        initQCExportModule();
         initAbnormalEnterBridge();
         checkNavigateTarget();
         checkAuditQueueResume();
