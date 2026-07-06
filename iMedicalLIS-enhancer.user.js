@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.1
+// @version      7.30.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3334,8 +3334,14 @@
         return isQCDataInputPage();
     }
 
-    // 质控 API 基础 URL
+    // 质控 API：仪器/项目列表用 DataView，结果数据用 DataInputNew（与录入页一致）
     function qeQCApiUrl() { return BASE + '/qc/ashx/ashQCDataView.ashx'; }
+    function qeQCDataApiUrl() { return BASE + '/qc/ashx/ashQCDataInputNew.ashx'; }
+
+    function qeMonthEndDate(year, month) {
+        const last = new Date(year, month, 0).getDate();
+        return year + '-' + String(month).padStart(2, '0') + '-' + String(last).padStart(2, '0');
+    }
 
     // 通过 API 查询某台仪器的测试项目列表
     async function qeApiTestCodes(machineDR, startDate, endDate) {
@@ -3347,39 +3353,50 @@
         } catch(e) { console.error('[LIS-QE] qeApiTestCodes error:', e); return []; }
     }
 
-    // 通过 API 查询某项目某浓度的质控结果数据
+    // 通过 API 查询某项目各浓度的质控结果（对齐 DataInputNew.QueryData）
     async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate) {
-        // 第一步：获取正确的 MatLotDR（每个浓度级别的实际批号DR）
-        let matLotDRs = [];
+        const api = qeQCDataApiUrl();
+        const levels = [];
         try {
-            const leaveUrl = qeQCApiUrl() + '?Method=QueryQCLeaveData&MachineParameterDR=' + machineDR + '&TestCodeDR=' + testCodeDR + '&StartDate=' + startDate + '&EndDate=' + endDate + '&MaterialCode=' + (matDR || '') + '&BatchCode=';
-            const leaveResp = await fetch(leaveUrl, { credentials: 'same-origin' });
-            const leaveText = await leaveResp.text();
-            if (leaveText && leaveText.trim()) {
-                const leaveData = JSON.parse(leaveText);
-                const leaveRows = (leaveData && leaveData.rows) ? leaveData.rows : (Array.isArray(leaveData) ? leaveData : []);
-                leaveRows.forEach(r => { if (r.MatLotDR) matLotDRs.push(r.MatLotDR); });
-            }
-        } catch(e) {}
-
-        // 如果没有获取到 MatLotDR，用原始 matDR
-        if (!matLotDRs.length) matLotDRs = [matDR || ''];
-
-        // 第二步：用每个 MatLotDR 查询实际数据
-        let allRows = [];
-        for (const lotDR of matLotDRs) {
-            try {
-                const url = qeQCApiUrl() + '?Method=QueryTestResultData&StartDate=' + startDate + '&EndDate=' + endDate + '&InstrumentCode=' + machineDR + '&Leavel=&TCCode=' + testCodeDR + '&QcRule=&MatDR=' + lotDR + '&StartTime=&EndTime=';
-                const resp = await fetch(url, { credentials: 'same-origin' });
-                const text = await resp.text();
-                if (text && text.trim()) {
-                    const data = JSON.parse(text);
-                    const rows = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
-                    // 只保留有实际数据的行（有 TestDate 或 Result）
-                    const realRows = rows.filter(r => r.TestDate || r.Result || r.Result1 || r.DayAve);
-                    allRows.push(...realRows);
+            const leaveUrl = api + '?Method=QueryQCLeaveData&MachineParameterDR=' + encodeURIComponent(machineDR)
+                + '&TestCodeDR=' + encodeURIComponent(testCodeDR)
+                + '&StartDate=' + encodeURIComponent(startDate) + '&EndDate=' + encodeURIComponent(endDate)
+                + '&MaterialCode=' + encodeURIComponent(matDR || '') + '&BatchCode=';
+            const leaveData = await fetchJ(leaveUrl, 15000);
+            const leaveRows = Array.isArray(leaveData) ? leaveData : (leaveData && leaveData.rows) || [];
+            leaveRows.forEach(r => {
+                if (r.LevelNo != null && r.LevelNo !== '') {
+                    levels.push({ levelNo: String(r.LevelNo), matLotDR: r.MatLotDR || '' });
                 }
-            } catch(e) {}
+            });
+        } catch(e) {
+            console.warn('[LIS-QE] QueryQCLeaveData failed:', e.message);
+        }
+        if (!levels.length) levels.push({ levelNo: '1', matLotDR: '' }, { levelNo: '2', matLotDR: '' });
+
+        const allRows = [];
+        const seen = new Set();
+        for (const lv of levels) {
+            try {
+                const url = api + '?Method=QueryTestResultData&StartDate=' + encodeURIComponent(startDate)
+                    + '&EndDate=' + encodeURIComponent(endDate)
+                    + '&InstrumentCode=' + encodeURIComponent(machineDR)
+                    + '&Leavel=' + encodeURIComponent(lv.levelNo)
+                    + '&TCCode=' + encodeURIComponent(testCodeDR)
+                    + '&QcRule=&MatDR=' + encodeURIComponent(matDR || '') + '&BatchCode=';
+                const data = await fetchJ(url, 25000);
+                const rows = Array.isArray(data) ? data : (data && data.rows) || [];
+                rows.forEach(r => {
+                    if (!r.LevelNo) r.LevelNo = lv.levelNo;
+                    const date = r.TestDate || r.AddDate || r.QCDate || '';
+                    const key = date + '|' + r.LevelNo + '|' + (r.TestCodeDR || testCodeDR);
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    if (date || r.Result1 != null || r.DayAve != null || r.Result != null) allRows.push(r);
+                });
+            } catch(e) {
+                console.warn('[LIS-QE] QueryTestResultData L' + lv.levelNo + ' failed:', e.message);
+            }
         }
         return allRows;
     }
@@ -3532,7 +3549,7 @@
         const year = cfg._year || new Date().getFullYear();
         const month = cfg._month || (new Date().getMonth() + 1);
         const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
-        const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
+        const endDate = qeMonthEndDate(year, month);
 
         if (statusCb) statusCb(`正在检测项目映射... 共 ${machines.length} 台仪器`, 'info');
 
@@ -3663,7 +3680,7 @@
         const year = cfg._year || new Date().getFullYear();
         const operator = qeGetOperator(cfg, group);
         const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
-        const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
+        const endDate = qeMonthEndDate(year, month);
 
         for (let pi = 0; pi < group.projects.length; pi++) {
             if (qeAbortFlag) break;
@@ -3690,12 +3707,12 @@
                 if (!levels[lv]) levels[lv] = [];
                 const val = qeCalcValue(r);
                 if (val !== null && !Number.isNaN(val)) {
-                    const date = r.TestDate || r.AddDate || '';
+                    const date = r.TestDate || r.AddDate || r.QCDate || '';
                     const m = qeExtractMonth(date);
                     const d = qeExtractDay(date);
-                    if (m === month && d > 0) {
-                        levels[lv].push({ day: d, value: val });
-                    }
+                    const inMonth = (m === month && d > 0) ||
+                        (String(date).indexOf(year + '-' + String(month).padStart(2, '0')) === 0 && d > 0);
+                    if (inMonth) levels[lv].push({ day: d, value: val });
                 }
             });
 
