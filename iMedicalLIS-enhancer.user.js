@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.27.0
+// @version      7.27.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3335,7 +3335,7 @@
     }
 
     // 质控 API 基础 URL
-    function qeQCApiUrl() { return BASE + '/qc/ashx/ashQCDataInputNew.ashx'; }
+    function qeQCApiUrl() { return BASE + '/qc/ashx/ashQCDataView.ashx'; }
 
     // 通过 API 查询某台仪器的测试项目列表
     async function qeApiTestCodes(machineDR, startDate, endDate) {
@@ -3356,13 +3356,7 @@
             if (!text || text.trim() === '') return [];
             let data;
             try { data = JSON.parse(text); } catch(e) { return []; }
-            const rows = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
-            // 过滤掉只有级别元数据的行（没有 TestDate 的行不是实际数据）
-            const realRows = rows.filter(r => r.TestDate || r.AddDate || r.DayAve || r.Result || r.Result1);
-            if (realRows.length === 0 && rows.length > 0) {
-                console.log(`[LIS-QE] TC=${testCodeDR}: ${rows.length}行但无实际数据(只有级别元数据)`);
-            }
-            return realRows;
+            return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
         } catch(e) { console.error('[LIS-QE] qeApiQCData error:', e); return []; }
     }
 
@@ -3647,26 +3641,6 @@
         const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
         const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
 
-        // 确保 iframe 已加载
-        if (statusCb) statusCb('正在加载质控页面...', 'info');
-        const ready = await qeEnsureQCPage();
-        if (!ready) {
-            if (statusCb) statusCb('质控页面加载超时，请先手动打开质控数据录入页面', 'error');
-            return rows;
-        }
-
-        // 获取 iframe 内的 fetch
-        let iframeFetch = null;
-        try {
-            if (_qeIframe && _qeIframe.contentWindow && _qeIframe.contentWindow.fetch) {
-                iframeFetch = _qeIframe.contentWindow.fetch.bind(_qeIframe.contentWindow);
-            }
-        } catch(e) { console.error('[LIS-QE] iframe fetch access error:', e); }
-        if (!iframeFetch) {
-            if (statusCb) statusCb('无法访问质控页面上下文，请先手动打开质控数据录入页面', 'error');
-            return rows;
-        }
-
         for (let pi = 0; pi < group.projects.length; pi++) {
             if (qeAbortFlag) break;
             const proj = group.projects[pi];
@@ -3678,22 +3652,8 @@
 
             if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
-            // 从 iframe 内部调用 API
-            const url = qeQCApiUrl() + '?Method=QueryTestResultData&StartDate=' + startDate + '&EndDate=' + endDate + '&InstrumentCode=' + map.machineDR + '&Leavel=&TCCode=' + map.testCodeDR + '&QcRule=&MatDR=' + (map.matDR || '') + '&StartTime=&EndTime=';
-            let dataRows = [];
-            try {
-                const resp = await iframeFetch(url, { credentials: 'same-origin' });
-                const text = await resp.text();
-                if (text && text.trim()) {
-                    let data;
-                    try { data = JSON.parse(text); } catch(e) { data = null; }
-                    if (data) {
-                        const allRows = (data.rows) ? data.rows : (Array.isArray(data) ? data : []);
-                        dataRows = allRows.filter(r => r.TestDate || r.AddDate || r.DayAve || r.Result || r.Result1);
-                    }
-                }
-            } catch(e) { console.error(`[LIS-QE] ${proj.name} API error:`, e); }
-
+            // 通过 API 查询质控数据
+            const dataRows = await qeApiQCData(map.machineDR, map.testCodeDR, map.matDR, startDate, endDate);
             if (!dataRows.length) {
                 if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
                 continue;
