@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.23.0
+// @version      7.23.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3284,7 +3284,8 @@
 
     // 通过 API 查询某台仪器的测试项目列表
     async function qeApiTestCodes(machineDR, startDate, endDate) {
-        const url = qeQCApiUrl() + '?Method=QryMachineTestCode&MachineParameterDR=' + machineDR + '&MatDR=&MatLotDR=&StartDate=' + (startDate || today()) + '&EndDate=' + (endDate || today());
+        // 用较宽的日期范围确保能查到项目
+        const url = qeQCApiUrl() + '?Method=QryMachineTestCode&MachineParameterDR=' + machineDR + '&MatDR=&MatLotDR=&StartDate=2025-01-01&EndDate=' + (endDate || today());
         try {
             const data = await fetchJ(url, 15000);
             return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
@@ -3310,7 +3311,16 @@
         } catch(e) { console.error('[LIS-QE] qeGetMachines error:', e); return []; }
     }
 
-    // 遍历所有工作组获取全部仪器（使用 API 直接查询）
+    // 通过 QC API 查询工作组的仪器参数列表
+    async function qeApiMachineParameters(wgDR) {
+        const url = qeQCApiUrl() + '?Method=QryMachineParameter&WorkGroupDR=' + wgDR;
+        try {
+            const data = await fetchJ(url, 15000);
+            return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+        } catch(e) { console.error('[LIS-QE] qeApiMachineParameters error:', e); return []; }
+    }
+
+    // 遍历所有工作组获取全部仪器（使用 QC API 查询 MachineParameter）
     async function qeGetAllMachines() {
         const allMachines = [];
         const wgs = [
@@ -3320,7 +3330,7 @@
         ];
         for (const w of wgs) {
             try {
-                const rows = await loadMachines(w.dr).catch(() => []);
+                const rows = await qeApiMachineParameters(w.dr);
                 console.log(`[LIS-QE] 工作组 ${w.name}(${w.dr}): ${rows.length} 台仪器`);
                 rows.forEach(m => {
                     allMachines.push({
@@ -3459,8 +3469,8 @@
             for (let ti = 0; ti < testCodes.length; ti++) {
                 const tc = testCodes[ti];
                 const code = String(tc.Code || '');
-                const cname = String(tc.CName || '');
-                const matName = String(tc.MaterialName || '');
+                const cname = String(tc.CName || '').replace(/\*+$/, '').trim();
+                const matName = String(tc.MaterialName || '').replace(/\*+$/, '').trim();
                 const rowID = String(tc.RowID || '');
                 const matDR = String(tc.MatDR || '');
                 const matLotDR = String(tc.MatLotRowID || '');
@@ -3470,7 +3480,7 @@
                         if (mappings[proj.code]) continue; // 已找到
                         // 匹配方式1: 编码精确匹配
                         const codeMatch = code === proj.code;
-                        // 匹配方式2: 中文名匹配
+                        // 匹配方式2: 中文名匹配（去除星号后）
                         const cnameMatch = cname === proj.name || cname.includes(proj.name) || proj.name.includes(cname);
                         const matMatch = matName === proj.name || matName.includes(proj.name) || proj.name.includes(matName);
                         // 匹配方式3: 英文名/缩写匹配
