@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.29.1
+// @version      7.30.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3656,8 +3656,7 @@
         });
     }
 
-    // --- 核心：获取某组的质控数据 ---
-    // 从质控页面的 dgData datagrid 读取数据（和质控图模块一样）
+    // --- 核心：获取某组的质控数据（半自动：读取当前 datagrid 数据） ---
     async function qeFetchGroupData(group, cfg, mappings, statusCb) {
         const rows = []; // 最终输出行
         const month = cfg._month || (new Date().getMonth() + 1);
@@ -3666,113 +3665,88 @@
 
         // 获取质控页面上下文
         const jq = qeGetJQ();
-        if (!jq) {
+        if (!jq || !jq('#dgData').datagrid) {
             if (statusCb) statusCb('无法访问质控页面，请先打开质控数据录入页面', 'error');
             return rows;
         }
 
-        for (let pi = 0; pi < group.projects.length; pi++) {
-            if (qeAbortFlag) break;
-            const proj = group.projects[pi];
+        // 读取当前 dgData 中的数据（用户已选择的仪器/项目）
+        const dataRows = jq('#dgData').datagrid('getRows') || [];
+        if (!dataRows.length) {
+            if (statusCb) statusCb('当前页面无数据，请先选择仪器和项目', 'info');
+            return rows;
+        }
+
+        // 获取当前选中的测试项目信息
+        const selectedTest = jq('#dgTestCode').datagrid('getSelected');
+        const currentTestCodeDR = selectedTest ? String(selectedTest.RowID || '') : '';
+        const currentCName = selectedTest ? String(selectedTest.CName || '').replace(/\*+$/, '').trim() : '';
+
+        // 尝试匹配当前选中的项目到某个组的项目
+        let matchedProject = null;
+        for (const proj of group.projects) {
             const map = mappings[proj.code];
-            if (!map) {
-                if (statusCb) statusCb(`  跳过 ${proj.name}（未找到映射）`, 'error');
-                continue;
+            if (!map) continue;
+            if (map.testCodeDR === currentTestCodeDR) { matchedProject = proj; break; }
+            if (currentCName === proj.name || currentCName.includes(proj.name) || proj.name.includes(currentCName)) {
+                matchedProject = proj; break;
             }
+        }
 
-            if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
+        if (!matchedProject) {
+            if (statusCb) statusCb(`当前选中的项目不属于 ${group.name}，请手动切换`, 'info');
+            return rows;
+        }
 
-            try {
-                // 选择仪器（setValue 触发页面加载）
-                jq('#cmbMach').combobox('setValue', map.machineDR);
-                await new Promise(r => setTimeout(r, 2000));
+        if (statusCb) statusCb(`  读取 ${matchedProject.name}...`, 'info');
 
-                // 找到并选中测试项目
-                const testCodes = jq('#dgTestCode').datagrid('getRows') || [];
-                let targetIdx = -1;
-                for (let i = 0; i < testCodes.length; i++) {
-                    if (String(testCodes[i].RowID || '') === map.testCodeDR) { targetIdx = i; break; }
+        // 按浓度分组
+        const levels = {};
+        dataRows.forEach(r => {
+            const lv = String(r.LevelNo || '1');
+            if (!levels[lv]) levels[lv] = [];
+            const val = qeCalcValue(r);
+            if (val !== null && !Number.isNaN(val)) {
+                const date = r.TestDate || r.AddDate || '';
+                const m = qeExtractMonth(date);
+                const d = qeExtractDay(date);
+                if (m === month && d > 0) {
+                    levels[lv].push({ day: d, value: val });
                 }
-                if (targetIdx < 0) {
-                    for (let i = 0; i < testCodes.length; i++) {
-                        const tc = testCodes[i];
-                        const cname = String(tc.CName || '').replace(/\*+$/, '').trim();
-                        if (cname === proj.name || cname.includes(proj.name) || proj.name.includes(cname)) {
-                            targetIdx = i; break;
-                        }
-                    }
-                }
-                if (targetIdx < 0) {
-                    if (statusCb) statusCb(`  ${proj.name}: 测试项目未找到`, 'error');
-                    continue;
-                }
+            }
+        });
 
-                // 选中测试项目（触发 dgData 加载）
-                jq('#dgTestCode').datagrid('selectRow', targetIdx);
-                await new Promise(r => setTimeout(r, 2000));
-
-                // 从 dgData datagrid 读取数据
-                const dataRows = jq('#dgData').datagrid('getRows') || [];
-                if (!dataRows.length) {
-                    if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
-                    continue;
-                }
-
-            // 按浓度分组
-            const levels = {};
-            dataRows.forEach(r => {
-                const lv = String(r.LevelNo || '1');
-                if (!levels[lv]) levels[lv] = [];
-                const val = qeCalcValue(r);
-                if (val !== null && !Number.isNaN(val)) {
-                    const date = r.TestDate || r.AddDate || '';
-                    const m = qeExtractMonth(date);
-                    const d = qeExtractDay(date);
-                    if (m === month && d > 0) {
-                        levels[lv].push({ day: d, value: val });
-                    }
-                }
+        // 生成输出行
+        const conc = group.concentrations || 1;
+        for (let li = 0; li < conc; li++) {
+            const lvNo = String(li + 1);
+            const lvData = levels[lvNo] || [];
+            let lot = '';
+            if (group.lotMode === 'suffix') {
+                const base = qeGetLot(cfg, group);
+                lot = base + (li === 0 ? 'N' : 'H');
+            } else if (group.lotMode === 'dual') {
+                const lots = qeGetLot(cfg, group);
+                lot = Array.isArray(lots) ? lots[li] || '' : '';
+            } else if (group.lotMode === 'single') {
+                lot = qeGetLot(cfg, group);
+            } else if (group.lotMode === 'perProject' || group.lotMode === 'immune') {
+                const lots = qeGetLot(cfg, group);
+                lot = lots[matchedProject.code] || '';
+            } else if (group.lotMode === 'coag') {
+                const lots = qeGetLot(cfg, group);
+                lot = matchedProject.isDDimer ? lots._dimer : lots._main;
+            }
+            lvData.sort((a, b) => a.day - b.day);
+            lvData.forEach(pt => {
+                rows.push([matchedProject.code, month, pt.day, 1, lot, pt.value, matchedProject.name, operator]);
             });
+        }
 
-            // 生成输出行
-            const conc = group.concentrations || 1;
-
-            for (let li = 0; li < conc; li++) {
-                const lvNo = String(li + 1);
-                const lvData = levels[lvNo] || [];
-                // 计算批号
-                let lot = '';
-                if (group.lotMode === 'suffix') {
-                    const base = qeGetLot(cfg, group);
-                    lot = base + (li === 0 ? 'N' : 'H');
-                } else if (group.lotMode === 'dual') {
-                    const lots = qeGetLot(cfg, group);
-                    lot = Array.isArray(lots) ? lots[li] || '' : '';
-                } else if (group.lotMode === 'single') {
-                    lot = qeGetLot(cfg, group);
-                } else if (group.lotMode === 'perProject' || group.lotMode === 'immune') {
-                    const lots = qeGetLot(cfg, group);
-                    lot = lots[proj.code] || '';
-                } else if (group.lotMode === 'coag') {
-                    const lots = qeGetLot(cfg, group);
-                    lot = proj.isDDimer ? lots._dimer : lots._main;
-                }
-
-                lvData.sort((a, b) => a.day - b.day);
-                lvData.forEach(pt => {
-                    rows.push([
-                        proj.code,   // 项目编码
-                        month,       // 月
-                        pt.day,      // 日
-                        1,           // 次
-                        lot,         // 批号
-                        pt.value,    // 数值
-                        proj.name,   // 备注（中文名）
-                        operator,    // 操作者
-                    ]);
-                });
-            }
-            } catch(e) { console.error(`[LIS-QE] ${proj.name} 错误:`, e); if (statusCb) statusCb(`  ${proj.name}: 错误 ${e.message}`, 'error'); }
+        if (rows.length > 0) {
+            if (statusCb) statusCb(`  ${matchedProject.name}: ${rows.length} 行`, 'ok');
+        } else {
+            if (statusCb) statusCb(`  ${matchedProject.name}: 当前页面无当月数据`, 'info');
         }
         return rows;
     }
