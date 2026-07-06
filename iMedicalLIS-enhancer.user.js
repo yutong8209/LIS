@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.2
+// @version      7.30.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3269,6 +3269,69 @@
         return (cfg.operators && cfg.operators[group.id]) || group.defaultOperator || '';
     }
 
+    // LIS 缩写(Code) → 模板项目编码（按组，来自质控录入页实测）
+    const QE_LIS_ABBR = {
+        blood: { WBC: '1001', RBC: '1002', HGB: '1003', HCT: '1004', PLT: '1005', MCV: '1006', MCH: '1007', MCHC: '1008' },
+        biochem: { ALT: 'P', AST: 'Q', GGT: 'AD', ALP: 'R', LDH: 'U', CK: 'T', GLU: 'F', BUN: 'G', CREA: 'I', UA: 'H', TG: 'M', CHO: 'L', HDL: 'N', TBIL: 'O', DBIL: 'V', K: 'A', Na: 'B', Cl: 'C', Ca: 'D', PHOS: 'E', AMY: 'S', TP: 'J', ALB: 'K' },
+        urine: { SG: '1200', PH: '1202', PRO: '1203', GLU: '1204', LEU: '1210', KET: '1206', BIL: '1205', URO: '1209', BLD: '1207', NIT: '1208' },
+        lipid: { LDL: '2404', APOA1: '2406', APOB: '2407', LPa: '2408' },
+        coag: { INR: '1102', APTT: '1103', PT: '1101', FIB: '1104', DD: '1107' },
+        endocrine: { TT3: '0402', TT4: '0404', FT3: '0401', FT4: '0403', TSH: '0405', hFSH: '0408', LH: '0409', PRL: '0411', E2: '0418', PROG: '0410', TESTO: '0412' },
+        tumor: { AFP: '0501', CEA: '0502', FER: '0511', PSA: '0504', FPSA: '0513', CA199: '0507', CA125: '0505', CA153: '0506' },
+        cardiac: { 'CK-MB': '2501', MYO: '2502', cTnI: '2503', cTnl: '2503' },
+    };
+
+    // 质控物名称关键词 → 限制匹配范围（避免 GLU 同时命中生化和尿常规）
+    function qeMaterialMatchesGroup(group, tc, proj) {
+        const mat = String(tc.MaterialName || tc.MatName || '');
+        if (group.id === 'coag') {
+            if (proj && proj.isDDimer) return /D-二聚体/i.test(mat);
+            return /凝血/i.test(mat) && !/D-二聚体/i.test(mat);
+        }
+        const hints = {
+            blood: /血常|血球|血细胞/i,
+            endocrine: /内分泌/i,
+            tumor: /肿瘤/i,
+            cardiac: /心肌/i,
+            infection: /传染|乙肝|艾滋|梅毒|丙肝|HIV/i,
+            urine: /尿液/i,
+            biochem: /生化/i,
+            lipid: /脂类|血脂/i,
+        };
+        const re = hints[group.id];
+        return !re || re.test(mat);
+    }
+
+    function qeNormName(s) {
+        return String(s || '').replace(/\*+$/, '').trim();
+    }
+
+    function qeMatchProject(group, proj, tc) {
+        if (!qeMaterialMatchesGroup(group, tc, proj)) return false;
+        const code = qeNormName(tc.Code);
+        const cname = qeNormName(tc.CName);
+        const matName = qeNormName(tc.MaterialName);
+        const groupAbbr = QE_LIS_ABBR[group.id] || {};
+        if (code && groupAbbr[code] === proj.code) return true;
+        if (code && proj.name && code.toLowerCase() === proj.name.toLowerCase()) return true;
+        if (code === proj.code) return true;
+        const cnameMatch = cname === proj.name || (cname && proj.name && (cname.includes(proj.name) || proj.name.includes(cname)));
+        const matMatch = matName === proj.name || (matName && proj.name && (matName.includes(proj.name) || proj.name.includes(matName)));
+        const abbrMatch = (matName && proj.name && matName.toLowerCase() === proj.name.toLowerCase()) ||
+            (cname && proj.name && cname.toLowerCase() === proj.name.toLowerCase());
+        const aliases = QE_ALIASES[proj.name] || [];
+        const aliasMatch = aliases.some(alias => {
+            const a = alias.toLowerCase();
+            const cn = cname.toLowerCase();
+            const mn = matName.toLowerCase();
+            const cd = code.toLowerCase();
+            return cn === a || cn.includes(a) || a.includes(cn) ||
+                   mn === a || mn.includes(a) || a.includes(mn) ||
+                   cd === a;
+        });
+        return cnameMatch || matMatch || abbrMatch || aliasMatch;
+    }
+
     // 项目名称别名映射（模板名 → LIS CName）
     const QE_ALIASES = {
         // 血常规
@@ -3285,8 +3348,17 @@
         'APTT': ['活化部分凝血活酶时间', 'APTT', '活化部份凝血活酶时间'],
         'PT': ['凝血酶原时间', 'PT'],
         'FIB': ['纤维蛋白原', 'FIB', '纤维蛋白原定量'],
-        'D-二聚体（FEU)': ['D-二聚体', 'D-Dimer', 'D二聚体'],
+        'D-二聚体（FEU)': ['D-二聚体', 'D-二聚体测定', 'D-Dimer', 'D二聚体', 'DD'],
         // 尿常规
+        '比重': ['比重', 'SG'],
+        '蛋白': ['蛋白', '蛋白质', 'PRO'],
+        '葡萄糖': ['葡萄糖', 'GLU'],
+        '白细胞酯酶': ['白细胞酯酶', '白细胞脂酶', 'LEU'],
+        '酮体': ['酮体', 'KET'],
+        '胆红素': ['胆红素', 'BIL'],
+        '尿胆原': ['尿胆原', 'URO'],
+        '隐血': ['隐血', 'BLD'],
+        '亚硝酸盐': ['亚硝酸盐', 'NIT'],
         'PH': ['酸碱度', 'PH', 'pH'],
         // 内分泌
         'TT3': ['三碘甲状原氨酸', '总T3', 'TT3'],
@@ -3298,21 +3370,41 @@
         'LH': ['黄体生成素', '促黄体生成素', 'LH'],
         'PRL泌乳素': ['泌乳素', '催乳素', 'PRL'],
         'E2': ['雌二醇', 'E2'],
-        'P孕酮': ['孕酮', '孕激素', 'P'],
-        'T睾酮': ['睾酮', 'T'],
+        'P孕酮': ['孕酮', '孕激素', 'PROG'],
+        'T睾酮': ['睾酮', 'TESTO'],
         // 肿瘤
         'AFP': ['甲胎蛋白', 'AFP'],
         'CEA': ['癌胚抗原', 'CEA'],
         '总PSA': ['前列腺特异性抗原', '总前列腺特异性抗原', 'PSA', 'T-PSA'],
+        '铁蛋白': ['铁蛋白', 'FER', 'Ferritin'],
         'CA125': ['糖类抗原125', 'CA125'],
         'CA153': ['糖类抗原153', 'CA153'],
         'CA199': ['糖类抗原199', 'CA199'],
         'F-PSA': ['游离前列腺特异性抗原', '游离PSA', 'F-PSA', 'FPSA'],
-        '铁蛋白': ['铁蛋白', 'Ferritin'],
         // 心肌
         'CK-MB': ['肌酸激酶同工酶', 'CK-MB', 'CKMB'],
-        'MYO': ['肌红蛋白', 'MYO', 'Mb'],
-        '肌钙蛋白': ['肌钙蛋白', '肌钙蛋白I', '肌钙蛋白T', 'cTnI', 'cTnT', 'TnI'],
+        'MYO': ['肌红蛋白', 'MYO', 'Mb', '肌红蛋'],
+        '肌钙蛋白': ['肌钙蛋白', '肌钙蛋白I', '肌钙蛋白T', 'cTnI', 'cTnl', 'cTnT', 'TnI'],
+        // 生化（LIS 缩写补充）
+        '丙氨酸氨基转移酶': ['ALT'],
+        '天门冬氨酸氨基转移酶': ['AST'],
+        'γ-谷氨酰基转移酶': ['GGT'],
+        '碱性磷酸酶': ['ALP'],
+        '乳酸脱氢酶': ['LDH'],
+        '肌酸激酶': ['CK'],
+        '尿素': ['BUN'],
+        '肌酐': ['CREA'],
+        '尿酸': ['UA'],
+        '甘油三酯': ['TG'],
+        '总胆固醇': ['CHO'],
+        '高密度脂蛋白胆固醇': ['HDL'],
+        '总胆红素': ['TBIL'],
+        '直接胆红素': ['DBIL'],
+        '钾': ['K'], '钠': ['Na'], '氯': ['Cl', 'CL'], '钙': ['Ca', 'CA'], '磷': ['PHOS'],
+        'α-淀粉酶': ['AMY'], '总蛋白': ['TP'], '白蛋白': ['ALB'],
+        // 血脂
+        '低密度脂蛋白胆固醇': ['LDL'],
+        '载脂蛋白A1': ['APOA1'], '载脂蛋白B': ['APOB'], '脂蛋白a': ['LPa', 'LP(a)'],
         // 传染病
         'HbsAg': ['乙型肝炎病毒表面抗原测定', '乙肝表面抗原', 'HBsAg', 'HbsAg'],
         'HbsAb': ['乙型肝炎病毒表面抗体测定', '乙肝表面抗体', 'HBsAb', 'HbsAb', '抗-HBs'],
@@ -3568,44 +3660,25 @@
             }
             for (let ti = 0; ti < testCodes.length; ti++) {
                 const tc = testCodes[ti];
-                const code = String(tc.Code || '');
-                const cname = String(tc.CName || '').replace(/\*+$/, '').trim();
-                const matName = String(tc.MaterialName || '').replace(/\*+$/, '').trim();
                 const rowID = String(tc.RowID || '');
                 const matDR = String(tc.MatDR || '');
                 const matLotDR = String(tc.MatLotRowID || '');
-                // 尝试匹配所有组的项目
+                const cname = qeNormName(tc.CName);
                 for (const group of QE_GROUPS) {
                     for (const proj of group.projects) {
-                        if (mappings[proj.code]) continue; // 已找到
-                        // 匹配方式1: 编码精确匹配
-                        const codeMatch = code === proj.code;
-                        // 匹配方式2: 中文名匹配（去除星号后）
-                        const cnameMatch = cname === proj.name || cname.includes(proj.name) || proj.name.includes(cname);
-                        const matMatch = matName === proj.name || matName.includes(proj.name) || proj.name.includes(matName);
-                        // 匹配方式3: 英文名/缩写匹配
-                        const abbrMatch = matName.toLowerCase() === proj.name.toLowerCase() || cname.toLowerCase() === proj.name.toLowerCase();
-                        // 匹配方式4: 别名匹配（支持双向包含）
-                        const aliases = QE_ALIASES[proj.name] || [];
-                        const aliasMatch = aliases.some(alias => {
-                            const a = alias.toLowerCase();
-                            const cn = cname.toLowerCase();
-                            const mn = matName.toLowerCase();
-                            return cn === a || cn.includes(a) || a.includes(cn) ||
-                                   mn === a || mn.includes(a) || a.includes(mn);
-                        });
-                        if (codeMatch || cnameMatch || matMatch || abbrMatch || aliasMatch) {
-                            mappings[proj.code] = {
-                                machineDR: mach.id,
-                                machineName: mach.text,
-                                testCodeDR: rowID,
-                                testName: cname || proj.name,
-                                matDR: matDR,
-                                matLotDR: matLotDR,
-                                wgDR: mach.wgDR,
-                                wgName: mach.wgName,
-                            };
-                        }
+                        if (mappings[proj.code]) continue;
+                        if (!qeMatchProject(group, proj, tc)) continue;
+                        mappings[proj.code] = {
+                            machineDR: mach.id,
+                            machineName: mach.text,
+                            testCodeDR: rowID,
+                            testName: cname || proj.name,
+                            matDR: matDR,
+                            matLotDR: matLotDR,
+                            wgDR: mach.wgDR,
+                            wgName: mach.wgName,
+                            groupId: group.id,
+                        };
                     }
                 }
             }
@@ -3618,7 +3691,7 @@
     }
 
     // 从 localStorage 加载或保存映射
-    const QE_MAP_KEY = 'lis-qe-mappings';
+    const QE_MAP_KEY = 'lis-qe-mappings-v3';
     function qeLoadMappings() {
         try { return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}'); } catch(e) { return {}; }
     }
