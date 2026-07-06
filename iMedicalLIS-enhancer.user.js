@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.28.0
+// @version      7.29.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3657,13 +3657,19 @@
     }
 
     // --- 核心：获取某组的质控数据 ---
+    // 从质控页面的 dgData datagrid 读取数据（和质控图模块一样）
     async function qeFetchGroupData(group, cfg, mappings, statusCb) {
         const rows = []; // 最终输出行
         const month = cfg._month || (new Date().getMonth() + 1);
         const year = cfg._year || new Date().getFullYear();
         const operator = qeGetOperator(cfg, group);
-        const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
-        const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
+
+        // 获取质控页面上下文
+        const jq = qeGetJQ();
+        if (!jq) {
+            if (statusCb) statusCb('无法访问质控页面，请先打开质控数据录入页面', 'error');
+            return rows;
+        }
 
         for (let pi = 0; pi < group.projects.length; pi++) {
             if (qeAbortFlag) break;
@@ -3676,12 +3682,45 @@
 
             if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
-            // 通过 API 查询质控数据
-            const dataRows = await qeApiQCData(map.machineDR, map.testCodeDR, map.matDR, startDate, endDate);
-            if (!dataRows.length) {
-                if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
-                continue;
-            }
+            try {
+                // 选择仪器
+                jq('#cmbMach').combobox('setValue', map.machineDR);
+                const machData = jq('#cmbMach').combobox('getData') || [];
+                const machItem = machData.find(d => String(d.RowID || d.value || '') === map.machineDR);
+                if (machItem && jq('#cmbMach').combobox('options').onSelect) {
+                    jq('#cmbMach').combobox('options').onSelect.call(jq('#cmbMach')[0], machItem);
+                }
+                await new Promise(r => setTimeout(r, 1500));
+
+                // 找到并选中测试项目
+                const testCodes = jq('#dgTestCode').datagrid('getRows') || [];
+                let targetIdx = -1;
+                for (let i = 0; i < testCodes.length; i++) {
+                    if (String(testCodes[i].RowID || '') === map.testCodeDR) { targetIdx = i; break; }
+                }
+                if (targetIdx < 0) {
+                    for (let i = 0; i < testCodes.length; i++) {
+                        const tc = testCodes[i];
+                        const cname = String(tc.CName || '').replace(/\*+$/, '').trim();
+                        if (cname === proj.name || cname.includes(proj.name) || proj.name.includes(cname)) {
+                            targetIdx = i; break;
+                        }
+                    }
+                }
+                if (targetIdx < 0) {
+                    if (statusCb) statusCb(`  ${proj.name}: 测试项目未找到`, 'error');
+                    continue;
+                }
+
+                jq('#dgTestCode').datagrid('selectRow', targetIdx);
+                await new Promise(r => setTimeout(r, 1500));
+
+                // 从 dgData datagrid 读取数据（和质控图模块一样）
+                const dataRows = jq('#dgData').datagrid('getRows') || [];
+                if (!dataRows.length) {
+                    if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
+                    continue;
+                }
 
             // 按浓度分组
             const levels = {};
@@ -3737,6 +3776,7 @@
                     ]);
                 });
             }
+            } catch(e) { console.error(`[LIS-QE] ${proj.name} 错误:`, e); if (statusCb) statusCb(`  ${proj.name}: 错误 ${e.message}`, 'error'); }
         }
         return rows;
     }
@@ -4059,6 +4099,12 @@
     // 主导出流程
     async function qeStartExport() {
         if (qeExporting) return;
+        // 检查是否在质控录入页面
+        const jq = qeGetJQ();
+        if (!jq || !jq('#dgData').datagrid || !jq('#dgTestCode').datagrid) {
+            qeSetStatus('请先打开质控数据录入页面（frmQCDataInputNew）后再导出。', 'error');
+            return;
+        }
 
         const cfg = qeCollectConfig();
         if (!cfg.selectedGroups || !cfg.selectedGroups.length) {
