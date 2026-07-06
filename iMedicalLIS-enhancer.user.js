@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.22.3
+// @version      7.23.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3279,6 +3279,27 @@
         return isQCDataInputPage();
     }
 
+    // 质控 API 基础 URL
+    function qeQCApiUrl() { return BASE + '/qc/ashx/ashQCDataView.ashx'; }
+
+    // 通过 API 查询某台仪器的测试项目列表
+    async function qeApiTestCodes(machineDR, startDate, endDate) {
+        const url = qeQCApiUrl() + '?Method=QryMachineTestCode&MachineParameterDR=' + machineDR + '&MatDR=&MatLotDR=&StartDate=' + (startDate || today()) + '&EndDate=' + (endDate || today());
+        try {
+            const data = await fetchJ(url, 15000);
+            return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+        } catch(e) { console.error('[LIS-QE] qeApiTestCodes error:', e); return []; }
+    }
+
+    // 通过 API 查询某项目某浓度的质控结果数据
+    async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate) {
+        const url = qeQCApiUrl() + '?Method=QueryQCLeaveData&MachineParameterDR=' + machineDR + '&TestCodeDR=' + testCodeDR + '&StartDate=' + startDate + '&EndDate=' + endDate + '&MaterialCode=' + (matDR || '') + '&BatchCode=';
+        try {
+            const data = await fetchJ(url, 15000);
+            return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+        } catch(e) { console.error('[LIS-QE] qeApiQCData error:', e); return []; }
+    }
+
     // 获取所有可用仪器列表
     function qeGetMachines() {
         const jq = qeGetJQ();
@@ -3408,10 +3429,17 @@
     }
 
     // --- 自动检测项目映射 ---
-    // 遍历所有工作组的仪器，找到每个项目对应的 machineObj + testCodeDR
+    // 遍历所有工作组的仪器，通过 API 查询测试项目并匹配
     async function qeDetectMappings(statusCb) {
-        const mappings = {}; // { projectCode: { machineObj, testCodeDR, testName, machineName, matLotDR } }
+        const mappings = {}; // { projectCode: { machineDR, testCodeDR, testName, machineName, matDR, matLotDR, wgDR, wgName } }
         const machines = await qeGetAllMachines();
+        const now = today();
+        // 计算当月日期范围
+        const cfg = qeCollectConfig();
+        const year = cfg._year || new Date().getFullYear();
+        const month = cfg._month || (new Date().getMonth() + 1);
+        const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
+        const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
 
         if (statusCb) statusCb(`正在检测项目映射... 共 ${machines.length} 台仪器`, 'info');
 
@@ -3419,14 +3447,13 @@
             if (qeAbortFlag) break;
             const mach = machines[mi];
             if (statusCb) statusCb(`检测 ${mi+1}/${machines.length}: ${mach.text}（${mach.wgName}）`, 'info');
-            await qeSelectMachine(mach);
-            // 等待测试项目列表加载
-            await new Promise(r => setTimeout(r, 1200));
-            const testCodes = qeGetTestCodes();
+
+            // 通过 API 直接查询测试项目
+            const testCodes = await qeApiTestCodes(mach.id, startDate, endDate);
             console.log(`[LIS-QE] ${mach.text}: ${testCodes.length} 个测试项目`);
             if (testCodes.length > 0) {
                 console.log('[LIS-QE] 示例:', testCodes.slice(0, 3).map(tc =>
-                    `Code=${tc.Code} CName=${tc.CName} MatName=${tc.MaterialName} RowID=${tc.RowID}`
+                    `Code=${tc.Code} CName=${tc.CName} MatName=${tc.MaterialName} RowID=${tc.RowID} MatDR=${tc.MatDR}`
                 ).join(' | '));
             }
             for (let ti = 0; ti < testCodes.length; ti++) {
@@ -3435,6 +3462,7 @@
                 const cname = String(tc.CName || '');
                 const matName = String(tc.MaterialName || '');
                 const rowID = String(tc.RowID || '');
+                const matDR = String(tc.MatDR || '');
                 const matLotDR = String(tc.MatLotRowID || '');
                 // 尝试匹配所有组的项目
                 for (const group of QE_GROUPS) {
@@ -3442,20 +3470,21 @@
                         if (mappings[proj.code]) continue; // 已找到
                         // 匹配方式1: 编码精确匹配
                         const codeMatch = code === proj.code;
-                        // 匹配方式2: 中文名匹配（CName 或 MaterialName 包含项目名，或项目名包含它们）
-                        const nameLower = proj.name.toLowerCase();
+                        // 匹配方式2: 中文名匹配
                         const cnameMatch = cname === proj.name || cname.includes(proj.name) || proj.name.includes(cname);
                         const matMatch = matName === proj.name || matName.includes(proj.name) || proj.name.includes(matName);
-                        // 匹配方式3: 英文名/缩写匹配（WBC/RBC/PLT 等在 MaterialName 中）
-                        const abbrMatch = matName.toLowerCase() === nameLower || cname.toLowerCase() === nameLower;
+                        // 匹配方式3: 英文名/缩写匹配
+                        const abbrMatch = matName.toLowerCase() === proj.name.toLowerCase() || cname.toLowerCase() === proj.name.toLowerCase();
                         if (codeMatch || cnameMatch || matMatch || abbrMatch) {
                             mappings[proj.code] = {
-                                machineObj: { id: mach.id, text: mach.text, wgDR: mach.wgDR, wgName: mach.wgName },
+                                machineDR: mach.id,
                                 machineName: mach.text,
                                 testCodeDR: rowID,
                                 testName: cname || proj.name,
+                                matDR: matDR,
                                 matLotDR: matLotDR,
-                                testRowIndex: ti,
+                                wgDR: mach.wgDR,
+                                wgName: mach.wgName,
                             };
                         }
                     }
@@ -3478,12 +3507,14 @@
         try { localStorage.setItem(QE_MAP_KEY, JSON.stringify(m)); } catch(e) {}
     }
 
-    // --- 核心：获取某组的质控数据 ---
+    // --- 核心：获取某组的质控数据（通过 API） ---
     async function qeFetchGroupData(group, cfg, mappings, statusCb) {
         const rows = []; // 最终输出行
         const month = cfg._month || (new Date().getMonth() + 1);
         const year = cfg._year || new Date().getFullYear();
         const operator = qeGetOperator(cfg, group);
+        const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
+        const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
 
         for (let pi = 0; pi < group.projects.length; pi++) {
             if (qeAbortFlag) break;
@@ -3496,40 +3527,8 @@
 
             if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
-            // 切换仪器（如果需要）
-            await qeSelectMachine(map.machineObj);
-            // 等待测试项目加载
-            await new Promise(r => setTimeout(r, 1000));
-
-            // 找到并选中测试项目
-            const testCodes = qeGetTestCodes();
-            let targetIdx = -1;
-            // 优先用 testCodeDR 匹配，其次用名称
-            for (let i = 0; i < testCodes.length; i++) {
-                const tc = testCodes[i];
-                if (String(tc.RowID || '') === map.testCodeDR) { targetIdx = i; break; }
-            }
-            if (targetIdx < 0) {
-                for (let i = 0; i < testCodes.length; i++) {
-                    const tc = testCodes[i];
-                    const cname = String(tc.CName || '');
-                    const matName = String(tc.MaterialName || '');
-                    if (cname === proj.name || cname.includes(proj.name) ||
-                        matName === proj.name || matName.includes(proj.name) ||
-                        String(tc.Code || '') === proj.code) {
-                        targetIdx = i; break;
-                    }
-                }
-            }
-            if (targetIdx < 0) {
-                if (statusCb) statusCb(`  跳过 ${proj.name}（测试项目未找到）`, 'error');
-                continue;
-            }
-
-            await qeSelectTestCode(targetIdx);
-
-            // 读取质控数据
-            const dataRows = qeReadData();
+            // 通过 API 直接查询质控数据
+            const dataRows = await qeApiQCData(map.machineDR, map.testCodeDR, map.matDR, startDate, endDate);
             if (!dataRows.length) {
                 if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
                 continue;
@@ -3552,7 +3551,6 @@
             });
 
             // 生成输出行
-            const levelNos = Object.keys(levels).sort();
             const conc = group.concentrations || 1;
 
             for (let li = 0; li < conc; li++) {
@@ -3799,12 +3797,6 @@
 
         // 检测映射
         document.getElementById('lis-qe-detect').addEventListener('click', async () => {
-            // 检查是否能访问质控页面上下文
-            const jq = qeGetJQ();
-            if (!jq) {
-                qeSetStatus('无法访问质控页面上下文。请确保已登录 LIS 系统。', 'error');
-                return;
-            }
             qeSetStatus('正在检测项目映射...', 'info');
             document.getElementById('lis-qe-detect').disabled = true;
             try {
@@ -3918,12 +3910,6 @@
     // 主导出流程
     async function qeStartExport() {
         if (qeExporting) return;
-        // 检查是否能访问质控页面上下文
-        const jq = qeGetJQ();
-        if (!jq) {
-            qeSetStatus('无法访问质控页面上下文。请确保已登录 LIS 系统。', 'error');
-            return;
-        }
 
         const cfg = qeCollectConfig();
         if (!cfg.selectedGroups || !cfg.selectedGroups.length) {
