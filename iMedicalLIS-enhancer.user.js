@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.26.0
+// @version      7.27.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3603,31 +3603,38 @@
                 return;
             }
             _qeIframeResolve = resolve;
-            // 检查是否已有质控页面 iframe
+            // 检查是否已有质控页面 iframe（用户可能已打开）
             const existing = qcFindIFrame();
             if (existing) {
                 _qeIframe = existing;
                 _qeIframeReady = true;
+                console.log('[LIS-QE] 找到已有质控页面 iframe');
                 resolve(true);
                 return;
             }
-            // 创建隐藏 iframe
+            // 创建隐藏 iframe（带 MenuDR 参数）
             _qeIframe = document.createElement('iframe');
             _qeIframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
-            _qeIframe.src = BASE + '/qc/form/frmQCDataInputNew';
+            _qeIframe.src = BASE + '/qc/form/frmQCDataInputNew?MenuDR=924&NotIndependent=1';
             document.body.appendChild(_qeIframe);
+            console.log('[LIS-QE] 创建质控页面 iframe:', _qeIframe.src);
             _qeIframe.onload = () => {
+                console.log('[LIS-QE] iframe loaded');
                 setTimeout(() => {
                     _qeIframeReady = true;
                     if (_qeIframeResolve) { _qeIframeResolve(true); _qeIframeResolve = null; }
-                }, 3000);
+                }, 5000); // 等待页面 JS 初始化
+            };
+            _qeIframe.onerror = () => {
+                console.error('[LIS-QE] iframe load error');
             };
             setTimeout(() => {
                 if (!_qeIframeReady) {
+                    console.error('[LIS-QE] iframe 加载超时');
                     _qeIframeReady = true;
                     if (_qeIframeResolve) { _qeIframeResolve(false); _qeIframeResolve = null; }
                 }
-            }, 15000);
+            }, 20000);
         });
     }
 
@@ -3640,6 +3647,26 @@
         const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
         const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
 
+        // 确保 iframe 已加载
+        if (statusCb) statusCb('正在加载质控页面...', 'info');
+        const ready = await qeEnsureQCPage();
+        if (!ready) {
+            if (statusCb) statusCb('质控页面加载超时，请先手动打开质控数据录入页面', 'error');
+            return rows;
+        }
+
+        // 获取 iframe 内的 fetch
+        let iframeFetch = null;
+        try {
+            if (_qeIframe && _qeIframe.contentWindow && _qeIframe.contentWindow.fetch) {
+                iframeFetch = _qeIframe.contentWindow.fetch.bind(_qeIframe.contentWindow);
+            }
+        } catch(e) { console.error('[LIS-QE] iframe fetch access error:', e); }
+        if (!iframeFetch) {
+            if (statusCb) statusCb('无法访问质控页面上下文，请先手动打开质控数据录入页面', 'error');
+            return rows;
+        }
+
         for (let pi = 0; pi < group.projects.length; pi++) {
             if (qeAbortFlag) break;
             const proj = group.projects[pi];
@@ -3651,8 +3678,22 @@
 
             if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
-            // 通过 API 查询质控数据
-            const dataRows = await qeApiQCData(map.machineDR, map.testCodeDR, map.matDR, startDate, endDate);
+            // 从 iframe 内部调用 API
+            const url = qeQCApiUrl() + '?Method=QueryTestResultData&StartDate=' + startDate + '&EndDate=' + endDate + '&InstrumentCode=' + map.machineDR + '&Leavel=&TCCode=' + map.testCodeDR + '&QcRule=&MatDR=' + (map.matDR || '') + '&StartTime=&EndTime=';
+            let dataRows = [];
+            try {
+                const resp = await iframeFetch(url, { credentials: 'same-origin' });
+                const text = await resp.text();
+                if (text && text.trim()) {
+                    let data;
+                    try { data = JSON.parse(text); } catch(e) { data = null; }
+                    if (data) {
+                        const allRows = (data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+                        dataRows = allRows.filter(r => r.TestDate || r.AddDate || r.DayAve || r.Result || r.Result1);
+                    }
+                }
+            } catch(e) { console.error(`[LIS-QE] ${proj.name} API error:`, e); }
+
             if (!dataRows.length) {
                 if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
                 continue;
