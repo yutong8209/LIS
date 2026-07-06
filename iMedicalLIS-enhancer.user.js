@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.24.1
+// @version      7.25.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3591,14 +3591,111 @@
         try { localStorage.setItem(QE_MAP_KEY, JSON.stringify(m)); } catch(e) {}
     }
 
-    // --- 核心：获取某组的质控数据（通过 API） ---
+    // --- 通过 iframe 获取质控数据 ---
+    // 创建隐藏 iframe 加载质控录入页面
+    let _qeIframe = null;
+    let _qeIframeReady = false;
+    let _qeIframeResolve = null;
+
+    function qeEnsureQCPage() {
+        return new Promise((resolve) => {
+            if (_qeIframeReady && _qeIframe && _qeIframe.contentWindow) {
+                resolve(true);
+                return;
+            }
+            _qeIframeResolve = resolve;
+            // 检查是否已有质控页面 iframe
+            const existing = qcFindIFrame();
+            if (existing) {
+                _qeIframe = existing;
+                _qeIframeReady = true;
+                resolve(true);
+                return;
+            }
+            // 创建隐藏 iframe
+            _qeIframe = document.createElement('iframe');
+            _qeIframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+            _qeIframe.src = BASE + '/qc/form/frmQCDataInputNew';
+            document.body.appendChild(_qeIframe);
+            _qeIframe.onload = () => {
+                setTimeout(() => {
+                    _qeIframeReady = true;
+                    if (_qeIframeResolve) { _qeIframeResolve(true); _qeIframeResolve = null; }
+                }, 3000); // 等待页面 JS 初始化
+            };
+            // 超时
+            setTimeout(() => {
+                if (!_qeIframeReady) {
+                    _qeIframeReady = true;
+                    if (_qeIframeResolve) { _qeIframeResolve(false); _qeIframeResolve = null; }
+                }
+            }, 15000);
+        });
+    }
+
+    function qeGetIframeJQ() {
+        if (!_qeIframe || !_qeIframe.contentWindow) return null;
+        try {
+            return _qeIframe.contentWindow.jQuery || _qeIframe.contentWindow.$;
+        } catch(e) { return null; }
+    }
+
+    // 在 iframe 中选择仪器并设置日期范围
+    async function qeIframeSelectMachine(machineDR, startDate, endDate) {
+        const jq = qeGetIframeJQ();
+        if (!jq) return false;
+        try {
+            // 设置日期范围
+            if (startDate) jq('#startdate').datebox('setValue', startDate);
+            if (endDate) jq('#enddate').datebox('setValue', endDate);
+            // 选择仪器
+            jq('#cmbMach').combobox('setValue', machineDR);
+            const data = jq('#cmbMach').combobox('getData') || [];
+            const item = data.find(d => String(d.RowID || d.value || '') === machineDR);
+            if (item && jq('#cmbMach').combobox('options').onSelect) {
+                jq('#cmbMach').combobox('options').onSelect.call(jq('#cmbMach')[0], item);
+            }
+        } catch(e) { console.error('[LIS-QE] qeIframeSelectMachine error:', e); }
+        await new Promise(r => setTimeout(r, 2000));
+        return true;
+    }
+
+    // 在 iframe 中读取 dgData 网格数据
+    function qeIframeReadData() {
+        const jq = qeGetIframeJQ();
+        if (!jq || !jq('#dgData').datagrid) return [];
+        try {
+            return jq('#dgData').datagrid('getRows') || [];
+        } catch(e) { return []; }
+    }
+
+    // 在 iframe 中选中测试项目
+    async function qeIframeSelectTestCode(rowIndex) {
+        const jq = qeGetIframeJQ();
+        if (!jq) return;
+        try {
+            jq('#dgTestCode').datagrid('selectRow', rowIndex);
+        } catch(e) {}
+        await new Promise(r => setTimeout(r, 1500));
+    }
+
+    // --- 核心：通过 iframe 获取某组的质控数据 ---
     async function qeFetchGroupData(group, cfg, mappings, statusCb) {
         const rows = []; // 最终输出行
         const month = cfg._month || (new Date().getMonth() + 1);
         const year = cfg._year || new Date().getFullYear();
         const operator = qeGetOperator(cfg, group);
+
         const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
         const endDate = year + '-' + String(month).padStart(2, '0') + '-28';
+
+        // 确保 iframe 中的质控页面已加载
+        if (statusCb) statusCb('正在加载质控页面...', 'info');
+        const ready = await qeEnsureQCPage();
+        if (!ready) {
+            if (statusCb) statusCb('质控页面加载失败', 'error');
+            return rows;
+        }
 
         for (let pi = 0; pi < group.projects.length; pi++) {
             if (qeAbortFlag) break;
@@ -3611,9 +3708,35 @@
 
             if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
-            // 通过 API 直接查询质控数据
-            const dataRows = await qeApiQCData(map.machineDR, map.testCodeDR, map.matDR, startDate, endDate);
-            console.log(`[LIS-QE] ${proj.name}: API返回 ${dataRows.length} 行, machineDR=${map.machineDR}, testCodeDR=${map.testCodeDR}, matDR=${map.matDR}`);
+            // 在 iframe 中选择仪器和日期范围
+            await qeIframeSelectMachine(map.machineDR, startDate, endDate);
+
+            // 找到并选中测试项目
+            const jq = qeGetIframeJQ();
+            if (!jq) { if (statusCb) statusCb(`  ${proj.name}: iframe 不可用`, 'error'); continue; }
+            const testCodes = jq('#dgTestCode').datagrid('getRows') || [];
+            let targetIdx = -1;
+            for (let i = 0; i < testCodes.length; i++) {
+                if (String(testCodes[i].RowID || '') === map.testCodeDR) { targetIdx = i; break; }
+            }
+            if (targetIdx < 0) {
+                for (let i = 0; i < testCodes.length; i++) {
+                    const tc = testCodes[i];
+                    const cname = String(tc.CName || '').replace(/\*+$/, '').trim();
+                    if (cname === proj.name || cname.includes(proj.name) || proj.name.includes(cname)) {
+                        targetIdx = i; break;
+                    }
+                }
+            }
+            if (targetIdx < 0) {
+                if (statusCb) statusCb(`  ${proj.name}: 测试项目未找到`, 'error');
+                continue;
+            }
+
+            await qeIframeSelectTestCode(targetIdx);
+
+            // 读取质控数据
+            const dataRows = qeIframeReadData();
             if (!dataRows.length) {
                 if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
                 continue;
