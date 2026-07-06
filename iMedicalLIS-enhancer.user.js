@@ -3143,7 +3143,10 @@
             concentrations: 1, lotMode: 'single', defaultLot: '57651',
             defaultOperator: '',
             projects: [
-                { code: '2404', name: '总胆固醇' },
+                { code: '2404', name: '低密度脂蛋白胆固醇' },
+                { code: '2406', name: '载脂蛋白A1' },
+                { code: '2407', name: '载脂蛋白B' },
+                { code: '2408', name: '脂蛋白a' },
             ]
         },
         {
@@ -3165,7 +3168,7 @@
         },
         {
             id: 'endocrine', name: '内分泌', file: '内分泌转换_直接上传.xlsx',
-            concentrations: 1, lotMode: 'immune', defaultLot: '40472',
+            concentrations: 1, lotMode: 'single', defaultLot: '40472',
             defaultOperator: '',
             projects: [
                 { code: '0402', name: 'TT3' },
@@ -3183,7 +3186,7 @@
         },
         {
             id: 'tumor', name: '肿瘤标志物', file: '肿瘤标志物转换_直接上传.xlsx',
-            concentrations: 1, lotMode: 'immune', defaultLot: '74662',
+            concentrations: 1, lotMode: 'single', defaultLot: '74662',
             defaultOperator: '',
             projects: [
                 { code: '0501', name: 'AFP' },
@@ -3198,7 +3201,7 @@
         },
         {
             id: 'cardiac', name: '心肌标志物', file: '心肌损伤标志物转换_直接上传.xlsx',
-            concentrations: 1, lotMode: 'immune', defaultLot: '1003112',
+            concentrations: 1, lotMode: 'single', defaultLot: '1003112',
             defaultOperator: '',
             projects: [
                 { code: '2501', name: 'CK-MB' },
@@ -3274,8 +3277,10 @@
         if (!jq || !jq('#cmbMach').combobox) return [];
         try {
             const data = jq('#cmbMach').combobox('getData') || [];
-            return data.map(d => ({ id: String(d.value || d.id || d.MachineDR || ''), text: String(d.text || d.CName || d.Name || '') }));
-        } catch(e) { return []; }
+            console.log('[LIS-QE] cmbMach getData:', data.length, '项');
+            if (data.length > 0) console.log('[LIS-QE] cmbMach 首项:', JSON.stringify(data[0]).substring(0, 200));
+            return data.map(d => ({ id: String(d.value || d.id || d.MachineDR || d.RowID || d.DR || ''), text: String(d.text || d.CName || d.Name || d.MachineName || '') }));
+        } catch(e) { console.error('[LIS-QE] qeGetMachines error:', e); return []; }
     }
 
     // 设置仪器选择
@@ -3284,10 +3289,16 @@
             const jq = qeGetJQ();
             if (!jq) { resolve(); return; }
             try {
+                // 先清空再设置，确保触发 onSelect
                 jq('#cmbMach').combobox('setValue', machineDR);
-                jq('#cmbMach').combobox('select', machineDR);
-            } catch(e) {}
-            setTimeout(resolve, 800); // 等待测试项目列表加载
+                // 手动触发 combobox 的 onSelect 事件
+                const data = jq('#cmbMach').combobox('getData') || [];
+                const item = data.find(d => String(d.value || d.id || d.MachineDR || d.RowID || '') === machineDR);
+                if (item && jq('#cmbMach').combobox('options').onSelect) {
+                    jq('#cmbMach').combobox('options').onSelect.call(jq('#cmbMach')[0], item);
+                }
+            } catch(e) { console.error('[LIS-QE] qeSelectMachine error:', e); }
+            setTimeout(resolve, 1000); // 等待测试项目列表加载
         });
     }
 
@@ -3371,17 +3382,28 @@
             // 等待测试项目列表加载
             await new Promise(r => setTimeout(r, 1000));
             const testCodes = qeGetTestCodes();
+            // 调试：第一台仪器时打印字段结构
+            if (mi === 0 && testCodes.length > 0) {
+                const sample = testCodes[0];
+                const keys = Object.keys(sample).slice(0, 30);
+                console.log('[LIS-QE] dgTestCode 行字段:', keys.join(', '));
+                console.log('[LIS-QE] 首行示例:', keys.map(k => k + '=' + String(sample[k]).substring(0, 40)).join(' | '));
+                if (statusCb) statusCb(`找到 ${testCodes.length} 个测试项目，字段: ${keys.slice(0,15).join(', ')}`, 'info');
+            }
             for (let ti = 0; ti < testCodes.length; ti++) {
                 const tc = testCodes[ti];
-                const code = String(tc.Code || tc.TestCode || '');
-                const name = String(tc.CName || tc.Synonym || '');
-                const rowID = String(tc.RowID || tc.TestCodeDR || '');
+                // 尝试多种字段名
+                const code = String(tc.Code || tc.TestCode || tc.TCCode || tc.TestCodeNo || tc.ItemCode || '');
+                const name = String(tc.CName || tc.Synonym || tc.TCName || tc.TestCName || tc.Name || tc.ItemName || '');
+                const rowID = String(tc.RowID || tc.TestCodeDR || tc.TCRowID || tc.DR || '');
                 // 尝试匹配所有组的项目
                 for (const group of QE_GROUPS) {
                     for (const proj of group.projects) {
                         if (mappings[proj.code]) continue; // 已找到
-                        if (code === proj.code || rowID === proj.code ||
-                            name === proj.name || name.includes(proj.name)) {
+                        // 精确匹配: 编码或名称
+                        const codeMatch = code === proj.code || rowID === proj.code;
+                        const nameMatch = name === proj.name || name.includes(proj.name) || proj.name.includes(name);
+                        if (codeMatch || nameMatch) {
                             mappings[proj.code] = {
                                 machineDR: mach.id,
                                 machineName: mach.text,
@@ -3438,9 +3460,10 @@
             let targetIdx = -1;
             for (let i = 0; i < testCodes.length; i++) {
                 const tc = testCodes[i];
-                const code = String(tc.Code || tc.TestCode || '');
-                const rowID = String(tc.RowID || tc.TestCodeDR || '');
-                if (code === proj.code || rowID === map.testCodeDR) {
+                const code = String(tc.Code || tc.TestCode || tc.TCCode || tc.TestCodeNo || tc.ItemCode || '');
+                const rowID = String(tc.RowID || tc.TestCodeDR || tc.TCRowID || tc.DR || '');
+                const name = String(tc.CName || tc.Synonym || tc.TCName || tc.TestCName || tc.Name || '');
+                if (code === proj.code || rowID === map.testCodeDR || name === proj.name) {
                     targetIdx = i;
                     break;
                 }
