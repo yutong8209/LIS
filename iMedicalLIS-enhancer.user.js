@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.24.0
+// @version      7.24.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3349,21 +3349,20 @@
 
     // 通过 API 查询某项目某浓度的质控结果数据
     async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate) {
-        const url = qeQCApiUrl() + '?Method=QueryTestResultData&StartDate=' + startDate + '&EndDate=' + endDate + '&InstrumentCode=' + machineDR + '&Leavel=&TCCode=' + testCodeDR + '&QcRule=&MatDR=' + (matDR || '');
-        console.log('[LIS-QE] qeApiQCData:', 'MP=' + machineDR, 'TC=' + testCodeDR, 'Mat=' + matDR, 'Date=' + startDate + '~' + endDate);
+        const url = qeQCApiUrl() + '?Method=QueryTestResultData&StartDate=' + startDate + '&EndDate=' + endDate + '&InstrumentCode=' + machineDR + '&Leavel=&TCCode=' + testCodeDR + '&QcRule=&MatDR=' + (matDR || '') + '&StartTime=&EndTime=';
         try {
             const resp = await fetch(url, { credentials: 'same-origin' });
             const text = await resp.text();
             if (!text || text.trim() === '') return [];
             let data;
-            try { data = JSON.parse(text); } catch(e) { console.error('[LIS-QE] JSON解析失败:', text.substring(0, 100)); return []; }
+            try { data = JSON.parse(text); } catch(e) { return []; }
             const rows = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
-            console.log('[LIS-QE] 解析后:', rows.length, '行');
-            if (rows.length > 0) {
-                console.log('[LIS-QE] 首行字段:', Object.keys(rows[0]).join(', '));
-                console.log('[LIS-QE] 首行:', JSON.stringify(rows[0]).substring(0, 400));
+            // 过滤掉只有级别元数据的行（没有 TestDate 的行不是实际数据）
+            const realRows = rows.filter(r => r.TestDate || r.AddDate || r.DayAve || r.Result || r.Result1);
+            if (realRows.length === 0 && rows.length > 0) {
+                console.log(`[LIS-QE] TC=${testCodeDR}: ${rows.length}行但无实际数据(只有级别元数据)`);
             }
-            return rows;
+            return realRows;
         } catch(e) { console.error('[LIS-QE] qeApiQCData error:', e); return []; }
     }
 
