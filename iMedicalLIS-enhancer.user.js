@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.23.1
+// @version      7.23.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3269,6 +3269,61 @@
         return (cfg.operators && cfg.operators[group.id]) || group.defaultOperator || '';
     }
 
+    // 项目名称别名映射（模板名 → LIS CName）
+    const QE_ALIASES = {
+        // 血常规
+        'WBC': ['白细胞计数', '白细胞', 'WBC'],
+        'RBC': ['红细胞计数', '红细胞', 'RBC'],
+        'Hgb': ['血红蛋白', '血红蛋白浓度', 'Hgb', 'HGB'],
+        'Plt': ['血小板计数', '血小板', 'PLT', 'Plt'],
+        'Hct': ['红细胞压积', '红细胞比容', 'HCT', 'Hct'],
+        'MCV': ['平均红细胞体积', 'MCV'],
+        'MCH': ['平均红细胞血红蛋白含量', 'MCH'],
+        'MCHC': ['平均红细胞血红蛋白浓度', 'MCHC'],
+        // 凝血
+        'INR': ['国际标准化比值', 'INR'],
+        'APTT': ['活化部分凝血活酶时间', 'APTT', '活化部份凝血活酶时间'],
+        'PT': ['凝血酶原时间', 'PT'],
+        'FIB': ['纤维蛋白原', 'FIB', '纤维蛋白原定量'],
+        'D-二聚体（FEU)': ['D-二聚体', 'D-Dimer', 'D二聚体'],
+        // 尿常规
+        'PH': ['酸碱度', 'PH', 'pH'],
+        // 内分泌
+        'TT3': ['三碘甲状原氨酸', '总T3', 'TT3'],
+        'TT4': ['甲状腺素', '总T4', 'TT4'],
+        'FT3': ['游离三碘甲状原氨酸', '游离T3', 'FT3'],
+        'FT4': ['游离甲状腺素', '游离T4', 'FT4'],
+        'TSH': ['促甲状腺激素', 'TSH'],
+        'FSH': ['卵泡刺激素', '促卵泡激素', 'FSH'],
+        'LH': ['黄体生成素', '促黄体生成素', 'LH'],
+        'PRL泌乳素': ['泌乳素', '催乳素', 'PRL'],
+        'E2': ['雌二醇', 'E2'],
+        'P孕酮': ['孕酮', '孕激素', 'P'],
+        'T睾酮': ['睾酮', 'T'],
+        // 肿瘤
+        'AFP': ['甲胎蛋白', 'AFP'],
+        'CEA': ['癌胚抗原', 'CEA'],
+        '总PSA': ['前列腺特异性抗原', '总前列腺特异性抗原', 'PSA', 'T-PSA'],
+        'CA125': ['糖类抗原125', 'CA125'],
+        'CA153': ['糖类抗原153', 'CA153'],
+        'CA199': ['糖类抗原199', 'CA199'],
+        'F-PSA': ['游离前列腺特异性抗原', '游离PSA', 'F-PSA', 'FPSA'],
+        '铁蛋白': ['铁蛋白', 'Ferritin'],
+        // 心肌
+        'CK-MB': ['肌酸激酶同工酶', 'CK-MB', 'CKMB'],
+        'MYO': ['肌红蛋白', 'MYO', 'Mb'],
+        '肌钙蛋白': ['肌钙蛋白', '肌钙蛋白I', '肌钙蛋白T', 'cTnI', 'cTnT', 'TnI'],
+        // 传染病
+        'HbsAg': ['乙型肝炎病毒表面抗原测定', '乙肝表面抗原', 'HBsAg', 'HbsAg'],
+        'HbsAb': ['乙型肝炎病毒表面抗体测定', '乙肝表面抗体', 'HBsAb', 'HbsAb', '抗-HBs'],
+        'HbeAg': ['乙型肝炎病毒e抗原测定', '乙肝e抗原', 'HBeAg', 'HbeAg'],
+        'HbeAb': ['乙型肝炎病毒e抗体测定', '乙肝e抗体', 'HBeAb', 'HbeAb', '抗-HBe'],
+        'HbcAb': ['乙型肝炎病毒核心抗体测定', '乙肝核心抗体', 'HBcAb', 'HbcAb', '抗-HBc'],
+        '抗-HCV': ['丙型肝炎病毒抗体测定', '丙肝抗体', '抗-HCV', 'HCV'],
+        'TP': ['梅毒螺旋体抗体测定', '梅毒抗体', 'TP', '梅毒'],
+        'HIV': ['人类免疫缺陷病毒抗体测定', 'HIV抗体', 'HIV'],
+    };
+
     // --- 从质控页面读取数据 ---
     function qeGetJQ() {
         const ctx = qcGetCtx();
@@ -3485,7 +3540,14 @@
                         const matMatch = matName === proj.name || matName.includes(proj.name) || proj.name.includes(matName);
                         // 匹配方式3: 英文名/缩写匹配
                         const abbrMatch = matName.toLowerCase() === proj.name.toLowerCase() || cname.toLowerCase() === proj.name.toLowerCase();
-                        if (codeMatch || cnameMatch || matMatch || abbrMatch) {
+                        // 匹配方式4: 别名匹配
+                        const aliases = QE_ALIASES[proj.name] || [];
+                        const aliasMatch = aliases.some(alias => {
+                            const a = alias.toLowerCase();
+                            return cname.toLowerCase() === a || cname.toLowerCase().includes(a) ||
+                                   matName.toLowerCase() === a || matName.toLowerCase().includes(a);
+                        });
+                        if (codeMatch || cnameMatch || matMatch || abbrMatch || aliasMatch) {
                             mappings[proj.code] = {
                                 machineDR: mach.id,
                                 machineName: mach.text,
