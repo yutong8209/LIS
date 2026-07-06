@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.3
+// @version      7.30.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3215,14 +3215,14 @@
             concentrations: 1, lotMode: 'immune',
             defaultOperator: '',
             projects: [
-                { code: '21011', name: 'HbsAg', defaultLot: '202509002HBsAg' },
-                { code: '21021', name: 'HbsAb', defaultLot: '202410006HBsAb' },
-                { code: '21031', name: 'HbeAg', defaultLot: '202404002' },
-                { code: '21041', name: 'HbeAb', defaultLot: '202405001eAb' },
-                { code: '21131', name: 'HbcAb', defaultLot: '202412005HBCAB' },
-                { code: '21071', name: '抗-HCV', defaultLot: '202407002HCV' },
-                { code: '21101', name: 'TP', defaultLot: '202403004' },
-                { code: '21121', name: 'HIV', defaultLot: '202409002HIV' },
+                { code: '21011', name: 'HbsAg', lisName: '乙型肝炎病毒表面抗原测定', defaultLot: '202509002HBsAg' },
+                { code: '21021', name: 'HbsAb', lisName: '乙型肝炎病毒表面抗体测定', defaultLot: '202410006HBsAb' },
+                { code: '21031', name: 'HbeAg', lisName: '乙型肝炎病毒e抗原测定', defaultLot: '202404002' },
+                { code: '21041', name: 'HbeAb', lisName: '乙型肝炎病毒e抗体测定', defaultLot: '202405001eAb' },
+                { code: '21131', name: 'HbcAb', lisName: '乙型肝炎病毒核心抗体测定', defaultLot: '202412005HBCAB' },
+                { code: '21071', name: '抗-HCV', lisName: '丙型肝炎病毒抗体测定', defaultLot: '202407002HCV' },
+                { code: '21101', name: 'TP', lisName: '梅毒螺旋体抗体测定', defaultLot: '202403004' },
+                { code: '21121', name: 'HIV', lisName: '人免疫缺陷病毒抗体测定', defaultLot: '202409002HIV' },
             ]
         },
     ];
@@ -3284,22 +3284,27 @@
     // 质控物名称关键词 → 限制匹配范围（避免 GLU 同时命中生化和尿常规）
     function qeMaterialMatchesGroup(group, tc, proj) {
         const mat = String(tc.MaterialName || tc.MatName || '');
+        const cname = qeNormName(tc.CName);
+        const text = mat + ' ' + cname;
         if (group.id === 'coag') {
-            if (proj && proj.isDDimer) return /D-二聚体/i.test(mat);
-            return /凝血/i.test(mat) && !/D-二聚体/i.test(mat);
+            if (proj && proj.isDDimer) return /D-二聚体/i.test(text);
+            return /凝血/i.test(text) && !/D-二聚体/i.test(text);
+        }
+        if (group.id === 'infection' && proj && proj.lisName) {
+            return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
         }
         const hints = {
             blood: /血常|血球|血细胞/i,
             endocrine: /内分泌/i,
             tumor: /肿瘤/i,
             cardiac: /心肌/i,
-            infection: /传染|乙肝|艾滋|梅毒|丙肝|HIV/i,
+            infection: /传染|乙肝|乙型肝炎|丙型肝炎|艾滋|免疫缺陷|梅毒|丙肝|HIV/i,
             urine: /尿液/i,
             biochem: /生化/i,
             lipid: /脂类|血脂/i,
         };
         const re = hints[group.id];
-        return !re || re.test(mat);
+        return !re || re.test(text);
     }
 
     function qeNormName(s) {
@@ -3307,9 +3312,10 @@
     }
 
     function qeMatchProject(group, proj, tc) {
-        if (!qeMaterialMatchesGroup(group, tc, proj)) return false;
         const code = qeNormName(tc.Code);
         const cname = qeNormName(tc.CName);
+        if (proj.lisName && (cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname))) return true;
+        if (!qeMaterialMatchesGroup(group, tc, proj)) return false;
         const matName = qeNormName(tc.MaterialName);
         const groupAbbr = QE_LIS_ABBR[group.id] || {};
         if (code && groupAbbr[code] === proj.code) return true;
@@ -3405,7 +3411,7 @@
         // 血脂
         '低密度脂蛋白胆固醇': ['LDL'],
         '载脂蛋白A1': ['APOA1'], '载脂蛋白B': ['APOB'], '脂蛋白a': ['LPa', 'LP(a)'],
-        // 传染病
+        // 传染病（X8：LIS 仅中文名）
         'HbsAg': ['乙型肝炎病毒表面抗原测定', '乙肝表面抗原', 'HBsAg', 'HbsAg'],
         'HbsAb': ['乙型肝炎病毒表面抗体测定', '乙肝表面抗体', 'HBsAb', 'HbsAb', '抗-HBs'],
         'HbeAg': ['乙型肝炎病毒e抗原测定', '乙肝e抗原', 'HBeAg', 'HbeAg'],
@@ -3413,7 +3419,7 @@
         'HbcAb': ['乙型肝炎病毒核心抗体测定', '乙肝核心抗体', 'HBcAb', 'HbcAb', '抗-HBc'],
         '抗-HCV': ['丙型肝炎病毒抗体测定', '丙肝抗体', '抗-HCV', 'HCV'],
         'TP': ['梅毒螺旋体抗体测定', '梅毒抗体', 'TP', '梅毒'],
-        'HIV': ['人类免疫缺陷病毒抗体测定', 'HIV抗体', 'HIV'],
+        'HIV': ['人免疫缺陷病毒抗体测定', '人类免疫缺陷病毒抗体测定', 'HIV抗体', 'HIV', '艾滋'],
     };
 
     // --- 从质控页面读取数据 ---
@@ -3691,7 +3697,7 @@
     }
 
     // 从 localStorage 加载或保存映射
-    const QE_MAP_KEY = 'lis-qe-mappings-v3';
+    const QE_MAP_KEY = 'lis-qe-mappings-v4';
     function qeLoadMappings() {
         try { return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}'); } catch(e) { return {}; }
     }
