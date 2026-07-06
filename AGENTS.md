@@ -2,19 +2,20 @@
 
 ## What this is
 
-A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Tampermonkey userscript for a hospital LIS at `http://192.168.31.111:9111/iMedicalLIS/*` (via nginx proxy) or `http://10.0.29.100/iMedicalLIS/*` (direct). Supporting scripts provide screenshot and browser automation.
+A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Tampermonkey userscript for a hospital LIS at `http://192.168.31.111:9111/iMedicalLIS/*` (via nginx proxy) or `http://10.0.29.100/iMedicalLIS/*` (direct). Modules include report review automation, patient result export, QC data export, and QC chart enhancement. Supporting scripts provide screenshot and browser automation.
 
 ## Key files
 
 | File | Purpose |
 |---|---|
-| `iMedicalLIS-enhancer.user.js` | Main userscript. Report review automation, batch approve, hotkeys, result classification. |
+| `iMedicalLIS-enhancer.user.js` | Main userscript. Report review automation, batch approve, hotkeys, result classification, QC data export. |
 | `serve.py` / `serve.js` | Local HTTP server on `localhost:8765` serving the userscript for Tampermonkey auto-update. |
 | `start_serve_mac.command` | Mac startup script — double-click or add to Login Items. |
 | `browser_control.py` | CLI for screenshot, click, type, key — outputs JSON. |
 | `image-reader.py` | CLI to read local image metadata (path, format, size). |
 | `image-reader-hook.py` | Stdin hook that detects image paths in text and prints info. |
 | `mcp-image-reader/` | MCP server: `read_image`, `describe_image` tools. |
+| `质控模板/` | 9 个质控数据上传模板 xlsx（血常规/生化/凝血/血脂/尿常规/内分泌/肿瘤/心肌/传染病） |
 
 ## Commands
 

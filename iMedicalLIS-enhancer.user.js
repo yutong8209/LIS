@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.21.1
+// @version      7.22.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -12,6 +12,7 @@
 // @downloadURL  http://localhost:8765/iMedicalLIS-enhancer.user.js
 // @run-at       document-idle
 // @noframes     false
+// @require      https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
 // ==/UserScript==
 
 (function () {
@@ -694,6 +695,59 @@
   #lis-ws-bar{flex-wrap:wrap}
   #lis-ws-body{font-size:11px}
 }
+/* --- 质控数据导出 --- */
+#lis-qe-fab{position:fixed;right:20px;bottom:224px;z-index:99999;width:52px;height:52px;border-radius:50%;border:none;background:#0d7c66;color:#fff;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 3px 14px rgba(13,124,102,.35);display:flex;align-items:center;justify-content:center;user-select:none;transition:transform .15s}
+#lis-qe-fab:hover{background:#09654f;transform:scale(1.06)}
+#lis-qe-panel{position:fixed!important;inset:0!important;z-index:100007!important;background:#eef2f6;display:none;flex-direction:column;font-family:'Microsoft YaHei','Segoe UI',sans-serif;color:#1f2933}
+#lis-qe-panel.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
+#lis-qe-hd{height:40px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#e8f5f1;border-bottom:1px solid #b8ddd3;flex-shrink:0}
+#lis-qe-hd h3{margin:0;font-size:14px;color:#0d7c66;white-space:nowrap;font-weight:800}
+#lis-qe-hd .qe-spacer{flex:1}
+#lis-qe-hd button{height:26px;border:1px solid #8ecbbf;background:#fff;color:#0d6655;border-radius:4px;padding:0 10px;font-size:11px;font-weight:700;cursor:pointer}
+#lis-qe-hd button:hover{background:#f0faf7;border-color:#4db89e}
+#lis-qe-hd .qe-close{font-size:18px;line-height:20px;padding:0 8px;color:#7b8b96}
+#lis-qe-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;background:#f7f9fb;padding:12px 16px}
+.qe-section{background:#fff;border:1px solid #d5e4ef;border-radius:8px;padding:12px 14px;margin-bottom:10px}
+.qe-section-title{font-size:12px;font-weight:800;color:#0d7c66;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.qe-section-title::before{content:'';display:inline-block;width:3px;height:14px;background:#0d7c66;border-radius:2px}
+.qe-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.qe-row label{display:flex;align-items:center;gap:5px;font-size:12px;color:#334155;font-weight:600;cursor:pointer;white-space:nowrap}
+.qe-row input[type="checkbox"]{width:14px;height:14px;accent-color:#0d7c66}
+.qe-row input[type="text"],.qe-row input[type="number"]{height:26px;border:1px solid #c3ced8;border-radius:4px;padding:2px 7px;font-size:12px;color:#213547;background:#fff;outline:none;box-sizing:border-box}
+.qe-row input[type="text"]:focus,.qe-row input[type="number"]:focus{border-color:#4db89e;box-shadow:0 0 0 2px rgba(77,184,158,.12)}
+.qe-row select{height:26px;border:1px solid #c3ced8;border-radius:4px;padding:2px 4px;font-size:12px;color:#213547;background:#fff;outline:none}
+.qe-lot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;width:100%}
+.qe-lot-item{display:flex;align-items:center;gap:5px;font-size:11px;color:#475569}
+.qe-lot-item span{min-width:60px;font-weight:700;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qe-lot-item input{flex:1;min-width:0;height:24px;border:1px solid #d5dde5;border-radius:3px;padding:1px 5px;font-size:11px}
+.qe-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.qe-actions button{height:30px;border:1px solid #8ecbbf;background:#fff;color:#0d6655;border-radius:5px;padding:0 14px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s}
+.qe-actions button:hover{background:#f0faf7;border-color:#4db89e}
+.qe-actions button.primary{background:#0d7c66;color:#fff;border-color:#09654f;box-shadow:0 1px 4px rgba(13,124,102,.25)}
+.qe-actions button.primary:hover{background:#09654f}
+.qe-actions button:disabled{opacity:.5;cursor:not-allowed}
+#lis-qe-status{padding:4px 0;font-size:11px;color:#6b7785}
+#lis-qe-status.ok{color:#0f6f65}
+#lis-qe-status.error{color:#c62828}
+#lis-qe-status.info{color:#1565c0}
+.qe-progress{margin-top:8px;background:#edf2f7;border-radius:6px;overflow:hidden;height:20px;position:relative;display:none}
+.qe-progress.show{display:block}
+.qe-progress-bar{height:100%;background:linear-gradient(90deg,#0d7c66,#4db89e);transition:width .3s;border-radius:6px}
+.qe-progress-text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#334155}
+.qe-result-list{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.qe-result-item{display:flex;align-items:center;gap:8px;padding:6px 10px;background:#fff;border:1px solid #d5e4ef;border-radius:5px;font-size:12px}
+.qe-result-item .qe-ri-name{flex:1;font-weight:700;color:#334155}
+.qe-result-item .qe-ri-status{font-size:11px;font-weight:600}
+.qe-result-item .qe-ri-status.ok{color:#0d7c66}
+.qe-result-item .qe-ri-status.err{color:#c62828}
+.qe-result-item button{height:24px;border:1px solid #8ecbbf;background:#fff;color:#0d6655;border-radius:3px;padding:0 8px;font-size:10px;font-weight:700;cursor:pointer}
+.qe-result-item button:hover{background:#f0faf7}
+.qe-immune-toggle{font-size:11px;color:#0d7c66;cursor:pointer;text-decoration:underline;user-select:none;margin-left:8px}
+.qe-immune-lots{display:none;margin-top:6px}
+.qe-immune-lots.show{display:block}
+.qe-date-row{display:flex;gap:8px;align-items:center}
+.qe-date-row input[type="month"]{height:26px;border:1px solid #c3ced8;border-radius:4px;padding:2px 7px;font-size:12px;color:#213547;background:#fff;outline:none}
+.qe-mapping-info{font-size:10px;color:#7b8b96;margin-top:4px;line-height:1.4}
     `);
 
     // ==================== Toast ====================
@@ -3018,6 +3072,889 @@
             if (e.key === 'Escape') panel.classList.remove('show');
         });
     }
+    // ============================================================
+    //  模块 QE：质控数据导出
+    // ============================================================
+    let qeInited = false;
+    let qeExporting = false;
+    let qeAbortFlag = false;
+
+    // --- 9 组项目配置 ---
+    const QE_GROUPS = [
+        {
+            id: 'blood', name: '血常规', file: '血常规转换_直接上传.xlsx',
+            concentrations: 2, lotMode: 'suffix', baseLot: 'E5245',
+            defaultOperator: '',
+            projects: [
+                { code: '1001', name: 'WBC' },
+                { code: '1002', name: 'RBC' },
+                { code: '1004', name: 'Hct' },
+                { code: '1006', name: 'MCV' },
+                { code: '1007', name: 'MCH' },
+                { code: '1008', name: 'MCHC' },
+                { code: '1003', name: 'Hgb' },
+                { code: '1005', name: 'Plt' },
+            ]
+        },
+        {
+            id: 'biochem', name: '生化', file: '生化转换_直接上传.xlsx',
+            concentrations: 2, lotMode: 'dual', defaultLots: ['45981', '46022'],
+            defaultOperator: '',
+            projects: [
+                { code: 'P', name: '丙氨酸氨基转移酶' },
+                { code: 'Q', name: '天门冬氨酸氨基转移酶' },
+                { code: 'AD', name: 'γ-谷氨酰基转移酶' },
+                { code: 'R', name: '碱性磷酸酶' },
+                { code: 'U', name: '乳酸脱氢酶' },
+                { code: 'T', name: '肌酸激酶' },
+                { code: 'F', name: '葡萄糖' },
+                { code: 'E', name: '磷' },
+                { code: 'M', name: '甘油三酯' },
+                { code: 'G', name: '尿素' },
+                { code: 'I', name: '肌酐' },
+                { code: 'A', name: '钾' },
+                { code: 'B', name: '钠' },
+                { code: 'C', name: '氯' },
+                { code: 'D', name: '钙' },
+                { code: 'J', name: '总蛋白' },
+                { code: 'K', name: '白蛋白' },
+                { code: 'O', name: '总胆红素' },
+                { code: 'V', name: '直接胆红素' },
+                { code: 'L', name: '总胆固醇' },
+                { code: 'H', name: '尿酸' },
+                { code: 'S', name: 'α-淀粉酶' },
+                { code: 'N', name: '高密度脂蛋白胆固醇' },
+            ]
+        },
+        {
+            id: 'coag', name: '凝血', file: '凝血转换_直接上传.xlsx',
+            concentrations: 1, lotMode: 'perProject',
+            defaultOperator: '',
+            projects: [
+                { code: '1102', name: 'INR', defaultLot: '84772' },
+                { code: '1103', name: 'APTT', defaultLot: '84772' },
+                { code: '1101', name: 'PT', defaultLot: '84772' },
+                { code: '1104', name: 'FIB', defaultLot: '84772' },
+                { code: '1107', name: 'D-二聚体（FEU)', defaultLot: '74442' },
+            ]
+        },
+        {
+            id: 'lipid', name: '血脂', file: '血脂转换_直接上传.xlsx',
+            concentrations: 1, lotMode: 'single', defaultLot: '57651',
+            defaultOperator: '',
+            projects: [
+                { code: '2404', name: '总胆固醇' },
+            ]
+        },
+        {
+            id: 'urine', name: '尿常规', file: '尿常规转换_直接上传.xlsx',
+            concentrations: 1, lotMode: 'single', defaultLot: '26030302',
+            defaultOperator: '',
+            projects: [
+                { code: '1210', name: '白细胞酯酶' },
+                { code: '1200', name: '比重' },
+                { code: '1205', name: '胆红素' },
+                { code: '1203', name: '蛋白' },
+                { code: '1209', name: '尿胆原' },
+                { code: '1204', name: '葡萄糖' },
+                { code: '1202', name: 'PH' },
+                { code: '1206', name: '酮体' },
+                { code: '1208', name: '亚硝酸盐' },
+                { code: '1207', name: '隐血' },
+            ]
+        },
+        {
+            id: 'endocrine', name: '内分泌', file: '内分泌转换_直接上传.xlsx',
+            concentrations: 1, lotMode: 'immune', defaultLot: '40472',
+            defaultOperator: '',
+            projects: [
+                { code: '0402', name: 'TT3' },
+                { code: '0404', name: 'TT4' },
+                { code: '0401', name: 'FT3' },
+                { code: '0403', name: 'FT4' },
+                { code: '0405', name: 'TSH' },
+                { code: '0408', name: 'FSH' },
+                { code: '0409', name: 'LH' },
+                { code: '0411', name: 'PRL泌乳素' },
+                { code: '0418', name: 'E2' },
+                { code: '0410', name: 'P孕酮' },
+                { code: '0412', name: 'T睾酮' },
+            ]
+        },
+        {
+            id: 'tumor', name: '肿瘤标志物', file: '肿瘤标志物转换_直接上传.xlsx',
+            concentrations: 1, lotMode: 'immune', defaultLot: '74662',
+            defaultOperator: '',
+            projects: [
+                { code: '0501', name: 'AFP' },
+                { code: '0502', name: 'CEA' },
+                { code: '0504', name: '总PSA' },
+                { code: '0505', name: 'CA125' },
+                { code: '0506', name: 'CA153' },
+                { code: '0507', name: 'CA199' },
+                { code: '0513', name: 'F-PSA' },
+                { code: '0511', name: '铁蛋白' },
+            ]
+        },
+        {
+            id: 'cardiac', name: '心肌标志物', file: '心肌损伤标志物转换_直接上传.xlsx',
+            concentrations: 1, lotMode: 'immune', defaultLot: '1003112',
+            defaultOperator: '',
+            projects: [
+                { code: '2501', name: 'CK-MB' },
+                { code: '2502', name: 'MYO' },
+                { code: '2503', name: '肌钙蛋白' },
+            ]
+        },
+        {
+            id: 'infection', name: '传染病', file: '传染病转换_直接上传.xlsx',
+            concentrations: 1, lotMode: 'immune',
+            defaultOperator: '',
+            projects: [
+                { code: '21011', name: 'HbsAg', defaultLot: '202509002HBsAg' },
+                { code: '21021', name: 'HbsAb', defaultLot: '202410006HBsAb' },
+                { code: '21031', name: 'HbeAg', defaultLot: '202404002' },
+                { code: '21041', name: 'HbeAb', defaultLot: '202405001eAb' },
+                { code: '21131', name: 'HbcAb', defaultLot: '202412005HBCAB' },
+                { code: '21071', name: '抗-HCV', defaultLot: '202407002HCV' },
+                { code: '21101', name: 'TP', defaultLot: '202403004' },
+                { code: '21121', name: 'HIV', defaultLot: '202409002HIV' },
+            ]
+        },
+    ];
+
+    // --- 持久化配置 ---
+    const QE_CONFIG_KEY = 'lis-qe-config';
+    function qeLoadConfig() {
+        try { return JSON.parse(localStorage.getItem(QE_CONFIG_KEY) || '{}'); } catch(e) { return {}; }
+    }
+    function qeSaveConfig(cfg) {
+        try { localStorage.setItem(QE_CONFIG_KEY, JSON.stringify(cfg)); } catch(e) {}
+    }
+
+    // 获取某个组的批号配置
+    function qeGetLot(cfg, group) {
+        const gc = cfg.lots && cfg.lots[group.id];
+        if (group.lotMode === 'suffix') return (gc && gc.baseLot) || group.baseLot;
+        if (group.lotMode === 'dual') return (gc && gc.lots) || group.defaultLots || ['', ''];
+        if (group.lotMode === 'single') return (gc && gc.lot) || group.defaultLot || '';
+        if (group.lotMode === 'perProject') {
+            const result = {};
+            group.projects.forEach(p => {
+                result[p.code] = (gc && gc[p.code]) || p.defaultLot || '';
+            });
+            return result;
+        }
+        if (group.lotMode === 'immune') {
+            const result = {};
+            group.projects.forEach(p => {
+                result[p.code] = (gc && gc[p.code]) || p.defaultLot || group.defaultLot || '';
+            });
+            return result;
+        }
+        return '';
+    }
+    function qeGetOperator(cfg, group) {
+        return (cfg.operators && cfg.operators[group.id]) || group.defaultOperator || '';
+    }
+
+    // --- 从质控页面读取数据 ---
+    function qeGetJQ() {
+        const ctx = qcGetCtx();
+        return (ctx.win.jQuery || ctx.win.$ || g('jQuery') || g('$') || window.jQuery || window.$);
+    }
+
+    function qeIsQCPage() {
+        return isQCDataInputPage();
+    }
+
+    // 获取所有可用仪器列表
+    function qeGetMachines() {
+        const jq = qeGetJQ();
+        if (!jq || !jq('#cmbMach').combobox) return [];
+        try {
+            const data = jq('#cmbMach').combobox('getData') || [];
+            return data.map(d => ({ id: String(d.value || d.id || d.MachineDR || ''), text: String(d.text || d.CName || d.Name || '') }));
+        } catch(e) { return []; }
+    }
+
+    // 设置仪器选择
+    function qeSelectMachine(machineDR) {
+        return new Promise(resolve => {
+            const jq = qeGetJQ();
+            if (!jq) { resolve(); return; }
+            try {
+                jq('#cmbMach').combobox('setValue', machineDR);
+                jq('#cmbMach').combobox('select', machineDR);
+            } catch(e) {}
+            setTimeout(resolve, 800); // 等待测试项目列表加载
+        });
+    }
+
+    // 获取当前仪器下的测试项目列表
+    function qeGetTestCodes() {
+        const jq = qeGetJQ();
+        if (!jq || !jq('#dgTestCode').datagrid) return [];
+        try {
+            return jq('#dgTestCode').datagrid('getRows') || [];
+        } catch(e) { return []; }
+    }
+
+    // 选中一个测试项目并等待数据加载
+    function qeSelectTestCode(rowIndex) {
+        return new Promise(resolve => {
+            const jq = qeGetJQ();
+            if (!jq) { resolve(); return; }
+            try {
+                jq('#dgTestCode').datagrid('selectRow', rowIndex);
+            } catch(e) {}
+            setTimeout(resolve, 1200); // 等待 dgData 加载
+        });
+    }
+
+    // 读取 dgData 中的数据
+    function qeReadData() {
+        const jq = qeGetJQ();
+        if (!jq || !jq('#dgData').datagrid) return [];
+        try {
+            return jq('#dgData').datagrid('getRows') || [];
+        } catch(e) { return []; }
+    }
+
+    // 计算质控结果值（复用 qcAverageValue 逻辑）
+    function qeCalcValue(row) {
+        const vals = [];
+        for (let i = 1; i <= 7; i++) {
+            const n = parseFloat(row['Result' + i]);
+            if (!Number.isNaN(n)) vals.push(n);
+        }
+        if (vals.length) return vals.reduce((a, b) => a + b, 0) / vals.length;
+        const candidates = [row.DayAve, row.Result, row.TextRes, row.TestResultPosNeg];
+        for (const v of candidates) {
+            const n = parseFloat(v);
+            if (!Number.isNaN(n)) return n;
+        }
+        return null;
+    }
+
+    // 从日期字符串提取日
+    function qeExtractDay(dateStr) {
+        const s = String(dateStr || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return parseInt(s.slice(8, 10), 10);
+        if (/^\d{8}$/.test(s)) return parseInt(s.slice(6, 8), 10);
+        const d = new Date(s);
+        return Number.isNaN(d.getTime()) ? 0 : d.getDate();
+    }
+
+    // 从日期字符串提取月
+    function qeExtractMonth(dateStr) {
+        const s = String(dateStr || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return parseInt(s.slice(5, 7), 10);
+        if (/^\d{8}$/.test(s)) return parseInt(s.slice(4, 6), 10);
+        const d = new Date(s);
+        return Number.isNaN(d.getTime()) ? 0 : d.getMonth() + 1;
+    }
+
+    // --- 自动检测项目映射 ---
+    // 遍历所有仪器，找到每个项目编码对应的 machineDR + testCodeDR
+    async function qeDetectMappings(statusCb) {
+        const mappings = {}; // { projectCode: { machineDR, testCodeDR, testName, machineName } }
+        const machines = qeGetMachines();
+
+        if (statusCb) statusCb(`正在检测项目映射... 找到 ${machines.length} 台仪器`, 'info');
+
+        for (let mi = 0; mi < machines.length; mi++) {
+            if (qeAbortFlag) break;
+            const mach = machines[mi];
+            if (statusCb) statusCb(`检测仪器 ${mi+1}/${machines.length}: ${mach.text}`, 'info');
+            await qeSelectMachine(mach.id);
+            // 等待测试项目列表加载
+            await new Promise(r => setTimeout(r, 1000));
+            const testCodes = qeGetTestCodes();
+            for (let ti = 0; ti < testCodes.length; ti++) {
+                const tc = testCodes[ti];
+                const code = String(tc.Code || tc.TestCode || '');
+                const name = String(tc.CName || tc.Synonym || '');
+                const rowID = String(tc.RowID || tc.TestCodeDR || '');
+                // 尝试匹配所有组的项目
+                for (const group of QE_GROUPS) {
+                    for (const proj of group.projects) {
+                        if (mappings[proj.code]) continue; // 已找到
+                        if (code === proj.code || rowID === proj.code ||
+                            name === proj.name || name.includes(proj.name)) {
+                            mappings[proj.code] = {
+                                machineDR: mach.id,
+                                machineName: mach.text,
+                                testCodeDR: rowID,
+                                testName: name || proj.name,
+                                testRowIndex: ti,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        const found = Object.keys(mappings).length;
+        const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
+        if (statusCb) statusCb(`映射检测完成: ${found}/${total} 个项目已匹配`, found === total ? 'ok' : 'info');
+        return mappings;
+    }
+
+    // 从 localStorage 加载或保存映射
+    const QE_MAP_KEY = 'lis-qe-mappings';
+    function qeLoadMappings() {
+        try { return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}'); } catch(e) { return {}; }
+    }
+    function qeSaveMappings(m) {
+        try { localStorage.setItem(QE_MAP_KEY, JSON.stringify(m)); } catch(e) {}
+    }
+
+    // --- 核心：获取某组的质控数据 ---
+    async function qeFetchGroupData(group, cfg, mappings, statusCb) {
+        const rows = []; // 最终输出行
+        const month = cfg._month || (new Date().getMonth() + 1);
+        const year = cfg._year || new Date().getFullYear();
+        const operator = qeGetOperator(cfg, group);
+
+        for (let pi = 0; pi < group.projects.length; pi++) {
+            if (qeAbortFlag) break;
+            const proj = group.projects[pi];
+            const map = mappings[proj.code];
+            if (!map) {
+                if (statusCb) statusCb(`  跳过 ${proj.name}（未找到映射）`, 'error');
+                continue;
+            }
+
+            if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
+
+            // 切换仪器（如果需要）
+            await qeSelectMachine(map.machineDR);
+            // 等待测试项目加载
+            await new Promise(r => setTimeout(r, 600));
+
+            // 找到并选中测试项目
+            const testCodes = qeGetTestCodes();
+            let targetIdx = -1;
+            for (let i = 0; i < testCodes.length; i++) {
+                const tc = testCodes[i];
+                const code = String(tc.Code || tc.TestCode || '');
+                const rowID = String(tc.RowID || tc.TestCodeDR || '');
+                if (code === proj.code || rowID === map.testCodeDR) {
+                    targetIdx = i;
+                    break;
+                }
+            }
+            if (targetIdx < 0) {
+                if (statusCb) statusCb(`  跳过 ${proj.name}（测试项目未找到）`, 'error');
+                continue;
+            }
+
+            await qeSelectTestCode(targetIdx);
+
+            // 读取质控数据
+            const dataRows = qeReadData();
+            if (!dataRows.length) {
+                if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
+                continue;
+            }
+
+            // 按浓度分组
+            const levels = {};
+            dataRows.forEach(r => {
+                const lv = String(r.LevelNo || '1');
+                if (!levels[lv]) levels[lv] = [];
+                const val = qeCalcValue(r);
+                if (val !== null && !Number.isNaN(val)) {
+                    const date = r.TestDate || r.AddDate || '';
+                    const m = qeExtractMonth(date);
+                    const d = qeExtractDay(date);
+                    if (m === month && d > 0) {
+                        levels[lv].push({ day: d, value: val });
+                    }
+                }
+            });
+
+            // 生成输出行
+            const levelNos = Object.keys(levels).sort();
+            const conc = group.concentrations || 1;
+
+            for (let li = 0; li < conc; li++) {
+                const lvNo = String(li + 1);
+                const lvData = levels[lvNo] || [];
+                // 计算批号
+                let lot = '';
+                if (group.lotMode === 'suffix') {
+                    const base = qeGetLot(cfg, group);
+                    lot = base + (li === 0 ? 'N' : 'H');
+                } else if (group.lotMode === 'dual') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = Array.isArray(lots) ? lots[li] || '' : '';
+                } else if (group.lotMode === 'single') {
+                    lot = qeGetLot(cfg, group);
+                } else if (group.lotMode === 'perProject' || group.lotMode === 'immune') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = lots[proj.code] || '';
+                }
+
+                lvData.sort((a, b) => a.day - b.day);
+                lvData.forEach(pt => {
+                    rows.push([
+                        proj.code,   // 项目编码
+                        month,       // 月
+                        pt.day,      // 日
+                        1,           // 次
+                        lot,         // 批号
+                        pt.value,    // 数值
+                        proj.name,   // 备注（中文名）
+                        operator,    // 操作者
+                    ]);
+                });
+            }
+        }
+        return rows;
+    }
+
+    // --- Excel 生成 ---
+    function qeBuildXlsx(groupName, rows) {
+        if (typeof XLSX === 'undefined') {
+            throw new Error('SheetJS (XLSX) 未加载，请检查网络连接');
+        }
+        const wb = XLSX.utils.book_new();
+        const header = ['项目编码', '月', '日', '次', '批号', '数值', '备注', '操作者'];
+        const data = [header, ...rows];
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        // 设置列宽
+        ws['!cols'] = [
+            { wch: 10 }, { wch: 5 }, { wch: 5 }, { wch: 4 },
+            { wch: 18 }, { wch: 10 }, { wch: 20 }, { wch: 10 },
+        ];
+        XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+        return XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    }
+
+    function qeDownloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+    }
+
+    // --- UI 创建 ---
+    function qeCreateFab() {
+        if (document.getElementById('lis-qe-fab')) return;
+        const fab = document.createElement('button');
+        fab.id = 'lis-qe-fab';
+        fab.textContent = 'QC导';
+        fab.title = '质控数据导出\n拖动移动 | 点击打开';
+        document.body.appendChild(fab);
+
+        // 恢复位置
+        const FAB_POS_KEY = 'lis-qe-fab-pos';
+        try {
+            const fp = JSON.parse(localStorage.getItem(FAB_POS_KEY) || 'null');
+            if (fp && typeof fp.l === 'number') {
+                fab.style.left = fp.l + 'px'; fab.style.top = fp.t + 'px';
+                fab.style.right = 'auto'; fab.style.bottom = 'auto'; fab.style.position = 'fixed';
+            }
+        } catch(e) {}
+
+        // 拖动 + 点击
+        let fabDx = 0, fabDy = 0, fabDownX = 0, fabDownY = 0;
+        fab.addEventListener('mousedown', e => {
+            fabDx = e.clientX - fab.offsetLeft; fabDy = e.clientY - fab.offsetTop;
+            fabDownX = e.clientX; fabDownY = e.clientY;
+            const onMove = ev => {
+                fab.style.left = (ev.clientX - fabDx) + 'px';
+                fab.style.top = (ev.clientY - fabDy) + 'px';
+                fab.style.right = 'auto'; fab.style.bottom = 'auto'; fab.style.position = 'fixed';
+            };
+            const onUp = ev => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                const dist = Math.abs(ev.clientX - fabDownX) + Math.abs(ev.clientY - fabDownY);
+                if (dist < 5) {
+                    const panel = document.getElementById('lis-qe-panel');
+                    if (panel) panel.classList.toggle('show');
+                } else {
+                    try { localStorage.setItem(FAB_POS_KEY, JSON.stringify({ l: fab.offsetLeft, t: fab.offsetTop })); } catch(e) {}
+                }
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            e.preventDefault();
+        });
+    }
+
+    function qeCreatePanel() {
+        if (document.getElementById('lis-qe-panel')) return;
+        const panel = document.createElement('div');
+        panel.id = 'lis-qe-panel';
+
+        const cfg = qeLoadConfig();
+        const now = new Date();
+        const defaultMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+
+        // 构建项目勾选和批号 HTML
+        let groupsHtml = '';
+        let lotsHtml = '';
+        QE_GROUPS.forEach(g => {
+            const checked = true; // 默认全选
+            groupsHtml += `<label><input type="checkbox" class="qe-gcheck" value="${g.id}" ${checked ? 'checked' : ''}>${g.name} (${g.projects.length}项)</label>`;
+
+            // 批号设置
+            const gc = (cfg.lots && cfg.lots[g.id]) || {};
+            if (g.lotMode === 'suffix') {
+                const base = gc.baseLot || g.baseLot;
+                lotsHtml += `<div class="qe-lot-item"><span>${g.name} 基础批号</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="baseLot" value="${esc(base)}" placeholder="自动+N/H后缀"></div>`;
+            } else if (g.lotMode === 'dual') {
+                const l1 = (gc.lots && gc.lots[0]) || (g.defaultLots && g.defaultLots[0]) || '';
+                const l2 = (gc.lots && gc.lots[1]) || (g.defaultLots && g.defaultLots[1]) || '';
+                lotsHtml += `<div class="qe-lot-item"><span>${g.name} Level1</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="lot0" value="${esc(l1)}"></div>`;
+                lotsHtml += `<div class="qe-lot-item"><span>${g.name} Level2</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="lot1" value="${esc(l2)}"></div>`;
+            } else if (g.lotMode === 'single') {
+                const lot = gc.lot || g.defaultLot || '';
+                lotsHtml += `<div class="qe-lot-item"><span>${g.name}</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="lot" value="${esc(lot)}"></div>`;
+            } else if (g.lotMode === 'perProject') {
+                g.projects.forEach(p => {
+                    const lot = gc[p.code] || p.defaultLot || '';
+                    lotsHtml += `<div class="qe-lot-item"><span>${p.name}</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="proj" data-code="${p.code}" value="${esc(lot)}"></div>`;
+                });
+            } else if (g.lotMode === 'immune') {
+                // 免疫组：可展开的批号设置
+                let projLotsHtml = '';
+                g.projects.forEach(p => {
+                    const lot = gc[p.code] || p.defaultLot || g.defaultLot || '';
+                    projLotsHtml += `<div class="qe-lot-item"><span>${p.name}</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="proj" data-code="${p.code}" value="${esc(lot)}"></div>`;
+                });
+                lotsHtml += `<div class="qe-lot-item" style="flex:1 0 100%"><span style="min-width:auto">${g.name}</span><span class="qe-immune-toggle" data-target="qe-imm-${g.id}">展开设置 ▾</span></div>`;
+                lotsHtml += `<div id="qe-imm-${g.id}" class="qe-immune-lots" style="flex:1 0 100%"><div class="qe-lot-grid">${projLotsHtml}</div></div>`;
+            }
+        });
+
+        // 操作者设置
+        const operatorGroups = [
+            { ids: ['blood', 'coag', 'lipid', 'urine'], label: '血常规/凝血/血脂/尿常规', def: '' },
+            { ids: ['biochem'], label: '生化', def: '' },
+            { ids: ['endocrine', 'tumor', 'cardiac', 'infection'], label: '免疫组', def: '' },
+        ];
+        let operatorHtml = '';
+        operatorGroups.forEach(og => {
+            const val = (cfg.operators && cfg.operators[og.ids[0]]) || og.def;
+            operatorHtml += `<div class="qe-lot-item"><span>${og.label}</span><input type="text" class="qe-op-input" data-ids="${og.ids.join(',')}" value="${esc(val)}" style="flex:1;min-width:0"></div>`;
+        });
+
+        panel.innerHTML = `
+            <div id="lis-qe-hd">
+                <h3>📊 质控数据导出</h3>
+                <span class="qe-spacer"></span>
+                <button id="lis-qe-mini" title="隐藏">_</button>
+                <button class="qe-close" id="lis-qe-close" title="关闭">×</button>
+            </div>
+            <div id="lis-qe-body">
+                <div class="qe-section">
+                    <div class="qe-section-title">导出月份</div>
+                    <div class="qe-date-row">
+                        <input type="month" id="lis-qe-month" value="${defaultMonth}">
+                        <span style="font-size:11px;color:#7b8b96">选择需要导出的月份</span>
+                    </div>
+                </div>
+                <div class="qe-section">
+                    <div class="qe-section-title">导出项目 <button id="lis-qe-toggle-all" style="margin-left:auto;height:22px;font-size:10px;border:1px solid #b8ddd3;background:#f0faf7;color:#0d6655;border-radius:3px;padding:0 8px;cursor:pointer;font-weight:700">全选/反选</button></div>
+                    <div class="qe-row">${groupsHtml}</div>
+                </div>
+                <div class="qe-section">
+                    <div class="qe-section-title">批号设置</div>
+                    <div class="qe-lot-grid">${lotsHtml}</div>
+                </div>
+                <div class="qe-section">
+                    <div class="qe-section-title">操作者</div>
+                    <div class="qe-lot-grid">${operatorHtml}</div>
+                </div>
+                <div class="qe-section">
+                    <div class="qe-actions">
+                        <button id="lis-qe-detect" title="自动检测质控页面中的项目映射">🔍 检测映射</button>
+                        <button id="lis-qe-export" class="primary" title="开始导出">▶ 开始导出</button>
+                        <button id="lis-qe-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">⏹ 停止</button>
+                    </div>
+                    <div id="lis-qe-status">请先在质控数据录入页面点击"检测映射"，再点击"开始导出"。</div>
+                    <div class="qe-progress" id="lis-qe-progress"><div class="qe-progress-bar" id="lis-qe-pbar"></div><div class="qe-progress-text" id="lis-qe-ptext"></div></div>
+                    <div class="qe-mapping-info" id="lis-qe-mapinfo"></div>
+                </div>
+                <div class="qe-section" id="lis-qe-result-section" style="display:none">
+                    <div class="qe-section-title">导出结果</div>
+                    <div class="qe-result-list" id="lis-qe-results"></div>
+                </div>
+            </div>`;
+        document.body.appendChild(panel);
+
+        // --- 事件绑定 ---
+        document.getElementById('lis-qe-mini').addEventListener('click', () => panel.classList.remove('show'));
+        document.getElementById('lis-qe-close').addEventListener('click', () => panel.classList.remove('show'));
+
+        // 全选/反选
+        document.getElementById('lis-qe-toggle-all').addEventListener('click', () => {
+            const checks = panel.querySelectorAll('.qe-gcheck');
+            const allChecked = Array.from(checks).every(c => c.checked);
+            checks.forEach(c => c.checked = !allChecked);
+        });
+
+        // 免疫组展开/折叠
+        panel.querySelectorAll('.qe-immune-toggle').forEach(el => {
+            el.addEventListener('click', () => {
+                const target = document.getElementById(el.dataset.target);
+                if (target) {
+                    target.classList.toggle('show');
+                    el.textContent = target.classList.contains('show') ? '收起 ▴' : '展开设置 ▾';
+                }
+            });
+        });
+
+        // 检测映射
+        document.getElementById('lis-qe-detect').addEventListener('click', async () => {
+            if (!qeIsQCPage()) {
+                qeSetStatus('请先打开质控数据录入页面（frmQCDataInputNew）后再检测。', 'error');
+                return;
+            }
+            qeSetStatus('正在检测项目映射...', 'info');
+            document.getElementById('lis-qe-detect').disabled = true;
+            try {
+                const mappings = await qeDetectMappings(qeSetStatus);
+                qeSaveMappings(mappings);
+                qeShowMappingInfo(mappings);
+            } catch(e) {
+                qeSetStatus('检测失败: ' + e.message, 'error');
+            }
+            document.getElementById('lis-qe-detect').disabled = false;
+        });
+
+        // 开始导出
+        document.getElementById('lis-qe-export').addEventListener('click', () => qeStartExport());
+        document.getElementById('lis-qe-cancel').addEventListener('click', () => {
+            qeAbortFlag = true;
+            qeSetStatus('正在停止...', 'info');
+        });
+
+        // ESC 关闭
+        panel.addEventListener('keydown', e => {
+            if (e.key === 'Escape') panel.classList.remove('show');
+        });
+
+        // 加载已有映射信息
+        const savedMap = qeLoadMappings();
+        if (Object.keys(savedMap).length) qeShowMappingInfo(savedMap);
+    }
+
+    function qeSetStatus(text, type) {
+        const el = document.getElementById('lis-qe-status');
+        if (!el) return;
+        el.textContent = text || '';
+        el.classList.remove('ok', 'error', 'info');
+        if (type) el.classList.add(type);
+    }
+
+    function qeShowMappingInfo(mappings) {
+        const el = document.getElementById('lis-qe-mapinfo');
+        if (!el) return;
+        const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
+        const found = Object.keys(mappings).length;
+        const missing = [];
+        QE_GROUPS.forEach(g => {
+            g.projects.forEach(p => {
+                if (!mappings[p.code]) missing.push(p.name);
+            });
+        });
+        el.innerHTML = `已匹配 <b>${found}/${total}</b> 个项目` +
+            (missing.length ? `　|　未匹配: ${missing.join('、')}` : '　|　✅ 全部匹配');
+    }
+
+    // 从 UI 收集配置
+    function qeCollectConfig() {
+        const panel = document.getElementById('lis-qe-panel');
+        if (!panel) return {};
+        const cfg = {};
+
+        // 月份
+        const monthInput = document.getElementById('lis-qe-month');
+        if (monthInput && monthInput.value) {
+            const parts = monthInput.value.split('-');
+            cfg._year = parseInt(parts[0], 10);
+            cfg._month = parseInt(parts[1], 10);
+        }
+
+        // 选中的组
+        cfg.selectedGroups = Array.from(panel.querySelectorAll('.qe-gcheck:checked')).map(c => c.value);
+
+        // 批号
+        cfg.lots = {};
+        panel.querySelectorAll('.qe-lot-input').forEach(input => {
+            const gid = input.dataset.group;
+            const type = input.dataset.type;
+            const code = input.dataset.code;
+            const val = input.value.trim();
+            if (!cfg.lots[gid]) cfg.lots[gid] = {};
+            if (type === 'baseLot') cfg.lots[gid].baseLot = val;
+            else if (type === 'lot0') { if (!cfg.lots[gid].lots) cfg.lots[gid].lots = []; cfg.lots[gid].lots[0] = val; }
+            else if (type === 'lot1') { if (!cfg.lots[gid].lots) cfg.lots[gid].lots = []; cfg.lots[gid].lots[1] = val; }
+            else if (type === 'lot') cfg.lots[gid].lot = val;
+            else if (type === 'proj' && code) cfg.lots[gid][code] = val;
+        });
+
+        // 操作者
+        cfg.operators = {};
+        panel.querySelectorAll('.qe-op-input').forEach(input => {
+            const ids = (input.dataset.ids || '').split(',');
+            ids.forEach(id => { if (id) cfg.operators[id] = input.value.trim(); });
+        });
+
+        return cfg;
+    }
+
+    // 显示进度
+    function qeShowProgress(current, total, text) {
+        const prog = document.getElementById('lis-qe-progress');
+        const bar = document.getElementById('lis-qe-pbar');
+        const ptxt = document.getElementById('lis-qe-ptext');
+        if (prog) prog.classList.add('show');
+        if (bar) bar.style.width = (total > 0 ? (current / total * 100) : 0) + '%';
+        if (ptxt) ptxt.textContent = text || `${current}/${total}`;
+    }
+    function qeHideProgress() {
+        const prog = document.getElementById('lis-qe-progress');
+        if (prog) prog.classList.remove('show');
+    }
+
+    // 主导出流程
+    async function qeStartExport() {
+        if (qeExporting) return;
+        if (!qeIsQCPage()) {
+            qeSetStatus('请先打开质控数据录入页面（frmQCDataInputNew）后再导出。', 'error');
+            return;
+        }
+
+        const cfg = qeCollectConfig();
+        if (!cfg.selectedGroups || !cfg.selectedGroups.length) {
+            qeSetStatus('请至少选择一个导出项目。', 'error');
+            return;
+        }
+
+        // 保存配置
+        qeSaveConfig(cfg);
+
+        const mappings = qeLoadMappings();
+        if (!Object.keys(mappings).length) {
+            qeSetStatus('请先点击"检测映射"来识别质控项目。', 'error');
+            return;
+        }
+
+        qeExporting = true;
+        qeAbortFlag = false;
+        const exportBtn = document.getElementById('lis-qe-export');
+        const cancelBtn = document.getElementById('lis-qe-cancel');
+        const detectBtn = document.getElementById('lis-qe-detect');
+        if (exportBtn) exportBtn.disabled = true;
+        if (cancelBtn) cancelBtn.style.display = '';
+        if (detectBtn) detectBtn.disabled = true;
+
+        const resultSection = document.getElementById('lis-qe-result-section');
+        const resultList = document.getElementById('lis-qe-results');
+        if (resultSection) resultSection.style.display = '';
+        if (resultList) resultList.innerHTML = '';
+
+        const groupsToExport = QE_GROUPS.filter(g => cfg.selectedGroups.includes(g.id));
+        const totalGroups = groupsToExport.length;
+        const results = [];
+
+        for (let gi = 0; gi < totalGroups; gi++) {
+            if (qeAbortFlag) break;
+            const group = groupsToExport[gi];
+            qeSetStatus(`正在导出 ${group.name} (${gi+1}/${totalGroups})...`, 'info');
+            qeShowProgress(gi, totalGroups, `${group.name} (${gi+1}/${totalGroups})`);
+
+            try {
+                const rows = await qeFetchGroupData(group, cfg, mappings, qeSetStatus);
+                if (rows.length > 0) {
+                    const xlsxData = qeBuildXlsx(group.name, rows);
+                    const blob = new Blob([xlsxData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                    results.push({ name: group.file, blob, rows: rows.length });
+                    qeAddResultItem(group.file, rows.length, blob);
+                    qeSetStatus(`${group.name}: 导出完成，${rows.length} 行数据`, 'ok');
+                } else {
+                    qeSetStatus(`${group.name}: 无数据`, 'info');
+                    qeAddResultItem(group.file, 0, null);
+                }
+            } catch(e) {
+                qeSetStatus(`${group.name}: 导出失败 - ${e.message}`, 'error');
+                qeAddResultItem(group.file, 0, null, e.message);
+            }
+        }
+
+        qeShowProgress(totalGroups, totalGroups, '完成');
+        qeExporting = false;
+        qeAbortFlag = false;
+        if (exportBtn) exportBtn.disabled = false;
+        if (cancelBtn) cancelBtn.style.display = 'none';
+        if (detectBtn) detectBtn.disabled = false;
+
+        if (!qeAbortFlag) {
+            qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。`, 'ok');
+        } else {
+            qeSetStatus('导出已停止。', 'info');
+        }
+    }
+
+    function qeAddResultItem(filename, rowCount, blob, error) {
+        const list = document.getElementById('lis-qe-results');
+        if (!list) return;
+        const div = document.createElement('div');
+        div.className = 'qe-result-item';
+        let statusHtml = '';
+        let btnHtml = '';
+        if (error) {
+            statusHtml = `<span class="qe-ri-status err">❌ ${esc(error)}</span>`;
+        } else if (rowCount > 0) {
+            statusHtml = `<span class="qe-ri-status ok">✅ ${rowCount} 行</span>`;
+            if (blob) {
+                btnHtml = `<button data-fn="${esc(filename)}">下载</button>`;
+            }
+        } else {
+            statusHtml = `<span class="qe-ri-status" style="color:#9e9e9e">无数据</span>`;
+        }
+        div.innerHTML = `<span class="qe-ri-name">${esc(filename)}</span>${statusHtml}${btnHtml}`;
+        if (btnHtml) {
+            div.querySelector('button').addEventListener('click', () => {
+                qeDownloadBlob(blob, filename);
+            });
+        }
+        list.appendChild(div);
+    }
+
+    // --- 初始化 ---
+    function initQEExport() {
+        if (qeInited) return;
+        if (!qeIsQCPage()) return;
+        qeInited = true;
+        qeCreateFab();
+        qeCreatePanel();
+        dbg('[LIS-QE] 质控数据导出模块已加载');
+    }
+
+    let qeProbeTimer = null;
+    function startQEProbe() {
+        if (qeProbeTimer) return;
+        const probe = () => {
+            const isQC = qeIsQCPage();
+            const fab = document.getElementById('lis-qe-fab');
+            if (isQC && !qeInited) initQEExport();
+            if (fab) fab.style.display = isQC ? 'flex' : 'none';
+        };
+        probe();
+        qeProbeTimer = setInterval(probe, 2000);
+    }
+
     // ============================================================
     //  模块 C：一体化工作台（核心）
     // ============================================================
@@ -10348,6 +11285,7 @@ function fillNativeLoginForm(creds, lastWG) {
         checkNavigateTarget();
         checkAuditQueueResume();
         startQCInputProbe();
+        startQEProbe();
         injectToolbar();
         initReportEnhance();
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
@@ -10358,6 +11296,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (_authTimer) { clearInterval(_authTimer); _authTimer = null; }
         if (_batchScanTimer) { clearInterval(_batchScanTimer); _batchScanTimer = null; }
         if (qcProbeTimer) { clearInterval(qcProbeTimer); qcProbeTimer = null; }
+        if (qeProbeTimer) { clearInterval(qeProbeTimer); qeProbeTimer = null; }
         if (wsTimer) { clearInterval(wsTimer); wsTimer = null; }
     });
 
