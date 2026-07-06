@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.23.6
+// @version      7.24.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3349,12 +3349,11 @@
 
     // 通过 API 查询某项目某浓度的质控结果数据
     async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate) {
-        const url = qeQCApiUrl() + '?Method=QueryQCLeaveData&MachineParameterDR=' + machineDR + '&TestCodeDR=' + testCodeDR + '&StartDate=' + startDate + '&EndDate=' + endDate + '&MaterialCode=' + (matDR || '') + '&BatchCode=';
+        const url = qeQCApiUrl() + '?Method=QueryTestResultData&StartDate=' + startDate + '&EndDate=' + endDate + '&InstrumentCode=' + machineDR + '&Leavel=&TCCode=' + testCodeDR + '&QcRule=&MatDR=' + (matDR || '');
         console.log('[LIS-QE] qeApiQCData:', 'MP=' + machineDR, 'TC=' + testCodeDR, 'Mat=' + matDR, 'Date=' + startDate + '~' + endDate);
         try {
             const resp = await fetch(url, { credentials: 'same-origin' });
             const text = await resp.text();
-            console.log('[LIS-QE] 响应状态:', resp.status, '长度:', text.length, '前200字:', text.substring(0, 200));
             if (!text || text.trim() === '') return [];
             let data;
             try { data = JSON.parse(text); } catch(e) { console.error('[LIS-QE] JSON解析失败:', text.substring(0, 100)); return []; }
