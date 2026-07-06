@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.4
+// @version      7.30.5
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3222,7 +3222,7 @@
                 { code: '21131', name: 'HbcAb', lisName: '乙型肝炎病毒核心抗体测定', defaultLot: '202412005HBCAB' },
                 { code: '21071', name: '抗-HCV', lisName: '丙型肝炎病毒抗体测定', defaultLot: '202407002HCV' },
                 { code: '21101', name: 'TP', lisName: '梅毒螺旋体抗体测定', defaultLot: '202403004' },
-                { code: '21121', name: 'HIV', lisName: '人免疫缺陷病毒抗体测定', defaultLot: '202409002HIV' },
+                { code: '21121', name: 'HIV', lisName: '人类免疫缺陷病毒抗体测定', defaultLot: '202409002HIV' },
             ]
         },
     ];
@@ -3419,7 +3419,7 @@
         'HbcAb': ['乙型肝炎病毒核心抗体测定', '乙肝核心抗体', 'HBcAb', 'HbcAb', '抗-HBc'],
         '抗-HCV': ['丙型肝炎病毒抗体测定', '丙肝抗体', '抗-HCV', 'HCV'],
         'TP': ['梅毒螺旋体抗体测定', '梅毒抗体', 'TP', '梅毒'],
-        'HIV': ['人免疫缺陷病毒抗体测定', '人类免疫缺陷病毒抗体测定', 'HIV抗体', 'HIV', '艾滋'],
+        'HIV': ['人类免疫缺陷病毒抗体测定', '人免疫缺陷病毒抗体测定', 'HIV抗体', 'HIV', '艾滋'],
     };
 
     // --- 从质控页面读取数据 ---
@@ -3697,7 +3697,7 @@
     }
 
     // 从 localStorage 加载或保存映射
-    const QE_MAP_KEY = 'lis-qe-mappings-v4';
+    const QE_MAP_KEY = 'lis-qe-mappings-v5';
     function qeLoadMappings() {
         try { return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}'); } catch(e) { return {}; }
     }
