@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.6
+// @version      7.30.7
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3083,7 +3083,7 @@
     const QE_GROUPS = [
         {
             id: 'blood', name: '血常规', file: '血常规转换_直接上传.xlsx',
-            machineMatch: /血细胞|血球/i,
+            machineMatch: /血细胞|血球|血常规|bc-|xn|sysmex|mindray|迈瑞/i,
             concentrations: 2, lotMode: 'suffix', baseLot: 'E5245',
             defaultOperator: '',
             projects: [
@@ -3130,7 +3130,7 @@
         },
         {
             id: 'coag', name: '凝血', file: '凝血转换_直接上传.xlsx',
-            machineMatch: /CS.?5100|凝血/i,
+            machineMatch: /CS.?5100|凝血|血凝|coag|stago/i,
             concentrations: 1, lotMode: 'coag', defaultLot: '84772',
             dDimLot: '74442',
             defaultOperator: '',
@@ -3156,7 +3156,7 @@
         },
         {
             id: 'urine', name: '尿常规', file: '尿常规转换_直接上传.xlsx',
-            machineMatch: /尿液/i,
+            machineMatch: /尿液|尿常规|尿沉渣|uf-|uc-|urisys/i,
             concentrations: 1, lotMode: 'single', defaultLot: '26030302',
             defaultOperator: '',
             projects: [
@@ -3174,7 +3174,8 @@
         },
         {
             id: 'endocrine', name: '内分泌', file: '内分泌转换_直接上传.xlsx',
-            machineMatch: /化学发光|DXi|DXI|发光仪/i,
+            machineMatch: /化学发光|DXi|DXI|发光仪|dxi\s*800/i,
+            materialHint: /内分泌/i,
             concentrations: 1, lotMode: 'single', defaultLot: '40472',
             defaultOperator: '',
             projects: [
@@ -3193,7 +3194,8 @@
         },
         {
             id: 'tumor', name: '肿瘤标志物', file: '肿瘤标志物转换_直接上传.xlsx',
-            machineMatch: /化学发光|DXi|DXI|发光仪/i,
+            machineMatch: /化学发光|DXi|DXI|发光仪|dxi\s*800/i,
+            materialHint: /肿瘤/i,
             concentrations: 1, lotMode: 'single', defaultLot: '74662',
             defaultOperator: '',
             projects: [
@@ -3209,7 +3211,8 @@
         },
         {
             id: 'cardiac', name: '心肌标志物', file: '心肌损伤标志物转换_直接上传.xlsx',
-            machineMatch: /化学发光|DXi|DXI|发光仪/i,
+            machineMatch: /化学发光|DXi|DXI|发光仪|dxi\s*800/i,
+            materialHint: /心肌/i,
             concentrations: 1, lotMode: 'single', defaultLot: '1003112',
             defaultOperator: '',
             projects: [
@@ -3220,7 +3223,7 @@
         },
         {
             id: 'infection', name: '传染病', file: '传染病转换_直接上传.xlsx',
-            machineMatch: /\bX8\b|X-?8/i,
+            machineMatch: /maglumi|x\s*-?\s*8\b/i,
             concentrations: 1, lotMode: 'immune',
             defaultOperator: '',
             projects: [
@@ -3280,12 +3283,12 @@
 
     // LIS 缩写(Code) → 模板项目编码（按组，来自质控录入页实测）
     const QE_LIS_ABBR = {
-        blood: { WBC: '1001', RBC: '1002', HGB: '1003', HCT: '1004', PLT: '1005', MCV: '1006', MCH: '1007', MCHC: '1008' },
+        blood: { WBC: '1001', RBC: '1002', HGB: '1003', Hgb: '1003', HCT: '1004', Hct: '1004', PLT: '1005', Plt: '1005', MCV: '1006', MCH: '1007', MCHC: '1008' },
         biochem: { ALT: 'P', AST: 'Q', GGT: 'AD', ALP: 'R', LDH: 'U', CK: 'T', GLU: 'F', BUN: 'G', CREA: 'I', UA: 'H', TG: 'M', CHO: 'L', HDL: 'N', TBIL: 'O', DBIL: 'V', K: 'A', Na: 'B', Cl: 'C', Ca: 'D', PHOS: 'E', AMY: 'S', TP: 'J', ALB: 'K' },
         urine: { SG: '1200', PH: '1202', PRO: '1203', GLU: '1204', LEU: '1210', KET: '1206', BIL: '1205', URO: '1209', BLD: '1207', NIT: '1208' },
         lipid: { LDL: '2404', APOA1: '2406', APOB: '2407', LPa: '2408' },
         coag: { INR: '1102', APTT: '1103', PT: '1101', FIB: '1104', DD: '1107' },
-        endocrine: { TT3: '0402', TT4: '0404', FT3: '0401', FT4: '0403', TSH: '0405', hFSH: '0408', LH: '0409', PRL: '0411', E2: '0418', PROG: '0410', TESTO: '0412' },
+        endocrine: { TT3: '0402', TT4: '0404', FT3: '0401', FT4: '0403', TSH: '0405', FSH: '0408', hFSH: '0408', LH: '0409', PRL: '0411', E2: '0418', PROG: '0410', TESTO: '0412' },
         tumor: { AFP: '0501', CEA: '0502', FER: '0511', PSA: '0504', FPSA: '0513', CA199: '0507', CA125: '0505', CA153: '0506' },
         cardiac: { 'CK-MB': '2501', MYO: '2502', cTnI: '2503', cTnl: '2503' },
     };
@@ -3295,22 +3298,35 @@
         return group.machineMatch.test(String(machineName || ''));
     }
 
+    function qeNormName(s) {
+        return String(s || '').replace(/\*+$/, '').trim();
+    }
+
+    // LIS 常返回 Code=AA001、Synonym=WBC，需同时检查
+    function qeTcKeys(tc) {
+        return [tc.Code, tc.Synonym, tc.LName].map(qeNormName).filter(Boolean);
+    }
+
+    function qeAbbrHit(group, proj, tc) {
+        const groupAbbr = QE_LIS_ABBR[group.id] || {};
+        return qeTcKeys(tc).some(k => groupAbbr[k] === proj.code);
+    }
+
     // 质控物名称关键词 → 限制匹配范围（仪器+缩写命中时可跳过）
     function qeMaterialMatchesGroup(group, tc, proj, machineName) {
-        const code = qeNormName(tc.Code);
         const mat = String(tc.MaterialName || tc.MatName || '');
         const cname = qeNormName(tc.CName);
         const text = mat + ' ' + cname;
-        const groupAbbr = QE_LIS_ABBR[group.id] || {};
         const machineOk = qeMachineMatchesGroup(group, machineName);
 
-        if (machineOk && code && groupAbbr[code] === proj.code) return true;
+        if (machineOk && qeAbbrHit(group, proj, tc)) return true;
+        if (group.materialHint && machineOk && !group.materialHint.test(text)) return false;
 
         if (group.id === 'coag') {
             if (proj && proj.isDDimer) {
-                return code === 'DD' || /D-二聚体/i.test(text);
+                return qeTcKeys(tc).some(k => k === 'DD') || /D-二聚体/i.test(text);
             }
-            if (machineOk && code && groupAbbr[code] === proj.code) return true;
+            if (machineOk && qeAbbrHit(group, proj, tc)) return true;
             return /凝血/i.test(text) && !/D-二聚体/i.test(text);
         }
         if (group.id === 'infection' && proj && proj.lisName) {
@@ -3326,40 +3342,39 @@
             biochem: /生化/i,
             lipid: /脂类|血脂/i,
         };
-        const re = hints[group.id];
+        const re = group.materialHint || hints[group.id];
         return !re || re.test(text);
-    }
-
-    function qeNormName(s) {
-        return String(s || '').replace(/\*+$/, '').trim();
     }
 
     function qeMatchProject(group, proj, tc, machineName) {
         if (!qeMachineMatchesGroup(group, machineName)) return false;
         const code = qeNormName(tc.Code);
+        const synonym = qeNormName(tc.Synonym);
         const cname = qeNormName(tc.CName);
         if (proj.lisName) {
             return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
         }
         if (!qeMaterialMatchesGroup(group, tc, proj, machineName)) return false;
         const matName = qeNormName(tc.MaterialName);
-        const groupAbbr = QE_LIS_ABBR[group.id] || {};
-        if (code && groupAbbr[code] === proj.code) return true;
+        if (qeAbbrHit(group, proj, tc)) return true;
         if (code && proj.name && code.toLowerCase() === proj.name.toLowerCase()) return true;
+        if (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase()) return true;
         if (code === proj.code) return true;
         const cnameMatch = cname === proj.name || (cname && proj.name && (cname.includes(proj.name) || proj.name.includes(cname)));
         const matMatch = matName === proj.name || (matName && proj.name && (matName.includes(proj.name) || proj.name.includes(matName)));
         const abbrMatch = (matName && proj.name && matName.toLowerCase() === proj.name.toLowerCase()) ||
-            (cname && proj.name && cname.toLowerCase() === proj.name.toLowerCase());
+            (cname && proj.name && cname.toLowerCase() === proj.name.toLowerCase()) ||
+            (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase());
         const aliases = QE_ALIASES[proj.name] || [];
         const aliasMatch = aliases.some(alias => {
             const a = alias.toLowerCase();
             const cn = cname.toLowerCase();
             const mn = matName.toLowerCase();
             const cd = code.toLowerCase();
+            const sy = synonym.toLowerCase();
             return cn === a || cn.includes(a) || a.includes(cn) ||
                    mn === a || mn.includes(a) || a.includes(mn) ||
-                   cd === a;
+                   cd === a || sy === a;
         });
         return cnameMatch || matMatch || abbrMatch || aliasMatch;
     }
@@ -3416,7 +3431,7 @@
         // 心肌
         'CK-MB': ['肌酸激酶同工酶', 'CK-MB', 'CKMB'],
         'MYO': ['肌红蛋白', 'MYO', 'Mb', '肌红蛋'],
-        '肌钙蛋白': ['肌钙蛋白', '肌钙蛋白I', '肌钙蛋白T', 'cTnI', 'cTnl', 'cTnT', 'TnI'],
+        '肌钙蛋白': ['肌钙蛋白', '肌钙蛋白I', '肌钙蛋白T', 'cTnI', 'cTnl', 'cTnT', 'TnI', '肌钙蛋白I测定'],
         // 生化（LIS 缩写补充）
         '丙氨酸氨基转移酶': ['ALT'],
         '天门冬氨酸氨基转移酶': ['AST'],
@@ -3467,10 +3482,13 @@
         return year + '-' + String(month).padStart(2, '0') + '-' + String(last).padStart(2, '0');
     }
 
-    // 通过 API 查询某台仪器的测试项目列表
-    async function qeApiTestCodes(machineDR, startDate, endDate) {
-        // 用较宽的日期范围确保能查到项目
-        const url = qeQCApiUrl() + '?Method=QryMachineTestCode&MachineParameterDR=' + machineDR + '&MatDR=&MatLotDR=&StartDate=2025-01-01&EndDate=' + (endDate || today());
+    // 通过 API 查询某台仪器的测试项目列表（与录入页一致用 DataInputNew）
+    async function qeApiTestCodes(machineDR, startDate, endDate, matDR) {
+        const api = qeQCDataApiUrl();
+        const sd = startDate || '2024-01-01';
+        const ed = endDate || today();
+        const url = api + '?Method=QryMachineTestCode&MachineParameterDR=' + encodeURIComponent(machineDR)
+            + '&MatDR=' + encodeURIComponent(matDR || '') + '&MatLotDR=&StartDate=' + encodeURIComponent(sd) + '&EndDate=' + encodeURIComponent(ed);
         try {
             const data = await fetchJ(url, 15000);
             return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
@@ -3662,6 +3680,69 @@
         return Number.isNaN(d.getTime()) ? 0 : d.getMonth() + 1;
     }
 
+    // CS5100 仪器列表常为空，用质控物 MatDR 补查 + 院内稳定 DR 兜底
+    async function qeCoagFallbackMappings(mappings, machines, startDate, endDate, statusCb) {
+        const coagGroup = QE_GROUPS.find(g => g.id === 'coag');
+        if (!coagGroup) return;
+        const missing = coagGroup.projects.filter(p => !mappings[p.code]);
+        if (!missing.length) return;
+        const coagMach = machines.find(m => /CS.?5100|凝血|血凝/i.test(m.text));
+        if (!coagMach) return;
+        if (statusCb) statusCb('凝血组：尝试质控物补查...', 'info');
+
+        const matDRs = ['167', '169', '151', '98'];
+        for (const matDR of matDRs) {
+            const testCodes = await qeApiTestCodes(coagMach.id, startDate, endDate, matDR);
+            for (const tc of testCodes) {
+                const rowID = String(tc.RowID || '');
+                const mat = String(tc.MatDR || matDR || '');
+                const cname = qeNormName(tc.CName);
+                for (const proj of coagGroup.projects) {
+                    if (mappings[proj.code]) continue;
+                    if (!qeMatchProject(coagGroup, proj, tc, coagMach.text)) continue;
+                    mappings[proj.code] = {
+                        machineDR: coagMach.id,
+                        machineName: coagMach.text,
+                        testCodeDR: rowID,
+                        testName: cname || proj.name,
+                        matDR: mat,
+                        matLotDR: String(tc.MatLotRowID || ''),
+                        wgDR: coagMach.wgDR,
+                        wgName: coagMach.wgName,
+                        groupId: coagGroup.id,
+                    };
+                }
+            }
+        }
+
+        const stillMissing = coagGroup.projects.filter(p => !mappings[p.code]);
+        if (!stillMissing.length) return;
+        const hardcoded = [
+            { code: '1101', testCodeDR: '29', matDR: '167', names: ['凝血酶原时间', 'PT'] },
+            { code: '1102', testCodeDR: '282', matDR: '167', names: ['国际标准化比值', 'INR'] },
+            { code: '1103', testCodeDR: '27', matDR: '167', names: ['活化部分凝血活酶时间', 'APTT'] },
+            { code: '1104', testCodeDR: '30', matDR: '167', names: ['纤维蛋白原', 'FIB'] },
+        ];
+        hardcoded.forEach(h => {
+            if (mappings[h.code]) return;
+            const proj = coagGroup.projects.find(p => p.code === h.code);
+            if (!proj) return;
+            mappings[h.code] = {
+                machineDR: coagMach.id,
+                machineName: coagMach.text,
+                testCodeDR: h.testCodeDR,
+                testName: h.names[0],
+                matDR: h.matDR,
+                matLotDR: '',
+                wgDR: coagMach.wgDR,
+                wgName: coagMach.wgName,
+                groupId: coagGroup.id,
+            };
+        });
+        const coagFound = coagGroup.projects.filter(p => mappings[p.code]).length;
+        if (statusCb && coagFound) statusCb(`凝血组：${coagFound}/${coagGroup.projects.length} 已映射`, 'info');
+    }
+
     // --- 自动检测项目映射 ---
     // 遍历所有工作组的仪器，通过 API 查询测试项目并匹配
     async function qeDetectMappings(statusCb) {
@@ -3716,6 +3797,8 @@
             }
         }
 
+        await qeCoagFallbackMappings(mappings, machines, startDate, endDate, statusCb);
+
         const found = Object.keys(mappings).length;
         const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
         if (statusCb) statusCb(`映射检测完成: ${found}/${total} 个项目已匹配`, found === total ? 'ok' : 'info');
@@ -3723,7 +3806,7 @@
     }
 
     // 从 localStorage 加载或保存映射
-    const QE_MAP_KEY = 'lis-qe-mappings-v6';
+    const QE_MAP_KEY = 'lis-qe-mappings-v7';
     function qeLoadMappings() {
         try { return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}'); } catch(e) { return {}; }
     }
@@ -4098,14 +4181,18 @@
         if (!el) return;
         const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
         const found = Object.keys(mappings).length;
+        const groupStats = QE_GROUPS.map(g => {
+            const n = g.projects.filter(p => mappings[p.code]).length;
+            return `${g.name} ${n}/${g.projects.length}`;
+        }).join('　');
         const missing = [];
         QE_GROUPS.forEach(g => {
             g.projects.forEach(p => {
-                if (!mappings[p.code]) missing.push(p.name);
+                if (!mappings[p.code]) missing.push(g.name + '/' + p.name);
             });
         });
-        el.innerHTML = `已匹配 <b>${found}/${total}</b> 个项目` +
-            (missing.length ? `　|　未匹配: ${missing.join('、')}` : '　|　✅ 全部匹配');
+        el.innerHTML = `已匹配 <b>${found}/${total}</b> 个项目<br><span style="font-size:10px;color:#607d8b">${groupStats}</span>` +
+            (missing.length ? `<br>未匹配: ${missing.join('、')}` : '<br>✅ 全部匹配');
     }
 
     // 从 UI 收集配置
