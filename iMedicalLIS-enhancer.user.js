@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.27.1
+// @version      7.28.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3349,15 +3349,39 @@
 
     // 通过 API 查询某项目某浓度的质控结果数据
     async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate) {
-        const url = qeQCApiUrl() + '?Method=QueryTestResultData&StartDate=' + startDate + '&EndDate=' + endDate + '&InstrumentCode=' + machineDR + '&Leavel=&TCCode=' + testCodeDR + '&QcRule=&MatDR=' + (matDR || '') + '&StartTime=&EndTime=';
+        // 第一步：获取正确的 MatLotDR（每个浓度级别的实际批号DR）
+        let matLotDRs = [];
         try {
-            const resp = await fetch(url, { credentials: 'same-origin' });
-            const text = await resp.text();
-            if (!text || text.trim() === '') return [];
-            let data;
-            try { data = JSON.parse(text); } catch(e) { return []; }
-            return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
-        } catch(e) { console.error('[LIS-QE] qeApiQCData error:', e); return []; }
+            const leaveUrl = qeQCApiUrl() + '?Method=QueryQCLeaveData&MachineParameterDR=' + machineDR + '&TestCodeDR=' + testCodeDR + '&StartDate=' + startDate + '&EndDate=' + endDate + '&MaterialCode=' + (matDR || '') + '&BatchCode=';
+            const leaveResp = await fetch(leaveUrl, { credentials: 'same-origin' });
+            const leaveText = await leaveResp.text();
+            if (leaveText && leaveText.trim()) {
+                const leaveData = JSON.parse(leaveText);
+                const leaveRows = (leaveData && leaveData.rows) ? leaveData.rows : (Array.isArray(leaveData) ? leaveData : []);
+                leaveRows.forEach(r => { if (r.MatLotDR) matLotDRs.push(r.MatLotDR); });
+            }
+        } catch(e) {}
+
+        // 如果没有获取到 MatLotDR，用原始 matDR
+        if (!matLotDRs.length) matLotDRs = [matDR || ''];
+
+        // 第二步：用每个 MatLotDR 查询实际数据
+        let allRows = [];
+        for (const lotDR of matLotDRs) {
+            try {
+                const url = qeQCApiUrl() + '?Method=QueryTestResultData&StartDate=' + startDate + '&EndDate=' + endDate + '&InstrumentCode=' + machineDR + '&Leavel=&TCCode=' + testCodeDR + '&QcRule=&MatDR=' + lotDR + '&StartTime=&EndTime=';
+                const resp = await fetch(url, { credentials: 'same-origin' });
+                const text = await resp.text();
+                if (text && text.trim()) {
+                    const data = JSON.parse(text);
+                    const rows = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+                    // 只保留有实际数据的行（有 TestDate 或 Result）
+                    const realRows = rows.filter(r => r.TestDate || r.Result || r.Result1 || r.DayAve);
+                    allRows.push(...realRows);
+                }
+            } catch(e) {}
+        }
+        return allRows;
     }
 
     // 获取所有可用仪器列表
