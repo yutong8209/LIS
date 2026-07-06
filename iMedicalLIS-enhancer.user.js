@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.22.1
+// @version      7.22.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3277,28 +3277,70 @@
         if (!jq || !jq('#cmbMach').combobox) return [];
         try {
             const data = jq('#cmbMach').combobox('getData') || [];
-            console.log('[LIS-QE] cmbMach getData:', data.length, '项');
-            if (data.length > 0) console.log('[LIS-QE] cmbMach 首项:', JSON.stringify(data[0]).substring(0, 200));
-            return data.map(d => ({ id: String(d.value || d.id || d.MachineDR || d.RowID || d.DR || ''), text: String(d.text || d.CName || d.Name || d.MachineName || '') }));
+            return data.map(d => ({ id: String(d.RowID || d.value || d.id || d.MachineDR || ''), text: String(d.CName || d.text || d.Name || d.LName || ''), raw: d }));
         } catch(e) { console.error('[LIS-QE] qeGetMachines error:', e); return []; }
     }
 
+    // 遍历所有工作组获取全部仪器
+    async function qeGetAllMachines() {
+        const jq = qeGetJQ();
+        if (!jq) return [];
+        const allMachines = [];
+        const seen = new Set();
+        const wgs = [
+            { dr: '1', name: '临检' },
+            { dr: '3', name: '生化' },
+            { dr: '4', name: '免疫' },
+        ];
+        const origWG = wgDR();
+        for (const w of wgs) {
+            // 切换工作组
+            try { uw().WorkGroupDR = w.dr; } catch(e) {}
+            // 重新加载仪器列表
+            try {
+                jq('#cmbMach').combobox('reload');
+            } catch(e) {}
+            await new Promise(r => setTimeout(r, 1500));
+            const machines = qeGetMachines();
+            console.log(`[LIS-QE] 工作组 ${w.name}(${w.dr}): ${machines.length} 台仪器`);
+            machines.forEach(m => {
+                if (!seen.has(m.id)) {
+                    seen.add(m.id);
+                    allMachines.push({ ...m, wgDR: w.dr, wgName: w.name });
+                }
+            });
+        }
+        // 恢复原工作组
+        try { uw().WorkGroupDR = origWG; } catch(e) {}
+        try { jq('#cmbMach').combobox('reload'); } catch(e) {}
+        console.log(`[LIS-QE] 共找到 ${allMachines.length} 台仪器（去重后）`);
+        return allMachines;
+    }
+
     // 设置仪器选择
-    function qeSelectMachine(machineDR) {
+    function qeSelectMachine(machineObj) {
         return new Promise(resolve => {
             const jq = qeGetJQ();
             if (!jq) { resolve(); return; }
             try {
-                // 先清空再设置，确保触发 onSelect
-                jq('#cmbMach').combobox('setValue', machineDR);
-                // 手动触发 combobox 的 onSelect 事件
-                const data = jq('#cmbMach').combobox('getData') || [];
-                const item = data.find(d => String(d.value || d.id || d.MachineDR || d.RowID || '') === machineDR);
-                if (item && jq('#cmbMach').combobox('options').onSelect) {
-                    jq('#cmbMach').combobox('options').onSelect.call(jq('#cmbMach')[0], item);
+                // 切换工作组
+                if (machineObj.wgDR) {
+                    try { uw().WorkGroupDR = machineObj.wgDR; } catch(e) {}
+                    jq('#cmbMach').combobox('reload');
                 }
-            } catch(e) { console.error('[LIS-QE] qeSelectMachine error:', e); }
-            setTimeout(resolve, 1000); // 等待测试项目列表加载
+                setTimeout(() => {
+                    try {
+                        jq('#cmbMach').combobox('setValue', machineObj.id);
+                        // 手动触发 onSelect
+                        const data = jq('#cmbMach').combobox('getData') || [];
+                        const item = data.find(d => String(d.RowID || d.value || '') === machineObj.id);
+                        if (item && jq('#cmbMach').combobox('options').onSelect) {
+                            jq('#cmbMach').combobox('options').onSelect.call(jq('#cmbMach')[0], item);
+                        }
+                    } catch(e) { console.error('[LIS-QE] qeSelectMachine error:', e); }
+                    resolve();
+                }, 800);
+            } catch(e) { resolve(); }
         });
     }
 
@@ -3367,48 +3409,53 @@
     }
 
     // --- 自动检测项目映射 ---
-    // 遍历所有仪器，找到每个项目编码对应的 machineDR + testCodeDR
+    // 遍历所有工作组的仪器，找到每个项目对应的 machineObj + testCodeDR
     async function qeDetectMappings(statusCb) {
-        const mappings = {}; // { projectCode: { machineDR, testCodeDR, testName, machineName } }
-        const machines = qeGetMachines();
+        const mappings = {}; // { projectCode: { machineObj, testCodeDR, testName, machineName, matLotDR } }
+        const machines = await qeGetAllMachines();
 
-        if (statusCb) statusCb(`正在检测项目映射... 找到 ${machines.length} 台仪器`, 'info');
+        if (statusCb) statusCb(`正在检测项目映射... 共 ${machines.length} 台仪器`, 'info');
 
         for (let mi = 0; mi < machines.length; mi++) {
             if (qeAbortFlag) break;
             const mach = machines[mi];
-            if (statusCb) statusCb(`检测仪器 ${mi+1}/${machines.length}: ${mach.text}`, 'info');
-            await qeSelectMachine(mach.id);
+            if (statusCb) statusCb(`检测 ${mi+1}/${machines.length}: ${mach.text}（${mach.wgName}）`, 'info');
+            await qeSelectMachine(mach);
             // 等待测试项目列表加载
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 1200));
             const testCodes = qeGetTestCodes();
-            // 调试：第一台仪器时打印字段结构
-            if (mi === 0 && testCodes.length > 0) {
-                const sample = testCodes[0];
-                const keys = Object.keys(sample).slice(0, 30);
-                console.log('[LIS-QE] dgTestCode 行字段:', keys.join(', '));
-                console.log('[LIS-QE] 首行示例:', keys.map(k => k + '=' + String(sample[k]).substring(0, 40)).join(' | '));
-                if (statusCb) statusCb(`找到 ${testCodes.length} 个测试项目，字段: ${keys.slice(0,15).join(', ')}`, 'info');
+            console.log(`[LIS-QE] ${mach.text}: ${testCodes.length} 个测试项目`);
+            if (testCodes.length > 0) {
+                console.log('[LIS-QE] 示例:', testCodes.slice(0, 3).map(tc =>
+                    `Code=${tc.Code} CName=${tc.CName} MatName=${tc.MaterialName} RowID=${tc.RowID}`
+                ).join(' | '));
             }
             for (let ti = 0; ti < testCodes.length; ti++) {
                 const tc = testCodes[ti];
-                // 尝试多种字段名
-                const code = String(tc.Code || tc.TestCode || tc.TCCode || tc.TestCodeNo || tc.ItemCode || '');
-                const name = String(tc.CName || tc.Synonym || tc.TCName || tc.TestCName || tc.Name || tc.ItemName || '');
-                const rowID = String(tc.RowID || tc.TestCodeDR || tc.TCRowID || tc.DR || '');
+                const code = String(tc.Code || '');
+                const cname = String(tc.CName || '');
+                const matName = String(tc.MaterialName || '');
+                const rowID = String(tc.RowID || '');
+                const matLotDR = String(tc.MatLotRowID || '');
                 // 尝试匹配所有组的项目
                 for (const group of QE_GROUPS) {
                     for (const proj of group.projects) {
                         if (mappings[proj.code]) continue; // 已找到
-                        // 精确匹配: 编码或名称
-                        const codeMatch = code === proj.code || rowID === proj.code;
-                        const nameMatch = name === proj.name || name.includes(proj.name) || proj.name.includes(name);
-                        if (codeMatch || nameMatch) {
+                        // 匹配方式1: 编码精确匹配
+                        const codeMatch = code === proj.code;
+                        // 匹配方式2: 中文名匹配（CName 或 MaterialName 包含项目名，或项目名包含它们）
+                        const nameLower = proj.name.toLowerCase();
+                        const cnameMatch = cname === proj.name || cname.includes(proj.name) || proj.name.includes(cname);
+                        const matMatch = matName === proj.name || matName.includes(proj.name) || proj.name.includes(matName);
+                        // 匹配方式3: 英文名/缩写匹配（WBC/RBC/PLT 等在 MaterialName 中）
+                        const abbrMatch = matName.toLowerCase() === nameLower || cname.toLowerCase() === nameLower;
+                        if (codeMatch || cnameMatch || matMatch || abbrMatch) {
                             mappings[proj.code] = {
-                                machineDR: mach.id,
+                                machineObj: { id: mach.id, text: mach.text, wgDR: mach.wgDR, wgName: mach.wgName },
                                 machineName: mach.text,
                                 testCodeDR: rowID,
-                                testName: name || proj.name,
+                                testName: cname || proj.name,
+                                matLotDR: matLotDR,
                                 testRowIndex: ti,
                             };
                         }
@@ -3451,21 +3498,28 @@
             if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
             // 切换仪器（如果需要）
-            await qeSelectMachine(map.machineDR);
+            await qeSelectMachine(map.machineObj);
             // 等待测试项目加载
-            await new Promise(r => setTimeout(r, 600));
+            await new Promise(r => setTimeout(r, 1000));
 
             // 找到并选中测试项目
             const testCodes = qeGetTestCodes();
             let targetIdx = -1;
+            // 优先用 testCodeDR 匹配，其次用名称
             for (let i = 0; i < testCodes.length; i++) {
                 const tc = testCodes[i];
-                const code = String(tc.Code || tc.TestCode || tc.TCCode || tc.TestCodeNo || tc.ItemCode || '');
-                const rowID = String(tc.RowID || tc.TestCodeDR || tc.TCRowID || tc.DR || '');
-                const name = String(tc.CName || tc.Synonym || tc.TCName || tc.TestCName || tc.Name || '');
-                if (code === proj.code || rowID === map.testCodeDR || name === proj.name) {
-                    targetIdx = i;
-                    break;
+                if (String(tc.RowID || '') === map.testCodeDR) { targetIdx = i; break; }
+            }
+            if (targetIdx < 0) {
+                for (let i = 0; i < testCodes.length; i++) {
+                    const tc = testCodes[i];
+                    const cname = String(tc.CName || '');
+                    const matName = String(tc.MaterialName || '');
+                    if (cname === proj.name || cname.includes(proj.name) ||
+                        matName === proj.name || matName.includes(proj.name) ||
+                        String(tc.Code || '') === proj.code) {
+                        targetIdx = i; break;
+                    }
                 }
             }
             if (targetIdx < 0) {
