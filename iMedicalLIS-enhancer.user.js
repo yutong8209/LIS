@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.5
+// @version      7.30.6
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3083,6 +3083,7 @@
     const QE_GROUPS = [
         {
             id: 'blood', name: '血常规', file: '血常规转换_直接上传.xlsx',
+            machineMatch: /血细胞|血球/i,
             concentrations: 2, lotMode: 'suffix', baseLot: 'E5245',
             defaultOperator: '',
             projects: [
@@ -3098,6 +3099,7 @@
         },
         {
             id: 'biochem', name: '生化', file: '生化转换_直接上传.xlsx',
+            machineMatch: /生化/i,
             concentrations: 2, lotMode: 'dual', defaultLots: ['45981', '46022'],
             defaultOperator: '',
             projects: [
@@ -3128,6 +3130,7 @@
         },
         {
             id: 'coag', name: '凝血', file: '凝血转换_直接上传.xlsx',
+            machineMatch: /CS.?5100|凝血/i,
             concentrations: 1, lotMode: 'coag', defaultLot: '84772',
             dDimLot: '74442',
             defaultOperator: '',
@@ -3141,6 +3144,7 @@
         },
         {
             id: 'lipid', name: '血脂', file: '血脂转换_直接上传.xlsx',
+            machineMatch: /生化|脂类/i,
             concentrations: 1, lotMode: 'single', defaultLot: '57651',
             defaultOperator: '',
             projects: [
@@ -3152,6 +3156,7 @@
         },
         {
             id: 'urine', name: '尿常规', file: '尿常规转换_直接上传.xlsx',
+            machineMatch: /尿液/i,
             concentrations: 1, lotMode: 'single', defaultLot: '26030302',
             defaultOperator: '',
             projects: [
@@ -3169,6 +3174,7 @@
         },
         {
             id: 'endocrine', name: '内分泌', file: '内分泌转换_直接上传.xlsx',
+            machineMatch: /化学发光|DXi|DXI|发光仪/i,
             concentrations: 1, lotMode: 'single', defaultLot: '40472',
             defaultOperator: '',
             projects: [
@@ -3187,6 +3193,7 @@
         },
         {
             id: 'tumor', name: '肿瘤标志物', file: '肿瘤标志物转换_直接上传.xlsx',
+            machineMatch: /化学发光|DXi|DXI|发光仪/i,
             concentrations: 1, lotMode: 'single', defaultLot: '74662',
             defaultOperator: '',
             projects: [
@@ -3202,6 +3209,7 @@
         },
         {
             id: 'cardiac', name: '心肌标志物', file: '心肌损伤标志物转换_直接上传.xlsx',
+            machineMatch: /化学发光|DXi|DXI|发光仪/i,
             concentrations: 1, lotMode: 'single', defaultLot: '1003112',
             defaultOperator: '',
             projects: [
@@ -3212,6 +3220,7 @@
         },
         {
             id: 'infection', name: '传染病', file: '传染病转换_直接上传.xlsx',
+            machineMatch: /\bX8\b|X-?8/i,
             concentrations: 1, lotMode: 'immune',
             defaultOperator: '',
             projects: [
@@ -3281,25 +3290,39 @@
         cardiac: { 'CK-MB': '2501', MYO: '2502', cTnI: '2503', cTnl: '2503' },
     };
 
-    // 质控物名称关键词 → 限制匹配范围（避免 GLU 同时命中生化和尿常规）
-    function qeMaterialMatchesGroup(group, tc, proj) {
+    function qeMachineMatchesGroup(group, machineName) {
+        if (!group.machineMatch) return true;
+        return group.machineMatch.test(String(machineName || ''));
+    }
+
+    // 质控物名称关键词 → 限制匹配范围（仪器+缩写命中时可跳过）
+    function qeMaterialMatchesGroup(group, tc, proj, machineName) {
+        const code = qeNormName(tc.Code);
         const mat = String(tc.MaterialName || tc.MatName || '');
         const cname = qeNormName(tc.CName);
         const text = mat + ' ' + cname;
+        const groupAbbr = QE_LIS_ABBR[group.id] || {};
+        const machineOk = qeMachineMatchesGroup(group, machineName);
+
+        if (machineOk && code && groupAbbr[code] === proj.code) return true;
+
         if (group.id === 'coag') {
-            if (proj && proj.isDDimer) return /D-二聚体/i.test(text);
+            if (proj && proj.isDDimer) {
+                return code === 'DD' || /D-二聚体/i.test(text);
+            }
+            if (machineOk && code && groupAbbr[code] === proj.code) return true;
             return /凝血/i.test(text) && !/D-二聚体/i.test(text);
         }
         if (group.id === 'infection' && proj && proj.lisName) {
             return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
         }
         const hints = {
-            blood: /血常|血球|血细胞/i,
-            endocrine: /内分泌/i,
-            tumor: /肿瘤/i,
+            blood: /血常|血球|血细胞|白细胞|红细胞|血红蛋白|血小板|HCT|MCV|MCH/i,
+            endocrine: /内分泌|激素|甲状腺|性激素/i,
+            tumor: /肿瘤|标志物|甲胎|癌胚|抗原/i,
             cardiac: /心肌/i,
             infection: /传染|乙肝|乙型肝炎|丙型肝炎|艾滋|免疫缺陷|梅毒|丙肝|HIV/i,
-            urine: /尿液/i,
+            urine: /尿液|尿标|尿质/i,
             biochem: /生化/i,
             lipid: /脂类|血脂/i,
         };
@@ -3311,11 +3334,14 @@
         return String(s || '').replace(/\*+$/, '').trim();
     }
 
-    function qeMatchProject(group, proj, tc) {
+    function qeMatchProject(group, proj, tc, machineName) {
+        if (!qeMachineMatchesGroup(group, machineName)) return false;
         const code = qeNormName(tc.Code);
         const cname = qeNormName(tc.CName);
-        if (proj.lisName && (cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname))) return true;
-        if (!qeMaterialMatchesGroup(group, tc, proj)) return false;
+        if (proj.lisName) {
+            return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
+        }
+        if (!qeMaterialMatchesGroup(group, tc, proj, machineName)) return false;
         const matName = qeNormName(tc.MaterialName);
         const groupAbbr = QE_LIS_ABBR[group.id] || {};
         if (code && groupAbbr[code] === proj.code) return true;
@@ -3673,7 +3699,7 @@
                 for (const group of QE_GROUPS) {
                     for (const proj of group.projects) {
                         if (mappings[proj.code]) continue;
-                        if (!qeMatchProject(group, proj, tc)) continue;
+                        if (!qeMatchProject(group, proj, tc, mach.text)) continue;
                         mappings[proj.code] = {
                             machineDR: mach.id,
                             machineName: mach.text,
@@ -3697,7 +3723,7 @@
     }
 
     // 从 localStorage 加载或保存映射
-    const QE_MAP_KEY = 'lis-qe-mappings-v5';
+    const QE_MAP_KEY = 'lis-qe-mappings-v6';
     function qeLoadMappings() {
         try { return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}'); } catch(e) { return {}; }
     }
