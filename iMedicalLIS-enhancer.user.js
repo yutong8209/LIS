@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.23.2
+// @version      7.23.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3278,7 +3278,7 @@
         'Plt': ['血小板计数', '血小板', 'PLT', 'Plt'],
         'Hct': ['红细胞压积', '红细胞比容', 'HCT', 'Hct'],
         'MCV': ['平均红细胞体积', 'MCV'],
-        'MCH': ['平均红细胞血红蛋白含量', 'MCH'],
+        'MCH': ['平均红细胞血红蛋白含量', 'MCH', '平均血红蛋白含量'],
         'MCHC': ['平均红细胞血红蛋白浓度', 'MCHC'],
         // 凝血
         'INR': ['国际标准化比值', 'INR'],
@@ -3293,8 +3293,8 @@
         'TT4': ['甲状腺素', '总T4', 'TT4'],
         'FT3': ['游离三碘甲状原氨酸', '游离T3', 'FT3'],
         'FT4': ['游离甲状腺素', '游离T4', 'FT4'],
-        'TSH': ['促甲状腺激素', 'TSH'],
-        'FSH': ['卵泡刺激素', '促卵泡激素', 'FSH'],
+        'TSH': ['促甲状腺激素', 'TSH', '促甲状腺素'],
+        'FSH': ['卵泡刺激素', '促卵泡激素', 'FSH', '卵泡刺激素(FSH)'],
         'LH': ['黄体生成素', '促黄体生成素', 'LH'],
         'PRL泌乳素': ['泌乳素', '催乳素', 'PRL'],
         'E2': ['雌二醇', 'E2'],
@@ -3540,12 +3540,14 @@
                         const matMatch = matName === proj.name || matName.includes(proj.name) || proj.name.includes(matName);
                         // 匹配方式3: 英文名/缩写匹配
                         const abbrMatch = matName.toLowerCase() === proj.name.toLowerCase() || cname.toLowerCase() === proj.name.toLowerCase();
-                        // 匹配方式4: 别名匹配
+                        // 匹配方式4: 别名匹配（支持双向包含）
                         const aliases = QE_ALIASES[proj.name] || [];
                         const aliasMatch = aliases.some(alias => {
                             const a = alias.toLowerCase();
-                            return cname.toLowerCase() === a || cname.toLowerCase().includes(a) ||
-                                   matName.toLowerCase() === a || matName.toLowerCase().includes(a);
+                            const cn = cname.toLowerCase();
+                            const mn = matName.toLowerCase();
+                            return cn === a || cn.includes(a) || a.includes(cn) ||
+                                   mn === a || mn.includes(a) || a.includes(mn);
                         });
                         if (codeMatch || cnameMatch || matMatch || abbrMatch || aliasMatch) {
                             mappings[proj.code] = {
