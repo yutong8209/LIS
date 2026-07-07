@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.32.1
+// @version      7.32.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9663,33 +9663,27 @@ function fillNativeLoginForm(creds, lastWG) {
         if (result) return result;
 
         if (authLoginDetected) {
-            // 审核登录窗口可能是自动重认证，等待它关闭后再确认结果
-            dbg('审核登录窗口已检测到，等待自动关闭...');
-            const authWaitStart = Date.now();
-            const authWaitMax = batchMode ? 15000 : 20000;
-            while (Date.now() - authWaitStart < authWaitMax) {
-                await sleep(batchMode ? 300 : 500);
-                try {
-                    const authWin = doc.querySelector('#win_AuthLogin, #win_EntryLogin');
-                    if (!authWin || authWin.style.display === 'none' || !jq(authWin).is(':visible')) {
-                        dbg('审核登录窗口已关闭');
-                        break;
-                    }
-                } catch(e) { break; }
+            // 检测到审核登录窗口 → 尝试自动填写密码并提交
+            dbg('审核登录窗口已检测到，尝试自动登录...');
+            const loginOK = await handleAuditLogin(iframeWin, jq);
+            if (loginOK) {
+                dbg('审核登录自动提交成功，等待审核结果...');
+                const postAuthResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 8000 : 12000, allowMissingSuccess, { ...waitOpts, missingStableMs: batchMode ? 700 : 900, failureGraceMs: batchMode ? 3000 : 5000 });
+                if (postAuthResult) {
+                    dbg('审核登录后确认审核成功');
+                    saveCAAuth();
+                    return postAuthResult;
+                }
             }
-            // 窗口关闭后，再次检查审核结果
-            const postAuthResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 6000 : 10000, allowMissingSuccess, { ...waitOpts, missingStableMs: batchMode ? 700 : 900, failureGraceMs: batchMode ? 3000 : 5000 });
-            if (postAuthResult) {
-                dbg('审核登录后确认审核成功');
-                saveCAAuth();
-                return postAuthResult;
-            }
+            // 自动登录失败或结果未确认，再做最终校验
             if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {
                 dbg('审核登录后二次校验：标本已审核');
                 saveCAAuth();
                 return true;
             }
-            showToast('审核登录认证后仍未确认结果，请手动检查', 'warning');
+            if (!loginOK) {
+                showToast('审核登录自动填写失败，请手动登录后重试', 'warning');
+            }
         }
         dbg('原生按钮点击完成，但未确认成功');
         return false;
