@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.31.3
+// @version      7.32.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -13,7 +13,7 @@
 // @run-at       document-idle
 // @noframes     false
 // @require      https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
-// @require      https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js
+
 // ==/UserScript==
 
 (function () {
@@ -758,9 +758,7 @@
 .qe-save-btn{height:28px;border:1px solid #0d7c66;background:#0d7c66;color:#fff;border-radius:5px;padding:0 16px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s}
 .qe-save-btn:hover{background:#09654f}
 .qe-save-btn.saved{background:#4db89e;border-color:#4db89e}
-.qe-download-all{height:30px;border:1px solid #0d7c66;background:linear-gradient(135deg,#0d7c66,#4db89e);color:#fff;border-radius:5px;padding:0 18px;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(13,124,102,.25)}
-.qe-download-all:hover{box-shadow:0 4px 12px rgba(13,124,102,.35);transform:translateY(-1px)}
-.qe-download-all:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
     `);
 
     // ==================== Toast ====================
@@ -3889,52 +3887,6 @@
         try { localStorage.setItem(QE_MAP_KEY, JSON.stringify(m)); } catch(e) {}
     }
 
-    // --- iframe 管理 ---
-    let _qeIframe = null;
-    let _qeIframeReady = false;
-    let _qeIframeResolve = null;
-
-    function qeEnsureQCPage() {
-        return new Promise((resolve) => {
-            if (_qeIframeReady && _qeIframe && _qeIframe.contentWindow) {
-                resolve(true);
-                return;
-            }
-            _qeIframeResolve = resolve;
-            // 检查是否已有质控页面 iframe（用户可能已打开）
-            const existing = qcFindIFrame();
-            if (existing) {
-                _qeIframe = existing;
-                _qeIframeReady = true;
-                console.log('[LIS-QE] 找到已有质控页面 iframe');
-                resolve(true);
-                return;
-            }
-            // 创建隐藏 iframe（带 MenuDR 参数）
-            _qeIframe = document.createElement('iframe');
-            _qeIframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
-            _qeIframe.src = BASE + '/qc/form/frmQCDataInputNew?MenuDR=924&NotIndependent=1';
-            document.body.appendChild(_qeIframe);
-            console.log('[LIS-QE] 创建质控页面 iframe:', _qeIframe.src);
-            _qeIframe.onload = () => {
-                console.log('[LIS-QE] iframe loaded');
-                setTimeout(() => {
-                    _qeIframeReady = true;
-                    if (_qeIframeResolve) { _qeIframeResolve(true); _qeIframeResolve = null; }
-                }, 5000); // 等待页面 JS 初始化
-            };
-            _qeIframe.onerror = () => {
-                console.error('[LIS-QE] iframe load error');
-            };
-            setTimeout(() => {
-                if (!_qeIframeReady) {
-                    console.error('[LIS-QE] iframe 加载超时');
-                    _qeIframeReady = true;
-                    if (_qeIframeResolve) { _qeIframeResolve(false); _qeIframeResolve = null; }
-                }
-            }, 20000);
-        });
-    }
 
     // --- 核心：获取某组的质控数据 ---
     async function qeFetchGroupData(group, cfg, mappings, statusCb) {
@@ -4038,82 +3990,6 @@
         setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
     }
 
-    // ZIP 打包下载所有导出文件
-    async function qeDownloadAllZip() {
-        console.log('[LIS-QE] qeDownloadAllZip called');
-        const resultSection = document.getElementById('lis-qe-result-section');
-        const items = resultSection ? resultSection.querySelectorAll('.qe-result-item') : [];
-        console.log('[LIS-QE] result items:', items.length);
-        const blobs = [];
-        items.forEach((item, i) => {
-            const btn = item.querySelector('button[data-fn]');
-            console.log(`[LIS-QE] item ${i}: btn=${!!btn}, _blob=${btn ? !!btn._blob : 'N/A'}, fn=${btn ? btn.getAttribute('data-fn') : 'N/A'}`);
-            if (btn && btn._blob) {
-                blobs.push({ name: btn.getAttribute('data-fn'), blob: btn._blob });
-            }
-        });
-        console.log('[LIS-QE] blobs collected:', blobs.length);
-        if (!blobs.length) {
-            qeSetStatus('没有可下载的文件。请先点击"开始导出"。', 'error');
-            return;
-        }
-        try {
-            // 检查 JSZip 是否已加载（@require 或动态注入）
-            console.log('[LIS-QE] JSZip type:', typeof JSZip);
-            if (typeof JSZip === 'undefined') {
-                console.log('[LIS-QE] JSZip undefined, trying dynamic load...');
-                qeSetStatus('正在加载 JSZip...', 'info');
-                try {
-                    await new Promise((resolve, reject) => {
-                        const s = document.createElement('script');
-                        s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-                        s.onload = () => { console.log('[LIS-QE] CDN JSZip loaded'); resolve(); };
-                        s.onerror = (e) => { console.log('[LIS-QE] CDN JSZip failed'); reject(e); };
-                        document.head.appendChild(s);
-                        // 5秒超时
-                        setTimeout(() => reject(new Error('CDN加载超时')), 5000);
-                    });
-                } catch(loadErr) {
-                    console.log('[LIS-QE] CDN load error:', loadErr.message);
-                }
-            }
-            console.log('[LIS-QE] JSZip check after load:', typeof JSZip);
-            if (typeof JSZip === 'undefined') {
-                // JSZip 不可用，逐个下载
-                console.log('[LIS-QE] JSZip still undefined, fallback to individual downloads');
-                qeSetStatus('JSZip 不可用，逐个下载中...', 'info');
-                for (const b of blobs) {
-                    qeDownloadBlob(b.blob, b.name);
-                    await new Promise(r => setTimeout(r, 300));
-                }
-                qeSetStatus(`已逐个下载 ${blobs.length} 个文件。`, 'ok');
-                return;
-            }
-            console.log('[LIS-QE] creating ZIP with', blobs.length, 'files...');
-            const zip = new JSZip();
-            blobs.forEach(b => zip.file(b.name, b.blob));
-            const zipBlob = await zip.generateAsync({ type: 'blob' });
-            console.log('[LIS-QE] ZIP generated, size:', zipBlob.size);
-            const cfg = qeCollectConfig();
-            const month = cfg._month || (new Date().getMonth() + 1);
-            const year = cfg._year || new Date().getFullYear();
-            qeDownloadBlob(zipBlob, `质控数据_${year}${String(month).padStart(2, '0')}.zip`);
-            qeSetStatus('ZIP 下载完成！', 'ok');
-            console.log('[LIS-QE] ZIP download triggered');
-        } catch(e) {
-            console.log('[LIS-QE] ZIP error:', e.message, e.stack);
-            // 出错时逐个下载兜底
-            try {
-                for (const b of blobs) {
-                    qeDownloadBlob(b.blob, b.name);
-                    await new Promise(r => setTimeout(r, 300));
-                }
-                qeSetStatus(`ZIP 失败，已逐个下载 ${blobs.length} 个文件。`, 'ok');
-            } catch(e2) {
-                qeSetStatus('下载失败: ' + e.message, 'error');
-            }
-        }
-    }
 
     // --- UI 创建 ---
     function qeCreateFab() {
@@ -4287,7 +4163,6 @@
                     <div class="qe-step-hd">
                         <span class="qe-step-num">✓</span>
                         <span class="qe-step-title">导出结果</span>
-                        <button class="qe-download-all" id="lis-qe-download-all" disabled>📦 一键下载全部 (ZIP)</button>
                     </div>
                     <div class="qe-step-body">
                         <div class="qe-result-list" id="lis-qe-results"></div>
@@ -4348,9 +4223,6 @@
             qeAbortFlag = true;
             qeSetStatus('正在停止...', 'info');
         });
-
-        // 一键下载全部
-        document.getElementById('lis-qe-download-all').addEventListener('click', () => qeDownloadAllZip());
 
         // ESC 关闭
         panel.addEventListener('keydown', e => {
@@ -4517,21 +4389,18 @@
         }
 
         qeShowProgress(totalGroups, totalGroups, '完成');
-        qeExporting = false;
-        qeAbortFlag = false;
-        if (exportBtn) exportBtn.disabled = false;
-        if (cancelBtn) cancelBtn.style.display = 'none';
-        if (detectBtn) detectBtn.disabled = false;
-
-        // 启用一键下载（无论是否完整导出）
-        const dlAllBtn = document.getElementById('lis-qe-download-all');
-        if (dlAllBtn) dlAllBtn.disabled = false;
 
         if (!qeAbortFlag) {
             qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。`, 'ok');
         } else {
             qeSetStatus('导出已停止。', 'info');
         }
+
+        qeExporting = false;
+        qeAbortFlag = false;
+        if (exportBtn) exportBtn.disabled = false;
+        if (cancelBtn) cancelBtn.style.display = 'none';
+        if (detectBtn) detectBtn.disabled = false;
     }
 
     function qeAddResultItem(filename, rowCount, blob, error) {
