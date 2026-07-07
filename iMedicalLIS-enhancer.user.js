@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.35.0
+// @version      7.36.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5554,7 +5554,11 @@
                         if (complete !== '1') return false;
                         const cached = wsClassifiedCache[r.ReportDR];
                         return cached && cached.status === 'NORMAL' && !isClassificationStale(r);
-                    }).map(r => ({ status: 'NORMAL', items: [], row: r, reportDR: r.ReportDR }));
+                    }).map(r => {
+                        // 优先复用分类缓存真实对象，与"正常可审"入口保持一致
+                        const cached = wsClassifiedCache[r.ReportDR];
+                        return cached ? cached : ({ status: 'NORMAL', items: [], row: r, reportDR: r.ReportDR });
+                    });
                     if (normalData.length === 0) {
                         if (wsClassifying) {
                             showToast('标本正在分类中，请稍候再试', 'warning');
@@ -6594,11 +6598,16 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
         updateAbnormalEnterBridge();
         keepWorkbenchOnTop('异常审核');
         markAbnormalAuditUI(specimen, 'start');
-        // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
+        // 安全超时：60 秒后强制释放锁并继续，避免异常审核卡死导致永久锁死
         const _auditSafetyTimer = setTimeout(() => {
             if (_abnormalAuditInProgress) {
-                dbg('异常审核安全超时：操作耗时超过 60 秒');
-                showToast('异常审核操作耗时较长，请耐心等待', 'warning');
+                dbg('异常审核安全超时：操作耗时超过 60 秒，强制释放');
+                showToast('异常审核超时，已强制释放并继续下一条', 'error');
+                _abnormalAuditInProgress = false;
+                clearAbnormalAuditingCard(specimen && specimen.ReportDR);
+                clearNativeUserSelectLock();
+                scheduleAbnormalFocusRecovery();
+                consumeAbnormalEnterQueue();
             }
         }, 60000);
         dbg('异常列表审核开始:', specimen.PatName);
@@ -6636,8 +6645,10 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
             const spDR = specimen._wg || '';
             if (spDR && curDR && spDR !== curDR) {
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
-                showToast(`切换到${wgName}继续审核`, 'warning');
+                showToast(`切换到${wgName}，继续审核当前标本...`, 'info');
                 switchWG(spDR);
+                // 工作组切换后原生会重载列表，稍后重试当前标本（finally 已释放 _abnormalAuditInProgress）
+                setTimeout(() => { if (!_abnormalAuditInProgress) auditAbnormalSpecimen(specimen); }, 1500);
                 return;
             }
 
@@ -6861,19 +6872,18 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
             return;
         }
         normalData = [...(normalData || [])].sort((a, b) => compareSpecimensForAudit(a.row || a, b.row || b));
-        const stale = normalData.filter(sp => !isLiveNormalForBatch(sp.reportDR || (sp.row && sp.row.ReportDR)));
-        if (stale.length > 0) {
-            const first = stale[0].row || stale[0];
-            showToast(`分类状态已变化或未完成：${first.PatName || first.Labno || ''}，请刷新工作台后重试`, 'error');
+        // 逐条跳过不可审标本，不再因个别标本整批取消（与 continueAuditQueue 内处理保持一致）
+        const live = normalData.filter(sp => isLiveNormalForBatch(sp.reportDR || (sp.row && sp.row.ReportDR)));
+        const auditable = live.filter(r => isAutoAuditableClassified(r));
+        const skipCount = normalData.length - auditable.length;
+        if (auditable.length === 0) {
+            showToast(`没有可审核的标本${skipCount ? `（已跳过 ${skipCount} 个不可审/异常标本）` : ''}`, 'warning');
             return;
         }
-        const blocked = normalData.filter(r => !isAutoAuditableClassified(r));
-        if (blocked.length > 0) {
-            const first = blocked[0];
-            showToast(getAutoAuditBlockReason(first, first.row) || '包含不可自动审核的标本', 'error');
-            return;
+        if (skipCount > 0) {
+            showToast(`将跳过 ${skipCount} 个不可审/异常标本，批审其余 ${auditable.length} 个`, 'info');
         }
-        if (normalData.length === 0) { showToast('没有可审核的标本', 'warning'); return; }
+        normalData = auditable;
         const existing = document.getElementById('lis-audit-confirm');
         if (existing) existing.remove();
 
@@ -7559,11 +7569,14 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
             return;
         }
         _detailAuditInProgress = true;
-        // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
+        // 安全超时：60 秒后强制释放锁并继续，避免详情审核卡死导致永久锁死
         const _detailSafetyTimer = setTimeout(() => {
             if (_detailAuditInProgress) {
-                dbg('详情审核安全超时：操作耗时超过 60 秒');
-                showToast('详情审核操作耗时较长，请耐心等待', 'warning');
+                dbg('详情审核安全超时：操作耗时超过 60 秒，强制释放');
+                showToast('详情审核超时，已强制释放并继续下一条', 'error');
+                _detailAuditInProgress = false;
+                if (wsCategory === 'abnormal') scheduleAbnormalFocusRecovery();
+                setTimeout(() => { if (!_detailAuditInProgress) _auditFromDetailPanel(); }, 200);
             }
         }, 60000);
         dbg('详情审核开始:', currentDetailSpecimen.PatName);
@@ -7616,8 +7629,10 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
             const spDR = specimen._wg || '';
             if (spDR && curDR && spDR !== curDR) {
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
-                showToast(`切换到${wgName}继续审核`, 'warning');
+                showToast(`切换到${wgName}，继续审核当前标本...`, 'info');
                 switchWG(spDR);
+                // 工作组切换后原生会重载列表，稍后重试当前标本（finally 已释放 _detailAuditInProgress）
+                setTimeout(() => { if (!_detailAuditInProgress) _auditFromDetailPanel(); }, 1500);
                 return;
             }
 
@@ -11416,7 +11431,9 @@ function fillNativeLoginForm(creds, lastWG) {
         if (String(next.mdr || '') !== String(currentItem.mdr || '')) return false;
         try {
             const sel = iframeWin.me.selectedGrid ? iframeWin.me.selectedGrid.datagrid('getSelected') : null;
-            return !!(sel && String(sel.ReportDR || '') === String(next.reportDR || ''));
+            if (!sel || String(sel.ReportDR || '') !== String(next.reportDR || '')) return false;
+            // 额外校验：报告详情确已加载到 next，避免误判"已自动跳行"而错审上一条
+            return isReportDetailLoaded(iframeWin, next.reportDR);
         } catch(e) {
             return false;
         }
@@ -11445,6 +11462,18 @@ function fillNativeLoginForm(creds, lastWG) {
         await continueAuditQueue(queue);
     }
 
+    let _auditResumePending = false;
+    function scheduleAuditQueueResume(queue, reason) {
+        saveAuditQueueNow(queue);
+        if (_auditResumePending) return;
+        _auditResumePending = true;
+        showToast(reason || '稍后自动继续批审...', 'info');
+        setTimeout(() => {
+            _auditResumePending = false;
+            continueAuditQueue(queue).catch(e => dbg('批审续跑失败:', e));
+        }, 3000);
+    }
+
     async function continueAuditQueue(queue) {
         if (!queue || !queue.items || queue.items.length === 0) return;
         if (wsClassifying) {
@@ -11454,22 +11483,22 @@ function fillNativeLoginForm(creds, lastWG) {
             return;
         }
         const auditLockId = acquireAuditLock('batchAudit');
-        if (!auditLockId) { showToast('正在审核中，请稍候', 'warning'); return; }
+        if (!auditLockId) { scheduleAuditQueueResume(queue, '正在审核中，稍后自动继续批审...'); return; }
         if (!acquireQueueLock()) {
-            showToast('其他标签页正在批审，请稍候', 'warning');
             releaseAuditLock(auditLockId);
+            scheduleAuditQueueResume(queue, '其他标签页正在批审，稍后自动继续...');
             return;
         }
         if (_abnormalAuditInProgress) {
-            showToast('正在审核异常标本中，请稍候', 'warning');
             releaseAuditLock(auditLockId);
             releaseQueueLock();
+            scheduleAuditQueueResume(queue, '正在审核异常标本中，稍后自动继续批审...');
             return;
         }
         if (_detailAuditInProgress) {
-            showToast('正在详情面板审核中，请稍候', 'warning');
             releaseAuditLock(auditLockId);
             releaseQueueLock();
+            scheduleAuditQueueResume(queue, '正在详情面板审核中，稍后自动继续批审...');
             return;
         }
         if (queue.keepWS) keepWorkbenchOnTop('批审开始');
