@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.31.2
+// @version      7.31.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4058,28 +4058,60 @@
             return;
         }
         try {
-            // 动态加载 JSZip（如果 CDN 加载失败）
+            // 检查 JSZip 是否已加载（@require 或动态注入）
+            console.log('[LIS-QE] JSZip type:', typeof JSZip);
             if (typeof JSZip === 'undefined') {
+                console.log('[LIS-QE] JSZip undefined, trying dynamic load...');
                 qeSetStatus('正在加载 JSZip...', 'info');
-                await new Promise((resolve, reject) => {
-                    const s = document.createElement('script');
-                    s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-                    s.onload = resolve;
-                    s.onerror = reject;
-                    document.head.appendChild(s);
-                });
+                try {
+                    await new Promise((resolve, reject) => {
+                        const s = document.createElement('script');
+                        s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+                        s.onload = () => { console.log('[LIS-QE] CDN JSZip loaded'); resolve(); };
+                        s.onerror = (e) => { console.log('[LIS-QE] CDN JSZip failed'); reject(e); };
+                        document.head.appendChild(s);
+                        // 5秒超时
+                        setTimeout(() => reject(new Error('CDN加载超时')), 5000);
+                    });
+                } catch(loadErr) {
+                    console.log('[LIS-QE] CDN load error:', loadErr.message);
+                }
             }
-            if (typeof JSZip === 'undefined') throw new Error('JSZip 加载失败');
+            console.log('[LIS-QE] JSZip check after load:', typeof JSZip);
+            if (typeof JSZip === 'undefined') {
+                // JSZip 不可用，逐个下载
+                console.log('[LIS-QE] JSZip still undefined, fallback to individual downloads');
+                qeSetStatus('JSZip 不可用，逐个下载中...', 'info');
+                for (const b of blobs) {
+                    qeDownloadBlob(b.blob, b.name);
+                    await new Promise(r => setTimeout(r, 300));
+                }
+                qeSetStatus(`已逐个下载 ${blobs.length} 个文件。`, 'ok');
+                return;
+            }
+            console.log('[LIS-QE] creating ZIP with', blobs.length, 'files...');
             const zip = new JSZip();
             blobs.forEach(b => zip.file(b.name, b.blob));
             const zipBlob = await zip.generateAsync({ type: 'blob' });
+            console.log('[LIS-QE] ZIP generated, size:', zipBlob.size);
             const cfg = qeCollectConfig();
             const month = cfg._month || (new Date().getMonth() + 1);
             const year = cfg._year || new Date().getFullYear();
             qeDownloadBlob(zipBlob, `质控数据_${year}${String(month).padStart(2, '0')}.zip`);
             qeSetStatus('ZIP 下载完成！', 'ok');
+            console.log('[LIS-QE] ZIP download triggered');
         } catch(e) {
-            qeSetStatus('ZIP 下载失败: ' + e.message + '，请逐个下载。', 'error');
+            console.log('[LIS-QE] ZIP error:', e.message, e.stack);
+            // 出错时逐个下载兜底
+            try {
+                for (const b of blobs) {
+                    qeDownloadBlob(b.blob, b.name);
+                    await new Promise(r => setTimeout(r, 300));
+                }
+                qeSetStatus(`ZIP 失败，已逐个下载 ${blobs.length} 个文件。`, 'ok');
+            } catch(e2) {
+                qeSetStatus('下载失败: ' + e.message, 'error');
+            }
         }
     }
 
