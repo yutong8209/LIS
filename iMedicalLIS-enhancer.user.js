@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.32.3
+// @version      7.33.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6163,6 +6163,27 @@ window.addEventListener('keydown',function(e){
             turbo: batchMode && !options.afterCA
         });
         if (confirmed && confirmed !== 'incomplete') return true;
+
+        // 检查审核登录窗口是否出现，尝试自动填写
+        try {
+            const doc = iframeWin ? iframeWin.document : document;
+            const jq = iframeWin ? (iframeWin.jQuery || iframeWin.$) : window.jQuery;
+            const authWin = doc.querySelector('#win_AuthLogin, #win_EntryLogin, #win_BatchAuthUserLogin');
+            if (authWin && authWin.style.display !== 'none' && jq && jq(authWin).is(':visible')) {
+                dbg('confirmAudit: 检测到审核登录窗口，尝试自动登录');
+                const loginOK = await handleAuditLoginDirect(iframeWin, jq, doc);
+                if (loginOK) {
+                    dbg('confirmAudit: 审核登录成功，等待结果');
+                    const postLoginResult = await waitNativeActionResult(iframeWin, reportDR, ['3'], batchMode ? 8000 : 12000, allowMissing, {
+                        targetWasPresent,
+                        missingStableMs: batchMode ? 700 : 900,
+                        failureGraceMs: batchMode ? 3000 : 5000
+                    });
+                    if (postLoginResult && postLoginResult !== 'incomplete') return true;
+                }
+            }
+        } catch(e) { dbg('confirmAudit: 审核登录处理异常', e.message); }
+
         await sleep(batchMode ? 300 : 1500);
         if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) return true;
         const latestWin = getReportIframeWin() || iframeWin;
@@ -9663,33 +9684,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (result) return result;
 
         if (authLoginDetected) {
-            // 检测到审核登录窗口 → 尝试自动填写密码并提交
-            dbg('审核登录窗口已检测到，尝试自动登录...');
-            // 窗口已由 ReportSave 触发打开，直接填写表单（不重复点击按钮）
-            let loginOK = await handleAuditLoginDirect(iframeWin, jq, doc);
-            if (!loginOK) {
-                // 直接填写失败，回退原方法（会重新点击按钮打开窗口）
-                dbg('直接填写审核登录失败，尝试原方法...');
-                loginOK = await handleAuditLogin(iframeWin, jq);
-            }
-            if (loginOK) {
-                dbg('审核登录自动提交成功，等待审核结果...');
-                const postAuthResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 8000 : 12000, allowMissingSuccess, { ...waitOpts, missingStableMs: batchMode ? 700 : 900, failureGraceMs: batchMode ? 3000 : 5000 });
-                if (postAuthResult) {
-                    dbg('审核登录后确认审核成功');
-                    saveCAAuth();
-                    return postAuthResult;
-                }
-            }
-            // 自动登录失败或结果未确认，再做最终校验
-            if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {
-                dbg('审核登录后二次校验：标本已审核');
-                saveCAAuth();
-                return true;
-            }
-            if (!loginOK) {
-                showToast('审核登录自动填写失败，请手动登录后重试', 'warning');
-            }
+            dbg('审核登录窗口已检测到，交由后续确认流程处理');
         }
         dbg('原生按钮点击完成，但未确认成功');
         return false;
