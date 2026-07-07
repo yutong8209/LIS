@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.33.8
+// @version      7.33.9
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6862,12 +6862,16 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
         document.body.appendChild(dialog);
         dialog.classList.add('show');
 
+        const closeDialog = () => { document.removeEventListener('keydown', onEsc); dialog.remove(); };
+        const onEsc = e => { if (e.key === 'Escape') { e.stopPropagation(); e.stopImmediatePropagation(); closeDialog(); } };
+        document.addEventListener('keydown', onEsc);
+
         const confirmBtn = document.getElementById('lis-ab-confirm');
-        document.getElementById('lis-ab-close').addEventListener('click', () => dialog.remove());
-        document.getElementById('lis-ab-cancel').addEventListener('click', () => dialog.remove());
-        dialog.addEventListener('click', e => { if (e.target === dialog) dialog.remove(); });
+        document.getElementById('lis-ab-close').addEventListener('click', closeDialog);
+        document.getElementById('lis-ab-cancel').addEventListener('click', closeDialog);
+        dialog.addEventListener('click', e => { if (e.target === dialog) closeDialog(); });
         confirmBtn.addEventListener('click', () => {
-            dialog.remove();
+            closeDialog();
             executeBatchAudit(normalData).catch(e => {
                 console.error('[LIS] 批审异常:', e);
             });
@@ -7117,7 +7121,9 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
             </div>`;
         document.body.appendChild(dialog);
         dialog.classList.add('show');
-        const close = () => dialog.remove();
+        const close = () => { document.removeEventListener('keydown', onEsc); dialog.remove(); };
+        const onEsc = e => { if (e.key === 'Escape') { e.stopPropagation(); e.stopImmediatePropagation(); close(); } };
+        document.addEventListener('keydown', onEsc);
         document.getElementById('lis-qr-close').addEventListener('click', close);
         document.getElementById('lis-qr-cancel').addEventListener('click', () => { clearAuditQueue(); close(); });
         dialog.addEventListener('click', e => { if (e.target === dialog) close(); });
@@ -11123,6 +11129,8 @@ function fillNativeLoginForm(creds, lastWG) {
         let escRemoved = false;
         const escHandler = e => {
             if (e.key === 'Escape') {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
                 cleanupAndRemove();
             }
         };
