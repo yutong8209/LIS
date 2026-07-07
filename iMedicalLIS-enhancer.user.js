@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.34.0
+// @version      7.35.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5637,26 +5637,37 @@
         } catch(e) {}
     }
 
+    function consumeAbnormalEnterQueue() {
+        while (_abnormalEnterQueue.length) {
+            const dr = _abnormalEnterQueue.shift();
+            const sp = findWSSpecimenByReportDR(dr);
+            if (sp) { setTimeout(() => auditAbnormalSpecimen(sp), 30); return; }
+        }
+        prefetchAbnormalAuditContext();
+    }
+
     function triggerAbnormalEnterAudit() {
         updateAbnormalEnterBridge();
         if (wsCategory !== 'abnormal' || !isWSVisible() || isDetailPanelVisible()) return false;
         const now = Date.now();
-        if (now - _abnormalEnterLastAt < 250) return true;
+        if (now - _abnormalEnterLastAt < 50) return true; // 仅防物理双击去抖，连按不丢
         _abnormalEnterLastAt = now;
-        if (_abnormalAuditInProgress) {
-            if (!_abnormalAuditQueued) {
-                _abnormalAuditQueued = true;
-                const ft = document.getElementById('lis-ws-ft-stat');
-                if (ft) ft.textContent = '⏳ 当前条审完后自动审下一条（已排队）';
-                showToast('下一条已排队，当前条完成后自动继续', 'info');
-            }
-            return true;
-        }
         const curData = filteredData();
         if (!curData.length) return false;
         if (wsAbnormalIndex < 0 || wsAbnormalIndex >= curData.length) wsAbnormalIndex = 0;
         const sp = getAbnormalFocusSpecimen(curData);
         if (!sp) return false;
+        if (_abnormalAuditInProgress) {
+            // 审核进行中：把当前聚焦标本压入队列，审完后依次消费（不再只排 1 条）
+            const dr = String(sp.ReportDR || '');
+            if (dr && _abnormalEnterQueue.indexOf(dr) === -1) {
+                _abnormalEnterQueue.push(dr);
+                const ft = document.getElementById('lis-ws-ft-stat');
+                if (ft) ft.textContent = '⏳ 已排队，当前条完成后自动审下一条';
+                showToast('已排队，当前条完成后自动继续', 'info');
+            }
+            return true;
+        }
         markAbnormalAuditUI(sp, 'start');
         void auditAbnormalSpecimen(sp);
         return true;
@@ -5666,9 +5677,12 @@
         if (wsCategory !== 'abnormal' || isDetailPanelVisible()) return false;
         if (!e || e.key !== 'Enter' || e.shiftKey) return false;
         if (shouldIgnoreAbnormalKeyEvent(e)) return false;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        return triggerAbnormalEnterAudit() || true;
+        const handled = triggerAbnormalEnterAudit();
+        if (handled) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+        }
+        return handled; // 未真正处理时不吞键，放行 Enter 做其他用途
     }
 
     function installPageContextAbnormalEnterHijack(iframeWin) {
@@ -5794,11 +5808,12 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
     function scheduleAbnormalFocusRecovery() {
         updateAbnormalEnterBridge();
         releaseNativeReportFocus();
-        refocusAbnormalWorkbench();
+        if (!isDetailPanelVisible()) refocusAbnormalWorkbench();
         installAbnormalResultGridEnterHijack();
-        [80, 200, 450, 900, 1800].forEach(ms => {
+        // 收敛夺焦点：仅 2 次兜底恢复，且详情面板打开/审核进行中不抢焦点
+        [150, 600].forEach(ms => {
             setTimeout(() => {
-                if (wsCategory !== 'abnormal' || _abnormalAuditInProgress) return;
+                if (wsCategory !== 'abnormal' || _abnormalAuditInProgress || isDetailPanelVisible()) return;
                 updateAbnormalEnterBridge();
                 releaseNativeReportFocus();
                 refocusAbnormalWorkbench();
@@ -6095,6 +6110,7 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
             });
             card.addEventListener('keydown', e => {
                 if (e.key !== 'Enter' || e.shiftKey) return;
+                if (shouldIgnoreAbnormalKeyEvent(e)) return;
                 _abnormalFocusDR = String(card.dataset.rdr || '');
                 const cards = document.querySelectorAll('.ws-abnormal-card');
                 cards.forEach(c => c.classList.remove('focused'));
@@ -6228,7 +6244,7 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
     }
 
     let _abnormalAuditInProgress = false;
-    let _abnormalAuditQueued = false;
+    let _abnormalEnterQueue = [];
     let _abnormalLastMdr = '';
     let _abnormalNativeReadyDR = '';
     let _abnormalPrewarmTimer = null;
@@ -6551,9 +6567,11 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
 
     async function auditAbnormalSpecimen(specimen) {
         if (_abnormalAuditInProgress) {
-            _abnormalAuditQueued = true;
-            const ft = document.getElementById('lis-ws-ft-stat');
-            if (ft) ft.textContent = '审核进行中，下一条已排队...';
+            const dr = specimen && specimen.ReportDR ? String(specimen.ReportDR) : (_abnormalFocusDR || '');
+            if (dr && _abnormalEnterQueue.indexOf(dr) === -1) {
+                _abnormalEnterQueue.push(dr);
+                showToast('已排队，当前条完成后自动继续', 'info');
+            }
             return;
         }
         if (_auditInProgress) {
@@ -6572,7 +6590,6 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
             return;
         }
         _abnormalAuditInProgress = true;
-        _abnormalAuditQueued = false;
         clearNativeUserSelectLock();
         updateAbnormalEnterBridge();
         keepWorkbenchOnTop('异常审核');
@@ -6703,16 +6720,7 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
             updateWSFooter();
             dbg('异常列表审核结束');
             if (wsCategory === 'abnormal') scheduleAbnormalFocusRecovery();
-            if (_abnormalAuditQueued) {
-                _abnormalAuditQueued = false;
-                const data = filteredData();
-                if (data.length) {
-                    const idx = Math.max(0, Math.min(wsAbnormalIndex, data.length - 1));
-                    setTimeout(() => auditAbnormalSpecimen(data[idx]), 30);
-                }
-            } else {
-                prefetchAbnormalAuditContext();
-            }
+            consumeAbnormalEnterQueue();
         }
     }
 
@@ -9118,9 +9126,6 @@ function fillNativeLoginForm(creds, lastWG) {
                             return;
                         }
                         const ret = origSuccess ? origSuccess.apply(this, arguments) : undefined;
-                        if (wsCategory === 'abnormal') {
-                            setTimeout(() => scheduleAbnormalFocusRecovery(), 30);
-                        }
                         return ret;
                     };
                 });
@@ -9829,17 +9834,20 @@ function fillNativeLoginForm(creds, lastWG) {
                 const caWin = jq('#win_CAUserLogin');
                 if (caWin.length && caWin.is(':visible')) return false;
             }
+            // 优先以真实 Ukey 绑定为准：Ukey 已绑定 = CA 真正就绪（可秒审）
             if (iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray) {
                 const me = iframeWin.me;
                 const userDR = me?.AuthUserDR || uid();
-                if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) return true;
+                if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) {
+                    saveCAAuth(wgDR()); // 同步刷新本地缓存时间窗
+                    return true;
+                }
             }
             const authStatus = getAuditStatusText(iframeWin);
             const authLoggedIn = !!(authStatus && authStatus.indexOf('未登录') === -1);
-            // 本地缓存仅在与原生状态栏一致时采信，避免 CA 已过期仍走秒审短超时
+            // 本地缓存：仅当 wg 一致且未超 1h 窗口才采信；绝不乐观兜底（避免 CA 已过期仍走秒审短超时）
             const cached = loadCAAuth();
             if (authLoggedIn && cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) return true;
-            if (authLoggedIn) return true;
         } catch(e) {}
         return false;
     }
