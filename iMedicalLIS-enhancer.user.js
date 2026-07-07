@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.7
+// @version      7.30.8
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3680,6 +3680,66 @@
         return Number.isNaN(d.getTime()) ? 0 : d.getMonth() + 1;
     }
 
+    function qeCountMonthQCRows(dataRows, month, year) {
+        let n = 0;
+        (dataRows || []).forEach(r => {
+            const val = qeCalcValue(r);
+            if (val === null || Number.isNaN(val)) return;
+            const date = r.TestDate || r.AddDate || r.QCDate || '';
+            const m = qeExtractMonth(date);
+            const d = qeExtractDay(date);
+            const inMonth = (m === month && d > 0) ||
+                (String(date).indexOf(year + '-' + String(month).padStart(2, '0')) === 0 && d > 0);
+            if (inMonth) n++;
+        });
+        return n;
+    }
+
+    // 同月多质控物时（如血常规 202602/202604），自动选有数据的 MatDR
+    async function qeFetchProjectQCData(group, proj, map, cfg) {
+        const month = cfg._month || (new Date().getMonth() + 1);
+        const year = cfg._year || new Date().getFullYear();
+        const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
+        const endDate = qeMonthEndDate(year, month);
+        const matCandidates = [];
+        const addMat = (md, name) => {
+            const id = String(md || '');
+            if (matCandidates.some(c => c.matDR === id)) return;
+            matCandidates.push({ matDR: id, materialName: name || '' });
+        };
+        addMat(map.matDR, map.materialName);
+
+        if (group.id === 'blood' || group.id === 'urine') {
+            const testCodes = await qeApiTestCodes(map.machineDR, startDate, endDate);
+            testCodes.forEach(tc => {
+                if (!qeMatchProject(group, proj, tc, map.machineName)) return;
+                addMat(tc.MatDR, tc.MaterialName);
+            });
+        }
+
+        let bestRows = [], bestMat = map.matDR || '', bestName = map.materialName || '', bestCount = 0;
+        for (const c of matCandidates) {
+            const rows = await qeApiQCData(map.machineDR, map.testCodeDR, c.matDR, startDate, endDate);
+            const cnt = qeCountMonthQCRows(rows, month, year);
+            if (cnt > bestCount) {
+                bestCount = cnt;
+                bestRows = rows;
+                bestMat = c.matDR;
+                bestName = c.materialName || bestName;
+            }
+        }
+        if (bestCount > 0 && bestMat !== map.matDR) {
+            console.log('[LIS-QE] ' + proj.name + ' 质控物切换: ' + (map.materialName || map.matDR) + ' -> ' + (bestName || bestMat));
+            map.matDR = bestMat;
+            map.materialName = bestName;
+        }
+        return bestRows;
+    }
+
+    function qeMappingCount(mappings) {
+        return Object.keys(mappings || {}).filter(k => !k.startsWith('_')).length;
+    }
+
     // CS5100 仪器列表常为空，用质控物 MatDR 补查 + 院内稳定 DR 兜底
     async function qeCoagFallbackMappings(mappings, machines, startDate, endDate, statusCb) {
         const coagGroup = QE_GROUPS.find(g => g.id === 'coag');
@@ -3788,6 +3848,7 @@
                             testName: cname || proj.name,
                             matDR: matDR,
                             matLotDR: matLotDR,
+                            materialName: String(tc.MaterialName || ''),
                             wgDR: mach.wgDR,
                             wgName: mach.wgName,
                             groupId: group.id,
@@ -3799,14 +3860,15 @@
 
         await qeCoagFallbackMappings(mappings, machines, startDate, endDate, statusCb);
 
-        const found = Object.keys(mappings).length;
+        mappings._meta = { year: year, month: month, at: Date.now() };
+        const found = qeMappingCount(mappings);
         const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
-        if (statusCb) statusCb(`映射检测完成: ${found}/${total} 个项目已匹配`, found === total ? 'ok' : 'info');
+        if (statusCb) statusCb(`映射检测完成: ${found}/${total} 个项目已匹配（${year}-${String(month).padStart(2, '0')}）`, found === total ? 'ok' : 'info');
         return mappings;
     }
 
     // 从 localStorage 加载或保存映射
-    const QE_MAP_KEY = 'lis-qe-mappings-v7';
+    const QE_MAP_KEY = 'lis-qe-mappings-v8';
     function qeLoadMappings() {
         try { return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}'); } catch(e) { return {}; }
     }
@@ -3881,10 +3943,11 @@
 
             if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
 
-            // 通过 API 查询质控数据
-            const dataRows = await qeApiQCData(map.machineDR, map.testCodeDR, map.matDR, startDate, endDate);
+            // 通过 API 查询质控数据（血常规/尿常规等同月多质控物时自动选有数据的）
+            const dataRows = await qeFetchProjectQCData(group, proj, map, cfg);
             if (!dataRows.length) {
-                if (statusCb) statusCb(`  ${proj.name}: 无数据`, 'info');
+                const matHint = map.materialName ? '（质控物 ' + map.materialName + '）' : '';
+                if (statusCb) statusCb(`  ${proj.name}: 无数据${matHint}`, 'info');
                 continue;
             }
 
@@ -4180,7 +4243,8 @@
         const el = document.getElementById('lis-qe-mapinfo');
         if (!el) return;
         const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
-        const found = Object.keys(mappings).length;
+        const found = qeMappingCount(mappings);
+        const meta = mappings._meta;
         const groupStats = QE_GROUPS.map(g => {
             const n = g.projects.filter(p => mappings[p.code]).length;
             return `${g.name} ${n}/${g.projects.length}`;
@@ -4191,7 +4255,9 @@
                 if (!mappings[p.code]) missing.push(g.name + '/' + p.name);
             });
         });
-        el.innerHTML = `已匹配 <b>${found}/${total}</b> 个项目<br><span style="font-size:10px;color:#607d8b">${groupStats}</span>` +
+        const metaHint = meta && meta.year && meta.month
+            ? `<br><span style="font-size:10px;color:#607d8b">映射月份: ${meta.year}-${String(meta.month).padStart(2, '0')}</span>` : '';
+        el.innerHTML = `已匹配 <b>${found}/${total}</b> 个项目${metaHint}<br><span style="font-size:10px;color:#607d8b">${groupStats}</span>` +
             (missing.length ? `<br>未匹配: ${missing.join('、')}` : '<br>✅ 全部匹配');
     }
 
@@ -4267,9 +4333,14 @@
         qeSaveConfig(cfg);
 
         const mappings = qeLoadMappings();
-        if (!Object.keys(mappings).length) {
+        if (!qeMappingCount(mappings)) {
             qeSetStatus('请先点击"检测映射"来识别质控项目。', 'error');
             return;
+        }
+        const mapMeta = mappings._meta;
+        if (mapMeta && cfg._year && cfg._month &&
+            (mapMeta.year !== cfg._year || mapMeta.month !== cfg._month)) {
+            qeSetStatus(`映射为 ${mapMeta.year}-${String(mapMeta.month).padStart(2, '0')} 月检测，导出 ${cfg._year}-${String(cfg._month).padStart(2, '0')} 月；血常规将自动切换有数据的质控物`, 'info');
         }
 
         qeExporting = true;
