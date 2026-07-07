@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.33.6
+// @version      7.33.7
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -832,6 +832,7 @@
     }
 
     function refreshAuthUI() {
+        if (isAuditBusy()) return;
         try {
             const w = uw();
             if (typeof w.GetAuthLoginInfo === 'function') {
@@ -890,6 +891,7 @@
     }
 
     async function fillBatchPwd() {
+        if (isAuditBusy()) return;
         const pwd = await loadPwdAsync();
         if (!pwd) return;
         const f = document.getElementById('text_AuthUserLoginPasssword');
@@ -5824,6 +5826,13 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
     function renderWSTable() {
         const body = $('#lis-ws-body');
         if (!body) return;
+        // 审核进行中：分类/刷新回调会触发 renderWSTable，此时不能拆除键盘监听或整块重绘
+        if (isAuditBusy()) {
+            calcMachineCounts();
+            renderWSCategoryBar();
+            updateWSFooter();
+            return;
+        }
         // 强制 flex 和滚动（LIS 系统 CSS 会覆盖）
         body.style.cssText = 'flex:1!important;overflow:auto!important;min-height:0!important;position:relative';
         // 移除旧的异常视图键盘监听
@@ -8695,9 +8704,15 @@ function fillNativeLoginForm(creds, lastWG) {
     let _auditAbortFlag = false;
     let _auditLockTs = 0;
     let _auditLockId = 0;
-    const AUDIT_LOCK_TIMEOUT = 45000; // 45秒超时警告（不自动释放）
+    const AUDIT_LOCK_TIMEOUT = 45000;
+    const AUDIT_LOCK_FORCE_RELEASE = 90000; // 90秒强制释放，防止锁永久卡死
     function acquireAuditLock(tag) {
-        if (_auditInProgress && (Date.now() - _auditLockTs > AUDIT_LOCK_TIMEOUT)) {
+        if (_auditInProgress && (Date.now() - _auditLockTs > AUDIT_LOCK_FORCE_RELEASE)) {
+            dbg('审核锁超时强制释放 (held by', tag, ', age=', Date.now() - _auditLockTs, 'ms)');
+            _auditAbortFlag = true;
+            releaseAuditLock();
+            showToast('上次审核操作超时，已重置状态', 'warning');
+        } else if (_auditInProgress && (Date.now() - _auditLockTs > AUDIT_LOCK_TIMEOUT)) {
             dbg('审核锁持有超过', AUDIT_LOCK_TIMEOUT / 1000, '秒，可能存在卡死 (held by', tag, ')');
             _auditAbortFlag = true;
             showToast('审核操作耗时较长，可能需要等待', 'warning');
@@ -8973,8 +8988,13 @@ function fillNativeLoginForm(creds, lastWG) {
         }
     }
 
-    function isScriptOwnedNativeSelection() {
+    function isAuditBusy() {
+        if (typeof _auditInProgress === 'undefined') return false;
         return !!(_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress);
+    }
+
+    function isScriptOwnedNativeSelection() {
+        return isAuditBusy();
     }
 
     function clearNativeUserSelectLock() {
@@ -9743,10 +9763,12 @@ function fillNativeLoginForm(creds, lastWG) {
                 const userDR = me?.AuthUserDR || uid();
                 if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) return true;
             }
-            const cached = loadCAAuth();
-            if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) return true;
             const authStatus = getAuditStatusText(iframeWin);
-            if (authStatus && authStatus.indexOf('未登录') === -1) return true;
+            const authLoggedIn = !!(authStatus && authStatus.indexOf('未登录') === -1);
+            // 本地缓存仅在与原生状态栏一致时采信，避免 CA 已过期仍走秒审短超时
+            const cached = loadCAAuth();
+            if (authLoggedIn && cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) return true;
+            if (authLoggedIn) return true;
         } catch(e) {}
         return false;
     }
@@ -11586,7 +11608,7 @@ function fillNativeLoginForm(creds, lastWG) {
                             batchMode: true,
                             targetWasPresent: auditCtx.rowPresent,
                             detailWasReady: auditCtx.detailReady,
-                            afterCA: true
+                            afterCA: !batchCAReady
                         });
                     }
                     if (!auditResult && verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
