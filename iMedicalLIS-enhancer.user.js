@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.31.0
+// @version      7.31.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4054,7 +4054,18 @@
             return;
         }
         try {
-            if (typeof JSZip === 'undefined') throw new Error('JSZip 未加载');
+            // 动态加载 JSZip（如果 CDN 加载失败）
+            if (typeof JSZip === 'undefined') {
+                qeSetStatus('正在加载 JSZip...', 'info');
+                await new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+                    s.onload = resolve;
+                    s.onerror = reject;
+                    document.head.appendChild(s);
+                });
+            }
+            if (typeof JSZip === 'undefined') throw new Error('JSZip 加载失败');
             const zip = new JSZip();
             blobs.forEach(b => zip.file(b.name, b.blob));
             const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -4476,11 +4487,12 @@
         if (cancelBtn) cancelBtn.style.display = 'none';
         if (detectBtn) detectBtn.disabled = false;
 
+        // 启用一键下载（无论是否完整导出）
+        const dlAllBtn = document.getElementById('lis-qe-download-all');
+        if (dlAllBtn) dlAllBtn.disabled = false;
+
         if (!qeAbortFlag) {
             qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。`, 'ok');
-            // 启用一键下载
-            const dlAllBtn = document.getElementById('lis-qe-download-all');
-            if (dlAllBtn) dlAllBtn.disabled = false;
         } else {
             qeSetStatus('导出已停止。', 'info');
         }
