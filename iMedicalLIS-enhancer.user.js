@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.33.9
+// @version      7.34.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -83,6 +83,9 @@
         if (t.closest('#lis-pr-panel')) return true;
         if (t.closest('#lis-detail-panel')) return isEditableEventTarget(e);
         if (t.closest('#lis-ws-search')) return true;
+        if (t.closest('#lis-queue-resume')) return true;
+        if (t.closest('#lis-audit-progress')) return true;
+        if (t.closest('.window-body')) return true;
         return false;
     };
 
@@ -3359,13 +3362,23 @@
         return !re || re.test(text);
     }
 
+    // 子串匹配辅助：要求短串长度 >= 长串的 60%，防止"白细胞"匹配到"白细胞酯酶"
+    function qeLooseMatch(a, b) {
+        if (!a || !b) return false;
+        if (a === b) return true;
+        const short = a.length <= b.length ? a : b;
+        const long  = a.length <= b.length ? b : a;
+        if (short.length < long.length * 0.6) return false;
+        return long.includes(short);
+    }
+
     function qeMatchProject(group, proj, tc, machineName) {
         if (!qeMachineMatchesGroup(group, machineName)) return false;
         const code = qeNormName(tc.Code);
         const synonym = qeNormName(tc.Synonym);
         const cname = qeNormName(tc.CName);
         if (proj.lisName) {
-            return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
+            return cname === proj.lisName || qeLooseMatch(cname, proj.lisName);
         }
         if (!qeMaterialMatchesGroup(group, tc, proj, machineName)) return false;
         const matName = qeNormName(tc.MaterialName);
@@ -3373,8 +3386,8 @@
         if (code && proj.name && code.toLowerCase() === proj.name.toLowerCase()) return true;
         if (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase()) return true;
         if (code === proj.code) return true;
-        const cnameMatch = cname === proj.name || (cname && proj.name && (cname.includes(proj.name) || proj.name.includes(cname)));
-        const matMatch = matName === proj.name || (matName && proj.name && (matName.includes(proj.name) || proj.name.includes(matName)));
+        const cnameMatch = cname === proj.name || qeLooseMatch(cname, proj.name);
+        const matMatch = matName === proj.name || qeLooseMatch(matName, proj.name);
         const abbrMatch = (matName && proj.name && matName.toLowerCase() === proj.name.toLowerCase()) ||
             (cname && proj.name && cname.toLowerCase() === proj.name.toLowerCase()) ||
             (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase());
@@ -3385,8 +3398,8 @@
             const mn = matName.toLowerCase();
             const cd = code.toLowerCase();
             const sy = synonym.toLowerCase();
-            return cn === a || cn.includes(a) || a.includes(cn) ||
-                   mn === a || mn.includes(a) || a.includes(mn) ||
+            return cn === a || qeLooseMatch(cn, a) ||
+                   mn === a || qeLooseMatch(mn, a) ||
                    cd === a || sy === a;
         });
         return cnameMatch || matMatch || abbrMatch || aliasMatch;
@@ -3542,12 +3555,16 @@
                 const data = await fetchJ(url, 25000);
                 const rows = Array.isArray(data) ? data : (data && data.rows) || [];
                 rows.forEach(r => {
-                    if (!r.LevelNo) r.LevelNo = lv.levelNo;
+                    const levelNo = r.LevelNo || lv.levelNo;
                     const date = r.TestDate || r.AddDate || r.QCDate || '';
-                    const key = date + '|' + r.LevelNo + '|' + (r.TestCodeDR || testCodeDR);
+                    // 去重 key 包含运行序号/时间戳，避免同日多次检测结果被丢弃
+                    const seq = r.SeqNo || r.RunSeq || r.AddTime || '';
+                    const key = date + '|' + levelNo + '|' + (r.TestCodeDR || testCodeDR) + '|' + seq;
                     if (seen.has(key)) return;
                     seen.add(key);
-                    if (date || r.Result1 != null || r.DayAve != null || r.Result != null) allRows.push(r);
+                    // 不修改原 API 响应对象，避免副作用
+                    const row = seq ? r : { ...r, LevelNo: levelNo };
+                    if (date || row.Result1 != null || row.DayAve != null || row.Result != null) allRows.push(row);
                 });
             } catch(e) {
                 console.warn('[LIS-QE] QueryTestResultData L' + lv.levelNo + ' failed:', e.message);
@@ -3989,7 +4006,7 @@
         a.download = filename;
         document.body.appendChild(a);
         a.click();
-        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 5000);
     }
 
 
@@ -4228,7 +4245,11 @@
 
         // ESC 关闭
         panel.addEventListener('keydown', e => {
-            if (e.key === 'Escape') panel.classList.remove('show');
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                panel.classList.remove('show');
+            }
         });
 
         // 加载已有映射信息
@@ -4278,6 +4299,10 @@
             const parts = monthInput.value.split('-');
             cfg._year = parseInt(parts[0], 10);
             cfg._month = parseInt(parts[1], 10);
+            if (isNaN(cfg._year) || isNaN(cfg._month) || cfg._month < 1 || cfg._month > 12) {
+                cfg._year = 0;
+                cfg._month = 0;
+            }
         }
 
         // 选中的组
@@ -4329,6 +4354,10 @@
         if (qeExporting) return;
 
         const cfg = qeCollectConfig();
+        if (!cfg._year || !cfg._month) {
+            qeSetStatus('请选择有效的导出月份。', 'error');
+            return;
+        }
         if (!cfg.selectedGroups || !cfg.selectedGroups.length) {
             qeSetStatus('请至少选择一个导出项目。', 'error');
             return;
@@ -4357,6 +4386,7 @@
         if (cancelBtn) cancelBtn.style.display = '';
         if (detectBtn) detectBtn.disabled = true;
 
+        try {
         const resultSection = document.getElementById('lis-qe-result-section');
         const resultList = document.getElementById('lis-qe-results');
         if (resultSection) resultSection.style.display = '';
@@ -4397,12 +4427,13 @@
         } else {
             qeSetStatus('导出已停止。', 'info');
         }
-
-        qeExporting = false;
-        qeAbortFlag = false;
-        if (exportBtn) exportBtn.disabled = false;
-        if (cancelBtn) cancelBtn.style.display = 'none';
-        if (detectBtn) detectBtn.disabled = false;
+        } finally {
+            qeExporting = false;
+            qeAbortFlag = false;
+            if (exportBtn) exportBtn.disabled = false;
+            if (cancelBtn) cancelBtn.style.display = 'none';
+            if (detectBtn) detectBtn.disabled = false;
+        }
     }
 
     function qeAddResultItem(filename, rowCount, blob, error) {
@@ -6184,10 +6215,15 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
         });
         if (confirmed && confirmed !== 'incomplete') return true;
         await sleep(batchMode ? 300 : 1500);
-        if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) return true;
+        // 用最新 iframe 引用做二次验证
         const latestWin = getReportIframeWin() || iframeWin;
+        if (verifyAuditSucceededByReportDR(latestWin, reportDR)) return true;
         const found = findNativeRowByReportDR(latestWin, reportDR);
-        if (!found) return allowMissing;
+        if (!found) {
+            // 仅当详情已加载 + 行曾经存在时才认为"行消失=成功"
+            if (allowMissing && targetWasPresent) return true;
+            return false;
+        }
         return isExpectedNativeStatus(found.row, ['3', '4']);
     }
 
@@ -6398,6 +6434,14 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
     function removeAuditedAbnormalCard(reportDR, startIndex) {
         const q = ($('#lis-ws-search') || {}).value || '';
         if (q) {
+            // 搜索模式下仍需更新索引，避免指向已审核的标本
+            const newData = filteredData();
+            if (newData.length === 0) {
+                wsCategory = 'normal';
+                wsAbnormalIndex = -1;
+            } else {
+                wsAbnormalIndex = Math.min(Math.max(startIndex, 0), newData.length - 1);
+            }
             renderWSCategoryBar();
             renderWSTable();
             return;
@@ -8710,13 +8754,19 @@ function fillNativeLoginForm(creds, lastWG) {
     let _auditAbortFlag = false;
     let _auditLockTs = 0;
     let _auditLockId = 0;
+    let _auditLockGeneration = 0; // 每次强制释放时递增，旧循环通过 generation 检测自己已被取代
     const AUDIT_LOCK_TIMEOUT = 45000;
     const AUDIT_LOCK_FORCE_RELEASE = 90000; // 90秒强制释放，防止锁永久卡死
     function acquireAuditLock(tag) {
         if (_auditInProgress && (Date.now() - _auditLockTs > AUDIT_LOCK_FORCE_RELEASE)) {
             dbg('审核锁超时强制释放 (held by', tag, ', age=', Date.now() - _auditLockTs, 'ms)');
-            _auditAbortFlag = true;
-            releaseAuditLock();
+            // 递增 generation，让旧循环检测到自己已被取代
+            _auditLockGeneration++;
+            // 不调用 releaseAuditLock()，保留 _auditAbortFlag=true 让旧循环自行退出
+            _batchAbort = false;
+            _auditInProgress = false;
+            _auditLockTs = 0;
+            _auditLockId = 0;
             showToast('上次审核操作超时，已重置状态', 'warning');
         } else if (_auditInProgress && (Date.now() - _auditLockTs > AUDIT_LOCK_TIMEOUT)) {
             dbg('审核锁持有超过', AUDIT_LOCK_TIMEOUT / 1000, '秒，可能存在卡死 (held by', tag, ')');
@@ -8868,7 +8918,10 @@ function fillNativeLoginForm(creds, lastWG) {
             } catch(e) {}
         }
         // 回退：unsafeWindow 有 ReportSave（可能返回主页面窗口，缺少 me 对象）
-        try { if (typeof uw().ReportSave === 'function') return uw(); } catch(e) {}
+        // 仅在确认主页面有 me 对象时才回退，避免后续代码因缺少 me 而崩溃
+        try {
+            if (typeof uw().ReportSave === 'function' && uw().me) return uw();
+        } catch(e) {}
         return null;
     }
 
@@ -9344,12 +9397,24 @@ function fillNativeLoginForm(creds, lastWG) {
         const ignoreMessages = !!options.ignoreMessages;
         const missingStableMs = Number(options.missingStableMs || 700);
         const failureGraceMs = Number(options.failureGraceMs || 2500);
+        let _iframeRefreshAt = Date.now();
         if (targetReportDR && !sawTargetRow) {
             try { sawTargetRow = !!findNativeRowByReportDR(iframeWin, targetReportDR); } catch(e) {}
         }
 
         while (Date.now() < end) {
             await sleep(Date.now() < fastEnd ? (turbo ? 35 : 50) : (turbo ? 80 : 150));
+            // 周期性刷新 iframe 引用（防工作组切换后旧引用失效）
+            if (Date.now() - _iframeRefreshAt > 2000) {
+                _iframeRefreshAt = Date.now();
+                try {
+                    const freshWin = typeof getReportIframeWin === 'function' ? getReportIframeWin() : null;
+                    if (freshWin && freshWin !== iframeWin) {
+                        iframeWin = freshWin;
+                        dbg('waitNativeActionResult: 刷新 iframe 引用');
+                    }
+                } catch(e) {}
+            }
             closeIgnorableNativeExceptionDialogs(doc, jq);
 
             if (targetReportDR && expectedStatuses && expectedStatuses.length) {
@@ -11478,7 +11543,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
             while (queue.current < queue.items.length) {
                 if (_batchAbort) { dbg('批审被用户中止'); saveAuditQueueNow(queue); break; }
-                if (_auditAbortFlag) { dbg('批审因审核锁超时被中止'); saveAuditQueueNow(queue); break; }
+                if (_auditAbortFlag || auditLockId !== _auditLockId) { dbg('批审因审核锁超时或被取代而中止'); saveAuditQueueNow(queue); break; }
 
                 const item = currentQueueItem(queue);
                 if (!item) break;
@@ -11548,7 +11613,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     }
                     if (!jq || !me) {
                         queue.failed.push({ ...item, reason: '页面未就绪' });
-                        failCount++; queue.current++; saveAuditQueue(queue); continue;
+                        failCount++; queue.current++; saveAuditQueueNow(queue); continue;
                     }
 
                     let selectedOk = batchSkipSelect;
@@ -11580,7 +11645,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     }
                     if (!selectedOk) {
                         if (!requeueAuditItem(queue, item, '原生列表未找到')) skipCount++;
-                        queue.current++; saveAuditQueue(queue); continue;
+                        queue.current++; saveAuditQueueNow(queue); continue;
                     }
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 加载详情...`, queue.current / totalCount * 100);
@@ -11596,7 +11661,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     }
                     if (!detailReady) {
                         if (!requeueAuditItem(queue, item, '详情未加载完成')) skipCount++;
-                        queue.current++; saveAuditQueue(queue); continue;
+                        queue.current++; saveAuditQueueNow(queue); continue;
                     }
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
@@ -11638,6 +11703,12 @@ function fillNativeLoginForm(creds, lastWG) {
                     } else {
                         queue.failed.push({ ...item, reason: '审核未确认成功' });
                         failCount++;
+                        // 审核失败可能是 CA 过期，重置 CA 就绪状态，后续标本使用更长超时
+                        if (batchCAReady) {
+                            batchCAReady = false;
+                            queue.caReadyByWg[itemWg] = false;
+                            dbg('批审: 审核失败，重置 CA 就绪状态');
+                        }
                     }
                 } catch(e) {
                     queue.failed.push({ ...item, reason: e.message });
