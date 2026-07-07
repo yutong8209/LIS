@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.30.8
-// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
+// @version      7.31.0
+// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -13,6 +13,7 @@
 // @run-at       document-idle
 // @noframes     false
 // @require      https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
+// @require      https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js
 // ==/UserScript==
 
 (function () {
@@ -748,6 +749,18 @@
 .qe-date-row{display:flex;gap:8px;align-items:center}
 .qe-date-row input[type="month"]{height:26px;border:1px solid #c3ced8;border-radius:4px;padding:2px 7px;font-size:12px;color:#213547;background:#fff;outline:none}
 .qe-mapping-info{font-size:10px;color:#7b8b96;margin-top:4px;line-height:1.4}
+.qe-step{background:#fff;border:1px solid #d5e4ef;border-radius:8px;padding:10px 14px;margin-bottom:8px}
+.qe-step-hd{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;user-select:none}
+.qe-step-num{width:22px;height:22px;border-radius:50%;background:#0d7c66;color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.qe-step-title{font-size:13px;font-weight:800;color:#0d7c66;flex:1}
+.qe-step-desc{font-size:10px;color:#7b8b96;font-weight:400}
+.qe-step-body{margin-top:4px}
+.qe-save-btn{height:28px;border:1px solid #0d7c66;background:#0d7c66;color:#fff;border-radius:5px;padding:0 16px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s}
+.qe-save-btn:hover{background:#09654f}
+.qe-save-btn.saved{background:#4db89e;border-color:#4db89e}
+.qe-download-all{height:30px;border:1px solid #0d7c66;background:linear-gradient(135deg,#0d7c66,#4db89e);color:#fff;border-radius:5px;padding:0 18px;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(13,124,102,.25)}
+.qe-download-all:hover{box-shadow:0 4px 12px rgba(13,124,102,.35);transform:translateY(-1px)}
+.qe-download-all:disabled{opacity:.5;cursor:not-allowed;transform:none}
     `);
 
     // ==================== Toast ====================
@@ -4025,6 +4038,36 @@
         setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
     }
 
+    // ZIP 打包下载所有导出文件
+    async function qeDownloadAllZip() {
+        const resultSection = document.getElementById('lis-qe-result-section');
+        const items = resultSection ? resultSection.querySelectorAll('.qe-result-item') : [];
+        const blobs = [];
+        items.forEach(item => {
+            const btn = item.querySelector('button[data-fn]');
+            if (btn && btn._blob) {
+                blobs.push({ name: btn.getAttribute('data-fn'), blob: btn._blob });
+            }
+        });
+        if (!blobs.length) {
+            qeSetStatus('没有可下载的文件。', 'error');
+            return;
+        }
+        try {
+            if (typeof JSZip === 'undefined') throw new Error('JSZip 未加载');
+            const zip = new JSZip();
+            blobs.forEach(b => zip.file(b.name, b.blob));
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            const cfg = qeCollectConfig();
+            const month = cfg._month || (new Date().getMonth() + 1);
+            const year = cfg._year || new Date().getFullYear();
+            qeDownloadBlob(zipBlob, `质控数据_${year}${String(month).padStart(2, '0')}.zip`);
+            qeSetStatus('ZIP 下载完成！', 'ok');
+        } catch(e) {
+            qeSetStatus('ZIP 下载失败: ' + e.message + '，请逐个下载。', 'error');
+        }
+    }
+
     // --- UI 创建 ---
     function qeCreateFab() {
         if (document.getElementById('lis-qe-fab')) return;
@@ -4080,14 +4123,15 @@
         const now = new Date();
         const defaultMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
 
-        // 构建项目勾选和批号 HTML
+        // --- 项目勾选 HTML ---
         let groupsHtml = '';
+        QE_GROUPS.forEach(g => {
+            groupsHtml += `<label><input type="checkbox" class="qe-gcheck" value="${g.id}" checked>${g.name} (${g.projects.length}项)</label>`;
+        });
+
+        // --- 批号设置 HTML ---
         let lotsHtml = '';
         QE_GROUPS.forEach(g => {
-            const checked = true; // 默认全选
-            groupsHtml += `<label><input type="checkbox" class="qe-gcheck" value="${g.id}" ${checked ? 'checked' : ''}>${g.name} (${g.projects.length}项)</label>`;
-
-            // 批号设置
             const gc = (cfg.lots && cfg.lots[g.id]) || {};
             if (g.lotMode === 'suffix') {
                 const base = gc.baseLot || g.baseLot;
@@ -4111,7 +4155,6 @@
                 lotsHtml += `<div class="qe-lot-item"><span>凝血四项(INR/APTT/PT/FIB)</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="coag_main" value="${esc(mainLot)}"></div>`;
                 lotsHtml += `<div class="qe-lot-item"><span>D-二聚体</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="coag_dimer" value="${esc(dimerLot)}"></div>`;
             } else if (g.lotMode === 'immune') {
-                // 免疫组：可展开的批号设置
                 let projLotsHtml = '';
                 g.projects.forEach(p => {
                     const lot = gc[p.code] || p.defaultLot || g.defaultLot || '';
@@ -4122,7 +4165,7 @@
             }
         });
 
-        // 操作者设置
+        // --- 操作者设置 HTML ---
         const operatorGroups = [
             { ids: ['blood', 'coag', 'lipid', 'urine'], label: '血常规/凝血/血脂/尿常规', def: '' },
             { ids: ['biochem'], label: '生化', def: '' },
@@ -4142,38 +4185,66 @@
                 <button class="qe-close" id="lis-qe-close" title="关闭">×</button>
             </div>
             <div id="lis-qe-body">
-                <div class="qe-section">
-                    <div class="qe-section-title">导出月份</div>
-                    <div class="qe-date-row">
-                        <input type="month" id="lis-qe-month" value="${defaultMonth}">
-                        <span style="font-size:11px;color:#7b8b96">选择需要导出的月份</span>
+                <!-- Step 1: 选择月份和项目 -->
+                <div class="qe-step">
+                    <div class="qe-step-hd">
+                        <span class="qe-step-num">1</span>
+                        <span class="qe-step-title">选择月份和导出项目</span>
+                        <button id="lis-qe-toggle-all" style="height:22px;font-size:10px;border:1px solid #b8ddd3;background:#f0faf7;color:#0d6655;border-radius:3px;padding:0 8px;cursor:pointer;font-weight:700">全选/反选</button>
+                    </div>
+                    <div class="qe-step-body">
+                        <div class="qe-date-row" style="margin-bottom:6px">
+                            <input type="month" id="lis-qe-month" value="${defaultMonth}">
+                        </div>
+                        <div class="qe-row">${groupsHtml}</div>
                     </div>
                 </div>
-                <div class="qe-section">
-                    <div class="qe-section-title">导出项目 <button id="lis-qe-toggle-all" style="margin-left:auto;height:22px;font-size:10px;border:1px solid #b8ddd3;background:#f0faf7;color:#0d6655;border-radius:3px;padding:0 8px;cursor:pointer;font-weight:700">全选/反选</button></div>
-                    <div class="qe-row">${groupsHtml}</div>
-                </div>
-                <div class="qe-section">
-                    <div class="qe-section-title">批号设置</div>
-                    <div class="qe-lot-grid">${lotsHtml}</div>
-                </div>
-                <div class="qe-section">
-                    <div class="qe-section-title">操作者</div>
-                    <div class="qe-lot-grid">${operatorHtml}</div>
-                </div>
-                <div class="qe-section">
-                    <div class="qe-actions">
-                        <button id="lis-qe-detect" title="自动检测质控页面中的项目映射">🔍 检测映射</button>
-                        <button id="lis-qe-export" class="primary" title="开始导出">▶ 开始导出</button>
-                        <button id="lis-qe-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">⏹ 停止</button>
+
+                <!-- Step 2: 批号和操作者设置 -->
+                <div class="qe-step">
+                    <div class="qe-step-hd">
+                        <span class="qe-step-num">2</span>
+                        <span class="qe-step-title">批号和操作者设置</span>
+                        <span class="qe-step-desc">修改后点击右侧保存</span>
+                        <button class="qe-save-btn" id="lis-qe-save">💾 保存设置</button>
                     </div>
-                    <div id="lis-qe-status">选择月份和项目后，点击"检测映射"开始。</div>
-                    <div class="qe-progress" id="lis-qe-progress"><div class="qe-progress-bar" id="lis-qe-pbar"></div><div class="qe-progress-text" id="lis-qe-ptext"></div></div>
-                    <div class="qe-mapping-info" id="lis-qe-mapinfo"></div>
+                    <div class="qe-step-body">
+                        <div class="qe-lot-grid">${lotsHtml}</div>
+                        <div style="margin-top:8px;border-top:1px solid #edf1f5;padding-top:8px">
+                            <div style="font-size:11px;font-weight:700;color:#526575;margin-bottom:4px">操作者</div>
+                            <div class="qe-lot-grid">${operatorHtml}</div>
+                        </div>
+                    </div>
                 </div>
-                <div class="qe-section" id="lis-qe-result-section" style="display:none">
-                    <div class="qe-section-title">导出结果</div>
-                    <div class="qe-result-list" id="lis-qe-results"></div>
+
+                <!-- Step 3: 检测和导出 -->
+                <div class="qe-step">
+                    <div class="qe-step-hd">
+                        <span class="qe-step-num">3</span>
+                        <span class="qe-step-title">检测映射 → 导出</span>
+                    </div>
+                    <div class="qe-step-body">
+                        <div class="qe-actions">
+                            <button id="lis-qe-detect" title="自动检测质控系统中的项目映射">🔍 检测映射</button>
+                            <button id="lis-qe-export" class="primary" title="开始导出">▶ 开始导出</button>
+                            <button id="lis-qe-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">⏹ 停止</button>
+                        </div>
+                        <div id="lis-qe-status" style="margin-top:6px">选择月份和项目后，点击"检测映射"。</div>
+                        <div class="qe-progress" id="lis-qe-progress"><div class="qe-progress-bar" id="lis-qe-pbar"></div><div class="qe-progress-text" id="lis-qe-ptext"></div></div>
+                        <div class="qe-mapping-info" id="lis-qe-mapinfo"></div>
+                    </div>
+                </div>
+
+                <!-- 导出结果 -->
+                <div class="qe-step" id="lis-qe-result-section" style="display:none">
+                    <div class="qe-step-hd">
+                        <span class="qe-step-num">✓</span>
+                        <span class="qe-step-title">导出结果</span>
+                        <button class="qe-download-all" id="lis-qe-download-all" disabled>📦 一键下载全部 (ZIP)</button>
+                    </div>
+                    <div class="qe-step-body">
+                        <div class="qe-result-list" id="lis-qe-results"></div>
+                    </div>
                 </div>
             </div>`;
         document.body.appendChild(panel);
@@ -4200,6 +4271,16 @@
             });
         });
 
+        // 保存设置
+        document.getElementById('lis-qe-save').addEventListener('click', () => {
+            const cfg = qeCollectConfig();
+            qeSaveConfig(cfg);
+            const btn = document.getElementById('lis-qe-save');
+            btn.textContent = '✅ 已保存';
+            btn.classList.add('saved');
+            setTimeout(() => { btn.textContent = '💾 保存设置'; btn.classList.remove('saved'); }, 2000);
+        });
+
         // 检测映射
         document.getElementById('lis-qe-detect').addEventListener('click', async () => {
             qeSetStatus('正在检测项目映射...', 'info');
@@ -4221,6 +4302,9 @@
             qeSetStatus('正在停止...', 'info');
         });
 
+        // 一键下载全部
+        document.getElementById('lis-qe-download-all').addEventListener('click', () => qeDownloadAllZip());
+
         // ESC 关闭
         panel.addEventListener('keydown', e => {
             if (e.key === 'Escape') panel.classList.remove('show');
@@ -4228,7 +4312,7 @@
 
         // 加载已有映射信息
         const savedMap = qeLoadMappings();
-        if (Object.keys(savedMap).length) qeShowMappingInfo(savedMap);
+        if (Object.keys(savedMap).length > 1) qeShowMappingInfo(savedMap);
     }
 
     function qeSetStatus(text, type) {
@@ -4394,6 +4478,9 @@
 
         if (!qeAbortFlag) {
             qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。`, 'ok');
+            // 启用一键下载
+            const dlAllBtn = document.getElementById('lis-qe-download-all');
+            if (dlAllBtn) dlAllBtn.disabled = false;
         } else {
             qeSetStatus('导出已停止。', 'info');
         }
@@ -4418,7 +4505,9 @@
         }
         div.innerHTML = `<span class="qe-ri-name">${esc(filename)}</span>${statusHtml}${btnHtml}`;
         if (btnHtml) {
-            div.querySelector('button').addEventListener('click', () => {
+            const dlBtn = div.querySelector('button');
+            dlBtn._blob = blob;
+            dlBtn.addEventListener('click', () => {
                 qeDownloadBlob(blob, filename);
             });
         }
