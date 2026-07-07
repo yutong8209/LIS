@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.33.2
+// @version      7.33.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -832,6 +832,7 @@
     }
 
     function refreshAuthUI() {
+        if (_auditInProgress) return;
         try {
             const w = uw();
             if (typeof w.GetAuthLoginInfo === 'function') {
@@ -890,6 +891,7 @@
     }
 
     async function fillBatchPwd() {
+        if (_auditInProgress) return;
         const pwd = await loadPwdAsync();
         if (!pwd) return;
         const f = document.getElementById('text_AuthUserLoginPasssword');
@@ -6164,25 +6166,25 @@ window.addEventListener('keydown',function(e){
         });
         if (confirmed && confirmed !== 'incomplete') return true;
 
-        // 检查审核登录窗口是否出现，尝试自动填写
+        // 自动审核只走 F5 → CA（capping）路径，绝不填「审核登录」窗口
         try {
-            const doc = iframeWin ? iframeWin.document : document;
-            const jq = iframeWin ? (iframeWin.jQuery || iframeWin.$) : window.jQuery;
-            const authWin = doc.querySelector('#win_AuthLogin, #win_EntryLogin, #win_BatchAuthUserLogin');
-            if (authWin && authWin.style.display !== 'none' && jq && jq(authWin).is(':visible')) {
-                dbg('confirmAudit: 检测到审核登录窗口，尝试自动登录');
-                const loginOK = await handleAuditLoginDirect(iframeWin, jq, doc);
-                if (loginOK) {
-                    dbg('confirmAudit: 审核登录成功，等待结果');
-                    const postLoginResult = await waitNativeActionResult(iframeWin, reportDR, ['3'], batchMode ? 8000 : 12000, allowMissing, {
-                        targetWasPresent,
-                        missingStableMs: batchMode ? 700 : 900,
-                        failureGraceMs: batchMode ? 3000 : 5000
-                    });
-                    if (postLoginResult && postLoginResult !== 'incomplete') return true;
+            if (isAuthLoginWindowVisible(iframeWin)) {
+                dbg('confirmAudit: 检测到审核登录窗口，关闭并走 CA 路径');
+                closeStaleAuthLoginWindows(iframeWin);
+                if (isCAWindowVisible(iframeWin)) {
+                    const caOK = await handleCALogin(iframeWin, { fast: batchMode });
+                    if (caOK || isCAUKeyBound(iframeWin)) saveCAAuth();
+                } else if (typeof iframeWin.ReportSave === 'function') {
+                    try { iframeWin.ReportSave('A', ''); } catch(e) {}
                 }
+                const postDismiss = await waitNativeActionResult(iframeWin, reportDR, ['3'], batchMode ? 10000 : 12000, allowMissing, {
+                    targetWasPresent,
+                    missingStableMs: batchMode ? 700 : 900,
+                    failureGraceMs: batchMode ? 3000 : 5000
+                });
+                if (postDismiss && postDismiss !== 'incomplete') return true;
             }
-        } catch(e) { dbg('confirmAudit: 审核登录处理异常', e.message); }
+        } catch(e) { dbg('confirmAudit: 关闭审核登录窗口异常', e.message); }
 
         await sleep(batchMode ? 300 : 1500);
         if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) return true;
@@ -8925,6 +8927,41 @@ function fillNativeLoginForm(creds, lastWG) {
         } catch(e) { return false; }
     }
 
+    function isAuthLoginWindowVisible(iframeWin) {
+        try {
+            const jq = iframeWin?.jQuery || iframeWin?.$;
+            if (!jq) return false;
+            for (const sel of ['#win_AuthLogin', '#win_EntryLogin', '#win_BatchAuthUserLogin']) {
+                const w = jq(sel);
+                if (w.length && w.is(':visible')) return true;
+            }
+        } catch(e) {}
+        return false;
+    }
+
+    // --- 关闭误弹出的「审核登录/审核密码」窗口（自动审核不使用）---
+    function closeStaleAuthLoginWindows(iframeWin) {
+        try {
+            const jq = iframeWin?.jQuery || iframeWin?.$;
+            if (!jq) return false;
+            let closed = false;
+            for (const sel of ['#win_AuthLogin', '#win_EntryLogin', '#win_BatchAuthUserLogin']) {
+                const w = jq(sel);
+                if (!w.length || !w.is(':visible')) continue;
+                try { w.window('close'); } catch(e) {}
+                try { w.dialog('close'); } catch(e) {}
+                try { w.hide(); } catch(e) {}
+                try {
+                    const closeBtn = w.find('.panel-tool-close');
+                    if (closeBtn.length) closeBtn.click();
+                } catch(e) {}
+                dbg('已关闭审核登录相关窗口:', sel);
+                closed = true;
+            }
+            return closed;
+        } catch(e) { return false; }
+    }
+
     // --- 关闭 CA 认证窗口（残留窗口多种方式尝试）---
     function closeStaleCAWindow(iframeWin) {
         try {
@@ -9661,6 +9698,12 @@ function fillNativeLoginForm(creds, lastWG) {
             return false;
         }
 
+        // 自动审核不走「审核登录」按钮弹窗，误弹出则先关掉
+        if (isAudit && isAuthLoginWindowVisible(iframeWin)) {
+            dbg('审核前关闭误弹出的审核登录窗口');
+            closeStaleAuthLoginWindows(iframeWin);
+        }
+
         // 批审/秒审前：CA 窗口已弹出则先处理，避免误以为已认证而漏检
         if (isAudit && isCAWindowVisible(iframeWin)) {
             dbg('审核前检测到 CA 窗口，先完成认证');
@@ -9691,7 +9734,6 @@ function fillNativeLoginForm(creds, lastWG) {
         }
 
         let caDetected = false;
-        let authLoginDetected = false;
         const instant = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 120 : 80, allowMissingSuccess, waitOpts);
         if (instant !== false) return instant;
 
@@ -9711,13 +9753,9 @@ function fillNativeLoginForm(creds, lastWG) {
             } catch(e) {}
 
             try {
-                const authWin = doc.querySelector('#win_AuthLogin, #win_EntryLogin');
-                if (authWin && authWin.style.display !== 'none') {
-                    const vis = jq(authWin);
-                    if (vis.length && vis.is(':visible')) {
-                        authLoginDetected = true;
-                        dbg('检测到审核登录窗口，继续等待原生审核结果');
-                    }
+                if (isAuthLoginWindowVisible(iframeWin)) {
+                    dbg('检测到审核登录窗口，关闭后继续 CA 审核路径');
+                    closeStaleAuthLoginWindows(iframeWin);
                 }
             } catch(e) {}
         }
@@ -9764,9 +9802,6 @@ function fillNativeLoginForm(creds, lastWG) {
         const result = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, allowMissingSuccess, { ...waitOpts, missingStableMs, failureGraceMs: batchMode ? 2000 : 3000 });
         if (result) return result;
 
-        if (authLoginDetected) {
-            dbg('审核登录窗口已检测到，交由后续确认流程处理');
-        }
         dbg('原生按钮点击完成，但未确认成功');
         return false;
     }
@@ -11739,6 +11774,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     }
 
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
+                    closeStaleAuthLoginWindows(iframeWin);
                     const auditCtx = auditTargetContext(iframeWin, item.reportDR);
                     let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
                         action: 'audit', expectedStatuses: ['3'], batchMode: true,
