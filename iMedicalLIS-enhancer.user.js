@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.33.1
+// @version      7.33.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8908,18 +8908,44 @@ function fillNativeLoginForm(creds, lastWG) {
         return false;
     }
 
-    // --- 关闭 CA 认证窗口（如果打开）---
-    function closeCAWindow(iframeWin) {
+    function isCAWindowVisible(iframeWin) {
         try {
-            const jq = iframeWin.jQuery || iframeWin.$;
-            if (jq) {
-                const caWin = jq('#win_CAUserLogin');
-                if (caWin.length && caWin.is(':visible')) {
-                    caWin.window('close');
-                    dbg('已关闭 CA 认证窗口');
-                }
-            }
-        } catch(e) {}
+            const jq = iframeWin?.jQuery || iframeWin?.$;
+            if (!jq) return false;
+            const caWin = jq('#win_CAUserLogin');
+            return !!(caWin.length && caWin.is(':visible'));
+        } catch(e) { return false; }
+    }
+
+    function isCAUKeyBound(iframeWin) {
+        try {
+            if (!iframeWin?.CAMsg?.UkeyNoArray) return false;
+            const userDR = iframeWin.me?.AuthUserDR || uid();
+            return !!(userDR && iframeWin.CAMsg.UkeyNoArray[userDR]);
+        } catch(e) { return false; }
+    }
+
+    // --- 关闭 CA 认证窗口（残留窗口多种方式尝试）---
+    function closeStaleCAWindow(iframeWin) {
+        try {
+            const jq = iframeWin?.jQuery || iframeWin?.$;
+            if (!jq) return false;
+            const caWin = jq('#win_CAUserLogin');
+            if (!caWin.length || !caWin.is(':visible')) return true;
+            try { caWin.window('close'); } catch(e) {}
+            try { caWin.dialog('close'); } catch(e) {}
+            try { caWin.hide(); } catch(e) {}
+            try {
+                const closeBtn = caWin.find('.panel-tool-close');
+                if (closeBtn.length) closeBtn.click();
+            } catch(e) {}
+            try {
+                const doc = iframeWin.document;
+                const panelClose = doc.querySelector('#win_CAUserLogin .panel-tool-close');
+                if (panelClose) panelClose.click();
+            } catch(e) {}
+            return !caWin.is(':visible');
+        } catch(e) { return false; }
     }
 
     function getNativeWorkListSelectedDR(iframeWin) {
@@ -9416,6 +9442,19 @@ function fillNativeLoginForm(creds, lastWG) {
         const caWin = jq('#win_CAUserLogin');
         if (!caWin.length || !caWin.is(':visible')) return true;
 
+        // 已认证但窗口残留：直接关窗，避免反复填密码卡住
+        if (isCAUKeyBound(iframeWin)) {
+            dbg('CA: UKey 已绑定，关闭残留窗口');
+            closeStaleCAWindow(iframeWin);
+            if (!isCAWindowVisible(iframeWin)) return true;
+        }
+        const cachedAuth = loadCAAuth();
+        if (cachedAuth && cachedAuth.wg === wgDR() && (Date.now() - cachedAuth.time < 3600000)) {
+            dbg('CA: 缓存有效，尝试关闭残留窗口');
+            closeStaleCAWindow(iframeWin);
+            if (!isCAWindowVisible(iframeWin)) return true;
+        }
+
         const caPwd = await loadCAPwdAsync();
         if (!caPwd) { showToast('请先设置CA密码', 'warning'); return false; }
 
@@ -9495,12 +9534,21 @@ function fillNativeLoginForm(creds, lastWG) {
                     dbg('CA: 登录按钮已点击');
                 } else {
                     dbg('CA: 登录按钮未找到');
+                    if (isCAUKeyBound(iframeWin)) {
+                        closeStaleCAWindow(iframeWin);
+                        if (!isCAWindowVisible(iframeWin)) return true;
+                    }
+                    const bodyText = (caDoc.body?.textContent || '');
+                    if (bodyText.indexOf('已登录') !== -1 || bodyText.indexOf('登录成功') !== -1) {
+                        closeStaleCAWindow(iframeWin);
+                        if (!isCAWindowVisible(iframeWin)) return true;
+                    }
                     // 没有登录按钮可能意味着已登录状态
                     if (attempt === 1) {
                         dbg('CA: 登录按钮不存在，可能已登录，尝试关闭窗口');
-                        try { caWin.window('close'); } catch(e) { try { caWin.hide(); } catch(e2) {} }
+                        closeStaleCAWindow(iframeWin);
                         await sleep(500);
-                        if (!caWin.is(':visible')) { dbg('CA: 窗口已关闭，视为已登录'); return true; }
+                        if (!isCAWindowVisible(iframeWin)) { dbg('CA: 窗口已关闭，视为已登录'); return true; }
                     }
                     if (attempt < 3) { await sleep(1500); continue; }
                     return false;
@@ -9513,18 +9561,12 @@ function fillNativeLoginForm(creds, lastWG) {
                         dbg('CA: 登录成功');
                         return true;
                     }
-                    // 第10轮（约2秒）时检查：如果 UKey 已绑定说明已登录，强制关闭窗口
-                    if (i === 10) {
-                        try {
-                            const _me = iframeWin.me;
-                            const _userDR = _me?.AuthUserDR || uid();
-                            if (_userDR && iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray && iframeWin.CAMsg.UkeyNoArray[_userDR]) {
-                                dbg('CA: UKey 已绑定但窗口未关闭，强制关闭');
-                                try { caWin.window('close'); } catch(e) { try { caWin.hide(); } catch(e2) {} }
-                                await sleep(300);
-                                if (!caWin.is(':visible')) return true;
-                            }
-                        } catch(e) {}
+                    // 每轮检查 UKey：已绑定则强制关窗
+                    if (isCAUKeyBound(iframeWin)) {
+                        dbg('CA: UKey 已绑定但窗口未关闭，强制关闭');
+                        closeStaleCAWindow(iframeWin);
+                        await sleep(300);
+                        if (!isCAWindowVisible(iframeWin)) return true;
                     }
                     // 检查错误（每次轮询都检查）
                     {
@@ -9594,8 +9636,9 @@ function fillNativeLoginForm(creds, lastWG) {
         const expectedStatuses = options.expectedStatuses || (isAudit ? ['3'] : []);
         const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? (caSessionReady ? 5000 : 10000) : 15000) : 8000);
         const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : (caSessionReady && isAudit);
-        const maxPoll = caSessionReady ? 4 : (batchMode ? 8 : 20);
-        const pollSleep = caSessionReady ? 40 : (batchMode ? 60 : 200);
+        const caWinBlocking = isCAWindowVisible(iframeWin) && !isCAUKeyBound(iframeWin);
+        const maxPoll = (caSessionReady && !caWinBlocking) ? 4 : (batchMode ? 12 : 20);
+        const pollSleep = (caSessionReady && !caWinBlocking) ? 40 : (batchMode ? 60 : 200);
         const missingStableMs = batchMode ? 450 : 900;
 
         let targetReportDR = options.targetReportDR ? String(options.targetReportDR) : '';
@@ -9616,6 +9659,19 @@ function fillNativeLoginForm(creds, lastWG) {
         if (isAudit && isNativeButtonDisabled(btn, jq)) {
             dbg('审核按钮不可用，跳过 targetReportDR=' + targetReportDR);
             return false;
+        }
+
+        // 批审/秒审前：CA 窗口已弹出则先处理，避免误以为已认证而漏检
+        if (isAudit && isCAWindowVisible(iframeWin)) {
+            dbg('审核前检测到 CA 窗口，先完成认证');
+            const preCaOK = await handleCALogin(iframeWin, { fast: batchMode });
+            if (preCaOK || isCAUKeyBound(iframeWin)) {
+                saveCAAuth();
+                closeStaleCAWindow(iframeWin);
+            } else if (!isCAUKeyBound(iframeWin)) {
+                clearCAAuth();
+                dbg('审核前 CA 认证未确认');
+            }
         }
 
         // 优先直接调用原生 ReportSave（与按钮点击等价，避免 EasyUI 事件未触发）
@@ -9669,7 +9725,12 @@ function fillNativeLoginForm(creds, lastWG) {
         // 如果检测到 CA 窗口，自动完成 CA 登录
         if (caDetected) {
             dbg('开始自动 CA 认证...');
-            const caOK = await handleCALogin(iframeWin, { fast: batchMode });
+            let caOK = await handleCALogin(iframeWin, { fast: batchMode });
+            if (!caOK && isCAUKeyBound(iframeWin)) {
+                closeStaleCAWindow(iframeWin);
+                caOK = true;
+                dbg('CA: 登录流程未确认但 UKey 已绑定，视为成功');
+            }
             if (caOK) {
                 saveCAAuth();
                 if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
@@ -9680,8 +9741,8 @@ function fillNativeLoginForm(creds, lastWG) {
             const postCaCtx = auditTargetContext(iframeWin, targetReportDR);
             const postCaMissing = allowMissingSuccess || postCaCtx.detailReady;
             const postCaTimeout = batchMode
-                ? Math.max(timeoutMs, caOK ? 20000 : 45000)
-                : Math.max(timeoutMs, caOK ? 15000 : 35000);
+                ? Math.max(timeoutMs, caOK ? 20000 : 15000)
+                : Math.max(timeoutMs, caOK ? 15000 : 25000);
             const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, postCaTimeout, postCaMissing, {
                 ...waitOpts,
                 targetWasPresent: waitOpts.targetWasPresent || postCaCtx.rowPresent,
@@ -9714,37 +9775,22 @@ function fillNativeLoginForm(creds, lastWG) {
         try {
             iframeWin = iframeWin || getReportIframeWin();
             if (!iframeWin) return false;
-            // 优先检查实际认证状态（UKey 绑定 或 本地缓存）
-            // 即使 CA 窗口可见，如果已认证则认为 session ready
-            if (iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray) {
-                const me = iframeWin.me;
-                const userDR = me?.AuthUserDR || uid();
-                if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) {
-                    // UKey 已绑定，CA 窗口可能是残留，尝试关闭
-                    try {
-                        const jq = iframeWin.jQuery || iframeWin.$;
-                        if (jq) { jq('#win_CAUserLogin').window('close'); }
-                    } catch(e) {}
-                    return true;
-                }
-            }
+
+            const ukeyBound = isCAUKeyBound(iframeWin);
             const cached = loadCAAuth();
-            if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) {
-                // 缓存有效，CA 窗口可能是残留，尝试关闭
-                try {
-                    const jq = iframeWin.jQuery || iframeWin.$;
-                    if (jq) { jq('#win_CAUserLogin').window('close'); }
-                } catch(e) {}
+            const cacheValid = cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000);
+            const authStatus = getAuditStatusText(iframeWin);
+            const authOk = authStatus && authStatus.indexOf('未登录') === -1;
+
+            if (ukeyBound || cacheValid || authOk) {
+                if (isCAWindowVisible(iframeWin)) {
+                    if (ukeyBound || cacheValid) closeStaleCAWindow(iframeWin);
+                    if (isCAWindowVisible(iframeWin)) return false;
+                }
                 return true;
             }
-            const authStatus = getAuditStatusText(iframeWin);
-            if (authStatus && authStatus.indexOf('未登录') === -1) return true;
-            // 最后才检查窗口是否可见
-            const jq = iframeWin.jQuery || iframeWin.$;
-            if (jq) {
-                const caWin = jq('#win_CAUserLogin');
-                if (caWin.length && caWin.is(':visible')) return false;
-            }
+
+            if (isCAWindowVisible(iframeWin)) return false;
         } catch(e) {}
         return false;
     }
@@ -9782,13 +9828,10 @@ function fillNativeLoginForm(creds, lastWG) {
         // 快速检查：如果 CA UKey 已绑定，跳过
         try {
             const iframeWin0 = getReportIframeWin();
-            if (iframeWin0 && iframeWin0.CAMsg && iframeWin0.CAMsg.UkeyNoArray) {
-                const _me0 = iframeWin0.me;
-                const _userDR = _me0?.AuthUserDR || uid();
-                if (_userDR && iframeWin0.CAMsg.UkeyNoArray[_userDR]) {
-                    dbg('CA: UKey 已绑定，跳过认证');
-                    return true;
-                }
+            if (iframeWin0 && isCAUKeyBound(iframeWin0)) {
+                closeStaleCAWindow(iframeWin0);
+                dbg('CA: UKey 已绑定，跳过认证');
+                return true;
             }
         } catch(e) {}
 
@@ -11551,6 +11594,19 @@ function fillNativeLoginForm(creds, lastWG) {
                 const remaining = queue.items.splice(queue.current);
                 remaining.sort(compareAuditQueueItems);
                 queue.items.push(...remaining);
+            }
+
+            if (!batchCAReady) {
+                updateBatchProgress('正在完成 CA 认证...', 0);
+                const preCaOK = await ensureCAAuthenticated();
+                iframeWin = getReportIframeWin() || iframeWin;
+                if (preCaOK) {
+                    batchCAReady = true;
+                    queue.caReadyByWg[wgDR()] = true;
+                    dbg('批审: 预认证完成，进入秒审模式');
+                } else {
+                    dbg('批审: 预认证未确认，首条审核时将自动重试 CA');
+                }
             }
 
             const prepHint = batchCAReady ? 'CA 已认证，秒审模式...' : '首条将自动 CA 认证，加载全部仪器列表...';
