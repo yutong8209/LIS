@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.31.1
+// @version      7.31.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4040,17 +4040,21 @@
 
     // ZIP 打包下载所有导出文件
     async function qeDownloadAllZip() {
+        console.log('[LIS-QE] qeDownloadAllZip called');
         const resultSection = document.getElementById('lis-qe-result-section');
         const items = resultSection ? resultSection.querySelectorAll('.qe-result-item') : [];
+        console.log('[LIS-QE] result items:', items.length);
         const blobs = [];
-        items.forEach(item => {
+        items.forEach((item, i) => {
             const btn = item.querySelector('button[data-fn]');
+            console.log(`[LIS-QE] item ${i}: btn=${!!btn}, _blob=${btn ? !!btn._blob : 'N/A'}, fn=${btn ? btn.getAttribute('data-fn') : 'N/A'}`);
             if (btn && btn._blob) {
                 blobs.push({ name: btn.getAttribute('data-fn'), blob: btn._blob });
             }
         });
+        console.log('[LIS-QE] blobs collected:', blobs.length);
         if (!blobs.length) {
-            qeSetStatus('没有可下载的文件。', 'error');
+            qeSetStatus('没有可下载的文件。请先点击"开始导出"。', 'error');
             return;
         }
         try {
