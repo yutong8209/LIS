@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.33.0
+// @version      7.33.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9495,6 +9495,13 @@ function fillNativeLoginForm(creds, lastWG) {
                     dbg('CA: 登录按钮已点击');
                 } else {
                     dbg('CA: 登录按钮未找到');
+                    // 没有登录按钮可能意味着已登录状态
+                    if (attempt === 1) {
+                        dbg('CA: 登录按钮不存在，可能已登录，尝试关闭窗口');
+                        try { caWin.window('close'); } catch(e) { try { caWin.hide(); } catch(e2) {} }
+                        await sleep(500);
+                        if (!caWin.is(':visible')) { dbg('CA: 窗口已关闭，视为已登录'); return true; }
+                    }
                     if (attempt < 3) { await sleep(1500); continue; }
                     return false;
                 }
@@ -9505,6 +9512,19 @@ function fillNativeLoginForm(creds, lastWG) {
                     if (!caWin.is(':visible')) {
                         dbg('CA: 登录成功');
                         return true;
+                    }
+                    // 第10轮（约2秒）时检查：如果 UKey 已绑定说明已登录，强制关闭窗口
+                    if (i === 10) {
+                        try {
+                            const _me = iframeWin.me;
+                            const _userDR = _me?.AuthUserDR || uid();
+                            if (_userDR && iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray && iframeWin.CAMsg.UkeyNoArray[_userDR]) {
+                                dbg('CA: UKey 已绑定但窗口未关闭，强制关闭');
+                                try { caWin.window('close'); } catch(e) { try { caWin.hide(); } catch(e2) {} }
+                                await sleep(300);
+                                if (!caWin.is(':visible')) return true;
+                            }
+                        } catch(e) {}
                     }
                     // 检查错误（每次轮询都检查）
                     {
@@ -9694,20 +9714,37 @@ function fillNativeLoginForm(creds, lastWG) {
         try {
             iframeWin = iframeWin || getReportIframeWin();
             if (!iframeWin) return false;
+            // 优先检查实际认证状态（UKey 绑定 或 本地缓存）
+            // 即使 CA 窗口可见，如果已认证则认为 session ready
+            if (iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray) {
+                const me = iframeWin.me;
+                const userDR = me?.AuthUserDR || uid();
+                if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) {
+                    // UKey 已绑定，CA 窗口可能是残留，尝试关闭
+                    try {
+                        const jq = iframeWin.jQuery || iframeWin.$;
+                        if (jq) { jq('#win_CAUserLogin').window('close'); }
+                    } catch(e) {}
+                    return true;
+                }
+            }
+            const cached = loadCAAuth();
+            if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) {
+                // 缓存有效，CA 窗口可能是残留，尝试关闭
+                try {
+                    const jq = iframeWin.jQuery || iframeWin.$;
+                    if (jq) { jq('#win_CAUserLogin').window('close'); }
+                } catch(e) {}
+                return true;
+            }
+            const authStatus = getAuditStatusText(iframeWin);
+            if (authStatus && authStatus.indexOf('未登录') === -1) return true;
+            // 最后才检查窗口是否可见
             const jq = iframeWin.jQuery || iframeWin.$;
             if (jq) {
                 const caWin = jq('#win_CAUserLogin');
                 if (caWin.length && caWin.is(':visible')) return false;
             }
-            if (iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray) {
-                const me = iframeWin.me;
-                const userDR = me?.AuthUserDR || uid();
-                if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) return true;
-            }
-            const cached = loadCAAuth();
-            if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) return true;
-            const authStatus = getAuditStatusText(iframeWin);
-            if (authStatus && authStatus.indexOf('未登录') === -1) return true;
         } catch(e) {}
         return false;
     }
