@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.32.2
+// @version      7.32.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9665,7 +9665,13 @@ function fillNativeLoginForm(creds, lastWG) {
         if (authLoginDetected) {
             // 检测到审核登录窗口 → 尝试自动填写密码并提交
             dbg('审核登录窗口已检测到，尝试自动登录...');
-            const loginOK = await handleAuditLogin(iframeWin, jq);
+            // 窗口已由 ReportSave 触发打开，直接填写表单（不重复点击按钮）
+            let loginOK = await handleAuditLoginDirect(iframeWin, jq, doc);
+            if (!loginOK) {
+                // 直接填写失败，回退原方法（会重新点击按钮打开窗口）
+                dbg('直接填写审核登录失败，尝试原方法...');
+                loginOK = await handleAuditLogin(iframeWin, jq);
+            }
             if (loginOK) {
                 dbg('审核登录自动提交成功，等待审核结果...');
                 const postAuthResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 8000 : 12000, allowMissingSuccess, { ...waitOpts, missingStableMs: batchMode ? 700 : 900, failureGraceMs: batchMode ? 3000 : 5000 });
@@ -10029,6 +10035,123 @@ function fillNativeLoginForm(creds, lastWG) {
             return false;
         } catch(e) {
             dbg('审核登录异常:', e);
+            return false;
+        }
+    }
+
+    // 直接在已打开的审核登录窗口中填写密码（不重新点击按钮）
+    async function handleAuditLoginDirect(iframeWin, jq, doc) {
+        try {
+            const loginWin = doc.querySelector('#win_AuthLogin, #win_EntryLogin, #win_BatchAuthUserLogin');
+            if (!loginWin || loginWin.style.display === 'none') {
+                dbg('直接填写: 审核登录窗口未找到');
+                return false;
+            }
+            if (jq && !jq(loginWin).is(':visible')) {
+                dbg('直接填写: 审核登录窗口不可见');
+                return false;
+            }
+
+            // 在 dialog 内部找 iframe
+            let loginDoc = doc;
+            const dialogIframe = loginWin.querySelector('iframe');
+            if (dialogIframe) {
+                try {
+                    const iDoc = dialogIframe.contentDocument || dialogIframe.contentWindow.document;
+                    if (iDoc && iDoc.body && iDoc.body.childElementCount > 0) {
+                        loginDoc = iDoc;
+                    }
+                } catch(e) {}
+            }
+
+            // 找密码框
+            let pwdInput = loginDoc.querySelector('#text_AuthUserLoginPasssword')
+                || loginDoc.querySelector('input[type="password"]');
+            if (!pwdInput) {
+                // 遍历所有 iframe
+                const allIframes = loginWin.querySelectorAll('iframe');
+                for (const ifr of allIframes) {
+                    try {
+                        const iDoc = ifr.contentDocument || ifr.contentWindow.document;
+                        if (!iDoc) continue;
+                        pwdInput = iDoc.querySelector('#text_AuthUserLoginPasssword')
+                            || iDoc.querySelector('input[type="password"]');
+                        if (pwdInput) { loginDoc = iDoc; break; }
+                        const deep = iDoc.querySelectorAll('iframe');
+                        for (const d of deep) {
+                            try {
+                                const dDoc = d.contentDocument || d.contentWindow.document;
+                                if (!dDoc) continue;
+                                pwdInput = dDoc.querySelector('#text_AuthUserLoginPasssword')
+                                    || dDoc.querySelector('input[type="password"]');
+                                if (pwdInput) { loginDoc = dDoc; break; }
+                            } catch(e) {}
+                        }
+                        if (pwdInput) break;
+                    } catch(e) {}
+                }
+            }
+            if (!pwdInput) {
+                dbg('直接填写: 密码框未找到');
+                return false;
+            }
+
+            const pwd = await loadPwdAsync();
+            if (!pwd) { dbg('直接填写: 未保存审核密码'); return false; }
+
+            // 账户
+            let acctInput = loginDoc.querySelector('#text_AuthUserCode')
+                || loginDoc.querySelector('input[id*="UserCode"]')
+                || loginDoc.querySelector('input[id*="Account"]');
+            if (!acctInput) {
+                const allInputs = loginDoc.querySelectorAll('input[type="text"], input:not([type])');
+                for (const inp of allInputs) {
+                    if (inp.id !== pwdInput.id && !inp.readOnly && !inp.disabled) { acctInput = inp; break; }
+                }
+            }
+            if (acctInput) {
+                const userName = uname();
+                if (userName) setNativeInputValue(acctInput, userName);
+            }
+            setNativeInputValue(pwdInput, pwd);
+            dbg('直接填写: 已填写审核账户密码');
+            await sleep(300);
+
+            // 找确定按钮
+            let okBtn = null;
+            const btns = loginDoc.querySelectorAll('a.l-btn, button');
+            for (const b of btns) {
+                const text = (b.textContent || '').trim();
+                if (text.includes('确定') || text.includes('登录') || text === 'OK') { okBtn = b; break; }
+            }
+            if (!okBtn) {
+                const allBtns = loginWin.querySelectorAll('a.l-btn, button');
+                for (const b of allBtns) {
+                    const text = (b.textContent || '').trim();
+                    if (text.includes('确定') || text.includes('登录')) { okBtn = b; break; }
+                }
+            }
+            if (!okBtn) { dbg('直接填写: 确定按钮未找到'); return false; }
+
+            jq(okBtn).click();
+            dbg('直接填写: 已点击确定');
+
+            // 等待窗口关闭
+            for (let w = 0; w < 25; w++) {
+                await sleep(200);
+                if (!loginWin || loginWin.style.display === 'none' || !loginWin.offsetParent) {
+                    dbg('直接填写: 审核登录窗口已关闭');
+                    try {
+                        const _me = iframeWin.me;
+                        if (_me) { _me.IsAuthLogin = 1; _me.AuthUserDR = uid(); }
+                    } catch(e) {}
+                    return true;
+                }
+            }
+            dbg('直接填写: 窗口未关闭（超时）');
+            return false;
+        } catch(e) {
+            dbg('直接填写异常:', e.message);
             return false;
         }
     }
