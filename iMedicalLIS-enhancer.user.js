@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.33.5
+// @version      7.33.6
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5642,14 +5642,10 @@
         iframeWin = iframeWin || getReportIframeWin();
         if (!iframeWin) return;
         try {
-            if (iframeWin.__lisPageEnterHijack) return;
             const doc = iframeWin.document;
             const s = doc.createElement('script');
             s.setAttribute('data-lis-enhancer', 'abnormal-enter');
             s.textContent = `(function(){
-var KEY='__lisEnhancerAbnormalEnter';
-if(window[KEY])return;
-window[KEY]=true;
 window.__lisEnhancerReleaseReportFocus=function(){
   try{
     var jq=window.jQuery||window.$;
@@ -5665,9 +5661,11 @@ window.__lisEnhancerReleaseReportFocus=function(){
     if(ae&&ae!==document.body&&ae.blur)ae.blur();
   }catch(e){}
 };
-window.addEventListener('keydown',function(e){
+if(window.__lisEnhancerAbnormalEnterHandler){
+  try{window.removeEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true);}catch(e){}
+}
+window.__lisEnhancerAbnormalEnterHandler=function(e){
   if(e.key!=='Enter'||e.shiftKey)return;
-  var active=false;
   var active=false,token='',origin='';
   try{
     active=!!(window.parent&&window.parent.__lisAbnormalEnterActive);
@@ -5678,7 +5676,8 @@ window.addEventListener('keydown',function(e){
   try{window.parent.postMessage({type:'lis-enhancer-abnormal-enter',token:token},origin);}catch(err){}
   e.preventDefault();
   e.stopImmediatePropagation();
-},true);
+};
+window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true);
 })();`;
             (doc.head || doc.documentElement).appendChild(s);
             s.remove();
@@ -5979,7 +5978,7 @@ window.addEventListener('keydown',function(e){
             const hasInfectionWarning = cached && cached.infectionWarning;
             const focused = i === wsAbnormalIndex ? ' focused' : '';
 
-            h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR||'')}">`;
+            h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR||'')}" tabindex="0">`;
             h += `<span class="ab-card-name">${highlightText(r.PatName||'', wsSearchQuery)}</span>`;
             h += `<span class="ab-card-no">${highlightText(r.Labno||'', wsSearchQuery)}</span>`;
             h += `<span class="ab-card-test">${highlightText(r._mn||'', wsSearchQuery)}</span>`;
@@ -6042,7 +6041,7 @@ window.addEventListener('keydown',function(e){
         h += '</div>';
         body.innerHTML = h;
 
-        // 卡片点击 → 更新聚焦 + 打开详情
+        // 卡片点击 → 更新聚焦 + 打开详情；卡片 Enter → 直接审核（与详情面板连续审核一致）
         body.querySelectorAll('.ws-abnormal-card').forEach(card => {
             card.addEventListener('click', () => {
                 const specimen = findWSSpecimenByReportDR(card.dataset.rdr);
@@ -6053,6 +6052,18 @@ window.addEventListener('keydown',function(e){
                 card.classList.add('focused');
                 wsAbnormalIndex = Math.max(0, filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR)));
                 openDetailPanel(specimen, 'abnormal', wsAbnormalIndex);
+            });
+            card.addEventListener('keydown', e => {
+                if (e.key !== 'Enter' || e.shiftKey) return;
+                _abnormalFocusDR = String(card.dataset.rdr || '');
+                const cards = document.querySelectorAll('.ws-abnormal-card');
+                cards.forEach(c => c.classList.remove('focused'));
+                card.classList.add('focused');
+                const specimen = findWSSpecimenByReportDR(card.dataset.rdr);
+                if (specimen) {
+                    wsAbnormalIndex = Math.max(0, filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR)));
+                }
+                handleAbnormalEnterAudit(e);
             });
         });
 
@@ -6420,22 +6431,42 @@ window.addEventListener('keydown',function(e){
         }
         renderWSCategoryBar();
         updateWSFooter();
-        scheduleAbnormalFocusRecovery();
     }
 
-    function noteAbnormalNativeReadyAfterAudit(iframeWin, removedDR) {
-        _abnormalNativeReadyDR = '';
-        clearNativeUserSelectLock();
+    async function prepareNextAbnormalSpecimenAfterAudit(iframeWin) {
         const data = filteredData();
-        if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) return;
-        const next = data[wsAbnormalIndex];
-        if (!next || String(next.ReportDR) === String(removedDR)) return;
-        if (isReportDetailLoaded(iframeWin, next.ReportDR)) {
-            _abnormalNativeReadyDR = String(next.ReportDR);
-            dbg('异常审核: 原生已定位下一条', next.ReportDR);
-        } else {
-            prewarmAbnormalAuditNative(next).catch(() => {});
+        if (!data.length || wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {
+            scheduleAbnormalFocusRecovery();
+            return;
         }
+        const next = data[wsAbnormalIndex];
+        if (!next) {
+            scheduleAbnormalFocusRecovery();
+            return;
+        }
+        const nextDR = String(next.ReportDR || '');
+        clearNativeUserSelectLock();
+        _abnormalNativeReadyDR = '';
+        iframeWin = iframeWin || getReportIframeWin();
+        try { getUIWindow().focus(); } catch(e) {}
+        if (iframeWin) {
+            const prep = await ensureSpecimenReadyForAudit(iframeWin, next, {
+                lastMdr: _abnormalLastMdr,
+                abnormalFast: true,
+                forceSelect: true
+            });
+            iframeWin = prep.iframeWin || iframeWin;
+            if (prep.lastMdr) _abnormalLastMdr = prep.lastMdr;
+            if (prep.ok && isReportDetailLoaded(iframeWin, nextDR)) {
+                _abnormalNativeReadyDR = nextDR;
+                dbg('异常审核: 已同步原生选行到下一条', nextDR);
+            }
+        }
+        releaseNativeReportFocus(iframeWin);
+        refocusAbnormalWorkbench();
+        updateAbnormalEnterBridge();
+        installAbnormalResultGridEnterHijack(iframeWin);
+        scheduleAbnormalFocusRecovery();
     }
 
     async function executeNativeAudit(iframeWin, specimen, options = {}) {
@@ -6606,8 +6637,8 @@ window.addEventListener('keydown',function(e){
             wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
             invalidateCaches();
             calcMachineCounts();
-            noteAbnormalNativeReadyAfterAudit(iframeWin, targetDR);
             removeAuditedAbnormalCard(targetDR, startIndex);
+            await prepareNextAbnormalSpecimenAfterAudit(iframeWin);
         } catch(e) {
             dbg('审核失败:', e);
             showToast('审核失败: ' + e.message, 'error');
