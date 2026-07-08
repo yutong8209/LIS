@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.45.0
+// @version      7.46.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6799,25 +6799,28 @@ if(!window.__lisEnhancerFrameScan){
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
                 showToast(`切换到${wgName}，继续审核当前标本...`, 'info');
                 switchWG(spDR);
-                // 工作组切换后原生会异步从服务器重载列表，固定延时(1500ms)常早于列表就绪，
-                // 导致重试时 ensureSpecimenReadyForAudit 找不到目标行 → 静默跳过 → 表现为「Enter 没反应」。
-                // 改为轮询等待原生工作组真正切换完成（最多 ~10s）再重试当前标本；
-                // 外层 finally 已释放 _abnormalAuditInProgress，故重试时不会再被排队拦截。
+                // 工作组切换后原生会异步从服务器重载列表，且目标 WG 的 CA 会话通常未就绪。
+                // 原本重试时首条标本会在审核瞬间同步弹 CA 窗口认证（capping 登录 ~1-2s），
+                // 表现为「切到下一台仪器审第一条时卡顿一下」。
+                // 优化：在等待原生切换完成的窗口内并行预热目标 WG 的 CA 会话，
+                // 使重试时 isCASessionReady 已为真、走秒审，把 CA 耗时藏进不可避免的切仪器等待里。
                 setTimeout(async () => {
                     if (_abnormalAuditInProgress) return; // 正在审别的标本，放弃本次重试
                     let ok = false;
-                    for (let i = 0; i < 34; i++) {
+                    for (let i = 0; i < 24; i++) {
                         if (wgDR() === spDR) { ok = true; break; }
-                        await sleep(300);
+                        await sleep(250);
                     }
                     if (!ok) {
                         showToast(`切换到${wgName}未完成，请手动重按 Enter`, 'warning');
                         return;
                     }
+                    // 切换完成：预热目标 WG 的 CA 会话（有缓存/Ukey 绑定时秒返，否则触发一次 capping 登录）
+                    try { const caOk = await ensureCAAuthenticated(); if (caOk) saveCAAuth(spDR); dbg('异常审核切仪器 CA 预热:', spDR, caOk); } catch(e) {}
                     _abnormalNativeReadyDR = ''; // 强制重试时重新选行（跨仪器 mdr 已变）
                     _abnormalLastMdr = '';
                     auditAbnormalSpecimen(specimen);
-                }, 1000);
+                }, 150);
                 return;
             }
 
