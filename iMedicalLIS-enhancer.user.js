@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.43.0
+// @version      7.44.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6799,8 +6799,25 @@ if(!window.__lisEnhancerFrameScan){
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
                 showToast(`切换到${wgName}，继续审核当前标本...`, 'info');
                 switchWG(spDR);
-                // 工作组切换后原生会重载列表，稍后重试当前标本（finally 已释放 _abnormalAuditInProgress）
-                setTimeout(() => { if (!_abnormalAuditInProgress) auditAbnormalSpecimen(specimen); }, 1500);
+                // 工作组切换后原生会异步从服务器重载列表，固定延时(1500ms)常早于列表就绪，
+                // 导致重试时 ensureSpecimenReadyForAudit 找不到目标行 → 静默跳过 → 表现为「Enter 没反应」。
+                // 改为轮询等待原生工作组真正切换完成（最多 ~10s）再重试当前标本；
+                // 外层 finally 已释放 _abnormalAuditInProgress，故重试时不会再被排队拦截。
+                setTimeout(async () => {
+                    if (_abnormalAuditInProgress) return; // 正在审别的标本，放弃本次重试
+                    let ok = false;
+                    for (let i = 0; i < 34; i++) {
+                        if (wgDR() === spDR) { ok = true; break; }
+                        await sleep(300);
+                    }
+                    if (!ok) {
+                        showToast(`切换到${wgName}未完成，请手动重按 Enter`, 'warning');
+                        return;
+                    }
+                    _abnormalNativeReadyDR = ''; // 强制重试时重新选行（跨仪器 mdr 已变）
+                    _abnormalLastMdr = '';
+                    auditAbnormalSpecimen(specimen);
+                }, 1000);
                 return;
             }
 
