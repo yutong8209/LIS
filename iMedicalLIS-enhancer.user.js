@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.41.0
+// @version      7.42.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6613,7 +6613,9 @@ if(!window.__lisEnhancerFrameScan){
         const reportDR = specimen.ReportDR;
         const auditCtx = auditTargetContext(iframeWin, reportDR);
         const caReady = isCASessionReady(iframeWin);
-        let result = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
+        // 乐观审核：先触发点击（triggerOnly 立即返回），卡片由调用方即时移除；
+        // 后台再异步确认，若真失败则恢复卡片。彻底消除「审核掉后卡片延迟几秒消失」。
+        let triggered = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
             action: 'audit',
             expectedStatuses: ['3'],
             batchMode: fast,
@@ -6621,18 +6623,34 @@ if(!window.__lisEnhancerFrameScan){
             keepWS: !!options.keepWS,
             caSessionReady: caReady,
             missingAsSuccess: auditCtx.allowMissingSuccess,
-            targetReportDR: reportDR
+            targetReportDR: reportDR,
+            triggerOnly: true
         });
-        if (!result) {
-            iframeWin = getReportIframeWin() || iframeWin;
-            result = await confirmAuditEventually(iframeWin, reportDR, specimen.PatName || specimen.Labno || '', {
-                batchMode: fast,
-                targetWasPresent: auditCtx.rowPresent,
-                detailWasReady: auditCtx.detailReady,
-                afterCA: !caReady
-            });
+        if (!triggered) {
+            // 连点击都没成功（按钮禁用/详情未就绪），按原逻辑判失败
+            return false;
         }
-        return result;
+        // 后台兜底确认：失败则重渲染恢复卡片，避免误删
+        (async () => {
+            try {
+                const win = getReportIframeWin() || iframeWin;
+                const ok = await confirmAuditEventually(win, reportDR, specimen.PatName || specimen.Labno || '', {
+                    batchMode: fast,
+                    targetWasPresent: auditCtx.rowPresent,
+                    detailWasReady: auditCtx.detailReady,
+                    afterCA: !caReady
+                });
+                if (!ok) {
+                    dbg('后台确认：审核未成功，恢复卡片', reportDR);
+                    showToast(`${specimen.PatName || specimen.Labno || reportDR} 审核未确认，已恢复列表`, 'warning');
+                    invalidateCaches();
+                    renderWSTable();
+                } else {
+                    dbg('后台确认：审核成功', reportDR);
+                }
+            } catch(e) { dbg('后台确认异常:', e); }
+        })();
+        return true;
     }
 
     async function auditAbnormalSpecimen(specimen) {
@@ -9836,6 +9854,14 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!auditTriggered) {
             jq(btn).click();
             dbg('已点击审核按钮, targetReportDR=' + targetReportDR);
+        }
+
+        // 乐观模式：仅触发审核点击，立即返回 true，不等待后端状态回写。
+        // 卡片即时移除由调用方负责；真正的成功/失败由后台 confirmAuditEventually 兜底，
+        // 失败再用 renderWSTable() 恢复。这是消除「审核掉后卡片延迟几秒消失」的关键。
+        if (options.triggerOnly) {
+            dbg('乐观审核：已触发点击，立即返回，等待后台确认');
+            return true;
         }
 
         let caDetected = false;
