@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.44.0
+// @version      7.45.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9465,29 +9465,41 @@ function fillNativeLoginForm(creds, lastWG) {
 
     function closeIgnorableNativeExceptionDialogs(doc, jq) {
         let closed = false;
-        try {
-            const allWins = doc.querySelectorAll('.messager-window:not([style*="display: none"]), .window:not([style*="display: none"])');
-            for (const w of allWins) {
-                if (w.offsetParent === null) continue;
-                const text = (w.textContent || '').trim();
-                if (!isIgnorableNativeStatException(text)) continue;
-                const btns = w.querySelectorAll('a.l-btn, button');
-                for (const b of btns) {
-                    const bText = (b.textContent || b.value || '').trim();
-                    if (bText === '确定' || bText === 'OK' || bText === '关闭' || bText === '是') {
-                        try { jq && jq(b).click ? jq(b).click() : b.click(); } catch(e) { try { b.click(); } catch(e2) {} }
-                        closed = true;
-                        break;
+        const scanDoc = (d, j) => {
+            if (!d) return;
+            try {
+                const allWins = d.querySelectorAll('.messager-window:not([style*="display: none"]), .window:not([style*="display: none"])');
+                for (const w of allWins) {
+                    if (w.offsetParent === null) continue;
+                    const text = (w.textContent || '').trim();
+                    if (!isIgnorableNativeStatException(text)) continue;
+                    const btns = w.querySelectorAll('a.l-btn, button');
+                    for (const b of btns) {
+                        const bText = (b.textContent || b.value || '').trim();
+                        if (bText === '确定' || bText === 'OK' || bText === '关闭' || bText === '是') {
+                            try { (j && j(b).click) ? j(b).click() : b.click(); } catch(e) { try { b.click(); } catch(e2) {} }
+                            closed = true;
+                            break;
+                        }
                     }
+                    try {
+                        if (!closed && j) {
+                            const panel = j(w);
+                            const closeBtn = panel.find('.panel-tool-close');
+                            if (closeBtn.length) { closeBtn.click(); closed = true; }
+                        }
+                    } catch(e) {}
+                    if (closed) dbg('已关闭原始 LIS 统计异常弹窗（不影响审核结果确认）');
                 }
-                try {
-                    if (!closed && jq) {
-                        const panel = jq(w);
-                        const closeBtn = panel.find('.panel-tool-close');
-                        if (closeBtn.length) { closeBtn.click(); closed = true; }
-                    }
-                } catch(e) {}
-                if (closed) dbg('已关闭原始 LIS 统计异常弹窗（不影响审核结果确认）');
+            } catch(e) {}
+        };
+        scanDoc(doc, jq);
+        // 同时扫 LIS 主页面（统计异常弹窗常由主页面上下文弹出）
+        try {
+            const topWin = (typeof window.top !== 'undefined' && window.top && window.top !== window) ? window.top : null;
+            if (topWin && topWin !== (doc && doc.defaultView)) {
+                const tJq = topWin.jQuery || topWin.$;
+                scanDoc(topWin.document, tJq);
             }
         } catch(e) {}
         return closed;
@@ -9565,6 +9577,38 @@ function fillNativeLoginForm(creds, lastWG) {
                     return origMessagerAlert.apply(this, arguments);
                 };
                 jq.messager.__lisStatExceptionGuard = true;
+            }
+        } catch(e) {}
+        // 同时在 LIS 主页面（window.top）安装拦截：统计异常 alert 常由主页面上下文抛出，
+        // 仅拦截报告 iframe 会导致「切回 LIS 才看到原始报警弹窗」。
+        try {
+            const topWin = (typeof window.top !== 'undefined' && window.top && window.top !== iframeWin) ? window.top : null;
+            if (topWin && !topWin.__lisStatExceptionPageGuard) {
+                const tJq = topWin.jQuery || topWin.$;
+                if (tJq && tJq.messager && typeof tJq.messager.alert === 'function' && !tJq.messager.__lisStatExceptionGuard) {
+                    const tOrig = tJq.messager.alert;
+                    tJq.messager.alert = function(title, msg) {
+                        if (isIgnorableNativeStatException(title) || isIgnorableNativeStatException(msg)) {
+                            try { topWin.__lisLastIgnoredStatException = String(msg || title || '').slice(0, 500); } catch(e) {}
+                            return;
+                        }
+                        return tOrig.apply(this, arguments);
+                    };
+                    tJq.messager.__lisStatExceptionGuard = true;
+                }
+                if (!topWin.__lisStatAlertGuard) {
+                    const tOrigAlert = topWin.alert;
+                    topWin.__lisOriginalAlert = topWin.__lisOriginalAlert || tOrigAlert;
+                    topWin.alert = function(msg) {
+                        if (isIgnorableNativeStatException(msg)) {
+                            try { topWin.__lisLastIgnoredStatException = String(msg || '').slice(0, 500); } catch(e) {}
+                            return;
+                        }
+                        return tOrigAlert.apply(this, arguments);
+                    };
+                    topWin.__lisStatAlertGuard = true;
+                }
+                topWin.__lisStatExceptionPageGuard = true;
             }
         } catch(e) {}
     }
@@ -11891,31 +11935,23 @@ function fillNativeLoginForm(creds, lastWG) {
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
                     closeStaleAuthLoginWindows(iframeWin);
                     const auditCtx = auditTargetContext(iframeWin, item.reportDR);
+                    // 乐观批审：仅触发审核点击（triggerOnly 立即返回），不阻塞等待后端状态回写，
+                    // 避免后端统计异常（ZSUBSCRIPT）导致 LIS 卡住、状态迟迟不回写而「卡在审核中」。
+                    // 真正成功/失败由 detached 后台 confirmAuditEventually 兜底，失败再把标本挪回 failed 并重试。
                     let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
                         action: 'audit', expectedStatuses: ['3'], batchMode: true,
                         timeoutMs: batchCAReady ? 6000 : 10000, keepWS: queue.keepWS,
                         caSessionReady: batchCAReady,
                         missingAsSuccess: auditCtx.allowMissingSuccess,
-                        targetReportDR: item.reportDR
+                        targetReportDR: item.reportDR,
+                        triggerOnly: true
                     });
                     if (!auditResult) {
-                        dbg('批审单条首次未确认，继续确认原生状态:', item.name || item.reportDR);
-                        iframeWin = getReportIframeWin() || iframeWin;
-                        auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', {
-                            batchMode: true,
-                            targetWasPresent: auditCtx.rowPresent,
-                            detailWasReady: auditCtx.detailReady,
-                            afterCA: !batchCAReady
-                        });
-                    }
-                    if (!auditResult && verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
-                        dbg('批审最终校验：标本实际已审核', item.reportDR);
-                        auditResult = true;
-                    }
-                    if (auditResult === 'incomplete') {
-                        queue.skipped.push({ ...item, reason: '结果不完整' });
-                        skipCount++;
-                    } else if (auditResult) {
+                        dbg('批审单条点击未触发（按钮禁用/详情未就绪）:', item.name || item.reportDR);
+                        queue.failed.push({ ...item, reason: '审核未触发' });
+                        failCount++;
+                    } else {
+                        // 先乐观计入成功，立即推进下一条
                         queue.done.push(item);
                         successCount++;
                         batchCAReady = true;
@@ -11924,15 +11960,41 @@ function fillNativeLoginForm(creds, lastWG) {
                             batchSkipSelect = true;
                             dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
                         }
-                    } else {
-                        queue.failed.push({ ...item, reason: '审核未确认成功' });
-                        failCount++;
-                        // 审核失败可能是 CA 过期，重置 CA 就绪状态，后续标本使用更长超时
-                        if (batchCAReady) {
-                            batchCAReady = false;
-                            queue.caReadyByWg[itemWg] = false;
-                            dbg('批审: 审核失败，重置 CA 就绪状态');
-                        }
+                        // 后台兜底确认
+                        (async () => {
+                            try {
+                                const win = getReportIframeWin() || iframeWin;
+                                let ok = await confirmAuditEventually(win, item.reportDR, item.name || item.labno || '', {
+                                    batchMode: true,
+                                    targetWasPresent: auditCtx.rowPresent,
+                                    detailWasReady: auditCtx.detailReady,
+                                    afterCA: !batchCAReady
+                                });
+                                if (!ok && verifyAuditSucceededByReportDR(win, item.reportDR)) ok = true;
+                                if (!ok) {
+                                    dbg('批审后台确认失败，挪回 failed 并重试:', item.reportDR);
+                                    const di = queue.done.indexOf(item);
+                                    if (di !== -1) queue.done.splice(di, 1);
+                                    const fi = queue.failed.indexOf(item);
+                                    if (fi === -1) queue.failed.push({ ...item, reason: '审核未确认成功' });
+                                    // 重置 CA 就绪状态，后续标本使用更长超时
+                                    batchCAReady = false;
+                                    queue.caReadyByWg[itemWg] = false;
+                                    if (!_batchAbort) {
+                                        item.retry = (item.retry || 0) + 1;
+                                        if (item.retry <= 3) {
+                                            await sleep(800);
+                                            // 重新排到队尾等待重试
+                                            queue.items.push(item);
+                                            queue.current = Math.min(queue.current, queue.items.length - 1);
+                                        }
+                                    }
+                                    saveAuditQueueNow(queue);
+                                } else {
+                                    dbg('批审后台确认成功:', item.reportDR);
+                                }
+                            } catch(e) { dbg('批审后台确认异常:', e); }
+                        })();
                     }
                 } catch(e) {
                     queue.failed.push({ ...item, reason: e.message });
