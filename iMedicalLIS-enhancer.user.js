@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.42.0
+// @version      7.43.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6321,20 +6321,86 @@ if(!window.__lisEnhancerFrameScan){
 
     async function confirmAuditEventually(iframeWin, reportDR, patientName, options = {}) {
         const batchMode = !!options.batchMode;
+        // caAware：仅乐观审核(triggerOnly)路径开启。该路径 clickNativeAuditButton 提前返回、
+        // 跳过内部 CA 检测循环，导致 ReportSave('A') 弹出的 CA 窗口无人认证、审核卡死（异常待审/详情审核回归）。
+        // 故在此后台确认阶段补上 CA 窗口检测与自动认证，CA 成功后再继续等状态 '3'。
+        const caAware = !!options.caAware;
         const ft = document.getElementById('lis-ws-ft-stat');
         if (ft) ft.textContent = `正在确认审核结果：${patientName || reportDR}`;
         const ctx = auditTargetContext(iframeWin, reportDR);
         const targetWasPresent = options.targetWasPresent !== undefined ? !!options.targetWasPresent : ctx.rowPresent;
         const detailWasReady = options.detailWasReady !== undefined ? !!options.detailWasReady : ctx.detailReady;
         const allowMissing = detailWasReady;
-        const confirmTimeout = batchMode ? (options.afterCA ? 12000 : 8000) : 12000;
-        const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, allowMissing, {
-            targetWasPresent,
-            missingStableMs: batchMode ? 700 : 900,
-            turbo: batchMode && !options.afterCA
-        });
-        if (confirmed && confirmed !== 'incomplete') return true;
-        await sleep(batchMode ? 300 : 1500);
+        iframeWin = iframeWin || getReportIframeWin();
+
+        const isCAWinVisible = (win) => {
+            try {
+                const jq = win && (win.jQuery || win.$);
+                const caWin = jq && jq('#win_CAUserLogin');
+                return !!(caWin && caWin.length && caWin.is(':visible'));
+            } catch (e) { return false; }
+        };
+
+        // —— CA 感知确认：仅 caAware（乐观/triggerOnly）路径启用 ——
+        if (caAware) {
+            const normalDeadline = Date.now() + (batchMode ? (options.afterCA ? 12000 : 8000) : 12000);
+            const caHardDeadline = Date.now() + (batchMode ? 45000 : 30000);
+            let caHandled = false;
+            while (true) {
+                const now = Date.now();
+                const deadline = caHandled ? caHardDeadline : normalDeadline;
+                if (now >= deadline) break;
+
+                const slice = await waitNativeActionResult(iframeWin, reportDR, ['3'], 600, allowMissing, {
+                    targetWasPresent,
+                    missingStableMs: batchMode ? 700 : 900,
+                    turbo: batchMode
+                });
+                if (slice && slice !== 'incomplete') return true;
+                if (slice === 'incomplete') return false;
+
+                iframeWin = getReportIframeWin() || iframeWin;
+
+                if (isCAWinVisible(iframeWin)) {
+                    caHandled = true;
+                    if (ft) ft.textContent = `CA 认证中… ${patientName || reportDR}`;
+                    dbg('confirmAuditEventually: 检测到 CA 认证窗口，自动认证');
+                    const caOK = await handleCALogin(iframeWin, { fast: batchMode });
+                    if (caOK) {
+                        saveCAAuth(wgDR());
+                        if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
+                        dbg('confirmAuditEventually: CA 认证成功，继续确认审核结果');
+                    } else {
+                        dbg('confirmAuditEventually: CA 认证失败，直接确认当前原生状态');
+                        clearCAAuth();
+                        break;
+                    }
+                    continue;
+                }
+
+                if (caHandled) {
+                    const finalChk = await waitNativeActionResult(iframeWin, reportDR, ['3'], 3000, allowMissing, {
+                        targetWasPresent, missingStableMs: batchMode ? 700 : 900, turbo: batchMode
+                    });
+                    if (finalChk && finalChk !== 'incomplete') return true;
+                    break;
+                }
+                // 未遇 CA 窗口且未确认：继续短轮询直到 normalDeadline
+            }
+        }
+
+        // 非 caAware 路径（批量/快速审核兜底）走原确认等待；
+        // caAware 路径已在上面的循环中完成等价轮询，此处直接进入二次校验，避免重复等待。
+        if (!caAware) {
+            const confirmTimeout = batchMode ? (options.afterCA ? 12000 : 8000) : 12000;
+            const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, allowMissing, {
+                targetWasPresent,
+                missingStableMs: batchMode ? 700 : 900,
+                turbo: batchMode && !options.afterCA
+            });
+            if (confirmed && confirmed !== 'incomplete') return true;
+            await sleep(batchMode ? 300 : 1500);
+        }
         // 用最新 iframe 引用做二次验证
         const latestWin = getReportIframeWin() || iframeWin;
         if (verifyAuditSucceededByReportDR(latestWin, reportDR)) return true;
@@ -6636,6 +6702,8 @@ if(!window.__lisEnhancerFrameScan){
                 const win = getReportIframeWin() || iframeWin;
                 const ok = await confirmAuditEventually(win, reportDR, specimen.PatName || specimen.Labno || '', {
                     batchMode: fast,
+                    caAware: true, // 乐观/triggerOnly 路径需后台补 CA 认证（修复 CA 窗口未认证导致审核卡死）
+                    keepWS: !!options.keepWS,
                     targetWasPresent: auditCtx.rowPresent,
                     detailWasReady: auditCtx.detailReady,
                     afterCA: !caReady
