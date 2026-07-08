@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.49.0
+// @version      7.49.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6321,9 +6321,9 @@ if(!window.__lisEnhancerFrameScan){
 
     async function confirmAuditEventually(iframeWin, reportDR, patientName, options = {}) {
         const batchMode = !!options.batchMode;
-        // caAware：仅乐观审核(triggerOnly)路径开启。该路径 clickNativeAuditButton 提前返回、
-        // 跳过内部 CA 检测循环，导致 ReportSave('A') 弹出的 CA 窗口无人认证、审核卡死（异常待审/详情审核回归）。
-        // 故在此后台确认阶段补上 CA 窗口检测与自动认证，CA 成功后再继续等状态 '3'。
+        // caAware：用于点击后仍可能弹出 CA 窗口的确认路径。
+        // clickNativeAuditButton 的早期轮询可能没等到晚弹出的 CA 窗口；这里补上检测与自动认证，
+        // CA 成功后继续等目标 ReportDR 的状态回写。
         const caAware = !!options.caAware;
         // allowMissingSuccess：是否允许「目标行从列表消失」当作审核成功。
         // 跨仪器审核时必须传 false —— 切组后仪器列表会重载使刚审的行暂时消失，
@@ -6345,7 +6345,7 @@ if(!window.__lisEnhancerFrameScan){
             } catch (e) { return false; }
         };
 
-        // —— CA 感知确认：仅 caAware（乐观/triggerOnly）路径启用 ——
+        // —— CA 感知确认：仅 caAware 路径启用 ——
         if (caAware) {
             const normalDeadline = Date.now() + (batchMode ? (options.afterCA ? 12000 : 8000) : 12000);
             const caHardDeadline = Date.now() + (batchMode ? 45000 : 30000);
@@ -6875,8 +6875,7 @@ if(!window.__lisEnhancerFrameScan){
                 return;
             }
             if (!auditResult) {
-                showToast('未确认审核成功，已跳到下一条', 'warning');
-                advanceAbnormalFocusAfterSkip(startIndex);
+                showToast('未确认审核成功，已保留当前标本，请核对 CA/原生状态后重试', 'warning');
                 return;
             }
             if (ft) ft.textContent = `已审核: ${specimen.PatName || specimen.Labno || targetDR}`;
@@ -7323,6 +7322,7 @@ if(!window.__lisEnhancerFrameScan){
                 return;
             }
             delete freshQueue.pausedForSwitch;
+            delete freshQueue.pausedForCA;
             saveAuditQueueNow(freshQueue);
             continueAuditQueue(freshQueue).catch(e => {
                 dbg('续跑批审队列失败:', e);
@@ -9784,7 +9784,7 @@ function fillNativeLoginForm(creds, lastWG) {
         const doc = iframeWin.document;
         const jq = iframeWin.jQuery || iframeWin.$;
         const caWin = jq('#win_CAUserLogin');
-        if (!caWin.length || !caWin.is(':visible')) return true;
+        if (!caWin.length || !caWin.is(':visible')) return isCASessionReady(iframeWin);
 
         const caPwd = await loadCAPwdAsync();
         if (!caPwd) { showToast('请先设置CA密码', 'warning'); return false; }
@@ -9873,8 +9873,13 @@ function fillNativeLoginForm(creds, lastWG) {
                 for (let i = 0; i < 40; i++) {
                     await sleep(i < 20 ? 200 : 300);
                     if (!caWin.is(':visible')) {
-                        dbg('CA: 登录成功');
-                        return true;
+                        const verified = await waitCAUKeyBound(iframeWin, fast ? 2500 : 5000);
+                        if (verified) {
+                            dbg('CA: 登录成功，UKey 已绑定');
+                            return true;
+                        }
+                        dbg('CA: 登录窗口已关闭，但未确认 UKey 绑定');
+                        return false;
                     }
                     // 检查错误（每次轮询都检查）
                     {
@@ -9983,14 +9988,6 @@ function fillNativeLoginForm(creds, lastWG) {
             dbg('已点击审核按钮, targetReportDR=' + targetReportDR);
         }
 
-        // 乐观模式：仅触发审核点击，立即返回 true，不等待后端状态回写。
-        // 卡片即时移除由调用方负责；真正的成功/失败由后台 confirmAuditEventually 兜底，
-        // 失败再用 renderWSTable() 恢复。这是消除「审核掉后卡片延迟几秒消失」的关键。
-        if (options.triggerOnly) {
-            dbg('乐观审核：已触发点击，立即返回，等待后台确认');
-            return true;
-        }
-
         let caDetected = false;
         let authLoginDetected = false;
         const instant = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 120 : 80, allowMissingSuccess, waitOpts);
@@ -10036,7 +10033,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 dbg('CA 自动登录未确认，继续等待原生异步审核（可能已报错但仍会完成）...');
             }
             const postCaCtx = auditTargetContext(iframeWin, targetReportDR);
-            const postCaMissing = allowMissingSuccess || postCaCtx.detailReady;
+            const postCaMissing = allowMissingSuccess;
             const postCaTimeout = batchMode
                 ? Math.max(timeoutMs, caOK ? 20000 : 45000)
                 : Math.max(timeoutMs, caOK ? 15000 : 35000);
@@ -10069,23 +10066,59 @@ function fillNativeLoginForm(creds, lastWG) {
     }
 
 
+    function getCAUserDR(iframeWin) {
+        try {
+            const me = iframeWin && iframeWin.me;
+            const v = (me && (me.AuthUserDR || me.AuthLoginUserID || me.BatchUserDR || me.LoginUserDR || me.UserDR)) ||
+                (iframeWin && (iframeWin.AuthUserDR || iframeWin.LoginUserDR)) || uid();
+            return String(v || '').trim();
+        } catch(e) {
+            return String(uid() || '').trim();
+        }
+    }
+
+    function isCAWindowVisible(iframeWin) {
+        try {
+            iframeWin = iframeWin || getReportIframeWin();
+            const jq = iframeWin && (iframeWin.jQuery || iframeWin.$);
+            if (!jq) return false;
+            const caWin = jq('#win_CAUserLogin');
+            return !!(caWin.length && caWin.is(':visible'));
+        } catch(e) {
+            return false;
+        }
+    }
+
+    function isCAUKeyBound(iframeWin) {
+        try {
+            iframeWin = iframeWin || getReportIframeWin();
+            if (!iframeWin || !iframeWin.CAMsg || !iframeWin.CAMsg.UkeyNoArray) return false;
+            const userDR = getCAUserDR(iframeWin);
+            return !!(userDR && iframeWin.CAMsg.UkeyNoArray[userDR]);
+        } catch(e) {
+            return false;
+        }
+    }
+
+    async function waitCAUKeyBound(iframeWin, timeoutMs = 3000) {
+        const end = Date.now() + timeoutMs;
+        while (Date.now() < end) {
+            iframeWin = getReportIframeWin() || iframeWin;
+            if (isCAUKeyBound(iframeWin)) return true;
+            await sleep(120);
+        }
+        return isCAUKeyBound(getReportIframeWin() || iframeWin);
+    }
+
     function isCASessionReady(iframeWin) {
         try {
             iframeWin = iframeWin || getReportIframeWin();
             if (!iframeWin) return false;
-            const jq = iframeWin.jQuery || iframeWin.$;
-            if (jq) {
-                const caWin = jq('#win_CAUserLogin');
-                if (caWin.length && caWin.is(':visible')) return false;
-            }
+            if (isCAWindowVisible(iframeWin)) return false;
             // 优先以真实 Ukey 绑定为准：Ukey 已绑定 = CA 真正就绪（可秒审）
-            if (iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray) {
-                const me = iframeWin.me;
-                const userDR = me?.AuthUserDR || uid();
-                if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) {
-                    saveCAAuth(wgDR()); // 同步刷新本地缓存时间窗
-                    return true;
-                }
+            if (isCAUKeyBound(iframeWin)) {
+                saveCAAuth(wgDR()); // 同步刷新本地缓存时间窗，但不作为后续判定依据
+                return true;
             }
             // 不再以「本地缓存 + 审核登录态」乐观兜底：缓存可能过期/未真正绑定，
             // 会导致在无真实 CA 会话时走秒审短超时、ReportSave('A') 静默不提交。
@@ -10128,13 +10161,9 @@ function fillNativeLoginForm(creds, lastWG) {
         // 快速检查：如果 CA UKey 已绑定，跳过
         try {
             const iframeWin0 = getReportIframeWin();
-            if (iframeWin0 && iframeWin0.CAMsg && iframeWin0.CAMsg.UkeyNoArray) {
-                const _me0 = iframeWin0.me;
-                const _userDR = _me0?.AuthUserDR || uid();
-                if (_userDR && iframeWin0.CAMsg.UkeyNoArray[_userDR]) {
-                    dbg('CA: UKey 已绑定，跳过认证');
-                    return true;
-                }
+            if (isCASessionReady(iframeWin0)) {
+                dbg('CA: UKey 已绑定，跳过认证');
+                return true;
             }
         } catch(e) {}
 
@@ -10160,11 +10189,10 @@ function fillNativeLoginForm(creds, lastWG) {
             if (!iframeWin || !iframeWin.CAMsg) { showToast('报告页面未就绪', 'error'); return false; }
 
             const jq = iframeWin.jQuery || iframeWin.$;
-            const me = iframeWin.me;
             const CAMsg = iframeWin.CAMsg;
 
             // 直接调用 CAMsg.Login 触发 CA 认证（不点审核按钮，避免触发审核流程）
-            const caUserDR = me?.AuthUserDR || uid();
+            const caUserDR = getCAUserDR(iframeWin);
             dbg('CA: 调用 CAMsg.Login, userDR=' + caUserDR);
 
             // 先检查 CA 窗口是否已经打开
@@ -10172,14 +10200,16 @@ function fillNativeLoginForm(creds, lastWG) {
             if (caWin.length && caWin.is(':visible')) {
                 dbg('CA: CA窗口已打开，直接处理登录');
                 const caOK = await handleCALogin(iframeWin);
-                if (caOK) { saveCAAuth(); showToast('✅ CA 认证成功', 'success'); return true; }
+                if (caOK || await waitCAUKeyBound(iframeWin, 3000)) {
+                    saveCAAuth();
+                    showToast('✅ CA 认证成功', 'success');
+                    return true;
+                }
                 clearCAAuth(); return false;
             }
 
             // 调用 CAMsg.Login 触发 CA 窗口
-            CAMsg.Login(caUserDR, function() {
-                dbg('CA: CAMsg.Login 回调触发');
-            }, []);
+            CAMsg.Login(caUserDR, null, [], '');
 
             // 等待 CA 窗口出现（最多 15 秒）
             let waited = 0;
@@ -10193,14 +10223,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 // CA窗口没出现：可能是 CA 客户端未运行 / 网络异常，绝不能当成「认证成功」。
                 // 校验真实 Ukey 绑定：真正绑定了才放行，否则清除缓存并判定失败，
                 // 避免在无 CA 会话时静默提交导致标本退回。
-                let ukeyBound = false;
-                try {
-                    const _iw = getReportIframeWin();
-                    if (_iw && _iw.CAMsg && _iw.CAMsg.UkeyNoArray) {
-                        const _ud = (_iw.me?.AuthUserDR || uid());
-                        ukeyBound = !!(_ud && _iw.CAMsg.UkeyNoArray[_ud]);
-                    }
-                } catch(e) {}
+                const ukeyBound = await waitCAUKeyBound(getReportIframeWin() || iframeWin, 1000);
                 if (ukeyBound) {
                     dbg('CA: CAMsg.Login 后 Ukey 已绑定，视为成功');
                     saveCAAuth();
@@ -10216,7 +10239,7 @@ function fillNativeLoginForm(creds, lastWG) {
             dbg('CA: CA窗口已弹出，自动登录');
             const caOK = await handleCALogin(iframeWin);
 
-            if (caOK) {
+            if (caOK || await waitCAUKeyBound(iframeWin, 3000)) {
                 saveCAAuth();
                 showToast('✅ CA 认证成功', 'success');
                 return true;
@@ -11217,15 +11240,26 @@ function fillNativeLoginForm(creds, lastWG) {
                 return;
             }
             const auditCtx = auditTargetContext(iframeWin, reportDR);
-            const caReady = isCASessionReady(iframeWin);
+            let caReady = isCASessionReady(iframeWin);
+            if (!caReady) {
+                try {
+                    const caOk = await ensureCAAuthenticated();
+                    iframeWin = getReportIframeWin() || iframeWin;
+                    caReady = caOk && isCASessionReady(iframeWin);
+                } catch(e) {
+                    caReady = false;
+                }
+            }
             let auditOK = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
-                action: 'audit', expectedStatuses: ['3'], timeoutMs: caReady ? 8000 : 15000,
-                caSessionReady: caReady, missingAsSuccess: auditCtx.allowMissingSuccess, targetReportDR: reportDR
+                action: 'audit', expectedStatuses: ['3'], timeoutMs: caReady ? 8000 : 20000,
+                caSessionReady: caReady, missingAsSuccess: false, targetReportDR: reportDR
             });
             if (!auditOK) {
                 auditOK = await confirmAuditEventually(iframeWin, reportDR, selected.PatName || selected.Labno || '', {
                     targetWasPresent: auditCtx.rowPresent,
-                    detailWasReady: auditCtx.detailReady
+                    detailWasReady: auditCtx.detailReady,
+                    allowMissingSuccess: false,
+                    caAware: !caReady
                 });
             }
             if (auditOK === 'incomplete') {
@@ -11769,6 +11803,7 @@ function fillNativeLoginForm(creds, lastWG) {
         try {
             const sameWG = await ensureAuditQueueWorkGroup(queue);
             if (!sameWG) { progress.remove(); return; } /* ensureAuditQueueWorkGroup 内已 schedule 续跑 */
+            if (queue.pausedForCA) delete queue.pausedForCA;
 
             let iframeWin = getReportIframeWin();
             if (!iframeWin) {
@@ -11802,11 +11837,12 @@ function fillNativeLoginForm(creds, lastWG) {
             let successCount = queue.done.length, failCount = queue.failed.length, skipCount = queue.skipped.length;
             let totalCount = queue.items.length;
             let queuePausedForSwitch = false;
+            let queuePausedForCA = false;
             let batchLastMdr = '';
             let batchListFresh = false;
             let batchSkipSelect = false;
-            queue.caReadyByWg = queue.caReadyByWg || {};
-            let batchCAReady = queue.caReadyByWg[wgDR()] || isCASessionReady(iframeWin);
+            if (queue.caReadyByWg) delete queue.caReadyByWg;
+            let batchCAReady = isCASessionReady(iframeWin);
             _batchAbort = false;
             if (queue.current < queue.items.length - 1) {
                 const remaining = queue.items.splice(queue.current);
@@ -11858,11 +11894,10 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
 
                 if (item.wg && item.wg !== wgDR()) {
-                    if (batchCAReady && wgDR()) queue.caReadyByWg[wgDR()] = true;
                     queue.pausedForSwitch = true;
                     saveAuditQueueNow(queue);
                     const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
-                    const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
+                    const nextCaHint = '（切换后重新检测 CA）';
                     showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
                     queuePausedForSwitch = true;
                     switchWG(item.wg);
@@ -11870,8 +11905,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     break;
                 }
 
-                const itemWg = item.wg || wgDR();
-                batchCAReady = queue.caReadyByWg[itemWg] || isCASessionReady(iframeWin);
+                batchCAReady = isCASessionReady(iframeWin);
 
                 batchListFresh = false;
                 totalCount = queue.items.length;
@@ -11885,6 +11919,28 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
                 const modeHint = batchCAReady ? ' · 秒审' : ' · 自动CA';
                 updateBatchProgress(`${queue.current + 1} / ${totalCount} - ${item.name || item.labno || item.reportDR}${item.retry ? '（重试' + item.retry + '）' : ''}${modeHint}${etaStr}`, queue.current / totalCount * 100);
+
+                if (!batchCAReady) {
+                    updateBatchProgress(`${queue.current + 1} / ${totalCount} - CA 认证中...`, queue.current / totalCount * 100);
+                    let caOk = false;
+                    try {
+                        caOk = await ensureCAAuthenticated();
+                        iframeWin = getReportIframeWin() || iframeWin;
+                        if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
+                    } catch(e) {
+                        dbg('批审 CA 预认证异常:', e.message);
+                    }
+                    batchCAReady = caOk && isCASessionReady(iframeWin);
+                    if (!batchCAReady) {
+                        clearCAAuth();
+                        queue.pausedForCA = true;
+                        saveAuditQueueNow(queue);
+                        queuePausedForCA = true;
+                        showToast('CA 认证未确认，已暂停批审；请检查 CA 后再继续', 'warning');
+                        break;
+                    }
+                    updateBatchProgress(`${queue.current + 1} / ${totalCount} - CA 已认证，开始审核...`, queue.current / totalCount * 100);
+                }
 
                 try {
                     if (!jq || !me) {
@@ -11947,66 +12003,40 @@ function fillNativeLoginForm(creds, lastWG) {
                     updateBatchProgress(`${queue.current + 1} / ${totalCount} - 审核中...`, queue.current / totalCount * 100);
                     closeStaleAuthLoginWindows(iframeWin);
                     const auditCtx = auditTargetContext(iframeWin, item.reportDR);
-                    // 乐观批审：仅触发审核点击（triggerOnly 立即返回），不阻塞等待后端状态回写，
-                    // 避免后端统计异常（ZSUBSCRIPT）导致 LIS 卡住、状态迟迟不回写而「卡在审核中」。
-                    // 真正成功/失败由 detached 后台 confirmAuditEventually 兜底，失败再把标本挪回 failed 并重试。
                     let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
                         action: 'audit', expectedStatuses: ['3'], batchMode: true,
-                        timeoutMs: batchCAReady ? 6000 : 10000, keepWS: queue.keepWS,
+                        timeoutMs: batchCAReady ? 8000 : 20000, keepWS: queue.keepWS,
                         caSessionReady: batchCAReady,
-                        missingAsSuccess: auditCtx.allowMissingSuccess,
-                        targetReportDR: item.reportDR,
-                        triggerOnly: true
+                        missingAsSuccess: false,
+                        targetReportDR: item.reportDR
                     });
                     if (!auditResult) {
-                        dbg('批审单条点击未触发（按钮禁用/详情未就绪）:', item.name || item.reportDR);
-                        queue.failed.push({ ...item, reason: '审核未触发' });
-                        failCount++;
-                    } else {
-                        // 先乐观计入成功，立即推进下一条
+                        iframeWin = getReportIframeWin() || iframeWin;
+                        auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', {
+                            batchMode: true,
+                            targetWasPresent: auditCtx.rowPresent,
+                            detailWasReady: auditCtx.detailReady,
+                            afterCA: !batchCAReady,
+                            allowMissingSuccess: false,
+                            caAware: !batchCAReady,
+                            keepWS: queue.keepWS
+                        });
+                    }
+                    if (auditResult && auditResult !== 'incomplete') {
                         queue.done.push(item);
                         successCount++;
-                        batchCAReady = true;
-                        queue.caReadyByWg[itemWg] = true;
+                        batchCAReady = isCASessionReady(iframeWin);
                         if (prepareNextBatchItemAfterAudit(iframeWin, queue, item)) {
                             batchSkipSelect = true;
                             dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
                         }
-                        // 后台兜底确认
-                        (async () => {
-                            try {
-                                const win = getReportIframeWin() || iframeWin;
-                                let ok = await confirmAuditEventually(win, item.reportDR, item.name || item.labno || '', {
-                                    batchMode: true,
-                                    targetWasPresent: auditCtx.rowPresent,
-                                    detailWasReady: auditCtx.detailReady,
-                                    afterCA: !batchCAReady
-                                });
-                                if (!ok && verifyAuditSucceededByReportDR(win, item.reportDR)) ok = true;
-                                if (!ok) {
-                                    dbg('批审后台确认失败，挪回 failed 并重试:', item.reportDR);
-                                    const di = queue.done.indexOf(item);
-                                    if (di !== -1) queue.done.splice(di, 1);
-                                    const fi = queue.failed.indexOf(item);
-                                    if (fi === -1) queue.failed.push({ ...item, reason: '审核未确认成功' });
-                                    // 重置 CA 就绪状态，后续标本使用更长超时
-                                    batchCAReady = false;
-                                    queue.caReadyByWg[itemWg] = false;
-                                    if (!_batchAbort) {
-                                        item.retry = (item.retry || 0) + 1;
-                                        if (item.retry <= 3) {
-                                            await sleep(800);
-                                            // 重新排到队尾等待重试
-                                            queue.items.push(item);
-                                            queue.current = Math.min(queue.current, queue.items.length - 1);
-                                        }
-                                    }
-                                    saveAuditQueueNow(queue);
-                                } else {
-                                    dbg('批审后台确认成功:', item.reportDR);
-                                }
-                            } catch(e) { dbg('批审后台确认异常:', e); }
-                        })();
+                    } else if (auditResult === 'incomplete') {
+                        queue.skipped.push({ ...item, reason: '结果不完整' });
+                        skipCount++;
+                    } else {
+                        clearCAAuth();
+                        batchCAReady = false;
+                        if (!requeueAuditItem(queue, item, '审核未确认成功')) skipCount++;
                     }
                 } catch(e) {
                     queue.failed.push({ ...item, reason: e.message });
@@ -12022,13 +12052,18 @@ function fillNativeLoginForm(creds, lastWG) {
 
             const fill = document.getElementById('lis-prog-fill');
             const text = document.getElementById('lis-prog-text');
-            if (fill) fill.style.width = '100%';
-            if (text) text.textContent = `完成: ${successCount} 成功, ${failCount} 失败, ${skipCount} 跳过`;
-
             if (queuePausedForSwitch) {
                 if (text) text.textContent = '正在切换工作组，稍后自动继续...';
                 return;
             }
+            if (queuePausedForCA) {
+                if (fill) fill.style.width = `${Math.max(0, Math.min(100, queue.current / Math.max(totalCount, 1) * 100))}%`;
+                if (text) text.textContent = 'CA 认证未确认，批审已暂停';
+                return;
+            }
+
+            if (fill) fill.style.width = '100%';
+            if (text) text.textContent = `完成: ${successCount} 成功, ${failCount} 失败, ${skipCount} 跳过`;
 
             if (queue.current >= queue.items.length) clearAuditQueue();
             if (successCount > 0) {
