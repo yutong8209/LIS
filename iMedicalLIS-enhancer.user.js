@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.36.0
+// @version      7.37.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -46,7 +46,15 @@
 
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
-    const CLASSIFY_STALE_MS = 5 * 60 * 1000;
+    const CLASSIFY_STALE_MS = 30 * 60 * 1000;
+    const SCRIPT_VERSION = (function(){
+        try {
+            const t = (document.currentScript && document.currentScript.textContent) || '';
+            const m = t.match(/@version\s+([\d.]+)/);
+            if (m) return m[1];
+        } catch(e){}
+        return '7.36.0';
+    })();
     const AUDIT_QUEUE_LOCK_TTL = 45000;
 
     // ==================== 工具 ====================
@@ -3973,8 +3981,10 @@
                     lot = proj.isDDimer ? lots._dimer : lots._main;
                 }
                 lvData.sort((a, b) => a.day - b.day);
+                const daySeq = {};
                 lvData.forEach(pt => {
-                    rows.push([proj.code, month, pt.day, 1, lot, pt.value, proj.name, operator]);
+                    const seq = (daySeq[pt.day] = (daySeq[pt.day] || 0) + 1);
+                    rows.push([proj.code, month, pt.day, seq, lot, pt.value, proj.name, operator]);
                 });
             }
         }
@@ -11843,10 +11853,7 @@ function fillNativeLoginForm(creds, lastWG) {
             // 忽略如果对话框打开
             if (document.getElementById('lis-audit-confirm')) return;
 
-            if (e.key === 'F5') {
-                e.preventDefault();
-                quickAuditCurrent();
-            } else if (e.altKey && (e.key === 'a' || e.key === 'A')) {
+            if (e.altKey && (e.key === 'a' || e.key === 'A')) {
                 e.preventDefault();
                 quickAuditCurrent();
             } else if (e.altKey && (e.key === 'b' || e.key === 'B')) {
@@ -11954,7 +11961,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.21.1');
+        dbg('iMedicalLIS 增强助手 v' + SCRIPT_VERSION);
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
