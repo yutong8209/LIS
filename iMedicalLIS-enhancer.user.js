@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.47.0
+// @version      7.48.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10106,11 +10106,10 @@ function fillNativeLoginForm(creds, lastWG) {
                     return true;
                 }
             }
-            const authStatus = getAuditStatusText(iframeWin);
-            const authLoggedIn = !!(authStatus && authStatus.indexOf('未登录') === -1);
-            // 本地缓存：仅当 wg 一致且未超 1h 窗口才采信；绝不乐观兜底（避免 CA 已过期仍走秒审短超时）
-            const cached = loadCAAuth();
-            if (authLoggedIn && cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) return true;
+            // 不再以「本地缓存 + 审核登录态」乐观兜底：缓存可能过期/未真正绑定，
+            // 会导致在无真实 CA 会话时走秒审短超时、ReportSave('A') 静默不提交。
+            // 未绑定 Ukey 时统一返回 false，由 ensureCAAuthenticated() 走真实 CAMsg.Login。
+            return false;
         } catch(e) {}
         return false;
     }
@@ -10158,12 +10157,11 @@ function fillNativeLoginForm(creds, lastWG) {
             }
         } catch(e) {}
 
-        // 本地缓存检查（1小时内有效）
-        const cached = loadCAAuth();
-        if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) {
-            dbg('CA: 使用本地缓存');
-            return true;
-        }
+        // 注意：不再信任本地 1h 缓存作为「CA 已就绪」依据。
+        // 旧逻辑只要同 WG 近 1h 写过一次 saveCAAuth 就 return true，但并未验证 LIS 里 CA 是否真绑定，
+        // 会导致 ReportSave('A') 在无真实 CA 会话时静默不提交（后端拒收、状态不变 3/4），
+        // 表现为「已审的标本又退回异常待审 / 切回 LIS 显示 CA 认证界面」。
+        // 故此处必须走真实 CAMsg.Login 认证，绝不乐观兜底。
 
         dbg('CA: 需要认证，直接调用 CAMsg.Login');
 
@@ -10211,10 +10209,26 @@ function fillNativeLoginForm(creds, lastWG) {
             }
 
             if (!caWin.length || !caWin.is(':visible')) {
-                // CA窗口没出现 = 不需要CA认证 或 CA客户端未运行
-                dbg('CA: 未弹出CA窗口（等了' + waited + 'ms），可能不需要CA认证或CA客户端未运行');
-                saveCAAuth();
-                return true;
+                // CA窗口没出现：可能是 CA 客户端未运行 / 网络异常，绝不能当成「认证成功」。
+                // 校验真实 Ukey 绑定：真正绑定了才放行，否则清除缓存并判定失败，
+                // 避免在无 CA 会话时静默提交导致标本退回。
+                let ukeyBound = false;
+                try {
+                    const _iw = getReportIframeWin();
+                    if (_iw && _iw.CAMsg && _iw.CAMsg.UkeyNoArray) {
+                        const _ud = (_iw.me?.AuthUserDR || uid());
+                        ukeyBound = !!(_ud && _iw.CAMsg.UkeyNoArray[_ud]);
+                    }
+                } catch(e) {}
+                if (ukeyBound) {
+                    dbg('CA: CAMsg.Login 后 Ukey 已绑定，视为成功');
+                    saveCAAuth();
+                    return true;
+                }
+                dbg('CA: 未弹出CA窗口且 Ukey 未绑定（等了' + waited + 'ms），CA 客户端可能未运行');
+                clearCAAuth();
+                showToast('CA 客户端无响应，请检查 CA 认证', 'warning');
+                return false;
             }
 
             // CA窗口已弹出，自动完成 capping 登录
