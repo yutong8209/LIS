@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.39.0
+// @version      7.40.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5601,18 +5601,21 @@
     function updateAbnormalEnterBridge() {
         const active = wsCategory === 'abnormal' && isWSVisible() && !isDetailPanelVisible();
         try {
+            // token 只在初始化时生成一次（永久稳定），不再随 active 切换而重排/置空，
+            // 避免「先置 active=true 再赋新 token」两条独立语句之间的竞态：
+            // 若此刻 iframe 内正好 postMessage，注入 handler 读到 active 但 token 尚未更新，会导致该次 Enter 被丢弃。
+            if (!window.__lisAbnormalEnterToken) {
+                window.__lisAbnormalEnterToken = (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12));
+            }
             window.__lisAbnormalEnterActive = active;
-            window.__lisAbnormalEnterToken = active
-                ? (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12))
-                : '';
         } catch(e) {}
     }
 
     function isTrustedAbnormalEnterMessage(e) {
         if (!e || !e.data || e.data.type !== 'lis-enhancer-abnormal-enter') return false;
         if (e.origin !== window.location.origin) return false;
-        const token = window.__lisAbnormalEnterToken;
-        if (!token || e.data.token !== token) return false;
+        // token 永久稳定，仅做相等比对即可，避免重排导致的竞态丢键
+        if (!window.__lisAbnormalEnterActive || e.data.token !== window.__lisAbnormalEnterToken) return false;
         // 允许来自报告页 iframe 及其嵌套 iframe（结果录入常位于嵌套 iframe）的消息
         const src = e.source;
         if (!src) return false;
@@ -6418,60 +6421,16 @@ if(!window.__lisEnhancerFrameScan){
     async function prewarmAbnormalAuditNative(specimen) {
         if (!specimen || _abnormalAuditInProgress || !isWSVisible()) return;
         const reportDR = String(specimen.ReportDR || '');
-        if (isAbnormalSpecimenReady(reportDR)) {
+        // 软预取：仅判定详情是否已因其他原因就绪（例如用户点过/列表本就定位到该标本），
+        // 绝不主动 FindFast / 选中下一条原生行——选中原生行会把光标落入结果录入控件，
+        // 正是「光标落在下一个标本结果栏、无法连审」的根因。
+        // 真正需要的选行交给 auditAbnormalSpecimen 在按下 Enter 的那一刻按需执行。
+        const iframeWin = getReportIframeWin();
+        if (iframeWin && isReportDetailLoaded(iframeWin, reportDR)) {
             _abnormalNativeReadyDR = reportDR;
             _abnormalPrewarmDR = reportDR;
-            return;
         }
-        if (_abnormalPrewarmPromise && _abnormalPrewarmDR === reportDR) {
-            return _abnormalPrewarmPromise;
-        }
-        _abnormalPrewarmDR = reportDR;
-        _abnormalPrewarmPromise = (async () => {
-            let iframeWin = await prefetchReportPageForWS();
-            if (!iframeWin) iframeWin = getReportIframeWin();
-            if (!iframeWin) return;
-            installNativeDetailGuard(iframeWin);
-            if (!canScriptSelectNativeRow(iframeWin, reportDR)) {
-                dbg('预热跳过：用户正在原生列表查看其他标本');
-                return;
-            }
-            const item = specimenToAuditItem(specimen);
-            const mdrKey = String(item.mdr || '');
-            if (mdrKey) {
-                const mdrChanged = mdrKey !== String(_abnormalLastMdr || '');
-                const nativeMismatch = !nativeMachineMatches(iframeWin, mdrKey);
-                if (mdrChanged || nativeMismatch) {
-                    iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
-                    _abnormalLastMdr = mdrKey;
-                } else {
-                    _abnormalLastMdr = mdrKey;
-                }
-            }
-            iframeWin = getReportIframeWin() || iframeWin;
-            if (!canScriptSelectNativeRow(iframeWin, reportDR)) {
-                dbg('预热中止：刷新列表后用户已接管原生选择');
-                return;
-            }
-            if (item.labno && typeof iframeWin.FindFast === 'function' && canScriptSelectNativeRow(iframeWin, reportDR)) {
-                try { iframeWin.FindFast(item.labno); await sleep(60); } catch(e) {}
-                iframeWin = getReportIframeWin() || iframeWin;
-            }
-            if (!selectNativeRowByReportDR(iframeWin, reportDR, { force: true })) {
-                await waitAndSelectNativeRow(iframeWin, item, { timeoutMs: 2800, pollMs: 30, skipListRefresh: !!mdrKey, force: true });
-                iframeWin = getReportIframeWin() || iframeWin;
-            }
-            if (!isReportDetailLoaded(iframeWin, reportDR)) {
-                await waitReportDetailReady(iframeWin, reportDR, 4500, { fastBatch: true });
-            }
-            iframeWin = getReportIframeWin() || iframeWin;
-            if (isReportDetailLoaded(iframeWin, reportDR)) {
-                _abnormalNativeReadyDR = reportDR;
-            }
-        })().finally(() => {
-            if (_abnormalPrewarmDR === reportDR) _abnormalPrewarmPromise = null;
-        });
-        return _abnormalPrewarmPromise;
+        return;
     }
 
     async function awaitAbnormalPrewarm(specimen) {
@@ -6838,6 +6797,10 @@ if(!window.__lisEnhancerFrameScan){
             updateWSFooter();
             dbg('异常列表审核结束');
             if (wsCategory === 'abnormal') scheduleAbnormalFocusRecovery();
+            // 注意：此处【不再】调用 prefetchAbnormalAuditContext()（即不预热下一条原生行）。
+            // 预热会 FindFast/选中下一条原生行，把光标落入其结果录入控件（连审失败根因）。
+            // 下一条的选行与详情加载，交由用户真正按下 Enter 时的 auditAbnormalSpecimen 按需完成，
+            // 审核后由 prepareNextAbnormalSpecimenAfterAudit 立即清空选中并拉回工作台卡片。
             consumeAbnormalEnterQueue();
         }
     }
