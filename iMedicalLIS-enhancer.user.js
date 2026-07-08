@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.38.0
+// @version      7.39.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5656,6 +5656,25 @@
         } catch(e) {}
     }
 
+    // 清空原生网格的选中行，避免选中行把光标落入其可编辑结果录入单元格
+    function trimNativeSelectedRow(iframeWin) {
+        iframeWin = iframeWin || getReportIframeWin();
+        if (!iframeWin) return;
+        try {
+            const jq = iframeWin.jQuery || iframeWin.$;
+            if (!jq) return;
+            [NATIVE_WORKLIST_SEL, '#dgLeftReportItem', '#dgRightReportItem'].forEach(sel => {
+                try {
+                    const el = jq(sel);
+                    if (el.length && el.datagrid) {
+                        el.datagrid('clearSelections');
+                        if (iframeWin.me) { try { iframeWin.me.selectedGrid = null; } catch(e) {} }
+                    }
+                } catch(e) {}
+            });
+        } catch(e) {}
+    }
+
     function consumeAbnormalEnterQueue() {
         while (_abnormalEnterQueue.length) {
             const dr = _abnormalEnterQueue.shift();
@@ -5847,6 +5866,7 @@ if(!window.__lisEnhancerFrameScan){
 
     function refocusAbnormalWorkbench() {
         releaseNativeReportFocus();
+        trimNativeSelectedRow();
         try { getUIWindow().focus(); } catch(e) {}
         const uiDoc = getUIDoc();
         const card = uiDoc.querySelector('.ws-abnormal-card.focused');
@@ -6599,21 +6619,31 @@ if(!window.__lisEnhancerFrameScan){
         _abnormalNativeReadyDR = '';
         iframeWin = iframeWin || getReportIframeWin();
         try { getUIWindow().focus(); } catch(e) {}
+        // 关键修复：审核完成后【不要预先选中下一条原生行】。
+        // 选中原生行会把光标落入该行的结果录入输入/编辑单元格（用户反馈的「光标落在下一个标本的结果栏」），
+        // 且原生网格会异步重新抢回焦点，导致下一次 Enter 被原生录入吃掉、无法连审。
+        // 改为保持工作台卡片选中态：焦点留在卡片上，下一条审核时由 auditAbnormalSpecimen 自行按需选行
+        // （它已支持通过 _abnormalNativeReadyDR + skipSelect 跳过选行，无需提前预选）。
         if (iframeWin) {
-            const prep = await ensureSpecimenReadyForAudit(iframeWin, next, {
-                lastMdr: _abnormalLastMdr,
-                abnormalFast: true,
-                forceSelect: true
-            });
-            iframeWin = prep.iframeWin || iframeWin;
-            if (prep.lastMdr) _abnormalLastMdr = prep.lastMdr;
-            if (prep.ok && isReportDetailLoaded(iframeWin, nextDR)) {
-                _abnormalNativeReadyDR = nextDR;
-                dbg('异常审核: 已同步原生选行到下一条', nextDR);
-            }
+            try {
+                const jq = iframeWin.jQuery || iframeWin.$;
+                if (jq) {
+                    // 仅清空原生选中，不激活下一条行，避免光标落入结果录入控件
+                    jq(NATIVE_WORKLIST_SEL + ',#dgLeftReportItem,#dgRightReportItem').each(function() {
+                        try { jq(this).datagrid('clearSelections'); } catch(e) {}
+                    });
+                }
+            } catch(e) {}
         }
         releaseNativeReportFocus(iframeWin);
+        // 先把原生选行清空后，强制把焦点拉回工作台卡片
         refocusAbnormalWorkbench();
+        trimNativeSelectedRow(iframeWin);
+        // 标记下一条「详情已就绪」以便后续审核跳过选行（仅当确实已就绪时）
+        if (iframeWin && isReportDetailLoaded(iframeWin, nextDR)) {
+            _abnormalNativeReadyDR = nextDR;
+            dbg('异常审核: 下一条详情已就绪，标记 skipSelect', nextDR);
+        }
         updateAbnormalEnterBridge();
         installAbnormalResultGridEnterHijack(iframeWin);
         scheduleAbnormalFocusRecovery();
