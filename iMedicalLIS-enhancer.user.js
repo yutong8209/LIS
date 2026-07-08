@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.40.0
+// @version      7.41.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9300,6 +9300,12 @@ function fillNativeLoginForm(creds, lastWG) {
     function classifyNativeMessage(text) {
         const t = (text || '').trim();
         if (!t) return '';
+        // 后端统计异常（访问号统计存储过程下标越界）属于 LIS 后端独立 bug，
+        // 与「审核是否成功」无关——实际审核往往已成功回写，仅统计流程抛错。
+        // 这种弹窗由 closeIgnorableNativeExceptionDialogs 静默关闭，此处必须返回 ''（既不成功也不失败），
+        // 否则会被误归类为 'failure'（报错文本含「失败」二字），导致 executeNativeAudit 返回 false、
+        // 工作台卡片不即时移除、只能等周期刷新才消失（用户反馈的「过半天才消失」）。
+        if (isIgnorableNativeStatException(t)) return '';
         if (t.indexOf('必填项目') !== -1 || t.indexOf('未存数据') !== -1 ||
             t.indexOf('结果为空') !== -1 || t.indexOf('结果不完整') !== -1 ||
             t.indexOf('无结果') !== -1 || t.indexOf('没有结果') !== -1 ||
