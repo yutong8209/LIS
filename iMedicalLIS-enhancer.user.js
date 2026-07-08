@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.48.0
+// @version      7.49.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6684,55 +6684,36 @@ if(!window.__lisEnhancerFrameScan){
         const auditCtx = auditTargetContext(iframeWin, reportDR);
         // 跨仪器/切组后 CA 会话往往未就绪，若此时触发 ReportSave('A') 会弹出 CA 窗口、
         // 后台 capping 登录约 1-2s，即用户感知的「切到下一台仪器卡几秒」。
-        // 故在真正点击前先确保 CA 就绪（有缓存/Ukey 绑定时秒返，否则在此完成一次 capping 登录，
-        // 耗时藏进切仪器的等待里），使后续审核走秒审、不弹 CA 窗口。
+        // 故在真正点击前先确保 CA 就绪（v7.48 修复：以真实 Ukey 绑定为准，绝不乐观缓存），
+        // 使后续审核走秒审、不弹 CA 窗口。
         let caReady = isCASessionReady(iframeWin);
         if (!caReady) {
             try { const caOk = await ensureCAAuthenticated(); if (caOk) { saveCAAuth(wgDR()); caReady = true; } } catch(e) {}
         }
-        // 乐观审核：先触发点击（triggerOnly 立即返回），卡片由调用方即时移除；
-        // 后台再异步确认，若真失败则恢复卡片。彻底消除「审核掉后卡片延迟几秒消失」。
-        // 注意：missingAsSuccess 传 false —— 跨仪器时仪器列表会重载使目标行「暂时消失」，
-        // 绝不能把「行消失」当作审核成功，否则会出现「卡片秒删但后端未记录、稍后又变未审核」。
-        let triggered = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
+        // 同步审核：点击后真等后端状态回写（状态 3/4）才返回成功，调用方仅在返回 true 时移除卡片。
+        // 故绝不会出现「卡片秒删但后端未记录、稍后又变未审核」的假成功/退回列表。
+        // （v7.42 曾引入乐观移除+后台 confirm 状态机，导致跨仪器假成功；此处回退到 v7.20.43 的同步结构。）
+        let result = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
             action: 'audit',
             expectedStatuses: ['3'],
             batchMode: fast,
             timeoutMs: fast ? (caReady ? 5000 : 8000) : 15000,
             keepWS: !!options.keepWS,
             caSessionReady: caReady,
-            missingAsSuccess: false,
-            targetReportDR: reportDR,
-            triggerOnly: true
+            missingAsSuccess: false, // 跨仪器绝不以「行消失」当成功，必须显式状态 3/4
+            targetReportDR: reportDR
         });
-        if (!triggered) {
-            // 连点击都没成功（按钮禁用/详情未就绪），按原逻辑判失败
-            return false;
+        if (!result) {
+            iframeWin = getReportIframeWin() || iframeWin;
+            result = await confirmAuditEventually(iframeWin, reportDR, specimen.PatName || specimen.Labno || '', {
+                batchMode: fast,
+                targetWasPresent: auditCtx.rowPresent,
+                detailWasReady: auditCtx.detailReady,
+                afterCA: !caReady,
+                allowMissingSuccess: false // 同上：必须状态 3/4，杜绝假成功
+            });
         }
-        // 后台兜底确认：失败则重渲染恢复卡片，避免误删
-        (async () => {
-            try {
-                const win = getReportIframeWin() || iframeWin;
-                const ok = await confirmAuditEventually(win, reportDR, specimen.PatName || specimen.Labno || '', {
-                    batchMode: fast,
-                    caAware: true, // 乐观/triggerOnly 路径需后台补 CA 认证（修复 CA 窗口未认证导致审核卡死）
-                    keepWS: !!options.keepWS,
-                    targetWasPresent: auditCtx.rowPresent,
-                    detailWasReady: auditCtx.detailReady,
-                    afterCA: !caReady,
-                    allowMissingSuccess: false // 跨仪器必须：绝不以「行消失」当成功，要求显式状态 3/4
-                });
-                if (!ok) {
-                    dbg('后台确认：审核未成功，恢复卡片', reportDR);
-                    showToast(`${specimen.PatName || specimen.Labno || reportDR} 审核未确认，已恢复列表`, 'warning');
-                    invalidateCaches();
-                    renderWSTable();
-                } else {
-                    dbg('后台确认：审核成功', reportDR);
-                }
-            } catch(e) { dbg('后台确认异常:', e); }
-        })();
-        return true;
+        return result;
     }
 
     async function auditAbnormalSpecimen(specimen) {
