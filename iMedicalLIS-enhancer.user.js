@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.37.0
+// @version      7.38.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5610,11 +5610,16 @@
 
     function isTrustedAbnormalEnterMessage(e) {
         if (!e || !e.data || e.data.type !== 'lis-enhancer-abnormal-enter') return false;
-        const reportWin = getReportIframeWin();
-        if (!reportWin || e.source !== reportWin) return false;
         if (e.origin !== window.location.origin) return false;
         const token = window.__lisAbnormalEnterToken;
-        return !!(token && e.data.token === token);
+        if (!token || e.data.token !== token) return false;
+        // 允许来自报告页 iframe 及其嵌套 iframe（结果录入常位于嵌套 iframe）的消息
+        const src = e.source;
+        if (!src) return false;
+        const reportWin = getReportIframeWin();
+        if (src === reportWin) return true;
+        try { if (src.top === window) return true; } catch(err) {}
+        return false;
     }
 
     function releaseNativeReportFocus(iframeWin) {
@@ -5707,6 +5712,9 @@
             const s = doc.createElement('script');
             s.setAttribute('data-lis-enhancer', 'abnormal-enter');
             s.textContent = `(function(){
+function getTop(){
+  try{return window.top;}catch(e){return window.parent||window;}
+}
 window.__lisEnhancerReleaseReportFocus=function(){
   try{
     var jq=window.jQuery||window.$;
@@ -5721,29 +5729,66 @@ window.__lisEnhancerReleaseReportFocus=function(){
     var ae=document.activeElement;
     if(ae&&ae!==document.body&&ae.blur)ae.blur();
   }catch(e){}
+  // 递归释放嵌套 iframe（结果录入常位于嵌套 iframe）的焦点
+  try{
+    var fr=window.frames||[];
+    for(var i=0;i<fr.length;i++){ if(fr[i]&&fr[i].__lisEnhancerReleaseReportFocus) fr[i].__lisEnhancerReleaseReportFocus(); }
+  }catch(e){}
 };
 if(window.__lisEnhancerAbnormalEnterHandler){
   try{window.removeEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true);}catch(e){}
 }
 window.__lisEnhancerAbnormalEnterHandler=function(e){
   if(e.key!=='Enter'||e.shiftKey)return;
+  var top= getTop();
   var active=false,token='',origin='';
   try{
-    active=!!(window.parent&&window.parent.__lisAbnormalEnterActive);
-    token=String(window.parent.__lisAbnormalEnterToken||'');
-    origin=window.parent.location.origin;
+    active=!!(top&&top.__lisAbnormalEnterActive);
+    token=String(top&&top.__lisAbnormalEnterToken||'');
+    origin=top.location.origin;
   }catch(err){}
   if(!active||!token)return;
-  try{window.parent.postMessage({type:'lis-enhancer-abnormal-enter',token:token},origin);}catch(err){}
+  try{top.postMessage({type:'lis-enhancer-abnormal-enter',token:token},origin);}catch(err){}
   e.preventDefault();
   e.stopImmediatePropagation();
 };
 window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true);
+// 递归注入嵌套 iframe（结果录入网格可能位于子 iframe）
+function installIntoFrames(scope){
+  try{
+    var fr=scope.frames||[];
+    for(var i=0;i<fr.length;i++){
+      try{
+        if(fr[i]&&fr[i].document&&fr[i].document.body){
+          if(!fr[i].__lisEnhancerAbnormalEnterHandler){
+            fr[i].addEventListener('keydown',fr[i].__lisEnhancerAbnormalEnterHandler=function(e){
+              if(e.key!=='Enter'||e.shiftKey)return;
+              var top=getTop();
+              var active=false,token='',origin='';
+              try{active=!!(top&&top.__lisAbnormalEnterActive);token=String(top&&top.__lisAbnormalEnterToken||'');origin=top.location.origin;}catch(err){}
+              if(!active||!token)return;
+              try{top.postMessage({type:'lis-enhancer-abnormal-enter',token:token},origin);}catch(err){}
+              e.preventDefault();e.stopImmediatePropagation();
+            },true);
+          }
+          installIntoFrames(fr[i]);
+        }
+      }catch(e){}
+    }
+  }catch(e){}
+}
+if(!window.__lisEnhancerFrameScan){
+  window.__lisEnhancerFrameScan=true;
+  installIntoFrames(window);
+  // 子树动态变化（网格延迟加载）时再扫一次
+  setTimeout(function(){try{installIntoFrames(window);}catch(e){}}, 1200);
+  setTimeout(function(){try{installIntoFrames(window);}catch(e){}}, 4000);
+}
 })();`;
             (doc.head || doc.documentElement).appendChild(s);
             s.remove();
             iframeWin.__lisPageEnterHijack = true;
-            dbg('报告页页面上下文 Enter 劫持已注入');
+            dbg('报告页页面上下文 Enter 劫持已注入（含嵌套 iframe）');
         } catch(e) {
             dbg('注入报告页 Enter 劫持失败:', e.message);
         }
@@ -5824,16 +5869,38 @@ window.addEventListener('keydown',window.__lisEnhancerAbnormalEnterHandler,true)
         releaseNativeReportFocus();
         if (!isDetailPanelVisible()) refocusAbnormalWorkbench();
         installAbnormalResultGridEnterHijack();
-        // 收敛夺焦点：仅 2 次兜底恢复，且详情面板打开/审核进行中不抢焦点
-        [150, 600].forEach(ms => {
-            setTimeout(() => {
-                if (wsCategory !== 'abnormal' || _abnormalAuditInProgress || isDetailPanelVisible()) return;
-                updateAbnormalEnterBridge();
-                releaseNativeReportFocus();
-                refocusAbnormalWorkbench();
-                installAbnormalResultGridEnterHijack();
-            }, ms);
-        });
+        // 持续夺回焦点：原生审核后网格会重新抢焦点（光标落在结果录入输入/编辑单元格），
+        // 仅 2 次短时恢复不够。改为自愈式回收：只要焦点仍落在原生结果录入控件就持续拉回工作台卡片，
+        // 直到卡片真正获得焦点或达到上限（不会无限抢焦点，详情面板打开即停）。
+        let attempts = 0;
+        const maxAttempts = 12;
+        const recover = () => {
+            if (wsCategory !== 'abnormal' || _abnormalAuditInProgress || isDetailPanelVisible()) return;
+            updateAbnormalEnterBridge();
+            const uiDoc = getUIDoc();
+            const act = uiDoc.activeElement;
+            // 焦点仍被原生录入控件占据（输入框/编辑单元格/嵌套 iframe 内）→ 拉回工作台
+            const nativeFocused = !!act && (
+                /INPUT|TEXTAREA|SELECT/.test(act.tagName || '') ||
+                (act.classList && (act.classList.contains('datagrid-editable-input') || act.classList.contains('datagrid-cell'))) ||
+                (act.tagName === 'IFRAME') ||
+                !!act.isContentEditable
+            );
+            releaseNativeReportFocus();
+            refocusAbnormalWorkbench();
+            installAbnormalResultGridEnterHijack();
+            const card = uiDoc.querySelector('.ws-abnormal-card.focused');
+            if (card && (document.activeElement === card || getUIDoc().activeElement === card)) {
+                return; // 焦点已落在卡片上，停止回收
+            }
+            if (!nativeFocused) return; // 焦点已不在原生录入控件，无需强抢
+            attempts++;
+            if (attempts < maxAttempts) {
+                const delay = Math.min(120 + attempts * 90, 1400);
+                setTimeout(recover, delay);
+            }
+        };
+        [120, 320, 600].forEach(ms => setTimeout(recover, ms));
     }
 
     function _rebindAbnormalKeyHandler() {
