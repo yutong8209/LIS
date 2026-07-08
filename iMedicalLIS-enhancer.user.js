@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.46.0
+// @version      7.47.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6325,12 +6325,16 @@ if(!window.__lisEnhancerFrameScan){
         // 跳过内部 CA 检测循环，导致 ReportSave('A') 弹出的 CA 窗口无人认证、审核卡死（异常待审/详情审核回归）。
         // 故在此后台确认阶段补上 CA 窗口检测与自动认证，CA 成功后再继续等状态 '3'。
         const caAware = !!options.caAware;
+        // allowMissingSuccess：是否允许「目标行从列表消失」当作审核成功。
+        // 跨仪器审核时必须传 false —— 切组后仪器列表会重载使刚审的行暂时消失，
+        // 若把消失当成功，会出现「卡片秒删但后端未记录、稍后又变未审核」的假成功。
+        const allowMissingSuccess = options.allowMissingSuccess !== undefined ? !!options.allowMissingSuccess : true;
         const ft = document.getElementById('lis-ws-ft-stat');
         if (ft) ft.textContent = `正在确认审核结果：${patientName || reportDR}`;
         const ctx = auditTargetContext(iframeWin, reportDR);
         const targetWasPresent = options.targetWasPresent !== undefined ? !!options.targetWasPresent : ctx.rowPresent;
         const detailWasReady = options.detailWasReady !== undefined ? !!options.detailWasReady : ctx.detailReady;
-        const allowMissing = detailWasReady;
+        const allowMissing = allowMissingSuccess && detailWasReady;
         iframeWin = iframeWin || getReportIframeWin();
 
         const isCAWinVisible = (win) => {
@@ -6678,9 +6682,18 @@ if(!window.__lisEnhancerFrameScan){
         const fast = options.fast !== false;
         const reportDR = specimen.ReportDR;
         const auditCtx = auditTargetContext(iframeWin, reportDR);
-        const caReady = isCASessionReady(iframeWin);
+        // 跨仪器/切组后 CA 会话往往未就绪，若此时触发 ReportSave('A') 会弹出 CA 窗口、
+        // 后台 capping 登录约 1-2s，即用户感知的「切到下一台仪器卡几秒」。
+        // 故在真正点击前先确保 CA 就绪（有缓存/Ukey 绑定时秒返，否则在此完成一次 capping 登录，
+        // 耗时藏进切仪器的等待里），使后续审核走秒审、不弹 CA 窗口。
+        let caReady = isCASessionReady(iframeWin);
+        if (!caReady) {
+            try { const caOk = await ensureCAAuthenticated(); if (caOk) { saveCAAuth(wgDR()); caReady = true; } } catch(e) {}
+        }
         // 乐观审核：先触发点击（triggerOnly 立即返回），卡片由调用方即时移除；
         // 后台再异步确认，若真失败则恢复卡片。彻底消除「审核掉后卡片延迟几秒消失」。
+        // 注意：missingAsSuccess 传 false —— 跨仪器时仪器列表会重载使目标行「暂时消失」，
+        // 绝不能把「行消失」当作审核成功，否则会出现「卡片秒删但后端未记录、稍后又变未审核」。
         let triggered = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
             action: 'audit',
             expectedStatuses: ['3'],
@@ -6688,7 +6701,7 @@ if(!window.__lisEnhancerFrameScan){
             timeoutMs: fast ? (caReady ? 5000 : 8000) : 15000,
             keepWS: !!options.keepWS,
             caSessionReady: caReady,
-            missingAsSuccess: auditCtx.allowMissingSuccess,
+            missingAsSuccess: false,
             targetReportDR: reportDR,
             triggerOnly: true
         });
@@ -6706,7 +6719,8 @@ if(!window.__lisEnhancerFrameScan){
                     keepWS: !!options.keepWS,
                     targetWasPresent: auditCtx.rowPresent,
                     detailWasReady: auditCtx.detailReady,
-                    afterCA: !caReady
+                    afterCA: !caReady,
+                    allowMissingSuccess: false // 跨仪器必须：绝不以「行消失」当成功，要求显式状态 3/4
                 });
                 if (!ok) {
                     dbg('后台确认：审核未成功，恢复卡片', reportDR);
