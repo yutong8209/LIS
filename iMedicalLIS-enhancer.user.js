@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.53.0
+// @version      7.53.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6602,16 +6602,12 @@ window.addEventListener('keydown',function(e){
                 : `异常审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;
             const skipSelect = _abnormalNativeReadyDR === targetDR;
             let prep = { ok: false, iframeWin, lastMdr: _abnormalLastMdr };
-            // 关键：详情已加载就跳过选行（和详情面板审核一样），直接审核
-            if (detailReady) {
+            if (detailReady && skipSelect) {
                 prep.ok = true;
-                prep.iframeWin = iframeWin;
-                prep.lastMdr = _abnormalLastMdr;
-                dbg('异常审核: 详情已加载，跳过选行');
             } else {
                 prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, {
                     lastMdr: _abnormalLastMdr,
-                    skipSelect: skipSelect,
+                    skipSelect: detailReady || skipSelect,
                     abnormalFast: true,
                     forceSelect: true
                 });
