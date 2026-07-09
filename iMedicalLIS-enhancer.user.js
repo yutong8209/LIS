@@ -4067,11 +4067,12 @@
             const data = ent.data;
             const crc = qeCrc32(data);
             const size = data.length >>> 0;
-            // Local file header
+            // Local file header（flags bit11 = UTF-8 文件名，避免中文乱码）
+            const flags = 0x0800;
             const local = qeConcatBytes([
                 qeU32(0x04034b50),
                 qeU16(20), // version needed
-                qeU16(0),  // flags
+                qeU16(flags),
                 qeU16(0),  // method STORE
                 qeU16(0), qeU16(0), // time/date
                 qeU32(crc),
@@ -4087,7 +4088,7 @@
             const central = qeConcatBytes([
                 qeU32(0x02014b50),
                 qeU16(20), qeU16(20),
-                qeU16(0), qeU16(0),
+                qeU16(flags), qeU16(0),
                 qeU16(0), qeU16(0),
                 qeU32(crc),
                 qeU32(size), qeU32(size),
