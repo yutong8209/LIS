@@ -12,6 +12,8 @@ A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Ta
 | `serve.py` / `serve.js` | Local HTTP server on `localhost:8765`（推荐 **serve.py**）serving userscript + `vendor/` for TM auto-update. |
 | `vendor/xlsx.full.min.js` | SheetJS 本地副本（质控导出，不走公网 CDN） |
 | `start_serve_mac.command` | Mac startup script — double-click or add to Login Items. |
+| `start_serve.bat` | Windows 启动 serve（质控导出必需） |
+| `Windows安装-含质控.md` | Windows 安装步骤（审核 + 质控） |
 | `browser_control.py` | CLI for screenshot, click, type, key — outputs JSON. |
 | `image-reader.py` | CLI to read local image metadata (path, format, size). |
 | `image-reader-hook.py` | Stdin hook that detects image paths in text and prints info. |
@@ -27,6 +29,7 @@ A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Ta
 # Dev server (serves userscript + vendor for Tampermonkey)
 python3 ~/脚本/serve.py
 # or: node ~/脚本/serve.js
+# Windows: 双击 start_serve.bat（质控 Excel 依赖此服务）
 
 # Screenshot from desktop (returns base64)
 python3 ~/脚本/browser_control.py screenshot
@@ -38,6 +41,8 @@ python3 ~/脚本/image-reader.py "/path/to/image.png"
 python3 ~/脚本/lis_proxy.py
 python3 ~/脚本/lis_proxy.py --cache-api   # 仅调试接口时
 ```
+
+Windows 完整安装（审核 + 质控导出）：见 **`Windows安装-含质控.md`**。
 
 ## Dependencies & setup
 
