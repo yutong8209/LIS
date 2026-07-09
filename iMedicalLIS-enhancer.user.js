@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.52.0
+// @version      7.53.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -46,7 +46,15 @@
 
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
-    const CLASSIFY_STALE_MS = 5 * 60 * 1000;
+    const CLASSIFY_STALE_MS = 30 * 60 * 1000;
+    const SCRIPT_VERSION = (function(){
+        try {
+            const t = (document.currentScript && document.currentScript.textContent) || '';
+            const m = t.match(/@version\s+([\d.]+)/);
+            if (m) return m[1];
+        } catch(e){}
+        return '7.36.0';
+    })();
     const AUDIT_QUEUE_LOCK_TTL = 45000;
 
     // ==================== 工具 ====================
@@ -3357,13 +3365,23 @@
         return !re || re.test(text);
     }
 
+    // 子串匹配辅助：要求短串长度 >= 长串的 60%，防止"白细胞"匹配到"白细胞酯酶"
+    function qeLooseMatch(a, b) {
+        if (!a || !b) return false;
+        if (a === b) return true;
+        const short = a.length <= b.length ? a : b;
+        const long  = a.length <= b.length ? b : a;
+        if (short.length < long.length * 0.6) return false;
+        return long.includes(short);
+    }
+
     function qeMatchProject(group, proj, tc, machineName) {
         if (!qeMachineMatchesGroup(group, machineName)) return false;
         const code = qeNormName(tc.Code);
         const synonym = qeNormName(tc.Synonym);
         const cname = qeNormName(tc.CName);
         if (proj.lisName) {
-            return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
+            return cname === proj.lisName || qeLooseMatch(cname, proj.lisName);
         }
         if (!qeMaterialMatchesGroup(group, tc, proj, machineName)) return false;
         const matName = qeNormName(tc.MaterialName);
@@ -3371,8 +3389,8 @@
         if (code && proj.name && code.toLowerCase() === proj.name.toLowerCase()) return true;
         if (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase()) return true;
         if (code === proj.code) return true;
-        const cnameMatch = cname === proj.name || (cname && proj.name && (cname.includes(proj.name) || proj.name.includes(cname)));
-        const matMatch = matName === proj.name || (matName && proj.name && (matName.includes(proj.name) || proj.name.includes(matName)));
+        const cnameMatch = cname === proj.name || qeLooseMatch(cname, proj.name);
+        const matMatch = matName === proj.name || qeLooseMatch(matName, proj.name);
         const abbrMatch = (matName && proj.name && matName.toLowerCase() === proj.name.toLowerCase()) ||
             (cname && proj.name && cname.toLowerCase() === proj.name.toLowerCase()) ||
             (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase());
@@ -3383,8 +3401,8 @@
             const mn = matName.toLowerCase();
             const cd = code.toLowerCase();
             const sy = synonym.toLowerCase();
-            return cn === a || cn.includes(a) || a.includes(cn) ||
-                   mn === a || mn.includes(a) || a.includes(mn) ||
+            return cn === a || qeLooseMatch(cn, a) ||
+                   mn === a || qeLooseMatch(mn, a) ||
                    cd === a || sy === a;
         });
         return cnameMatch || matMatch || abbrMatch || aliasMatch;
@@ -3540,12 +3558,16 @@
                 const data = await fetchJ(url, 25000);
                 const rows = Array.isArray(data) ? data : (data && data.rows) || [];
                 rows.forEach(r => {
-                    if (!r.LevelNo) r.LevelNo = lv.levelNo;
+                    const levelNo = r.LevelNo || lv.levelNo;
                     const date = r.TestDate || r.AddDate || r.QCDate || '';
-                    const key = date + '|' + r.LevelNo + '|' + (r.TestCodeDR || testCodeDR);
+                    // 去重 key 包含运行序号/时间戳，避免同日多次检测结果被丢弃
+                    const seq = r.SeqNo || r.RunSeq || r.AddTime || '';
+                    const key = date + '|' + levelNo + '|' + (r.TestCodeDR || testCodeDR) + '|' + seq;
                     if (seen.has(key)) return;
                     seen.add(key);
-                    if (date || r.Result1 != null || r.DayAve != null || r.Result != null) allRows.push(r);
+                    // 不修改原 API 响应对象，避免副作用
+                    const row = seq ? r : { ...r, LevelNo: levelNo };
+                    if (date || row.Result1 != null || row.DayAve != null || row.Result != null) allRows.push(row);
                 });
             } catch(e) {
                 console.warn('[LIS-QE] QueryTestResultData L' + lv.levelNo + ' failed:', e.message);
@@ -3954,8 +3976,10 @@
                     lot = proj.isDDimer ? lots._dimer : lots._main;
                 }
                 lvData.sort((a, b) => a.day - b.day);
+                const daySeq = {};
                 lvData.forEach(pt => {
-                    rows.push([proj.code, month, pt.day, 1, lot, pt.value, proj.name, operator]);
+                    const seq = (daySeq[pt.day] = (daySeq[pt.day] || 0) + 1);
+                    rows.push([proj.code, month, pt.day, seq, lot, pt.value, proj.name, operator]);
                 });
             }
         }
@@ -3987,7 +4011,7 @@
         a.download = filename;
         document.body.appendChild(a);
         a.click();
-        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 5000);
     }
 
 
@@ -4090,8 +4114,8 @@
 
         // --- 操作者设置 HTML ---
         const operatorGroups = [
-            { ids: ['blood', 'coag', 'lipid', 'urine'], label: '血常规/凝血/血脂/尿常规', def: '' },
-            { ids: ['biochem'], label: '生化', def: '' },
+            { ids: ['blood', 'coag', 'urine'], label: '临检（血常规/凝血/尿常规）', def: '' },
+            { ids: ['biochem', 'lipid'], label: '生化（含血脂）', def: '' },
             { ids: ['endocrine', 'tumor', 'cardiac', 'infection'], label: '免疫组', def: '' },
         ];
         let operatorHtml = '';
@@ -4226,7 +4250,11 @@
 
         // ESC 关闭
         panel.addEventListener('keydown', e => {
-            if (e.key === 'Escape') panel.classList.remove('show');
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                panel.classList.remove('show');
+            }
         });
 
         // 加载已有映射信息
@@ -4276,6 +4304,10 @@
             const parts = monthInput.value.split('-');
             cfg._year = parseInt(parts[0], 10);
             cfg._month = parseInt(parts[1], 10);
+            if (isNaN(cfg._year) || isNaN(cfg._month) || cfg._month < 1 || cfg._month > 12) {
+                cfg._year = 0;
+                cfg._month = 0;
+            }
         }
 
         // 选中的组
@@ -4327,6 +4359,10 @@
         if (qeExporting) return;
 
         const cfg = qeCollectConfig();
+        if (!cfg._year || !cfg._month) {
+            qeSetStatus('请选择有效的导出月份。', 'error');
+            return;
+        }
         if (!cfg.selectedGroups || !cfg.selectedGroups.length) {
             qeSetStatus('请至少选择一个导出项目。', 'error');
             return;
@@ -4355,6 +4391,7 @@
         if (cancelBtn) cancelBtn.style.display = '';
         if (detectBtn) detectBtn.disabled = true;
 
+        try {
         const resultSection = document.getElementById('lis-qe-result-section');
         const resultList = document.getElementById('lis-qe-results');
         if (resultSection) resultSection.style.display = '';
@@ -4395,12 +4432,13 @@
         } else {
             qeSetStatus('导出已停止。', 'info');
         }
-
-        qeExporting = false;
-        qeAbortFlag = false;
-        if (exportBtn) exportBtn.disabled = false;
-        if (cancelBtn) cancelBtn.style.display = 'none';
-        if (detectBtn) detectBtn.disabled = false;
+        } finally {
+            qeExporting = false;
+            qeAbortFlag = false;
+            if (exportBtn) exportBtn.disabled = false;
+            if (cancelBtn) cancelBtn.style.display = 'none';
+            if (detectBtn) detectBtn.disabled = false;
+        }
     }
 
     function qeAddResultItem(filename, rowCount, blob, error) {
@@ -11642,10 +11680,7 @@ function fillNativeLoginForm(creds, lastWG) {
             // 忽略如果对话框打开
             if (document.getElementById('lis-audit-confirm')) return;
 
-            if (e.key === 'F5') {
-                e.preventDefault();
-                quickAuditCurrent();
-            } else if (e.altKey && (e.key === 'a' || e.key === 'A')) {
+            if (e.altKey && (e.key === 'a' || e.key === 'A')) {
                 e.preventDefault();
                 quickAuditCurrent();
             } else if (e.altKey && (e.key === 'b' || e.key === 'B')) {
@@ -11753,7 +11788,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.21.1');
+        dbg('iMedicalLIS 增强助手 v' + SCRIPT_VERSION);
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
