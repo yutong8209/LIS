@@ -9,18 +9,22 @@ A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Ta
 | File | Purpose |
 |---|---|
 | `iMedicalLIS-enhancer.user.js` | Main userscript. Report review automation, batch approve, hotkeys, result classification, QC data export. |
-| `serve.py` / `serve.js` | Local HTTP server on `localhost:8765` serving the userscript for Tampermonkey auto-update. |
+| `serve.py` / `serve.js` | Local HTTP server on `localhost:8765`（推荐 **serve.py**）serving userscript + `vendor/` for TM auto-update. |
+| `vendor/xlsx.full.min.js` | SheetJS 本地副本（质控导出，不走公网 CDN） |
 | `start_serve_mac.command` | Mac startup script — double-click or add to Login Items. |
 | `browser_control.py` | CLI for screenshot, click, type, key — outputs JSON. |
 | `image-reader.py` | CLI to read local image metadata (path, format, size). |
 | `image-reader-hook.py` | Stdin hook that detects image paths in text and prints info. |
 | `mcp-image-reader/` | MCP server: `read_image`, `describe_image` tools. |
 | `质控模板/` | 9 个质控数据上传模板 xlsx（血常规/生化/凝血/血脂/尿常规/内分泌/肿瘤/心肌/传染病） |
+| `lis_proxy.py` | 反向代理 & 代码缓存器 — 默认只缓存静态前端到 `cache/`（`--cache-api` 才缓存接口） |
+| `HANDTEST.md` | 发布前手测清单（批审 / F4 必测） |
+| `requirements.txt` | Python 依赖 |
 
 ## Commands
 
 ```bash
-# Dev server (serves userscript for Tampermonkey)
+# Dev server (serves userscript + vendor for Tampermonkey)
 python3 ~/脚本/serve.py
 # or: node ~/脚本/serve.js
 
@@ -29,12 +33,21 @@ python3 ~/脚本/browser_control.py screenshot
 
 # Read image metadata
 python3 ~/脚本/image-reader.py "/path/to/image.png"
+
+# LIS 前端缓存代理（默认不缓存 API）
+python3 ~/脚本/lis_proxy.py
+python3 ~/脚本/lis_proxy.py --cache-api   # 仅调试接口时
 ```
 
 ## Dependencies & setup
 
-- **Python packages**: `pillow`, `mss`, `pyautogui`
-- **MCP config**: each MCP server has its own `config.json` in its subdirectory.
+```bash
+pip3 install -r ~/脚本/requirements.txt
+```
+
+- **Python packages**: 见 `requirements.txt`（`pillow`, `mss`, `pyautogui`, 可选 `mcp`）
+- **MCP config**: each MCP server has its own `config.json` in its subdirectory（勿提交密钥）。
+- Tampermonkey 更新前请保持 **serve.py 运行**，否则 SheetJS `@require` 与脚本更新会失败。
 
 ## Coding conventions
 
@@ -43,20 +56,20 @@ python3 ~/脚本/image-reader.py "/path/to/image.png"
 - `browser_control.py` and MCP servers output **JSON** — preserve this contract.
 - The userscript targets `192.168.31.111:9111` (nginx proxy) and `10.0.29.100` (direct). Do not change host/port without confirming.
 - Userscript version is in the `@version` header. Bump on meaningful changes.
+- **审核热路径**（`continueAuditQueue` / `clickNativeAuditButton` / `executeNativeAudit` / F4）改动后必须按 `HANDTEST.md` 手测，不要只改本地不回归。
 
 ## 发布流程（每次改完必做）
 
 1. **Bump** `@version`（有意义变更时）
-2. **Commit**：中文说明，写清改了什么、为什么
-3. **Push**：`git push` 到 `origin/main`（用户要求每次更新后自动推送，不要只改本地）
-4. **Diff 摘要**：回复里用 `git show --stat` 或 `git diff` 概括变更文件与要点，方便用户核对
+2. **手测**：至少 `HANDTEST.md` §1 批审 + §2 F4
+3. **Commit**：中文说明，写清改了什么、为什么
+4. **Push**：`git push` 到 `origin/main`（用户要求每次更新后自动推送，不要只改本地）
+5. **Diff 摘要**：回复里用 `git show --stat` 或 `git diff` 概括变更文件与要点，方便用户核对
 
 ## Gotchas
 
 - `browser_control.py` uses `mss` for screenshots (not pyautogui) — captures full primary monitor.
 - `pyautogui.typewrite()` only handles ASCII — Chinese input needs a different approach.
-- No test suite, no lint, no typecheck. Verify changes by running the scripts manually.
-
-## Key files (续)
-
-| `lis_proxy.py` | 反向代理 & 代码缓存器 — 自动抓取 LIS 前端代码到本地 `cache/` 目录 |
+- No automated test suite. Verify with `HANDTEST.md`.
+- 密码：HTTP 内网无 WebCrypto 时仅为 base64 可逆存储，勿在共享电脑勾选记住密码。
+- `cache/` 可能曾含接口响应；默认代理已改为不缓存 API，可定期清空 cache。

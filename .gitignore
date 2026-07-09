@@ -1,35 +1,36 @@
-﻿# Temp scripts
-*.py
-!serve.py
-!browser_control.py
-!image-reader.py
-!image-reader-hook.py
-!mcp-image-reader/server.py
-!lis_proxy.py
-!browser-act-ocr/server.py
-
-# IDE
+# IDE / agent
 .claude/
 .codex/
 CLAUDE.md
 
-# Images
+# Images & screenshots
 *.png
 *.jpg
 *.jpeg
 *.gif
 *.bmp
+截屏/
 
-# Large data files
+# Large / temp
 *_files/
+cache/
+mimo.exe
+patch*.txt
+test.user.js
+test_qc.html
+show.js
+install.command
+start_proxy_mac.command
 
 # Logs
 mcp.log
 */mcp.log
 
-# Python cache
+# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
 
 # Node
 node_modules/
@@ -39,11 +40,3 @@ mcp-image-reader/config.json
 
 # Misc
 .DS_Store
-cache/
-mimo.exe
-patch*.txt
-test.user.js
-install.command
-show.js
-start_proxy_mac.command
-test_qc.html

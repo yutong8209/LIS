@@ -38,6 +38,8 @@ TARGET = '10.0.29.100'
 LISTEN_PORT = 9112
 LISTEN_HOST = '127.0.0.1'
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+# 默认不缓存 API/接口响应（可能含检验业务数据）；仅缓存静态前端资源
+CACHE_API = False
 
 # 需要缓存的文件类型
 STATIC_EXTS = {
@@ -248,9 +250,14 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
         content_type = resp_headers.get('Content-Type', '') or resp_headers.get('content-type', '')
         file_type = detect_type(url_path, content_type)
 
-        should_cache = True
-        if method == 'GET' and file_type == 'other' and not is_api_path(url_path):
-            should_cache = False
+        # 默认只缓存静态前端资源；API/POST 需显式 --cache-api（可能含业务数据）
+        static_types = ('js', 'css', 'html', 'svg', 'ico', 'img', 'font', 'map')
+        if CACHE_API:
+            should_cache = True
+            if method == 'GET' and file_type == 'other' and not is_api_path(url_path):
+                should_cache = False
+        else:
+            should_cache = file_type in static_types and method == 'GET' and not is_api_path(url_path)
 
         if should_cache and resp_body:
             try:
@@ -294,7 +301,7 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    global TARGET, LISTEN_PORT, LISTEN_HOST, CACHE_DIR
+    global TARGET, LISTEN_PORT, LISTEN_HOST, CACHE_DIR, CACHE_API
 
     parser = argparse.ArgumentParser(description='LIS 反向代理 & 代码缓存器')
     parser.add_argument('--target', '-t', default='192.168.31.111:9111',
@@ -305,11 +312,16 @@ def main():
                         help='监听地址 (默认: 127.0.0.1，仅本机)')
     parser.add_argument('--cache-dir', '-d', default=None, help='缓存目录')
     parser.add_argument('--clear', action='store_true', help='启动前清空缓存')
+    parser.add_argument('--no-cache-api', action='store_true', default=True,
+                        help='不缓存 API 响应，只缓存静态资源（默认开启）')
+    parser.add_argument('--cache-api', action='store_true',
+                        help='缓存 API/接口响应（可能含业务数据，仅调试时用）')
     args = parser.parse_args()
 
     TARGET = args.target
     LISTEN_PORT = args.port
     LISTEN_HOST = args.bind
+    CACHE_API = bool(args.cache_api)
     if args.cache_dir:
         CACHE_DIR = os.path.abspath(args.cache_dir)
 
@@ -335,14 +347,17 @@ def main():
     print('  ║  代理监听:   {}:{:<18}║'.format(LISTEN_HOST, LISTEN_PORT))
     print('  ╠══════════════════════════════════════════╣')
     print('  ║  状态查看:   http://localhost:{:<10}║'.format(LISTEN_PORT))
+    print('  ║  API缓存:    {:<27}║'.format('开启(含业务数据)' if CACHE_API else '关闭(仅静态)'))
     print('  ╚══════════════════════════════════════════╝')
     print()
     print('  📋 使用方法:')
     print('  1. 设置浏览器 HTTP 代理 → localhost:{}'.format(LISTEN_PORT))
     print('  2. 访问 http://{}/iMedicalLIS/'.format(TARGET))
-    print('  3. 浏览各个页面，代码自动缓存到 cache/ 目录')
+    print('  3. 浏览各个页面，静态前端代码缓存到 cache/ 目录')
     print('  4. 用编辑器打开 cache/ 搜索前端代码')
     print()
+    if not CACHE_API:
+        print('  🔒 默认不缓存 API（保护业务数据）。调试接口可加 --cache-api')
     print('  💡 先把 LIS 主要页面都点一遍，缓存自动累积')
     print('  按 Ctrl+C 停止代理')
     print('─' * 46)
