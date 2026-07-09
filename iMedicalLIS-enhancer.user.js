@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.53.2
+// @version      7.53.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5840,6 +5840,10 @@ window.addEventListener('keydown',function(e){
                 const sp = getAbnormalFocusSpecimen(curData);
                 if (sp) openDetailPanel(sp, 'abnormal', wsAbnormalIndex);
             }
+            else if (e.key === 'F4') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                auditFocusedSpecimenAsDetail();
+            }
             else if (e.key === 'Escape') { wsCategory = 'normal'; updateAbnormalEnterBridge(); saveWSState(); renderWSCategoryBar(); renderWSTable(); }
         };
         _abnormalKeyTargets = [document];
@@ -5998,7 +6002,7 @@ window.addEventListener('keydown',function(e){
         }
 
         let h = `<div class="ws-abnormal-hint">
-            <kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 切换 <kbd>点击</kbd> 详情 · 按仪器分组，审完一台再换下一台
+            <kbd>Enter</kbd> 审核 <kbd>F4</kbd> 稳审(同详情按钮) <kbd>↑↓</kbd> 切换 <kbd>点击</kbd> 详情 · 按仪器分组，审完一台再换下一台
         </div>`;
         h += '<div class="ws-abnormal-list">';
 
@@ -7646,6 +7650,76 @@ window.addEventListener('keydown',function(e){
             _detailAuditInProgress = false;
             if (resumeWSRefresh && isWSVisible()) startWSRefresh();
             dbg('详情审核结束, inProgress 重置为 false');
+        }
+    }
+
+    // F4：复用「详情面板审核」同款成功判定路径（allowMissingSuccess=true，行消失即成功）
+    // 与回车审核 auditAbnormalSpecimen 的区别：先 ensureSpecimenReadyForAudit 强制详情就绪
+    // （顺带 blur 编辑焦点，避免回车常卡的根因），再 executeNativeAudit，成功率接近点详情审核按钮。
+    let _detailPathAuditInProgress = false;
+    async function auditFocusedSpecimenAsDetail() {
+        if (wsCategory !== 'abnormal' || isDetailPanelVisible()) return;
+        if (_detailAuditInProgress || _abnormalAuditInProgress || _auditInProgress) {
+            showToast('正在审核中，请稍候', 'warning'); return;
+        }
+        const data = filteredData();
+        const sp = getAbnormalFocusSpecimen(data);
+        if (!sp) { showToast('没有可审核的异常标本', 'warning'); return; }
+        _detailPathAuditInProgress = true;
+        const resumeWSRefresh = !!wsTimer;
+        stopWSRefresh();
+        const ft = document.getElementById('lis-ws-ft-stat');
+        try {
+            const reportDR = sp.ReportDR;
+            const classCheck = validateAuditClassification(reportDR, 'abnormal');
+            if (!classCheck.ok) { showToast(classCheck.msg, classCheck.msg.indexOf('危急') !== -1 ? 'error' : 'warning'); return; }
+            if (String(sp.IsComplete || '') !== '1') { showToast(`跳过: ${sp.PatName} 结果不完整`, 'warning'); return; }
+            const status = String(sp.Status || sp.ReportStatus || '');
+            if (status === '3' || status === '4') { showToast(`跳过: ${sp.PatName} 已审核`, 'warning'); return; }
+            const curDR = wgDR(), spDR = sp._wg || '';
+            if (spDR && curDR && spDR !== curDR) {
+                showToast(`切换到${(WG_MAP[spDR] || {}).name || spDR}继续审核`, 'warning');
+                switchWG(spDR); return;
+            }
+
+            if (ft) ft.textContent = `F4 审核：${sp.PatName || sp.Labno || reportDR}（确保详情就绪）`;
+            // 关键：先确保详情就绪，使 executeNativeAudit 走 allowMissingSuccess 宽松判定
+            let iframeWin = getReportIframeWin();
+            if (!iframeWin) iframeWin = await ensureReportPageLoaded({ keepWS: true, fast: true });
+            if (!iframeWin) { showToast('报告页面未加载', 'error'); return; }
+            releaseNativeReportFocus(); // blur 编辑焦点，消除回车卡顿根因
+            const prep = await ensureSpecimenReadyForAudit(iframeWin, sp, { lastMdr: _abnormalLastMdr, forceSelect: true });
+            iframeWin = prep.iframeWin || iframeWin;
+            if (prep.lastMdr) _abnormalLastMdr = prep.lastMdr;
+            if (!prep.ok) {
+                showToast(prep.reason === 'detail' ? '报告详情未加载完成' : '未在原生列表中找到该标本', prep.reason === 'detail' ? 'warning' : 'error');
+                return;
+            }
+
+            if (ft) ft.textContent = `F4 审核中：${sp.PatName || sp.Labno || reportDR}`;
+            const auditResult = await executeNativeAudit(iframeWin, sp, { keepWS: true, fast: true });
+            if (auditResult === 'incomplete') { showToast(`跳过: ${sp.PatName} 结果不完整`, 'warning'); return; }
+            if (!auditResult) { showToast('未确认审核成功，请核对原生列表状态', 'warning'); return; }
+            showToast(`已审核: ${sp.PatName}`, 'success');
+
+            delete wsClassifiedCache[reportDR];
+            wsData = wsData.filter(r => r.ReportDR !== reportDR);
+            invalidateCaches();
+            calcMachineCounts();
+            // 焦点移到下一条（保持连审手感）
+            _abnormalNativeReadyDR = '';
+            const newData = filteredData();
+            if (newData.length) moveAbnormalFocus(1, newData);
+            else { wsCategory = 'normal'; saveWSState(); renderWSCategoryBar(); renderWSTable(); }
+        } catch(e) {
+            dbg('F4 审核失败:', e);
+            showToast('审核失败: ' + e.message, 'error');
+        } finally {
+            clearTimeout(_auditSafetyTimer);
+            _detailPathAuditInProgress = false;
+            if (resumeWSRefresh && isWSVisible()) startWSRefresh();
+            if (ft) ft.textContent = '';
+            scheduleAbnormalFocusRecovery();
         }
     }
 
