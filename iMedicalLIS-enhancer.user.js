@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.53.4
+// @version      7.53.5
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4735,6 +4735,7 @@
         renderWSCategoryBar();
         renderWSTable();
         updateWSFooter();
+        _installF4Bridge(); // 常驻 F4 桥，独立于异常视图处理器生命周期
         loadWSData().then(() => {
             if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
         });
@@ -5751,6 +5752,42 @@ window.addEventListener('keydown',function(e){
         });
     }
 
+    // F4 统一入口：面板打开用 currentDetailSpecimen，否则用列表焦点标本
+    function triggerF4Audit() {
+        if (isDetailPanelVisible() && currentDetailSpecimen) _auditFromDetailPanel();
+        else auditFocusedSpecimenAsDetail();
+    }
+
+    // 常驻 F4 桥：挂到报告页 iframe，不被 openDetailPanel 的 _removeAbnormalKeyHandler 影响。
+    // 详情面板打开时异常视图处理器会被移除，故 F4 在面板内（焦点常在原生 iframe）必须由本桥捕获。
+    let _f4BridgeHandler = null;
+    let _f4BridgeTargets = [];
+    function _installF4Bridge() {
+        if (_f4BridgeHandler) { _attachF4BridgeToIframe(); return; }
+        _f4BridgeHandler = e => {
+            if (shouldIgnoreAbnormalKeyEvent(e)) return;
+            if (wsCategory !== 'abnormal') return;
+            if (!isDetailPanelVisible()) return; // 列表视图下由 _abnormalKeyHandler 处理，避免双重触发
+            if (e.key !== 'F4') return;
+            e.preventDefault(); e.stopImmediatePropagation();
+            triggerF4Audit();
+        };
+        document.addEventListener('keydown', _f4BridgeHandler, true);
+        _f4BridgeTargets.push(document);
+        _attachF4BridgeToIframe();
+    }
+    function _attachF4BridgeToIframe() {
+        if (!_f4BridgeHandler) return;
+        const iframeWin = getReportIframeWin();
+        if (!iframeWin || !iframeWin.document || iframeWin.document === document) return;
+        if (!_f4BridgeTargets.includes(iframeWin.document)) {
+            try { iframeWin.document.addEventListener('keydown', _f4BridgeHandler, true); _f4BridgeTargets.push(iframeWin.document); } catch(e) {}
+        }
+        if (!_f4BridgeTargets.includes(iframeWin)) {
+            try { iframeWin.addEventListener('keydown', _f4BridgeHandler, true); _f4BridgeTargets.push(iframeWin); } catch(e) {}
+        }
+    }
+
     function _attachAbnormalKeyToIframe() {
         if (!_abnormalKeyHandler) return;
         const iframeWin = getReportIframeWin();
@@ -5767,6 +5804,7 @@ window.addEventListener('keydown',function(e){
             }
         } catch(e) {}
         installAbnormalResultGridEnterHijack(iframeWin);
+        _attachF4BridgeToIframe();
     }
 
     function syncAbnormalFocusFromDOM() {
@@ -5821,6 +5859,13 @@ window.addEventListener('keydown',function(e){
         _abnormalKeyHandler = e => {
             if (shouldIgnoreAbnormalKeyEvent(e)) return;
             if (wsCategory !== 'abnormal') return;
+            // F4：无论面板是否打开都处理（异常视图处理器已挂到 iframe，可捕获原生页焦点下的按键）
+            // 面板打开时用 currentDetailSpecimen 调面板同款审核；面板未开时用列表焦点标本。
+            if (e.key === 'F4') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                triggerF4Audit();
+                return;
+            }
             if (isDetailPanelVisible()) return;
             if (_abnormalAuditInProgress && e.key === 'Enter') {
                 handleAbnormalEnterAudit(e);
@@ -7346,11 +7391,6 @@ window.addEventListener('keydown',function(e){
                 e.stopImmediatePropagation();
                 dbg('Enter 键捕获 (详情面板), inProgress=', _detailAuditInProgress);
                 _auditFromDetailPanel();
-            } else if (e.key === 'F4') {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                dbg('F4 键捕获 (详情面板), inProgress=', _detailAuditInProgress);
-                _auditFromDetailPanel();
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault();
                 e.stopImmediatePropagation();
@@ -7366,6 +7406,8 @@ window.addEventListener('keydown',function(e){
         };
         document.addEventListener('keydown', _detailKeyHandler, true);
         dbg('详情面板键盘监听已注册, specimen:', specimen.PatName);
+        // 确保 F4 桥在原生 iframe 上挂着（面板打开时异常处理器已被移除，F4 靠桥捕获）
+        _attachF4BridgeToIframe();
     }
 
     function _removeDetailKeyHandler() {
