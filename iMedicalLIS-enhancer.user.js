@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.58.4
+// @version      7.59.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -13,6 +13,7 @@
 // @run-at       document-idle
 // @noframes     false
 // @require      http://localhost:8765/vendor/xlsx.full.min.js
+// @require      http://localhost:8765/vendor/jszip.min.js
 
 // ==/UserScript==
 
@@ -48,7 +49,7 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.58.4';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.0';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
     // 批审单条硬超时（秒审 / 需 CA）；超时后二次校验，仍无果则跳过/重试，避免整批卡死
     // 秒审 / 首条 CA 后确认都宜短：真漏审靠队尾重试+补审，不靠首条空等十几秒
@@ -2996,6 +2997,8 @@
     let qeInited = false;
     let qeExporting = false;
     let qeAbortFlag = false;
+    // 最近一次导出成功的文件列表：[{ name, blob, rows }]，供 ZIP 一键打包
+    let qeLastExportFiles = [];
 
     // --- 9 组项目配置 ---
     const QE_GROUPS = [
@@ -3913,6 +3916,56 @@
         setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 5000);
     }
 
+    function qeUpdateZipButton() {
+        const btn = document.getElementById('lis-qe-zip');
+        if (!btn) return;
+        const n = (qeLastExportFiles || []).filter(f => f && f.blob).length;
+        btn.disabled = n === 0;
+        btn.textContent = n > 0 ? `📦 打包下载 ZIP (${n})` : '📦 打包下载 ZIP';
+    }
+
+    // 一键 ZIP：依赖本地 serve 的 vendor/jszip.min.js（@require）
+    async function qeDownloadAllZip() {
+        const files = (qeLastExportFiles || []).filter(f => f && f.blob);
+        if (!files.length) {
+            qeSetStatus('没有可打包的文件，请先完成导出。', 'error');
+            return;
+        }
+        if (typeof JSZip === 'undefined') {
+            // 兜底：逐个下载（浏览器可能拦截多文件，但总比没有好）
+            qeSetStatus('JSZip 未加载（请保持 serve.py 运行），改为逐个下载…', 'info');
+            for (let i = 0; i < files.length; i++) {
+                qeDownloadBlob(files[i].blob, files[i].name);
+                await sleep(400);
+            }
+            qeSetStatus(`已触发 ${files.length} 个文件逐个下载（无 ZIP）。`, 'ok');
+            return;
+        }
+        try {
+            qeSetStatus(`正在打包 ${files.length} 个 Excel…`, 'info');
+            const zip = new JSZip();
+            files.forEach(f => zip.file(f.name, f.blob));
+            const zipBlob = await zip.generateAsync({
+                type: 'blob',
+                compression: 'DEFLATE',
+                compressionOptions: { level: 6 }
+            });
+            const cfg = qeCollectConfig();
+            const ym = (cfg._year && cfg._month)
+                ? `${cfg._year}${String(cfg._month).padStart(2, '0')}`
+                : today().replace(/-/g, '').slice(0, 6);
+            qeDownloadBlob(zipBlob, `质控数据_${ym}.zip`);
+            qeSetStatus(`ZIP 已下载（${files.length} 个表格）。`, 'ok');
+        } catch(e) {
+            dbg('[LIS-QE] ZIP 失败:', e.message);
+            qeSetStatus('ZIP 失败: ' + e.message + '，改为逐个下载…', 'error');
+            for (let i = 0; i < files.length; i++) {
+                qeDownloadBlob(files[i].blob, files[i].name);
+                await sleep(400);
+            }
+        }
+    }
+
 
     // --- UI 创建 ---
     function qeCreateFab() {
@@ -4086,6 +4139,7 @@
                     <div class="qe-step-hd">
                         <span class="qe-step-num">✓</span>
                         <span class="qe-step-title">导出结果</span>
+                        <button id="lis-qe-zip" disabled title="将本次导出的全部表格打成一个 ZIP（需 serve.py 提供 JSZip）">📦 打包下载 ZIP</button>
                     </div>
                     <div class="qe-step-body">
                         <div class="qe-result-list" id="lis-qe-results"></div>
@@ -4097,6 +4151,9 @@
         // --- 事件绑定 ---
         document.getElementById('lis-qe-mini').addEventListener('click', () => panel.classList.remove('show'));
         document.getElementById('lis-qe-close').addEventListener('click', () => panel.classList.remove('show'));
+        document.getElementById('lis-qe-zip').addEventListener('click', () => {
+            qeDownloadAllZip().catch(e => qeSetStatus('ZIP 异常: ' + e.message, 'error'));
+        });
 
         // 全选/反选
         document.getElementById('lis-qe-toggle-all').addEventListener('click', () => {
@@ -4283,6 +4340,8 @@
 
         qeExporting = true;
         qeAbortFlag = false;
+        qeLastExportFiles = [];
+        qeUpdateZipButton();
         const exportBtn = document.getElementById('lis-qe-export');
         const cancelBtn = document.getElementById('lis-qe-cancel');
         const detectBtn = document.getElementById('lis-qe-detect');
@@ -4324,10 +4383,15 @@
             }
         }
 
+        qeLastExportFiles = results.slice();
+        qeUpdateZipButton();
         qeShowProgress(totalGroups, totalGroups, '完成');
 
         if (!qeAbortFlag) {
-            qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。`, 'ok');
+            const zipHint = results.length
+                ? (typeof JSZip !== 'undefined' ? ' 可点「打包下载 ZIP」。' : ' （JSZip 未加载时可逐个下载）')
+                : '';
+            qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。${zipHint}`, 'ok');
         } else {
             qeSetStatus('导出已停止。', 'info');
         }
@@ -11379,63 +11443,15 @@ function fillNativeLoginForm(creds, lastWG) {
         });
     }
 
-    // --- 注入工具栏 ---
+    // --- 顶部悬停审核条：已禁用（用户不需要，易误触）---
+    // 批审/快捷键仍走工作台与 Alt+A/B；此处只清理历史残留 DOM
     function injectToolbar() {
-        if (document.getElementById('lis-toolbar')) return;
-
-        const toolbar = document.createElement('div');
-        toolbar.id = 'lis-toolbar';
-        toolbar.innerHTML = `
-            <span class="tb-title">🔬 审核</span>
-            <span class="tb-sep"></span>
-            <div class="tb-stat" id="lis-tb-stat">
-                <span class="st-total" id="lis-tb-total">加载中...</span>
-            </div>
-            <span class="tb-sep"></span>
-            <button class="tb-btn btn-audit" id="lis-tb-quick" title="审核当前标本并跳转下一个 (Alt+A)">⚡ 审核</button>
-            <button class="tb-btn btn-batch" id="lis-tb-batch" title="批量审核所有正常标本 (Alt+B)">📋 批审</button>
-            <button class="tb-btn btn-refresh" id="lis-tb-refresh" title="刷新">🔄</button>
-            <button class="tb-btn btn-pwd" id="lis-tb-pwd" title="审核密码">🔐</button>
-            <span class="tb-shortcut"><kbd>Alt+A</kbd>审核 <kbd>Alt+B</kbd>批审 <kbd>Alt+N</kbd>下一个</span>
-            <button class="tb-close" id="lis-tb-close" title="隐藏工具栏">✕</button>
-        `;
-        document.body.appendChild(toolbar);
-
-        // 顶部悬停展开条
-        const hoverZone = document.createElement('div');
-        hoverZone.id = 'lis-tb-hoverzone';
-        document.body.appendChild(hoverZone);
-
-        // 隐藏/显示工具栏
-        document.getElementById('lis-tb-close').addEventListener('click', () => {
-            toolbar.classList.remove('show');
-            toolbar.classList.add('hide');
-            hoverZone.classList.remove('hidden');
-        });
-
-        // 鼠标移到顶部展开条时显示工具栏
-        hoverZone.addEventListener('mouseenter', () => {
-            toolbar.classList.add('show');
-            toolbar.classList.remove('hide');
-            hoverZone.classList.add('hidden');
-        });
-
-        // 鼠标离开工具栏时自动隐藏（延迟2秒）
-        let hideTimer = null;
-        toolbar.addEventListener('mouseenter', () => { clearTimeout(hideTimer); });
-        toolbar.addEventListener('mouseleave', () => {
-            hideTimer = setTimeout(() => {
-                toolbar.classList.remove('show');
-                toolbar.classList.add('hide');
-                hoverZone.classList.remove('hidden');
-            }, 2000);
-        });
-
-        // 事件绑定
-        document.getElementById('lis-tb-quick').addEventListener('click', quickAuditCurrent);
-        document.getElementById('lis-tb-batch').addEventListener('click', showBatchAuditDialog);
-        document.getElementById('lis-tb-refresh').addEventListener('click', updateToolbarStats);
-        document.getElementById('lis-tb-pwd').addEventListener('click', openPwdDlg);
+        try {
+            const tb = document.getElementById('lis-toolbar');
+            if (tb) tb.remove();
+            const hz = document.getElementById('lis-tb-hoverzone');
+            if (hz) hz.remove();
+        } catch(e) {}
     }
 
     // --- 更新工具栏统计 ---
