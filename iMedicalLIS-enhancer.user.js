@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.58.2
+// @version      7.58.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -48,7 +48,7 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.58.2';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.58.3';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
     // 批审单条硬超时（秒审 / 需 CA）；超时后二次校验，仍无果则跳过/重试，避免整批卡死
     // 秒审应收紧：已 CA 时单条网络+回写通常 <2s，给足 8s 兜底即可
@@ -11930,13 +11930,67 @@ function fillNativeLoginForm(creds, lastWG) {
 
     function requeueAuditItem(queue, item, reason) {
         item.retry = (item.retry || 0) + 1;
-        if (item.retry <= 2) {
+        // 最多队尾重试 3 次（选行失败/未确认等），提高「真漏审」补上的机会
+        if (item.retry <= 3) {
             queue.items.push(item);
             dbg('批审临时跳过，放回队尾重试:', item.name || item.labno || item.reportDR, reason, 'retry=', item.retry);
             return true;
         }
         queue.skipped.push({ ...item, reason });
         return false;
+    }
+
+    // 单条补审：用于主循环漏掉的标本（只关心审掉，不关心计数文案）
+    async function auditOneQueueItemOnce(iframeWin, item, options = {}) {
+        iframeWin = getReportIframeWin() || iframeWin;
+        if (!iframeWin || !item || !item.reportDR) return { ok: false, iframeWin };
+        if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
+            return { ok: true, iframeWin, already: true };
+        }
+        const sel = await waitAndSelectNativeRow(iframeWin, item, {
+            timeoutMs: options.timeoutMs || 4000,
+            pollMs: 40,
+            force: true
+        });
+        iframeWin = sel.iframeWin || iframeWin;
+        if (!sel.ok) {
+            if (item.mdr) {
+                iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
+                const sel2 = await waitAndSelectNativeRow(iframeWin, item, { timeoutMs: 3500, pollMs: 40, skipListRefresh: true, force: true });
+                iframeWin = sel2.iframeWin || iframeWin;
+                if (!sel2.ok) return { ok: false, iframeWin, reason: 'select' };
+            } else {
+                return { ok: false, iframeWin, reason: 'select' };
+            }
+        }
+        let ready = isReportDetailLoaded(iframeWin, item.reportDR);
+        if (!ready) ready = await waitReportDetailReady(iframeWin, item.reportDR, 4000, { fastBatch: true });
+        if (!ready) {
+            selectNativeRowByReportDR(iframeWin, item.reportDR, { force: true });
+            ready = await waitReportDetailReady(iframeWin, item.reportDR, 2500, { fastBatch: true });
+        }
+        if (!ready) return { ok: false, iframeWin, reason: 'detail' };
+
+        const caReady = isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin);
+        let result = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
+            action: 'audit',
+            expectedStatuses: ['3'],
+            batchMode: true,
+            timeoutMs: caReady ? 4000 : 8000,
+            keepWS: !!options.keepWS,
+            caSessionReady: caReady,
+            missingAsSuccess: true,
+            targetReportDR: item.reportDR
+        });
+        if (!result) {
+            await sleep(300);
+            result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR);
+        }
+        if (!result) {
+            await sleep(500);
+            result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR);
+        }
+        return { ok: !!result, iframeWin };
     }
 
     // --- 执行批量审核（逐行审核）---
@@ -12285,12 +12339,17 @@ function fillNativeLoginForm(creds, lastWG) {
                             dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
                         }
                     } else {
-                        queue.failed.push({ ...item, reason: '审核未确认成功' });
-                        failCount++;
+                        // 未确认成功：优先队尾重试，不要直接放弃（真漏审多由此产生）
+                        if (!requeueAuditItem(queue, item, '审核未确认成功')) {
+                            queue.failed.push({ ...item, reason: '审核未确认成功' });
+                            failCount++;
+                        }
                     }
                 } catch(e) {
-                    queue.failed.push({ ...item, reason: e.message });
-                    failCount++;
+                    if (!requeueAuditItem(queue, item, e.message || '异常')) {
+                        queue.failed.push({ ...item, reason: e.message });
+                        failCount++;
+                    }
                     dbg('逐行审核异常:', item.name, e.message);
                 } finally {
                     queue.current++;
@@ -12298,6 +12357,54 @@ function fillNativeLoginForm(creds, lastWG) {
                     refreshQueueLock();
                     await sleep(0);
                     try { iframeWin = getReportIframeWin(); if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; } } catch(e) {}
+                }
+            }
+
+            // 主循环结束后：对 failed + skipped(未确认类) 再补审一轮，目标是列表里不留未审
+            if (!queuePausedForSwitch && !_batchAbort) {
+                const salvage = [];
+                (queue.failed || []).forEach(f => salvage.push(f));
+                (queue.skipped || []).forEach(s => {
+                    if (s && /未确认|未找到|详情未加载|超时/.test(String(s.reason || ''))) salvage.push(s);
+                });
+                // 去重
+                const seen = new Set();
+                const need = [];
+                salvage.forEach(it => {
+                    const id = String(it.reportDR || '');
+                    if (!id || seen.has(id)) return;
+                    if (queue.done && queue.done.some(d => String(d.reportDR) === id)) return;
+                    seen.add(id);
+                    need.push(it);
+                });
+                if (need.length) {
+                    updateBatchProgress(`补审 ${need.length} 条未确认标本...`, 95);
+                    dbg('批审补审轮次:', need.length);
+                    const stillFail = [];
+                    for (let i = 0; i < need.length; i++) {
+                        if (_batchAbort) break;
+                        const it = need[i];
+                        updateBatchProgress(`补审 ${i + 1}/${need.length} - ${it.name || it.labno || it.reportDR}`, 95 + (i / need.length) * 4);
+                        const r = await auditOneQueueItemOnce(iframeWin, it, { keepWS: queue.keepWS });
+                        iframeWin = r.iframeWin || iframeWin;
+                        if (r.ok) {
+                            successCount++;
+                            failCount = Math.max(0, failCount - 1);
+                            queue.done.push(it);
+                            batchCAReady = true;
+                            if (it.wg) queue.caReadyByWg[it.wg] = true;
+                        } else {
+                            stillFail.push(it);
+                        }
+                    }
+                    queue.failed = stillFail;
+                    failCount = stillFail.length;
+                    // 从 skipped 里去掉已补审成功的
+                    if (queue.skipped && queue.skipped.length) {
+                        const doneSet = new Set((queue.done || []).map(d => String(d.reportDR)));
+                        queue.skipped = queue.skipped.filter(s => !doneSet.has(String(s.reportDR)));
+                        skipCount = queue.skipped.length;
+                    }
                 }
             }
 
@@ -12312,10 +12419,9 @@ function fillNativeLoginForm(creds, lastWG) {
             }
 
             if (queue.current >= queue.items.length) clearAuditQueue();
+            // 提示仅供参考；以列表是否消失为准
             if (successCount > 0) {
-                const skipMsg = skipCount > 0 ? `，跳过 ${skipCount} 个` : '';
-                const failMsg = failCount > 0 ? `，${failCount} 个失败` : '';
-                showToast(`✅ 已审核 ${successCount} 个标本${skipMsg}${failMsg}`, 'success');
+                showToast(`批审结束（以列表为准）成功约 ${successCount}` + (failCount ? `，仍有 ${failCount} 条请核对` : ''), failCount ? 'warning' : 'success');
             } else {
                 showToast('❌ 审核全部失败', 'error');
             }
