@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.59.1
+// @version      7.59.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -49,7 +49,7 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.1';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.2';
     // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
     const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
@@ -3890,16 +3890,23 @@
         return rows;
     }
 
-    // 从本机 serve 拉取 vendor 脚本并 eval 进油猴沙箱（@require 失败时的兜底）
+    // 油猴沙箱里 vendor 库可能挂在 window/unsafeWindow，不一定是自由变量
+    function qeGetGlobal(name) {
+        try { if (typeof globalThis !== 'undefined' && globalThis[name]) return globalThis[name]; } catch(e) {}
+        try { if (typeof window !== 'undefined' && window[name]) return window[name]; } catch(e) {}
+        try { if (typeof unsafeWindow !== 'undefined' && unsafeWindow[name]) return unsafeWindow[name]; } catch(e) {}
+        try {
+            // 自由变量（@require 进沙箱时常在此）
+            // eslint-disable-next-line no-eval
+            const v = (0, eval)('typeof ' + name + '!=="undefined"?' + name + ':null');
+            if (v) return v;
+        } catch(e) {}
+        return null;
+    }
+
+    // 从本机 serve 拉取 vendor 脚本并 eval（@require 失败时的兜底）
     async function qeLoadVendorScript(fileName, globalName) {
-        const has = () => {
-            try {
-                if (globalName === 'XLSX') return typeof XLSX !== 'undefined' && XLSX && XLSX.utils;
-                if (globalName === 'JSZip') return typeof JSZip !== 'undefined';
-            } catch(e) {}
-            return false;
-        };
-        if (has()) return true;
+        if (qeGetGlobal(globalName)) return true;
         const urls = [
             VENDOR_BASE + '/' + fileName,
             'http://localhost:8765/vendor/' + fileName
@@ -3910,9 +3917,27 @@
                 if (!r.ok) continue;
                 const code = await r.text();
                 if (!code || code.length < 100) continue;
-                // 在脚本作用域执行，使 XLSX/JSZip 对本模块可见
-                (0, eval)(code);
-                if (has()) {
+                // 绑定到本脚本可访问的对象（JSZip UMD 写 window.JSZip；须屏蔽 node 的 module）
+                const root = (typeof globalThis !== 'undefined') ? globalThis
+                    : (typeof window !== 'undefined' ? window : {});
+                // module/exports/define 显式 undefined，避免 UMD 走 module.exports 而不挂全局
+                const runner = new Function(
+                    'root', 'window', 'globalThis', 'self', 'module', 'exports', 'define',
+                    code + '\n;return (typeof ' + globalName + '!=="undefined"?' + globalName + ':null)||window.' + globalName + '||root.' + globalName + '||globalThis.' + globalName + ';'
+                );
+                let got = null;
+                try {
+                    got = runner(root, root, root, root, undefined, undefined, undefined);
+                } catch(e1) {
+                    dbg('[LIS-QE] Function 执行失败', fileName, e1.message);
+                    try { (0, eval)(code); } catch(e2) {}
+                    got = qeGetGlobal(globalName);
+                }
+                if (!got) got = qeGetGlobal(globalName) || root[globalName];
+                if (got) {
+                    try { root[globalName] = got; } catch(e) {}
+                    if (globalName === 'XLSX') qeXlsxLib = got;
+                    if (globalName === 'JSZip') qeJSZipLib = got;
                     dbg('[LIS-QE] 已从本机加载', fileName);
                     return true;
                 }
@@ -3920,35 +3945,47 @@
                 dbg('[LIS-QE] 加载失败', url, e.message);
             }
         }
-        return false;
+        return !!qeGetGlobal(globalName);
     }
 
+    let qeXlsxLib = null;
+    let qeJSZipLib = null;
+
     async function qeEnsureXlsx() {
-        if (typeof XLSX !== 'undefined' && XLSX && XLSX.utils) return true;
-        return qeLoadVendorScript('xlsx.full.min.js', 'XLSX');
+        if (qeXlsxLib && qeXlsxLib.utils) return true;
+        const g = qeGetGlobal('XLSX');
+        if (g && g.utils) { qeXlsxLib = g; return true; }
+        const ok = await qeLoadVendorScript('xlsx.full.min.js', 'XLSX');
+        qeXlsxLib = qeGetGlobal('XLSX') || qeXlsxLib;
+        return !!(qeXlsxLib && qeXlsxLib.utils);
     }
 
     async function qeEnsureJSZip() {
-        if (typeof JSZip !== 'undefined') return true;
-        return qeLoadVendorScript('jszip.min.js', 'JSZip');
+        if (qeJSZipLib) return true;
+        const g = qeGetGlobal('JSZip');
+        if (g) { qeJSZipLib = g; return true; }
+        const ok = await qeLoadVendorScript('jszip.min.js', 'JSZip');
+        qeJSZipLib = qeGetGlobal('JSZip') || qeJSZipLib;
+        return !!qeJSZipLib;
     }
 
     // --- Excel 生成 ---
     function qeBuildXlsx(groupName, rows) {
-        if (typeof XLSX === 'undefined' || !XLSX.utils) {
+        const X = qeXlsxLib || qeGetGlobal('XLSX');
+        if (!X || !X.utils) {
             throw new Error('SheetJS 未加载：请先运行 python3 ~/脚本/serve.py，再刷新页面后重试');
         }
-        const wb = XLSX.utils.book_new();
+        const wb = X.utils.book_new();
         const header = ['项目编码', '月', '日', '次', '批号', '数值', '备注', '操作者'];
         const data = [header, ...rows];
-        const ws = XLSX.utils.aoa_to_sheet(data);
+        const ws = X.utils.aoa_to_sheet(data);
         // 设置列宽
         ws['!cols'] = [
             { wch: 10 }, { wch: 5 }, { wch: 5 }, { wch: 4 },
             { wch: 18 }, { wch: 10 }, { wch: 20 }, { wch: 10 },
         ];
-        XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-        return XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        X.utils.book_append_sheet(wb, ws, 'Sheet1');
+        return X.write(wb, { bookType: 'xlsx', type: 'array' });
     }
 
     function qeDownloadBlob(blob, filename) {
@@ -3961,33 +3998,64 @@
         setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 5000);
     }
 
+    // 从内存或结果列表 DOM 收集可打包文件（单独下载按钮上挂着 _blob）
+    function qeCollectPackableFiles() {
+        let files = (qeLastExportFiles || []).filter(f => f && f.blob && f.name);
+        if (files.length) return files;
+        const list = document.getElementById('lis-qe-results');
+        if (!list) return [];
+        files = [];
+        list.querySelectorAll('button[data-fn]').forEach(btn => {
+            if (btn._blob) files.push({ name: btn.getAttribute('data-fn') || 'export.xlsx', blob: btn._blob });
+        });
+        return files;
+    }
+
     function qeUpdateZipButton() {
         const btn = document.getElementById('lis-qe-zip');
         if (!btn) return;
-        const n = (qeLastExportFiles || []).filter(f => f && f.blob).length;
-        btn.disabled = n === 0;
+        const n = qeCollectPackableFiles().length;
+        // 始终可点：无文件时点一下给提示，避免「灰色没反应」
+        btn.disabled = false;
+        btn.style.opacity = n > 0 ? '1' : '0.65';
+        btn.style.cursor = 'pointer';
         btn.textContent = n > 0 ? `📦 打包下载 ZIP (${n})` : '📦 打包下载 ZIP';
     }
 
-    // 一键 ZIP：依赖本地 serve 的 vendor/jszip.min.js（@require）
+    // 一键 ZIP：本地 vendor/jszip.min.js
     async function qeDownloadAllZip() {
-        const files = (qeLastExportFiles || []).filter(f => f && f.blob);
+        const files = qeCollectPackableFiles();
         if (!files.length) {
-            qeSetStatus('没有可打包的文件，请先完成导出。', 'error');
+            qeSetStatus('没有可打包的文件：请先点「开始导出」生成表格。', 'error');
             return;
         }
-        if (!(await qeEnsureJSZip())) {
-            qeSetStatus('JSZip 未加载：请运行 python3 ~/脚本/serve.py 后刷新，改为逐个下载…', 'info');
-            for (let i = 0; i < files.length; i++) {
-                qeDownloadBlob(files[i].blob, files[i].name);
-                await sleep(400);
-            }
-            qeSetStatus(`已触发 ${files.length} 个文件逐个下载（无 ZIP）。`, 'ok');
-            return;
+        const zipBtn = document.getElementById('lis-qe-zip');
+        if (zipBtn) {
+            zipBtn.disabled = true;
+            zipBtn.textContent = '打包中…';
         }
         try {
+            qeSetStatus(`正在加载 ZIP 组件并打包 ${files.length} 个文件…`, 'info');
+            if (!(await qeEnsureJSZip())) {
+                qeSetStatus('JSZip 未加载：请运行 python3 ~/脚本/serve.py 后刷新。改为逐个下载…', 'info');
+                for (let i = 0; i < files.length; i++) {
+                    qeDownloadBlob(files[i].blob, files[i].name);
+                    await sleep(400);
+                }
+                qeSetStatus(`已触发 ${files.length} 个文件逐个下载（无 ZIP）。`, 'ok');
+                return;
+            }
+            const Zip = qeJSZipLib || qeGetGlobal('JSZip');
+            if (!Zip) {
+                qeSetStatus('JSZip 对象不可用，改为逐个下载…', 'error');
+                for (let i = 0; i < files.length; i++) {
+                    qeDownloadBlob(files[i].blob, files[i].name);
+                    await sleep(400);
+                }
+                return;
+            }
             qeSetStatus(`正在打包 ${files.length} 个 Excel…`, 'info');
-            const zip = new JSZip();
+            const zip = new Zip();
             files.forEach(f => zip.file(f.name, f.blob));
             const zipBlob = await zip.generateAsync({
                 type: 'blob',
@@ -3999,14 +4067,16 @@
                 ? `${cfg._year}${String(cfg._month).padStart(2, '0')}`
                 : today().replace(/-/g, '').slice(0, 6);
             qeDownloadBlob(zipBlob, `质控数据_${ym}.zip`);
-            qeSetStatus(`ZIP 已下载（${files.length} 个表格）。`, 'ok');
+            qeSetStatus(`✅ ZIP 已下载（${files.length} 个表格）。`, 'ok');
         } catch(e) {
-            dbg('[LIS-QE] ZIP 失败:', e.message);
-            qeSetStatus('ZIP 失败: ' + e.message + '，改为逐个下载…', 'error');
+            dbg('[LIS-QE] ZIP 失败:', e && e.message);
+            qeSetStatus('ZIP 失败: ' + (e && e.message ? e.message : e) + '，改为逐个下载…', 'error');
             for (let i = 0; i < files.length; i++) {
                 qeDownloadBlob(files[i].blob, files[i].name);
                 await sleep(400);
             }
+        } finally {
+            qeUpdateZipButton();
         }
     }
 
@@ -4183,7 +4253,7 @@
                     <div class="qe-step-hd">
                         <span class="qe-step-num">✓</span>
                         <span class="qe-step-title">导出结果</span>
-                        <button id="lis-qe-zip" disabled title="将本次导出的全部表格打成一个 ZIP（需 serve.py 提供 JSZip）">📦 打包下载 ZIP</button>
+                        <button id="lis-qe-zip" type="button" title="将本次导出的全部表格打成一个 ZIP">📦 打包下载 ZIP</button>
                     </div>
                     <div class="qe-step-body">
                         <div class="qe-result-list" id="lis-qe-results"></div>
@@ -4195,9 +4265,18 @@
         // --- 事件绑定 ---
         document.getElementById('lis-qe-mini').addEventListener('click', () => panel.classList.remove('show'));
         document.getElementById('lis-qe-close').addEventListener('click', () => panel.classList.remove('show'));
-        document.getElementById('lis-qe-zip').addEventListener('click', () => {
-            qeDownloadAllZip().catch(e => qeSetStatus('ZIP 异常: ' + e.message, 'error'));
-        });
+        const zipBtn0 = document.getElementById('lis-qe-zip');
+        if (zipBtn0) {
+            zipBtn0.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                qeSetStatus('正在处理打包…', 'info');
+                qeDownloadAllZip().catch(err => {
+                    qeSetStatus('ZIP 异常: ' + (err && err.message ? err.message : err), 'error');
+                    qeUpdateZipButton();
+                });
+            });
+        }
 
         // 全选/反选
         document.getElementById('lis-qe-toggle-all').addEventListener('click', () => {
@@ -4439,9 +4518,7 @@
         qeShowProgress(totalGroups, totalGroups, '完成');
 
         if (!qeAbortFlag) {
-            const zipHint = results.length
-                ? (typeof JSZip !== 'undefined' ? ' 可点「打包下载 ZIP」。' : ' （JSZip 未加载时可逐个下载）')
-                : '';
+            const zipHint = results.length ? ' 可点右上角「打包下载 ZIP」。' : '';
             qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。${zipHint}`, 'ok');
         } else {
             qeSetStatus('导出已停止。', 'info');
