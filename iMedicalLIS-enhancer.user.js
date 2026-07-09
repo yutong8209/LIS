@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.53.3
+// @version      7.53.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7346,6 +7346,11 @@ window.addEventListener('keydown',function(e){
                 e.stopImmediatePropagation();
                 dbg('Enter 键捕获 (详情面板), inProgress=', _detailAuditInProgress);
                 _auditFromDetailPanel();
+            } else if (e.key === 'F4') {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                dbg('F4 键捕获 (详情面板), inProgress=', _detailAuditInProgress);
+                _auditFromDetailPanel();
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault();
                 e.stopImmediatePropagation();
@@ -7658,7 +7663,7 @@ window.addEventListener('keydown',function(e){
     // （顺带 blur 编辑焦点，避免回车常卡的根因），再 executeNativeAudit，成功率接近点详情审核按钮。
     let _detailPathAuditInProgress = false;
     async function auditFocusedSpecimenAsDetail() {
-        if (wsCategory !== 'abnormal' || isDetailPanelVisible()) return;
+        if (wsCategory !== 'abnormal') return;
         if (_detailAuditInProgress || _abnormalAuditInProgress || _auditInProgress) {
             showToast('正在审核中，请稍候', 'warning'); return;
         }
