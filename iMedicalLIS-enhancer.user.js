@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.58.3
+// @version      7.58.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -48,12 +48,12 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.58.3';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.58.4';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
     // 批审单条硬超时（秒审 / 需 CA）；超时后二次校验，仍无果则跳过/重试，避免整批卡死
-    // 秒审应收紧：已 CA 时单条网络+回写通常 <2s，给足 8s 兜底即可
-    const BATCH_ITEM_DEADLINE_MS = { caReady: 8000, needCA: 48000 };
-    const BATCH_CONFIRM_MS = { normal: 2000, afterCA: 8000 };
+    // 秒审 / 首条 CA 后确认都宜短：真漏审靠队尾重试+补审，不靠首条空等十几秒
+    const BATCH_ITEM_DEADLINE_MS = { caReady: 8000, needCA: 28000 };
+    const BATCH_CONFIRM_MS = { normal: 1500, afterCA: 2500 };
 
     // ==================== 工具 ====================
     const $  = s => document.querySelector(s);
@@ -6173,6 +6173,24 @@ window.addEventListener('keydown',function(e){
         return false;
     }
 
+    // CA 回调 ReportSave 后：状态回写前也能较快认成功的启发式
+    function softAuditSuccessHint(iframeWin, reportDR) {
+        if (!iframeWin || !reportDR) return false;
+        if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) return true;
+        try {
+            const me = iframeWin.me;
+            if (!me) return false;
+            // 已审核标志 + 焦点已离开本条（原生审后常自动下一条）
+            if (me.IsAuthed === true && String(me.curReportDR || '') !== String(reportDR)) {
+                const found = findNativeRowByReportDR(iframeWin, reportDR);
+                if (!found) return true;
+                if (isExpectedNativeStatus(found.row, ['3', '4'])) return true;
+            }
+            if (me.IsSaveSuccess === true && String(me.curReportDR || '') === String(reportDR)) return true;
+        } catch(e) {}
+        return false;
+    }
+
     async function confirmAuditEventually(iframeWin, reportDR, patientName, options = {}) {
         const batchMode = !!options.batchMode;
         const ft = document.getElementById('lis-ws-ft-stat');
@@ -6181,31 +6199,35 @@ window.addEventListener('keydown',function(e){
             if (typeof options.onTick === 'function') options.onTick(msg);
             else if (ft) ft.textContent = msg;
         };
-        tick(`正在确认审核结果：${label}`);
+        tick(`确认中：${label}`);
         // 先做几次快速校验，避免「其实已成功却干等满超时」
-        for (let i = 0; i < (batchMode ? 4 : 2); i++) {
+        for (let i = 0; i < (batchMode ? 6 : 2); i++) {
             if (options.abortCheck && options.abortCheck()) return false;
-            if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) return true;
-            await sleep(batchMode ? 120 : 200);
+            if (verifyAuditSucceededByReportDR(iframeWin, reportDR) || softAuditSuccessHint(iframeWin, reportDR)) return true;
+            await sleep(batchMode ? 80 : 200);
         }
         const ctx = auditTargetContext(iframeWin, reportDR);
-        const targetWasPresent = options.targetWasPresent !== undefined ? !!options.targetWasPresent : ctx.rowPresent;
+        const targetWasPresent = options.targetWasPresent !== undefined ? !!options.targetWasPresent : (ctx.rowPresent || ctx.detailReady);
         const detailWasReady = options.detailWasReady !== undefined ? !!options.detailWasReady : ctx.detailReady;
-        const allowMissing = detailWasReady;
+        const allowMissing = detailWasReady || !!options.afterCA;
+        // 批审 afterCA 确认必须短：首条 CA 后 FuncStr 往往已审完，长等只会卡在姓名上
         const confirmTimeout = batchMode
             ? (options.afterCA ? BATCH_CONFIRM_MS.afterCA : BATCH_CONFIRM_MS.normal)
             : 10000;
         const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, allowMissing, {
-            targetWasPresent,
-            missingStableMs: batchMode ? (options.afterCA ? 500 : 350) : 900,
-            turbo: batchMode,
+            targetWasPresent: targetWasPresent || true,
+            missingStableMs: batchMode ? (options.afterCA ? 200 : 280) : 900,
+            turbo: true,
             abortCheck: options.abortCheck,
-            quickVerify: () => verifyAuditSucceededByReportDR(iframeWin, reportDR),
-            onTick: (elapsed) => tick(`确认结果中：${label}（${Math.round(elapsed / 1000)}s）`)
+            quickVerify: () => verifyAuditSucceededByReportDR(iframeWin, reportDR) || softAuditSuccessHint(iframeWin, reportDR),
+            onTick: (elapsed) => {
+                if (batchMode && elapsed > 1200) tick(`确认中：${label}`);
+                else if (!batchMode) tick(`确认结果中：${label}（${Math.round(elapsed / 1000)}s）`);
+            }
         });
         if (confirmed && confirmed !== 'incomplete') return true;
-        await sleep(batchMode ? 120 : 800);
-        if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) return true;
+        await sleep(batchMode ? 80 : 800);
+        if (verifyAuditSucceededByReportDR(iframeWin, reportDR) || softAuditSuccessHint(iframeWin, reportDR)) return true;
         const latestWin = getReportIframeWin() || iframeWin;
         const found = findNativeRowByReportDR(latestWin, reportDR);
         if (!found) return allowMissing;
@@ -9985,47 +10007,95 @@ function fillNativeLoginForm(creds, lastWG) {
                 saveCAAuth();
                 forceCloseCAWindow(iframeWin);
                 if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
-                dbg('CA 认证成功，等待原生 ReportSave 回调结果（不重复触发）...');
-                tickAudit('CA 完成，确认审核结果...');
+                dbg('CA 认证成功，快速确认首条（FuncStr 多半已 ReportSave）...');
+                tickAudit('CA完成·确认首条...');
             } else {
                 dbg('CA 自动登录未确认，继续等待原生异步审核...');
                 tickAudit('CA 未确认，继续等待结果...');
             }
+
+            // 突发轮询：CapingLogin 里 FuncStr 已触发审核，状态回写前 1～2s 内要抓到
+            if (caOK && targetReportDR) {
+                for (let i = 0; i < (batchMode ? 20 : 30); i++) {
+                    if (options.abortCheck && options.abortCheck()) return false;
+                    iframeWin = getReportIframeWin() || iframeWin;
+                    if (verifyAuditSucceededByReportDR(iframeWin, targetReportDR) || softAuditSuccessHint(iframeWin, targetReportDR)) {
+                        dbg('CA 后突发确认：首条已审核');
+                        return true;
+                    }
+                    // IsSaveSuccess 边沿
+                    try {
+                        const me2 = iframeWin && iframeWin.me;
+                        if (me2 && me2.IsSaveSuccess === true) {
+                            me2.IsSaveSuccess = false;
+                            await sleep(100);
+                            if (verifyAuditSucceededByReportDR(iframeWin, targetReportDR) || softAuditSuccessHint(iframeWin, targetReportDR)) {
+                                return true;
+                            }
+                            // 批审：已跳到下一条且 IsAuthed
+                            if (batchMode && me2.IsAuthed === true && String(me2.curReportDR || '') !== String(targetReportDR)) {
+                                dbg('CA 后突发确认：已跳转下一条，视作首条成功');
+                                return true;
+                            }
+                        }
+                    } catch(e) {}
+                    await sleep(100);
+                }
+            }
+
             const postCaCtx = auditTargetContext(iframeWin, targetReportDR);
-            const postCaMissing = true;
-            // CA 成功后原生 FuncStr 已调用 ReportSave：先等结果；仅当长时间无进展且窗已关时才补触发一次
+            // 批审 CA 后最多再等约 3.5s（以前 10s+6s+确认 会卡在姓名上很久）
             let caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses,
-                batchMode ? (caOK ? 10000 : 14000) : (caOK ? 15000 : 25000),
-                postCaMissing, makeWaitOpts({
-                    targetWasPresent: waitOpts.targetWasPresent || postCaCtx.rowPresent,
-                    missingStableMs: batchMode ? 250 : missingStableMs,
-                    failureGraceMs: batchMode ? (caOK ? 1500 : 3000) : (caOK ? 3500 : 6000),
+                batchMode ? (caOK ? 3500 : 8000) : (caOK ? 12000 : 20000),
+                true, makeWaitOpts({
+                    targetWasPresent: true,
+                    missingStableMs: batchMode ? 180 : missingStableMs,
+                    failureGraceMs: batchMode ? 800 : 3000,
+                    turbo: true,
+                    quickVerify: () => verifyAuditSucceededByReportDR(iframeWin, targetReportDR) || softAuditSuccessHint(iframeWin, targetReportDR),
                     onTick: (elapsed) => {
                         if (typeof options.onTick === 'function') {
-                            options.onTick(elapsed, caOK ? 'CA后确认结果' : '等待CA/审核结果');
+                            options.onTick(elapsed, caOK ? '确认首条' : '等待结果');
                         }
                     }
                 }));
             if (caResult) return caResult;
 
+            // 补触发：仅详情仍是本条且未成功时（避免已跳到下一条还 ReportSave 审错人）
             if (caOK && targetReportDR && !verifyAuditSucceededByReportDR(iframeWin, targetReportDR)
-                && !findVisibleCAWindow(iframeWin) && isReportDetailLoaded(iframeWin, targetReportDR)) {
-                dbg('CA 后原生回调未确认成功，补触发一次审核');
+                && !softAuditSuccessHint(iframeWin, targetReportDR)
+                && !findVisibleCAWindow(iframeWin)
+                && isReportDetailLoaded(iframeWin, targetReportDR)) {
+                dbg('CA 后原生回调未确认，补触发一次审核');
                 tickAudit('补触发审核...');
                 reTriggerAudit();
                 caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses,
-                    batchMode ? 6000 : 10000, true, makeWaitOpts({ missingStableMs: 200, turbo: true }));
+                    batchMode ? 3000 : 8000, true, makeWaitOpts({
+                        targetWasPresent: true,
+                        missingStableMs: 180,
+                        turbo: true,
+                        quickVerify: () => verifyAuditSucceededByReportDR(iframeWin, targetReportDR) || softAuditSuccessHint(iframeWin, targetReportDR)
+                    }));
                 if (caResult) return caResult;
             }
 
-            await sleep(batchMode ? 120 : 500);
-            if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {
+            await sleep(batchMode ? 80 : 400);
+            if (targetReportDR && (verifyAuditSucceededByReportDR(iframeWin, targetReportDR) || softAuditSuccessHint(iframeWin, targetReportDR))) {
                 dbg('CA 后二次校验：标本已审核');
                 if (caOK) saveCAAuth();
                 return true;
             }
+            // 批审：CA 已成功且焦点已离开本条 → 宁可认为首条已审，漏网由补审捞
+            if (batchMode && caOK && targetReportDR) {
+                try {
+                    const me3 = (getReportIframeWin() || iframeWin).me;
+                    if (me3 && me3.IsAuthed === true && String(me3.curReportDR || '') !== String(targetReportDR)) {
+                        dbg('CA 后批审宽松成功：已离开本条');
+                        return true;
+                    }
+                } catch(e) {}
+            }
             dbg('CA 审核等待超时，未确认成功');
-            // 已有 Ukey 时不要 clearCAAuth，否则后续条又会弹 CA
             if (!caOK && !anyCAUkeyPresent(iframeWin)) clearCAAuth();
             return false;
         }
@@ -12287,27 +12357,35 @@ function fillNativeLoginForm(creds, lastWG) {
                             progressPhase(phase || (batchCAReady ? '秒审' : '审核中'), elapsed);
                         }
                     });
-                    // 首次未确认：超快校验 + 仅必要时短确认（已 CA 时最多约 2s）
+                    // 首次未确认：短确认即可；首条 CA 后勿再叠 8s「确认结果中」
                     if (!auditResult && !itemAbort()) {
                         iframeWin = getReportIframeWin() || iframeWin;
-                        if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
+                        if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR) || softAuditSuccessHint(iframeWin, item.reportDR)) {
                             auditResult = true;
-                        } else if (!batchCAReady || sawCAPath) {
+                        } else if (sawCAPath) {
+                            // CA 路径里已等过；这里只再扫极短一轮
+                            progressPhase('确认首条');
+                            for (let q = 0; q < 10 && !auditResult; q++) {
+                                await sleep(100);
+                                if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR) || softAuditSuccessHint(iframeWin, item.reportDR)) {
+                                    auditResult = true;
+                                }
+                            }
+                        } else if (!batchCAReady) {
                             dbg('批审单条首次未确认，短确认:', item.name || item.reportDR);
-                            progressPhase('确认结果');
+                            progressPhase('确认中');
                             auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', {
                                 batchMode: true,
-                                targetWasPresent: auditCtx.rowPresent,
+                                targetWasPresent: auditCtx.rowPresent || auditCtx.detailReady,
                                 detailWasReady: true,
-                                afterCA: sawCAPath,
+                                afterCA: false,
                                 abortCheck: itemAbort,
                                 onTick: (msg) => updateBatchProgress(`${itemBase} - ${msg}${modeHint}`, (queue.current + 0.7) / totalCount * 100)
                             });
                         } else {
-                            // 已 CA 秒审路径：再给 800ms 快速轮询，避免叠长确认
                             for (let q = 0; q < 8 && !auditResult; q++) {
-                                await sleep(100);
-                                if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) auditResult = true;
+                                await sleep(80);
+                                if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR) || softAuditSuccessHint(iframeWin, item.reportDR)) auditResult = true;
                             }
                         }
                     }
