@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.50.0
-// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 热键（纯本地运行，无任何上传）
+// @version      7.51.0
+// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -12,6 +12,8 @@
 // @downloadURL  http://localhost:8765/iMedicalLIS-enhancer.user.js
 // @run-at       document-idle
 // @noframes     false
+// @require      https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
+// @require      https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js
 // ==/UserScript==
 
 (function () {
@@ -423,6 +425,9 @@
 .ws-wg-tab.on{background:#168276;border-color:#168276;color:#fff}
 .ws-mach-tab{padding:4px 9px;border-radius:5px;font-size:11px;font-weight:600}
 .ws-mach-tab.on{background:#34495e;border-color:#34495e;color:#fff}
+.ws-mach-tab.ws-mach-multi{gap:5px}
+.ws-mach-check{width:13px;height:13px;border:1px solid #b7c3ce;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;line-height:1;background:#fff;color:#168276;flex:0 0 13px}
+.ws-mach-tab.ws-mach-multi.on .ws-mach-check{background:rgba(255,255,255,.22);border-color:rgba(255,255,255,.5);color:#fff}
 .ws-tab-name{overflow:hidden;text-overflow:ellipsis;max-width:150px}
 .mach-cnt{background:#eef2f6;color:#475569;border-radius:10px;padding:0 6px;font-size:10px;min-width:16px;text-align:center;line-height:1.55;font-weight:700}
 .ws-wg-tab.on .mach-cnt,.ws-mach-tab.on .mach-cnt{background:rgba(255,255,255,.22);color:#fff}
@@ -691,6 +696,71 @@
   #lis-ws-bar{flex-wrap:wrap}
   #lis-ws-body{font-size:11px}
 }
+/* --- 质控数据导出 --- */
+#lis-qe-fab{position:fixed;right:20px;bottom:224px;z-index:99999;width:52px;height:52px;border-radius:50%;border:none;background:#0d7c66;color:#fff;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 3px 14px rgba(13,124,102,.35);display:flex;align-items:center;justify-content:center;user-select:none;transition:transform .15s}
+#lis-qe-fab:hover{background:#09654f;transform:scale(1.06)}
+#lis-qe-panel{position:fixed!important;inset:0!important;z-index:100007!important;background:#eef2f6;display:none;flex-direction:column;font-family:'Microsoft YaHei','Segoe UI',sans-serif;color:#1f2933}
+#lis-qe-panel.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
+#lis-qe-hd{height:40px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#e8f5f1;border-bottom:1px solid #b8ddd3;flex-shrink:0}
+#lis-qe-hd h3{margin:0;font-size:14px;color:#0d7c66;white-space:nowrap;font-weight:800}
+#lis-qe-hd .qe-spacer{flex:1}
+#lis-qe-hd button{height:26px;border:1px solid #8ecbbf;background:#fff;color:#0d6655;border-radius:4px;padding:0 10px;font-size:11px;font-weight:700;cursor:pointer}
+#lis-qe-hd button:hover{background:#f0faf7;border-color:#4db89e}
+#lis-qe-hd .qe-close{font-size:18px;line-height:20px;padding:0 8px;color:#7b8b96}
+#lis-qe-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;background:#f7f9fb;padding:12px 16px}
+.qe-section{background:#fff;border:1px solid #d5e4ef;border-radius:8px;padding:12px 14px;margin-bottom:10px}
+.qe-section-title{font-size:12px;font-weight:800;color:#0d7c66;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.qe-section-title::before{content:'';display:inline-block;width:3px;height:14px;background:#0d7c66;border-radius:2px}
+.qe-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.qe-row label{display:flex;align-items:center;gap:5px;font-size:12px;color:#334155;font-weight:600;cursor:pointer;white-space:nowrap}
+.qe-row input[type="checkbox"]{width:14px;height:14px;accent-color:#0d7c66}
+.qe-row input[type="text"],.qe-row input[type="number"]{height:26px;border:1px solid #c3ced8;border-radius:4px;padding:2px 7px;font-size:12px;color:#213547;background:#fff;outline:none;box-sizing:border-box}
+.qe-row input[type="text"]:focus,.qe-row input[type="number"]:focus{border-color:#4db89e;box-shadow:0 0 0 2px rgba(77,184,158,.12)}
+.qe-row select{height:26px;border:1px solid #c3ced8;border-radius:4px;padding:2px 4px;font-size:12px;color:#213547;background:#fff;outline:none}
+.qe-lot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;width:100%}
+.qe-lot-item{display:flex;align-items:center;gap:5px;font-size:11px;color:#475569}
+.qe-lot-item span{min-width:60px;font-weight:700;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qe-lot-item input{flex:1;min-width:0;height:24px;border:1px solid #d5dde5;border-radius:3px;padding:1px 5px;font-size:11px}
+.qe-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.qe-actions button{height:30px;border:1px solid #8ecbbf;background:#fff;color:#0d6655;border-radius:5px;padding:0 14px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s}
+.qe-actions button:hover{background:#f0faf7;border-color:#4db89e}
+.qe-actions button.primary{background:#0d7c66;color:#fff;border-color:#09654f;box-shadow:0 1px 4px rgba(13,124,102,.25)}
+.qe-actions button.primary:hover{background:#09654f}
+.qe-actions button:disabled{opacity:.5;cursor:not-allowed}
+#lis-qe-status{padding:4px 0;font-size:11px;color:#6b7785}
+#lis-qe-status.ok{color:#0f6f65}
+#lis-qe-status.error{color:#c62828}
+#lis-qe-status.info{color:#1565c0}
+.qe-progress{margin-top:8px;background:#edf2f7;border-radius:6px;overflow:hidden;height:20px;position:relative;display:none}
+.qe-progress.show{display:block}
+.qe-progress-bar{height:100%;background:linear-gradient(90deg,#0d7c66,#4db89e);transition:width .3s;border-radius:6px}
+.qe-progress-text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#334155}
+.qe-result-list{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.qe-result-item{display:flex;align-items:center;gap:8px;padding:6px 10px;background:#fff;border:1px solid #d5e4ef;border-radius:5px;font-size:12px}
+.qe-result-item .qe-ri-name{flex:1;font-weight:700;color:#334155}
+.qe-result-item .qe-ri-status{font-size:11px;font-weight:600}
+.qe-result-item .qe-ri-status.ok{color:#0d7c66}
+.qe-result-item .qe-ri-status.err{color:#c62828}
+.qe-result-item button{height:24px;border:1px solid #8ecbbf;background:#fff;color:#0d6655;border-radius:3px;padding:0 8px;font-size:10px;font-weight:700;cursor:pointer}
+.qe-result-item button:hover{background:#f0faf7}
+.qe-immune-toggle{font-size:11px;color:#0d7c66;cursor:pointer;text-decoration:underline;user-select:none;margin-left:8px}
+.qe-immune-lots{display:none;margin-top:6px}
+.qe-immune-lots.show{display:block}
+.qe-date-row{display:flex;gap:8px;align-items:center}
+.qe-date-row input[type="month"]{height:26px;border:1px solid #c3ced8;border-radius:4px;padding:2px 7px;font-size:12px;color:#213547;background:#fff;outline:none}
+.qe-mapping-info{font-size:10px;color:#7b8b96;margin-top:4px;line-height:1.4}
+.qe-step{background:#fff;border:1px solid #d5e4ef;border-radius:8px;padding:10px 14px;margin-bottom:8px}
+.qe-step-hd{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;user-select:none}
+.qe-step-num{width:22px;height:22px;border-radius:50%;background:#0d7c66;color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.qe-step-title{font-size:13px;font-weight:800;color:#0d7c66;flex:1}
+.qe-step-desc{font-size:10px;color:#7b8b96;font-weight:400}
+.qe-step-body{margin-top:4px}
+.qe-save-btn{height:28px;border:1px solid #0d7c66;background:#0d7c66;color:#fff;border-radius:5px;padding:0 16px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s}
+.qe-save-btn:hover{background:#09654f}
+.qe-save-btn.saved{background:#4db89e;border-color:#4db89e}
+.qe-download-all{height:30px;border:1px solid #0d7c66;background:linear-gradient(135deg,#0d7c66,#4db89e);color:#fff;border-radius:5px;padding:0 18px;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(13,124,102,.25)}
+.qe-download-all:hover{box-shadow:0 4px 12px rgba(13,124,102,.35);transform:translateY(-1px)}
+.qe-download-all:disabled{opacity:.5;cursor:not-allowed;transform:none}
     `);
 
     // ==================== Toast ====================
@@ -3016,12 +3086,1511 @@
         });
     }
     // ============================================================
+    //  模块 QE：质控数据导出
+    // ============================================================
+    let qeInited = false;
+    let qeExporting = false;
+    let qeAbortFlag = false;
+
+    // --- 9 组项目配置 ---
+    const QE_GROUPS = [
+        {
+            id: 'blood', name: '血常规', file: '血常规转换_直接上传.xlsx',
+            machineMatch: /血细胞|血球|血常规|bc-|xn|sysmex|mindray|迈瑞/i,
+            concentrations: 2, lotMode: 'suffix', baseLot: 'E5245',
+            defaultOperator: '',
+            projects: [
+                { code: '1001', name: 'WBC' },
+                { code: '1002', name: 'RBC' },
+                { code: '1004', name: 'Hct' },
+                { code: '1006', name: 'MCV' },
+                { code: '1007', name: 'MCH' },
+                { code: '1008', name: 'MCHC' },
+                { code: '1003', name: 'Hgb' },
+                { code: '1005', name: 'Plt' },
+            ]
+        },
+        {
+            id: 'biochem', name: '生化', file: '生化转换_直接上传.xlsx',
+            machineMatch: /生化/i,
+            concentrations: 2, lotMode: 'dual', defaultLots: ['45981', '46022'],
+            defaultOperator: '',
+            projects: [
+                { code: 'P', name: '丙氨酸氨基转移酶' },
+                { code: 'Q', name: '天门冬氨酸氨基转移酶' },
+                { code: 'AD', name: 'γ-谷氨酰基转移酶' },
+                { code: 'R', name: '碱性磷酸酶' },
+                { code: 'U', name: '乳酸脱氢酶' },
+                { code: 'T', name: '肌酸激酶' },
+                { code: 'F', name: '葡萄糖' },
+                { code: 'E', name: '磷' },
+                { code: 'M', name: '甘油三酯' },
+                { code: 'G', name: '尿素' },
+                { code: 'I', name: '肌酐' },
+                { code: 'A', name: '钾' },
+                { code: 'B', name: '钠' },
+                { code: 'C', name: '氯' },
+                { code: 'D', name: '钙' },
+                { code: 'J', name: '总蛋白' },
+                { code: 'K', name: '白蛋白' },
+                { code: 'O', name: '总胆红素' },
+                { code: 'V', name: '直接胆红素' },
+                { code: 'L', name: '总胆固醇' },
+                { code: 'H', name: '尿酸' },
+                { code: 'S', name: 'α-淀粉酶' },
+                { code: 'N', name: '高密度脂蛋白胆固醇' },
+            ]
+        },
+        {
+            id: 'coag', name: '凝血', file: '凝血转换_直接上传.xlsx',
+            machineMatch: /CS.?5100|凝血|血凝|coag|stago/i,
+            concentrations: 1, lotMode: 'coag', defaultLot: '84772',
+            dDimLot: '74442',
+            defaultOperator: '',
+            projects: [
+                { code: '1102', name: 'INR' },
+                { code: '1103', name: 'APTT' },
+                { code: '1101', name: 'PT' },
+                { code: '1104', name: 'FIB' },
+                { code: '1107', name: 'D-二聚体（FEU)', isDDimer: true },
+            ]
+        },
+        {
+            id: 'lipid', name: '血脂', file: '血脂转换_直接上传.xlsx',
+            machineMatch: /生化|脂类/i,
+            concentrations: 1, lotMode: 'single', defaultLot: '57651',
+            defaultOperator: '',
+            projects: [
+                { code: '2404', name: '低密度脂蛋白胆固醇' },
+                { code: '2406', name: '载脂蛋白A1' },
+                { code: '2407', name: '载脂蛋白B' },
+                { code: '2408', name: '脂蛋白a' },
+            ]
+        },
+        {
+            id: 'urine', name: '尿常规', file: '尿常规转换_直接上传.xlsx',
+            machineMatch: /尿液|尿常规|尿沉渣|uf-|uc-|urisys/i,
+            concentrations: 1, lotMode: 'single', defaultLot: '26030302',
+            defaultOperator: '',
+            projects: [
+                { code: '1210', name: '白细胞酯酶' },
+                { code: '1200', name: '比重' },
+                { code: '1205', name: '胆红素' },
+                { code: '1203', name: '蛋白' },
+                { code: '1209', name: '尿胆原' },
+                { code: '1204', name: '葡萄糖' },
+                { code: '1202', name: 'PH' },
+                { code: '1206', name: '酮体' },
+                { code: '1208', name: '亚硝酸盐' },
+                { code: '1207', name: '隐血' },
+            ]
+        },
+        {
+            id: 'endocrine', name: '内分泌', file: '内分泌转换_直接上传.xlsx',
+            machineMatch: /化学发光|DXi|DXI|发光仪|dxi\s*800/i,
+            materialHint: /内分泌/i,
+            concentrations: 1, lotMode: 'single', defaultLot: '40472',
+            defaultOperator: '',
+            projects: [
+                { code: '0402', name: 'TT3' },
+                { code: '0404', name: 'TT4' },
+                { code: '0401', name: 'FT3' },
+                { code: '0403', name: 'FT4' },
+                { code: '0405', name: 'TSH' },
+                { code: '0408', name: 'FSH' },
+                { code: '0409', name: 'LH' },
+                { code: '0411', name: 'PRL泌乳素' },
+                { code: '0418', name: 'E2' },
+                { code: '0410', name: 'P孕酮' },
+                { code: '0412', name: 'T睾酮' },
+            ]
+        },
+        {
+            id: 'tumor', name: '肿瘤标志物', file: '肿瘤标志物转换_直接上传.xlsx',
+            machineMatch: /化学发光|DXi|DXI|发光仪|dxi\s*800/i,
+            materialHint: /肿瘤/i,
+            concentrations: 1, lotMode: 'single', defaultLot: '74662',
+            defaultOperator: '',
+            projects: [
+                { code: '0501', name: 'AFP' },
+                { code: '0502', name: 'CEA' },
+                { code: '0504', name: '总PSA' },
+                { code: '0505', name: 'CA125' },
+                { code: '0506', name: 'CA153' },
+                { code: '0507', name: 'CA199' },
+                { code: '0513', name: 'F-PSA' },
+                { code: '0511', name: '铁蛋白' },
+            ]
+        },
+        {
+            id: 'cardiac', name: '心肌标志物', file: '心肌损伤标志物转换_直接上传.xlsx',
+            machineMatch: /化学发光|DXi|DXI|发光仪|dxi\s*800/i,
+            materialHint: /心肌/i,
+            concentrations: 1, lotMode: 'single', defaultLot: '1003112',
+            defaultOperator: '',
+            projects: [
+                { code: '2501', name: 'CK-MB' },
+                { code: '2502', name: 'MYO' },
+                { code: '2503', name: '肌钙蛋白' },
+            ]
+        },
+        {
+            id: 'infection', name: '传染病', file: '传染病转换_直接上传.xlsx',
+            machineMatch: /maglumi|x\s*-?\s*8\b/i,
+            concentrations: 1, lotMode: 'immune',
+            defaultOperator: '',
+            projects: [
+                { code: '21011', name: 'HbsAg', lisName: '乙型肝炎病毒表面抗原测定', defaultLot: '202509002HBsAg' },
+                { code: '21021', name: 'HbsAb', lisName: '乙型肝炎病毒表面抗体测定', defaultLot: '202410006HBsAb' },
+                { code: '21031', name: 'HbeAg', lisName: '乙型肝炎病毒e抗原测定', defaultLot: '202404002' },
+                { code: '21041', name: 'HbeAb', lisName: '乙型肝炎病毒e抗体测定', defaultLot: '202405001eAb' },
+                { code: '21131', name: 'HbcAb', lisName: '乙型肝炎病毒核心抗体测定', defaultLot: '202412005HBCAB' },
+                { code: '21071', name: '抗-HCV', lisName: '丙型肝炎病毒抗体测定', defaultLot: '202407002HCV' },
+                { code: '21101', name: 'TP', lisName: '梅毒螺旋体抗体测定', defaultLot: '202403004' },
+                { code: '21121', name: 'HIV', lisName: '人类免疫缺陷病毒抗体测定', defaultLot: '202409002HIV' },
+            ]
+        },
+    ];
+
+    // --- 持久化配置 ---
+    const QE_CONFIG_KEY = 'lis-qe-config';
+    function qeLoadConfig() {
+        try { return JSON.parse(localStorage.getItem(QE_CONFIG_KEY) || '{}'); } catch(e) { return {}; }
+    }
+    function qeSaveConfig(cfg) {
+        try { localStorage.setItem(QE_CONFIG_KEY, JSON.stringify(cfg)); } catch(e) {}
+    }
+
+    // 获取某个组的批号配置
+    function qeGetLot(cfg, group) {
+        const gc = cfg.lots && cfg.lots[group.id];
+        if (group.lotMode === 'suffix') return (gc && gc.baseLot) || group.baseLot;
+        if (group.lotMode === 'dual') return (gc && gc.lots) || group.defaultLots || ['', ''];
+        if (group.lotMode === 'single') return (gc && gc.lot) || group.defaultLot || '';
+        if (group.lotMode === 'perProject') {
+            const result = {};
+            group.projects.forEach(p => {
+                result[p.code] = (gc && gc[p.code]) || p.defaultLot || '';
+            });
+            return result;
+        }
+        if (group.lotMode === 'coag') {
+            // 凝血模式: 主项目共用一个批号，D-二聚体单独一个
+            return {
+                _main: (gc && gc._main) || group.defaultLot || '',
+                _dimer: (gc && gc._dimer) || group.dDimLot || '',
+            };
+        }
+        if (group.lotMode === 'immune') {
+            const result = {};
+            group.projects.forEach(p => {
+                result[p.code] = (gc && gc[p.code]) || p.defaultLot || group.defaultLot || '';
+            });
+            return result;
+        }
+        return '';
+    }
+    function qeGetOperator(cfg, group) {
+        return (cfg.operators && cfg.operators[group.id]) || group.defaultOperator || '';
+    }
+
+    // LIS 缩写(Code) → 模板项目编码（按组，来自质控录入页实测）
+    const QE_LIS_ABBR = {
+        blood: { WBC: '1001', RBC: '1002', HGB: '1003', Hgb: '1003', HCT: '1004', Hct: '1004', PLT: '1005', Plt: '1005', MCV: '1006', MCH: '1007', MCHC: '1008' },
+        biochem: { ALT: 'P', AST: 'Q', GGT: 'AD', ALP: 'R', LDH: 'U', CK: 'T', GLU: 'F', BUN: 'G', CREA: 'I', UA: 'H', TG: 'M', CHO: 'L', HDL: 'N', TBIL: 'O', DBIL: 'V', K: 'A', Na: 'B', Cl: 'C', Ca: 'D', PHOS: 'E', AMY: 'S', TP: 'J', ALB: 'K' },
+        urine: { SG: '1200', PH: '1202', PRO: '1203', GLU: '1204', LEU: '1210', KET: '1206', BIL: '1205', URO: '1209', BLD: '1207', NIT: '1208' },
+        lipid: { LDL: '2404', APOA1: '2406', APOB: '2407', LPa: '2408' },
+        coag: { INR: '1102', APTT: '1103', PT: '1101', FIB: '1104', DD: '1107' },
+        endocrine: { TT3: '0402', TT4: '0404', FT3: '0401', FT4: '0403', TSH: '0405', FSH: '0408', hFSH: '0408', LH: '0409', PRL: '0411', E2: '0418', PROG: '0410', TESTO: '0412' },
+        tumor: { AFP: '0501', CEA: '0502', FER: '0511', PSA: '0504', FPSA: '0513', CA199: '0507', CA125: '0505', CA153: '0506' },
+        cardiac: { 'CK-MB': '2501', MYO: '2502', cTnI: '2503', cTnl: '2503' },
+    };
+
+    function qeMachineMatchesGroup(group, machineName) {
+        if (!group.machineMatch) return true;
+        return group.machineMatch.test(String(machineName || ''));
+    }
+
+    function qeNormName(s) {
+        return String(s || '').replace(/\*+$/, '').trim();
+    }
+
+    // LIS 常返回 Code=AA001、Synonym=WBC，需同时检查
+    function qeTcKeys(tc) {
+        return [tc.Code, tc.Synonym, tc.LName].map(qeNormName).filter(Boolean);
+    }
+
+    function qeAbbrHit(group, proj, tc) {
+        const groupAbbr = QE_LIS_ABBR[group.id] || {};
+        return qeTcKeys(tc).some(k => groupAbbr[k] === proj.code);
+    }
+
+    // 质控物名称关键词 → 限制匹配范围（仪器+缩写命中时可跳过）
+    function qeMaterialMatchesGroup(group, tc, proj, machineName) {
+        const mat = String(tc.MaterialName || tc.MatName || '');
+        const cname = qeNormName(tc.CName);
+        const text = mat + ' ' + cname;
+        const machineOk = qeMachineMatchesGroup(group, machineName);
+
+        if (machineOk && qeAbbrHit(group, proj, tc)) return true;
+        if (group.materialHint && machineOk && !group.materialHint.test(text)) return false;
+
+        if (group.id === 'coag') {
+            if (proj && proj.isDDimer) {
+                return qeTcKeys(tc).some(k => k === 'DD') || /D-二聚体/i.test(text);
+            }
+            if (machineOk && qeAbbrHit(group, proj, tc)) return true;
+            return /凝血/i.test(text) && !/D-二聚体/i.test(text);
+        }
+        if (group.id === 'infection' && proj && proj.lisName) {
+            return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
+        }
+        const hints = {
+            blood: /血常|血球|血细胞|白细胞|红细胞|血红蛋白|血小板|HCT|MCV|MCH/i,
+            endocrine: /内分泌|激素|甲状腺|性激素/i,
+            tumor: /肿瘤|标志物|甲胎|癌胚|抗原/i,
+            cardiac: /心肌/i,
+            infection: /传染|乙肝|乙型肝炎|丙型肝炎|艾滋|免疫缺陷|梅毒|丙肝|HIV/i,
+            urine: /尿液|尿标|尿质/i,
+            biochem: /生化/i,
+            lipid: /脂类|血脂/i,
+        };
+        const re = group.materialHint || hints[group.id];
+        return !re || re.test(text);
+    }
+
+    function qeMatchProject(group, proj, tc, machineName) {
+        if (!qeMachineMatchesGroup(group, machineName)) return false;
+        const code = qeNormName(tc.Code);
+        const synonym = qeNormName(tc.Synonym);
+        const cname = qeNormName(tc.CName);
+        if (proj.lisName) {
+            return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
+        }
+        if (!qeMaterialMatchesGroup(group, tc, proj, machineName)) return false;
+        const matName = qeNormName(tc.MaterialName);
+        if (qeAbbrHit(group, proj, tc)) return true;
+        if (code && proj.name && code.toLowerCase() === proj.name.toLowerCase()) return true;
+        if (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase()) return true;
+        if (code === proj.code) return true;
+        const cnameMatch = cname === proj.name || (cname && proj.name && (cname.includes(proj.name) || proj.name.includes(cname)));
+        const matMatch = matName === proj.name || (matName && proj.name && (matName.includes(proj.name) || proj.name.includes(matName)));
+        const abbrMatch = (matName && proj.name && matName.toLowerCase() === proj.name.toLowerCase()) ||
+            (cname && proj.name && cname.toLowerCase() === proj.name.toLowerCase()) ||
+            (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase());
+        const aliases = QE_ALIASES[proj.name] || [];
+        const aliasMatch = aliases.some(alias => {
+            const a = alias.toLowerCase();
+            const cn = cname.toLowerCase();
+            const mn = matName.toLowerCase();
+            const cd = code.toLowerCase();
+            const sy = synonym.toLowerCase();
+            return cn === a || cn.includes(a) || a.includes(cn) ||
+                   mn === a || mn.includes(a) || a.includes(mn) ||
+                   cd === a || sy === a;
+        });
+        return cnameMatch || matMatch || abbrMatch || aliasMatch;
+    }
+
+    // 项目名称别名映射（模板名 → LIS CName）
+    const QE_ALIASES = {
+        // 血常规
+        'WBC': ['白细胞计数', '白细胞', 'WBC'],
+        'RBC': ['红细胞计数', '红细胞', 'RBC'],
+        'Hgb': ['血红蛋白', '血红蛋白浓度', 'Hgb', 'HGB'],
+        'Plt': ['血小板计数', '血小板', 'PLT', 'Plt'],
+        'Hct': ['红细胞压积', '红细胞比容', 'HCT', 'Hct'],
+        'MCV': ['平均红细胞体积', 'MCV'],
+        'MCH': ['平均红细胞血红蛋白含量', 'MCH', '平均血红蛋白含量'],
+        'MCHC': ['平均红细胞血红蛋白浓度', 'MCHC'],
+        // 凝血
+        'INR': ['国际标准化比值', 'INR'],
+        'APTT': ['活化部分凝血活酶时间', 'APTT', '活化部份凝血活酶时间'],
+        'PT': ['凝血酶原时间', 'PT'],
+        'FIB': ['纤维蛋白原', 'FIB', '纤维蛋白原定量'],
+        'D-二聚体（FEU)': ['D-二聚体', 'D-二聚体测定', 'D-Dimer', 'D二聚体', 'DD'],
+        // 尿常规
+        '比重': ['比重', 'SG'],
+        '蛋白': ['蛋白', '蛋白质', 'PRO'],
+        '葡萄糖': ['葡萄糖', 'GLU'],
+        '白细胞酯酶': ['白细胞酯酶', '白细胞脂酶', 'LEU'],
+        '酮体': ['酮体', 'KET'],
+        '胆红素': ['胆红素', 'BIL'],
+        '尿胆原': ['尿胆原', 'URO'],
+        '隐血': ['隐血', 'BLD'],
+        '亚硝酸盐': ['亚硝酸盐', 'NIT'],
+        'PH': ['酸碱度', 'PH', 'pH'],
+        // 内分泌
+        'TT3': ['三碘甲状原氨酸', '总T3', 'TT3'],
+        'TT4': ['甲状腺素', '总T4', 'TT4'],
+        'FT3': ['游离三碘甲状原氨酸', '游离T3', 'FT3'],
+        'FT4': ['游离甲状腺素', '游离T4', 'FT4'],
+        'TSH': ['促甲状腺激素', 'TSH', '促甲状腺素'],
+        'FSH': ['卵泡刺激素', '促卵泡激素', 'FSH', '卵泡刺激素(FSH)', '促卵泡生成素', '卵泡生成素', 'hFSH'],
+        'LH': ['黄体生成素', '促黄体生成素', 'LH'],
+        'PRL泌乳素': ['泌乳素', '催乳素', 'PRL'],
+        'E2': ['雌二醇', 'E2'],
+        'P孕酮': ['孕酮', '孕激素', 'PROG'],
+        'T睾酮': ['睾酮', 'TESTO'],
+        // 肿瘤
+        'AFP': ['甲胎蛋白', 'AFP'],
+        'CEA': ['癌胚抗原', 'CEA'],
+        '总PSA': ['前列腺特异性抗原', '总前列腺特异性抗原', 'PSA', 'T-PSA'],
+        '铁蛋白': ['铁蛋白', 'FER', 'Ferritin'],
+        'CA125': ['糖类抗原125', 'CA125'],
+        'CA153': ['糖类抗原153', 'CA153'],
+        'CA199': ['糖类抗原199', 'CA199'],
+        'F-PSA': ['游离前列腺特异性抗原', '游离PSA', 'F-PSA', 'FPSA'],
+        // 心肌
+        'CK-MB': ['肌酸激酶同工酶', 'CK-MB', 'CKMB'],
+        'MYO': ['肌红蛋白', 'MYO', 'Mb', '肌红蛋'],
+        '肌钙蛋白': ['肌钙蛋白', '肌钙蛋白I', '肌钙蛋白T', 'cTnI', 'cTnl', 'cTnT', 'TnI', '肌钙蛋白I测定'],
+        // 生化（LIS 缩写补充）
+        '丙氨酸氨基转移酶': ['ALT'],
+        '天门冬氨酸氨基转移酶': ['AST'],
+        'γ-谷氨酰基转移酶': ['GGT'],
+        '碱性磷酸酶': ['ALP'],
+        '乳酸脱氢酶': ['LDH'],
+        '肌酸激酶': ['CK'],
+        '尿素': ['BUN'],
+        '肌酐': ['CREA'],
+        '尿酸': ['UA'],
+        '甘油三酯': ['TG'],
+        '总胆固醇': ['CHO'],
+        '高密度脂蛋白胆固醇': ['HDL'],
+        '总胆红素': ['TBIL'],
+        '直接胆红素': ['DBIL'],
+        '钾': ['K'], '钠': ['Na'], '氯': ['Cl', 'CL'], '钙': ['Ca', 'CA'], '磷': ['PHOS'],
+        'α-淀粉酶': ['AMY'], '总蛋白': ['TP'], '白蛋白': ['ALB'],
+        // 血脂
+        '低密度脂蛋白胆固醇': ['LDL'],
+        '载脂蛋白A1': ['APOA1'], '载脂蛋白B': ['APOB'], '脂蛋白a': ['LPa', 'LP(a)'],
+        // 传染病（X8：LIS 仅中文名）
+        'HbsAg': ['乙型肝炎病毒表面抗原测定', '乙肝表面抗原', 'HBsAg', 'HbsAg'],
+        'HbsAb': ['乙型肝炎病毒表面抗体测定', '乙肝表面抗体', 'HBsAb', 'HbsAb', '抗-HBs'],
+        'HbeAg': ['乙型肝炎病毒e抗原测定', '乙肝e抗原', 'HBeAg', 'HbeAg'],
+        'HbeAb': ['乙型肝炎病毒e抗体测定', '乙肝e抗体', 'HBeAb', 'HbeAb', '抗-HBe'],
+        'HbcAb': ['乙型肝炎病毒核心抗体测定', '乙肝核心抗体', 'HBcAb', 'HbcAb', '抗-HBc'],
+        '抗-HCV': ['丙型肝炎病毒抗体测定', '丙肝抗体', '抗-HCV', 'HCV'],
+        'TP': ['梅毒螺旋体抗体测定', '梅毒抗体', 'TP', '梅毒'],
+        'HIV': ['人类免疫缺陷病毒抗体测定', '人免疫缺陷病毒抗体测定', 'HIV抗体', 'HIV', '艾滋'],
+    };
+
+    // --- 从质控页面读取数据 ---
+    function qeGetJQ() {
+        const ctx = qcGetCtx();
+        return (ctx.win.jQuery || ctx.win.$ || g('jQuery') || g('$') || window.jQuery || window.$);
+    }
+
+    function qeIsQCPage() {
+        return isQCDataInputPage();
+    }
+
+    // 质控 API：仪器/项目列表用 DataView，结果数据用 DataInputNew（与录入页一致）
+    function qeQCApiUrl() { return BASE + '/qc/ashx/ashQCDataView.ashx'; }
+    function qeQCDataApiUrl() { return BASE + '/qc/ashx/ashQCDataInputNew.ashx'; }
+
+    function qeMonthEndDate(year, month) {
+        const last = new Date(year, month, 0).getDate();
+        return year + '-' + String(month).padStart(2, '0') + '-' + String(last).padStart(2, '0');
+    }
+
+    // 通过 API 查询某台仪器的测试项目列表（与录入页一致用 DataInputNew）
+    async function qeApiTestCodes(machineDR, startDate, endDate, matDR) {
+        const api = qeQCDataApiUrl();
+        const sd = startDate || '2024-01-01';
+        const ed = endDate || today();
+        const url = api + '?Method=QryMachineTestCode&MachineParameterDR=' + encodeURIComponent(machineDR)
+            + '&MatDR=' + encodeURIComponent(matDR || '') + '&MatLotDR=&StartDate=' + encodeURIComponent(sd) + '&EndDate=' + encodeURIComponent(ed);
+        try {
+            const data = await fetchJ(url, 15000);
+            return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+        } catch(e) { console.error('[LIS-QE] qeApiTestCodes error:', e); return []; }
+    }
+
+    // 通过 API 查询某项目各浓度的质控结果（对齐 DataInputNew.QueryData）
+    async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate) {
+        const api = qeQCDataApiUrl();
+        const levels = [];
+        try {
+            const leaveUrl = api + '?Method=QueryQCLeaveData&MachineParameterDR=' + encodeURIComponent(machineDR)
+                + '&TestCodeDR=' + encodeURIComponent(testCodeDR)
+                + '&StartDate=' + encodeURIComponent(startDate) + '&EndDate=' + encodeURIComponent(endDate)
+                + '&MaterialCode=' + encodeURIComponent(matDR || '') + '&BatchCode=';
+            const leaveData = await fetchJ(leaveUrl, 15000);
+            const leaveRows = Array.isArray(leaveData) ? leaveData : (leaveData && leaveData.rows) || [];
+            leaveRows.forEach(r => {
+                if (r.LevelNo != null && r.LevelNo !== '') {
+                    levels.push({ levelNo: String(r.LevelNo), matLotDR: r.MatLotDR || '' });
+                }
+            });
+        } catch(e) {
+            console.warn('[LIS-QE] QueryQCLeaveData failed:', e.message);
+        }
+        if (!levels.length) levels.push({ levelNo: '1', matLotDR: '' }, { levelNo: '2', matLotDR: '' });
+
+        const allRows = [];
+        const seen = new Set();
+        for (const lv of levels) {
+            try {
+                const url = api + '?Method=QueryTestResultData&StartDate=' + encodeURIComponent(startDate)
+                    + '&EndDate=' + encodeURIComponent(endDate)
+                    + '&InstrumentCode=' + encodeURIComponent(machineDR)
+                    + '&Leavel=' + encodeURIComponent(lv.levelNo)
+                    + '&TCCode=' + encodeURIComponent(testCodeDR)
+                    + '&QcRule=&MatDR=' + encodeURIComponent(matDR || '') + '&BatchCode=';
+                const data = await fetchJ(url, 25000);
+                const rows = Array.isArray(data) ? data : (data && data.rows) || [];
+                rows.forEach(r => {
+                    if (!r.LevelNo) r.LevelNo = lv.levelNo;
+                    const date = r.TestDate || r.AddDate || r.QCDate || '';
+                    const key = date + '|' + r.LevelNo + '|' + (r.TestCodeDR || testCodeDR);
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    if (date || r.Result1 != null || r.DayAve != null || r.Result != null) allRows.push(r);
+                });
+            } catch(e) {
+                console.warn('[LIS-QE] QueryTestResultData L' + lv.levelNo + ' failed:', e.message);
+            }
+        }
+        return allRows;
+    }
+
+    // 获取所有可用仪器列表
+    function qeGetMachines() {
+        const jq = qeGetJQ();
+        if (!jq || !jq('#cmbMach').combobox) return [];
+        try {
+            const data = jq('#cmbMach').combobox('getData') || [];
+            return data.map(d => ({ id: String(d.RowID || d.value || d.id || d.MachineDR || ''), text: String(d.CName || d.text || d.Name || d.LName || ''), raw: d }));
+        } catch(e) { console.error('[LIS-QE] qeGetMachines error:', e); return []; }
+    }
+
+    // 通过 QC API 查询工作组的仪器参数列表
+    async function qeApiMachineParameters(wgDR) {
+        const url = qeQCApiUrl() + '?Method=QryMachineParameter&WorkGroupDR=' + wgDR;
+        try {
+            const data = await fetchJ(url, 15000);
+            return (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+        } catch(e) { console.error('[LIS-QE] qeApiMachineParameters error:', e); return []; }
+    }
+
+    // 遍历所有工作组获取全部仪器（使用 QC API 查询 MachineParameter）
+    async function qeGetAllMachines() {
+        const allMachines = [];
+        const wgs = [
+            { dr: '1', name: '临检' },
+            { dr: '3', name: '生化' },
+            { dr: '4', name: '免疫' },
+        ];
+        for (const w of wgs) {
+            try {
+                const rows = await qeApiMachineParameters(w.dr);
+                console.log(`[LIS-QE] 工作组 ${w.name}(${w.dr}): ${rows.length} 台仪器`);
+                rows.forEach(m => {
+                    allMachines.push({
+                        id: String(m.RowID || ''),
+                        text: String(m.CName || m.Name || m.RowID || ''),
+                        wgDR: w.dr,
+                        wgName: w.name,
+                        raw: m,
+                    });
+                });
+            } catch(e) { console.error(`[LIS-QE] 加载工作组 ${w.name} 失败:`, e); }
+        }
+        console.log(`[LIS-QE] 共找到 ${allMachines.length} 台仪器`);
+        return allMachines;
+    }
+
+    // 设置仪器选择（通过 loadData 注入数据再 setValue）
+    function qeSelectMachine(machineObj) {
+        return new Promise(resolve => {
+            const jq = qeGetJQ();
+            if (!jq) { resolve(); return; }
+            try {
+                // 将目标仪器注入 combobox 数据源
+                const item = {
+                    RowID: machineObj.id,
+                    Code: machineObj.raw && machineObj.raw.Code || '',
+                    CName: machineObj.text,
+                    value: machineObj.id,
+                    text: machineObj.text,
+                };
+                jq('#cmbMach').combobox('loadData', [item]);
+                jq('#cmbMach').combobox('setValue', machineObj.id);
+                // 手动触发 onSelect
+                const opts = jq('#cmbMach').combobox('options');
+                if (opts && opts.onSelect) {
+                    opts.onSelect.call(jq('#cmbMach')[0], item);
+                }
+            } catch(e) { console.error('[LIS-QE] qeSelectMachine error:', e); }
+            // 等待测试项目列表加载
+            setTimeout(resolve, 1200);
+        });
+    }
+
+    // 获取当前仪器下的测试项目列表
+    function qeGetTestCodes() {
+        const jq = qeGetJQ();
+        if (!jq || !jq('#dgTestCode').datagrid) return [];
+        try {
+            return jq('#dgTestCode').datagrid('getRows') || [];
+        } catch(e) { return []; }
+    }
+
+    // 选中一个测试项目并等待数据加载
+    function qeSelectTestCode(rowIndex) {
+        return new Promise(resolve => {
+            const jq = qeGetJQ();
+            if (!jq) { resolve(); return; }
+            try {
+                jq('#dgTestCode').datagrid('selectRow', rowIndex);
+            } catch(e) {}
+            setTimeout(resolve, 1200); // 等待 dgData 加载
+        });
+    }
+
+    // 读取 dgData 中的数据
+    function qeReadData() {
+        const jq = qeGetJQ();
+        if (!jq || !jq('#dgData').datagrid) return [];
+        try {
+            return jq('#dgData').datagrid('getRows') || [];
+        } catch(e) { return []; }
+    }
+
+    // 计算质控结果值（复用 qcAverageValue 逻辑）
+    function qeCalcValue(row) {
+        const vals = [];
+        for (let i = 1; i <= 7; i++) {
+            const n = parseFloat(row['Result' + i]);
+            if (!Number.isNaN(n)) vals.push(n);
+        }
+        if (vals.length) return vals.reduce((a, b) => a + b, 0) / vals.length;
+        const candidates = [row.DayAve, row.Result, row.TextRes, row.TestResultPosNeg];
+        for (const v of candidates) {
+            const n = parseFloat(v);
+            if (!Number.isNaN(n)) return n;
+        }
+        return null;
+    }
+
+    // 从日期字符串提取日
+    function qeExtractDay(dateStr) {
+        const s = String(dateStr || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return parseInt(s.slice(8, 10), 10);
+        if (/^\d{8}$/.test(s)) return parseInt(s.slice(6, 8), 10);
+        const d = new Date(s);
+        return Number.isNaN(d.getTime()) ? 0 : d.getDate();
+    }
+
+    // 从日期字符串提取月
+    function qeExtractMonth(dateStr) {
+        const s = String(dateStr || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return parseInt(s.slice(5, 7), 10);
+        if (/^\d{8}$/.test(s)) return parseInt(s.slice(4, 6), 10);
+        const d = new Date(s);
+        return Number.isNaN(d.getTime()) ? 0 : d.getMonth() + 1;
+    }
+
+    function qeCountMonthQCRows(dataRows, month, year) {
+        let n = 0;
+        (dataRows || []).forEach(r => {
+            const val = qeCalcValue(r);
+            if (val === null || Number.isNaN(val)) return;
+            const date = r.TestDate || r.AddDate || r.QCDate || '';
+            const m = qeExtractMonth(date);
+            const d = qeExtractDay(date);
+            const inMonth = (m === month && d > 0) ||
+                (String(date).indexOf(year + '-' + String(month).padStart(2, '0')) === 0 && d > 0);
+            if (inMonth) n++;
+        });
+        return n;
+    }
+
+    // 同月多质控物时（如血常规 202602/202604），自动选有数据的 MatDR
+    async function qeFetchProjectQCData(group, proj, map, cfg) {
+        const month = cfg._month || (new Date().getMonth() + 1);
+        const year = cfg._year || new Date().getFullYear();
+        const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
+        const endDate = qeMonthEndDate(year, month);
+        const matCandidates = [];
+        const addMat = (md, name) => {
+            const id = String(md || '');
+            if (matCandidates.some(c => c.matDR === id)) return;
+            matCandidates.push({ matDR: id, materialName: name || '' });
+        };
+        addMat(map.matDR, map.materialName);
+
+        if (group.id === 'blood' || group.id === 'urine') {
+            const testCodes = await qeApiTestCodes(map.machineDR, startDate, endDate);
+            testCodes.forEach(tc => {
+                if (!qeMatchProject(group, proj, tc, map.machineName)) return;
+                addMat(tc.MatDR, tc.MaterialName);
+            });
+        }
+
+        let bestRows = [], bestMat = map.matDR || '', bestName = map.materialName || '', bestCount = 0;
+        for (const c of matCandidates) {
+            const rows = await qeApiQCData(map.machineDR, map.testCodeDR, c.matDR, startDate, endDate);
+            const cnt = qeCountMonthQCRows(rows, month, year);
+            if (cnt > bestCount) {
+                bestCount = cnt;
+                bestRows = rows;
+                bestMat = c.matDR;
+                bestName = c.materialName || bestName;
+            }
+        }
+        if (bestCount > 0 && bestMat !== map.matDR) {
+            console.log('[LIS-QE] ' + proj.name + ' 质控物切换: ' + (map.materialName || map.matDR) + ' -> ' + (bestName || bestMat));
+            map.matDR = bestMat;
+            map.materialName = bestName;
+        }
+        return bestRows;
+    }
+
+    function qeMappingCount(mappings) {
+        return Object.keys(mappings || {}).filter(k => !k.startsWith('_')).length;
+    }
+
+    // CS5100 仪器列表常为空，用质控物 MatDR 补查 + 院内稳定 DR 兜底
+    async function qeCoagFallbackMappings(mappings, machines, startDate, endDate, statusCb) {
+        const coagGroup = QE_GROUPS.find(g => g.id === 'coag');
+        if (!coagGroup) return;
+        const missing = coagGroup.projects.filter(p => !mappings[p.code]);
+        if (!missing.length) return;
+        const coagMach = machines.find(m => /CS.?5100|凝血|血凝/i.test(m.text));
+        if (!coagMach) return;
+        if (statusCb) statusCb('凝血组：尝试质控物补查...', 'info');
+
+        const matDRs = ['167', '169', '151', '98'];
+        for (const matDR of matDRs) {
+            const testCodes = await qeApiTestCodes(coagMach.id, startDate, endDate, matDR);
+            for (const tc of testCodes) {
+                const rowID = String(tc.RowID || '');
+                const mat = String(tc.MatDR || matDR || '');
+                const cname = qeNormName(tc.CName);
+                for (const proj of coagGroup.projects) {
+                    if (mappings[proj.code]) continue;
+                    if (!qeMatchProject(coagGroup, proj, tc, coagMach.text)) continue;
+                    mappings[proj.code] = {
+                        machineDR: coagMach.id,
+                        machineName: coagMach.text,
+                        testCodeDR: rowID,
+                        testName: cname || proj.name,
+                        matDR: mat,
+                        matLotDR: String(tc.MatLotRowID || ''),
+                        wgDR: coagMach.wgDR,
+                        wgName: coagMach.wgName,
+                        groupId: coagGroup.id,
+                    };
+                }
+            }
+        }
+
+        const stillMissing = coagGroup.projects.filter(p => !mappings[p.code]);
+        if (!stillMissing.length) return;
+        const hardcoded = [
+            { code: '1101', testCodeDR: '29', matDR: '167', names: ['凝血酶原时间', 'PT'] },
+            { code: '1102', testCodeDR: '282', matDR: '167', names: ['国际标准化比值', 'INR'] },
+            { code: '1103', testCodeDR: '27', matDR: '167', names: ['活化部分凝血活酶时间', 'APTT'] },
+            { code: '1104', testCodeDR: '30', matDR: '167', names: ['纤维蛋白原', 'FIB'] },
+        ];
+        hardcoded.forEach(h => {
+            if (mappings[h.code]) return;
+            const proj = coagGroup.projects.find(p => p.code === h.code);
+            if (!proj) return;
+            mappings[h.code] = {
+                machineDR: coagMach.id,
+                machineName: coagMach.text,
+                testCodeDR: h.testCodeDR,
+                testName: h.names[0],
+                matDR: h.matDR,
+                matLotDR: '',
+                wgDR: coagMach.wgDR,
+                wgName: coagMach.wgName,
+                groupId: coagGroup.id,
+            };
+        });
+        const coagFound = coagGroup.projects.filter(p => mappings[p.code]).length;
+        if (statusCb && coagFound) statusCb(`凝血组：${coagFound}/${coagGroup.projects.length} 已映射`, 'info');
+    }
+
+    // --- 自动检测项目映射 ---
+    // 遍历所有工作组的仪器，通过 API 查询测试项目并匹配
+    async function qeDetectMappings(statusCb) {
+        const mappings = {}; // { projectCode: { machineDR, testCodeDR, testName, machineName, matDR, matLotDR, wgDR, wgName } }
+        const machines = await qeGetAllMachines();
+        const now = today();
+        // 计算当月日期范围
+        const cfg = qeCollectConfig();
+        const year = cfg._year || new Date().getFullYear();
+        const month = cfg._month || (new Date().getMonth() + 1);
+        const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
+        const endDate = qeMonthEndDate(year, month);
+
+        if (statusCb) statusCb(`正在检测项目映射... 共 ${machines.length} 台仪器`, 'info');
+
+        for (let mi = 0; mi < machines.length; mi++) {
+            if (qeAbortFlag) break;
+            const mach = machines[mi];
+            if (statusCb) statusCb(`检测 ${mi+1}/${machines.length}: ${mach.text}（${mach.wgName}）`, 'info');
+
+            // 通过 API 直接查询测试项目
+            const testCodes = await qeApiTestCodes(mach.id, startDate, endDate);
+            console.log(`[LIS-QE] ${mach.text}: ${testCodes.length} 个测试项目`);
+            if (testCodes.length > 0) {
+                console.log('[LIS-QE] 示例:', testCodes.slice(0, 3).map(tc =>
+                    `Code=${tc.Code} CName=${tc.CName} MatName=${tc.MaterialName} RowID=${tc.RowID} MatDR=${tc.MatDR}`
+                ).join(' | '));
+            }
+            for (let ti = 0; ti < testCodes.length; ti++) {
+                const tc = testCodes[ti];
+                const rowID = String(tc.RowID || '');
+                const matDR = String(tc.MatDR || '');
+                const matLotDR = String(tc.MatLotRowID || '');
+                const cname = qeNormName(tc.CName);
+                for (const group of QE_GROUPS) {
+                    for (const proj of group.projects) {
+                        if (mappings[proj.code]) continue;
+                        if (!qeMatchProject(group, proj, tc, mach.text)) continue;
+                        mappings[proj.code] = {
+                            machineDR: mach.id,
+                            machineName: mach.text,
+                            testCodeDR: rowID,
+                            testName: cname || proj.name,
+                            matDR: matDR,
+                            matLotDR: matLotDR,
+                            materialName: String(tc.MaterialName || ''),
+                            wgDR: mach.wgDR,
+                            wgName: mach.wgName,
+                            groupId: group.id,
+                        };
+                    }
+                }
+            }
+        }
+
+        await qeCoagFallbackMappings(mappings, machines, startDate, endDate, statusCb);
+
+        mappings._meta = { year: year, month: month, at: Date.now() };
+        const found = qeMappingCount(mappings);
+        const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
+        if (statusCb) statusCb(`映射检测完成: ${found}/${total} 个项目已匹配（${year}-${String(month).padStart(2, '0')}）`, found === total ? 'ok' : 'info');
+        return mappings;
+    }
+
+    // 从 localStorage 加载或保存映射
+    const QE_MAP_KEY = 'lis-qe-mappings-v8';
+    function qeLoadMappings() {
+        try { return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}'); } catch(e) { return {}; }
+    }
+    function qeSaveMappings(m) {
+        try { localStorage.setItem(QE_MAP_KEY, JSON.stringify(m)); } catch(e) {}
+    }
+
+    // --- iframe 管理 ---
+    let _qeIframe = null;
+    let _qeIframeReady = false;
+    let _qeIframeResolve = null;
+
+    function qeEnsureQCPage() {
+        return new Promise((resolve) => {
+            if (_qeIframeReady && _qeIframe && _qeIframe.contentWindow) {
+                resolve(true);
+                return;
+            }
+            _qeIframeResolve = resolve;
+            // 检查是否已有质控页面 iframe（用户可能已打开）
+            const existing = qcFindIFrame();
+            if (existing) {
+                _qeIframe = existing;
+                _qeIframeReady = true;
+                console.log('[LIS-QE] 找到已有质控页面 iframe');
+                resolve(true);
+                return;
+            }
+            // 创建隐藏 iframe（带 MenuDR 参数）
+            _qeIframe = document.createElement('iframe');
+            _qeIframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+            _qeIframe.src = BASE + '/qc/form/frmQCDataInputNew?MenuDR=924&NotIndependent=1';
+            document.body.appendChild(_qeIframe);
+            console.log('[LIS-QE] 创建质控页面 iframe:', _qeIframe.src);
+            _qeIframe.onload = () => {
+                console.log('[LIS-QE] iframe loaded');
+                setTimeout(() => {
+                    _qeIframeReady = true;
+                    if (_qeIframeResolve) { _qeIframeResolve(true); _qeIframeResolve = null; }
+                }, 5000); // 等待页面 JS 初始化
+            };
+            _qeIframe.onerror = () => {
+                console.error('[LIS-QE] iframe load error');
+            };
+            setTimeout(() => {
+                if (!_qeIframeReady) {
+                    console.error('[LIS-QE] iframe 加载超时');
+                    _qeIframeReady = true;
+                    if (_qeIframeResolve) { _qeIframeResolve(false); _qeIframeResolve = null; }
+                }
+            }, 20000);
+        });
+    }
+
+    // --- 核心：获取某组的质控数据 ---
+    async function qeFetchGroupData(group, cfg, mappings, statusCb) {
+        const rows = []; // 最终输出行
+        const month = cfg._month || (new Date().getMonth() + 1);
+        const year = cfg._year || new Date().getFullYear();
+        const operator = qeGetOperator(cfg, group);
+        const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
+        const endDate = qeMonthEndDate(year, month);
+
+        for (let pi = 0; pi < group.projects.length; pi++) {
+            if (qeAbortFlag) break;
+            const proj = group.projects[pi];
+            const map = mappings[proj.code];
+            if (!map) {
+                if (statusCb) statusCb(`  跳过 ${proj.name}（未找到映射）`, 'error');
+                continue;
+            }
+
+            if (statusCb) statusCb(`  加载 ${proj.name} (${pi+1}/${group.projects.length})...`, 'info');
+
+            // 通过 API 查询质控数据（血常规/尿常规等同月多质控物时自动选有数据的）
+            const dataRows = await qeFetchProjectQCData(group, proj, map, cfg);
+            if (!dataRows.length) {
+                const matHint = map.materialName ? '（质控物 ' + map.materialName + '）' : '';
+                if (statusCb) statusCb(`  ${proj.name}: 无数据${matHint}`, 'info');
+                continue;
+            }
+
+            // 按浓度分组
+            const levels = {};
+            dataRows.forEach(r => {
+                const lv = String(r.LevelNo || '1');
+                if (!levels[lv]) levels[lv] = [];
+                const val = qeCalcValue(r);
+                if (val !== null && !Number.isNaN(val)) {
+                    const date = r.TestDate || r.AddDate || r.QCDate || '';
+                    const m = qeExtractMonth(date);
+                    const d = qeExtractDay(date);
+                    const inMonth = (m === month && d > 0) ||
+                        (String(date).indexOf(year + '-' + String(month).padStart(2, '0')) === 0 && d > 0);
+                    if (inMonth) levels[lv].push({ day: d, value: val });
+                }
+            });
+
+            // 生成输出行
+            const conc = group.concentrations || 1;
+            for (let li = 0; li < conc; li++) {
+                const lvNo = String(li + 1);
+                const lvData = levels[lvNo] || [];
+                let lot = '';
+                if (group.lotMode === 'suffix') {
+                    const base = qeGetLot(cfg, group);
+                    lot = base + (li === 0 ? 'N' : 'H');
+                } else if (group.lotMode === 'dual') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = Array.isArray(lots) ? lots[li] || '' : '';
+                } else if (group.lotMode === 'single') {
+                    lot = qeGetLot(cfg, group);
+                } else if (group.lotMode === 'perProject' || group.lotMode === 'immune') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = lots[proj.code] || '';
+                } else if (group.lotMode === 'coag') {
+                    const lots = qeGetLot(cfg, group);
+                    lot = proj.isDDimer ? lots._dimer : lots._main;
+                }
+                lvData.sort((a, b) => a.day - b.day);
+                lvData.forEach(pt => {
+                    rows.push([proj.code, month, pt.day, 1, lot, pt.value, proj.name, operator]);
+                });
+            }
+        }
+        return rows;
+    }
+
+    // --- Excel 生成 ---
+    function qeBuildXlsx(groupName, rows) {
+        if (typeof XLSX === 'undefined') {
+            throw new Error('SheetJS (XLSX) 未加载，请检查网络连接');
+        }
+        const wb = XLSX.utils.book_new();
+        const header = ['项目编码', '月', '日', '次', '批号', '数值', '备注', '操作者'];
+        const data = [header, ...rows];
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        // 设置列宽
+        ws['!cols'] = [
+            { wch: 10 }, { wch: 5 }, { wch: 5 }, { wch: 4 },
+            { wch: 18 }, { wch: 10 }, { wch: 20 }, { wch: 10 },
+        ];
+        XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+        return XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    }
+
+    function qeDownloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+    }
+
+    // ZIP 打包下载所有导出文件
+    async function qeDownloadAllZip() {
+        console.log('[LIS-QE] qeDownloadAllZip called');
+        const resultSection = document.getElementById('lis-qe-result-section');
+        const items = resultSection ? resultSection.querySelectorAll('.qe-result-item') : [];
+        console.log('[LIS-QE] result items:', items.length);
+        const blobs = [];
+        items.forEach((item, i) => {
+            const btn = item.querySelector('button[data-fn]');
+            console.log(`[LIS-QE] item ${i}: btn=${!!btn}, _blob=${btn ? !!btn._blob : 'N/A'}, fn=${btn ? btn.getAttribute('data-fn') : 'N/A'}`);
+            if (btn && btn._blob) {
+                blobs.push({ name: btn.getAttribute('data-fn'), blob: btn._blob });
+            }
+        });
+        console.log('[LIS-QE] blobs collected:', blobs.length);
+        if (!blobs.length) {
+            qeSetStatus('没有可下载的文件。请先点击"开始导出"。', 'error');
+            return;
+        }
+        try {
+            // 检查 JSZip 是否已加载（@require 或动态注入）
+            console.log('[LIS-QE] JSZip type:', typeof JSZip);
+            if (typeof JSZip === 'undefined') {
+                console.log('[LIS-QE] JSZip undefined, trying dynamic load...');
+                qeSetStatus('正在加载 JSZip...', 'info');
+                try {
+                    await new Promise((resolve, reject) => {
+                        const s = document.createElement('script');
+                        s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+                        s.onload = () => { console.log('[LIS-QE] CDN JSZip loaded'); resolve(); };
+                        s.onerror = (e) => { console.log('[LIS-QE] CDN JSZip failed'); reject(e); };
+                        document.head.appendChild(s);
+                        // 5秒超时
+                        setTimeout(() => reject(new Error('CDN加载超时')), 5000);
+                    });
+                } catch(loadErr) {
+                    console.log('[LIS-QE] CDN load error:', loadErr.message);
+                }
+            }
+            console.log('[LIS-QE] JSZip check after load:', typeof JSZip);
+            if (typeof JSZip === 'undefined') {
+                // JSZip 不可用，逐个下载
+                console.log('[LIS-QE] JSZip still undefined, fallback to individual downloads');
+                qeSetStatus('JSZip 不可用，逐个下载中...', 'info');
+                for (const b of blobs) {
+                    qeDownloadBlob(b.blob, b.name);
+                    await new Promise(r => setTimeout(r, 300));
+                }
+                qeSetStatus(`已逐个下载 ${blobs.length} 个文件。`, 'ok');
+                return;
+            }
+            console.log('[LIS-QE] creating ZIP with', blobs.length, 'files...');
+            const zip = new JSZip();
+            blobs.forEach(b => zip.file(b.name, b.blob));
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            console.log('[LIS-QE] ZIP generated, size:', zipBlob.size);
+            const cfg = qeCollectConfig();
+            const month = cfg._month || (new Date().getMonth() + 1);
+            const year = cfg._year || new Date().getFullYear();
+            qeDownloadBlob(zipBlob, `质控数据_${year}${String(month).padStart(2, '0')}.zip`);
+            qeSetStatus('ZIP 下载完成！', 'ok');
+            console.log('[LIS-QE] ZIP download triggered');
+        } catch(e) {
+            console.log('[LIS-QE] ZIP error:', e.message, e.stack);
+            // 出错时逐个下载兜底
+            try {
+                for (const b of blobs) {
+                    qeDownloadBlob(b.blob, b.name);
+                    await new Promise(r => setTimeout(r, 300));
+                }
+                qeSetStatus(`ZIP 失败，已逐个下载 ${blobs.length} 个文件。`, 'ok');
+            } catch(e2) {
+                qeSetStatus('下载失败: ' + e.message, 'error');
+            }
+        }
+    }
+
+    // --- UI 创建 ---
+    function qeCreateFab() {
+        if (document.getElementById('lis-qe-fab')) return;
+        const fab = document.createElement('button');
+        fab.id = 'lis-qe-fab';
+        fab.textContent = 'QC导';
+        fab.title = '质控数据导出\n拖动移动 | 点击打开';
+        document.body.appendChild(fab);
+
+        // 恢复位置
+        const FAB_POS_KEY = 'lis-qe-fab-pos';
+        try {
+            const fp = JSON.parse(localStorage.getItem(FAB_POS_KEY) || 'null');
+            if (fp && typeof fp.l === 'number') {
+                fab.style.left = fp.l + 'px'; fab.style.top = fp.t + 'px';
+                fab.style.right = 'auto'; fab.style.bottom = 'auto'; fab.style.position = 'fixed';
+            }
+        } catch(e) {}
+
+        // 拖动 + 点击
+        let fabDx = 0, fabDy = 0, fabDownX = 0, fabDownY = 0;
+        fab.addEventListener('mousedown', e => {
+            fabDx = e.clientX - fab.offsetLeft; fabDy = e.clientY - fab.offsetTop;
+            fabDownX = e.clientX; fabDownY = e.clientY;
+            const onMove = ev => {
+                fab.style.left = (ev.clientX - fabDx) + 'px';
+                fab.style.top = (ev.clientY - fabDy) + 'px';
+                fab.style.right = 'auto'; fab.style.bottom = 'auto'; fab.style.position = 'fixed';
+            };
+            const onUp = ev => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                const dist = Math.abs(ev.clientX - fabDownX) + Math.abs(ev.clientY - fabDownY);
+                if (dist < 5) {
+                    const panel = document.getElementById('lis-qe-panel');
+                    if (panel) panel.classList.toggle('show');
+                } else {
+                    try { localStorage.setItem(FAB_POS_KEY, JSON.stringify({ l: fab.offsetLeft, t: fab.offsetTop })); } catch(e) {}
+                }
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            e.preventDefault();
+        });
+    }
+
+    function qeCreatePanel() {
+        if (document.getElementById('lis-qe-panel')) return;
+        const panel = document.createElement('div');
+        panel.id = 'lis-qe-panel';
+
+        const cfg = qeLoadConfig();
+        const now = new Date();
+        const defaultMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+
+        // --- 项目勾选 HTML ---
+        let groupsHtml = '';
+        QE_GROUPS.forEach(g => {
+            groupsHtml += `<label><input type="checkbox" class="qe-gcheck" value="${g.id}" checked>${g.name} (${g.projects.length}项)</label>`;
+        });
+
+        // --- 批号设置 HTML ---
+        let lotsHtml = '';
+        QE_GROUPS.forEach(g => {
+            const gc = (cfg.lots && cfg.lots[g.id]) || {};
+            if (g.lotMode === 'suffix') {
+                const base = gc.baseLot || g.baseLot;
+                lotsHtml += `<div class="qe-lot-item"><span>${g.name} 基础批号</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="baseLot" value="${esc(base)}" placeholder="自动+N/H后缀"></div>`;
+            } else if (g.lotMode === 'dual') {
+                const l1 = (gc.lots && gc.lots[0]) || (g.defaultLots && g.defaultLots[0]) || '';
+                const l2 = (gc.lots && gc.lots[1]) || (g.defaultLots && g.defaultLots[1]) || '';
+                lotsHtml += `<div class="qe-lot-item"><span>${g.name} Level1</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="lot0" value="${esc(l1)}"></div>`;
+                lotsHtml += `<div class="qe-lot-item"><span>${g.name} Level2</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="lot1" value="${esc(l2)}"></div>`;
+            } else if (g.lotMode === 'single') {
+                const lot = gc.lot || g.defaultLot || '';
+                lotsHtml += `<div class="qe-lot-item"><span>${g.name}</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="lot" value="${esc(lot)}"></div>`;
+            } else if (g.lotMode === 'perProject') {
+                g.projects.forEach(p => {
+                    const lot = gc[p.code] || p.defaultLot || '';
+                    lotsHtml += `<div class="qe-lot-item"><span>${p.name}</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="proj" data-code="${p.code}" value="${esc(lot)}"></div>`;
+                });
+            } else if (g.lotMode === 'coag') {
+                const mainLot = gc._main || g.defaultLot || '';
+                const dimerLot = gc._dimer || g.dDimLot || '';
+                lotsHtml += `<div class="qe-lot-item"><span>凝血四项(INR/APTT/PT/FIB)</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="coag_main" value="${esc(mainLot)}"></div>`;
+                lotsHtml += `<div class="qe-lot-item"><span>D-二聚体</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="coag_dimer" value="${esc(dimerLot)}"></div>`;
+            } else if (g.lotMode === 'immune') {
+                let projLotsHtml = '';
+                g.projects.forEach(p => {
+                    const lot = gc[p.code] || p.defaultLot || g.defaultLot || '';
+                    projLotsHtml += `<div class="qe-lot-item"><span>${p.name}</span><input type="text" class="qe-lot-input" data-group="${g.id}" data-type="proj" data-code="${p.code}" value="${esc(lot)}"></div>`;
+                });
+                lotsHtml += `<div class="qe-lot-item" style="flex:1 0 100%"><span style="min-width:auto">${g.name}</span><span class="qe-immune-toggle" data-target="qe-imm-${g.id}">展开设置 ▾</span></div>`;
+                lotsHtml += `<div id="qe-imm-${g.id}" class="qe-immune-lots" style="flex:1 0 100%"><div class="qe-lot-grid">${projLotsHtml}</div></div>`;
+            }
+        });
+
+        // --- 操作者设置 HTML ---
+        const operatorGroups = [
+            { ids: ['blood', 'coag', 'lipid', 'urine'], label: '血常规/凝血/血脂/尿常规', def: '' },
+            { ids: ['biochem'], label: '生化', def: '' },
+            { ids: ['endocrine', 'tumor', 'cardiac', 'infection'], label: '免疫组', def: '' },
+        ];
+        let operatorHtml = '';
+        operatorGroups.forEach(og => {
+            const val = (cfg.operators && cfg.operators[og.ids[0]]) || og.def;
+            operatorHtml += `<div class="qe-lot-item"><span>${og.label}</span><input type="text" class="qe-op-input" data-ids="${og.ids.join(',')}" value="${esc(val)}" style="flex:1;min-width:0"></div>`;
+        });
+
+        panel.innerHTML = `
+            <div id="lis-qe-hd">
+                <h3>📊 质控数据导出</h3>
+                <span class="qe-spacer"></span>
+                <button id="lis-qe-mini" title="隐藏">_</button>
+                <button class="qe-close" id="lis-qe-close" title="关闭">×</button>
+            </div>
+            <div id="lis-qe-body">
+                <!-- Step 1: 选择月份和项目 -->
+                <div class="qe-step">
+                    <div class="qe-step-hd">
+                        <span class="qe-step-num">1</span>
+                        <span class="qe-step-title">选择月份和导出项目</span>
+                        <button id="lis-qe-toggle-all" style="height:22px;font-size:10px;border:1px solid #b8ddd3;background:#f0faf7;color:#0d6655;border-radius:3px;padding:0 8px;cursor:pointer;font-weight:700">全选/反选</button>
+                    </div>
+                    <div class="qe-step-body">
+                        <div class="qe-date-row" style="margin-bottom:6px">
+                            <input type="month" id="lis-qe-month" value="${defaultMonth}">
+                        </div>
+                        <div class="qe-row">${groupsHtml}</div>
+                    </div>
+                </div>
+
+                <!-- Step 2: 批号和操作者设置 -->
+                <div class="qe-step">
+                    <div class="qe-step-hd">
+                        <span class="qe-step-num">2</span>
+                        <span class="qe-step-title">批号和操作者设置</span>
+                        <span class="qe-step-desc">修改后点击右侧保存</span>
+                        <button class="qe-save-btn" id="lis-qe-save">💾 保存设置</button>
+                    </div>
+                    <div class="qe-step-body">
+                        <div class="qe-lot-grid">${lotsHtml}</div>
+                        <div style="margin-top:8px;border-top:1px solid #edf1f5;padding-top:8px">
+                            <div style="font-size:11px;font-weight:700;color:#526575;margin-bottom:4px">操作者</div>
+                            <div class="qe-lot-grid">${operatorHtml}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: 检测和导出 -->
+                <div class="qe-step">
+                    <div class="qe-step-hd">
+                        <span class="qe-step-num">3</span>
+                        <span class="qe-step-title">检测映射 → 导出</span>
+                    </div>
+                    <div class="qe-step-body">
+                        <div class="qe-actions">
+                            <button id="lis-qe-detect" title="自动检测质控系统中的项目映射">🔍 检测映射</button>
+                            <button id="lis-qe-export" class="primary" title="开始导出">▶ 开始导出</button>
+                            <button id="lis-qe-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">⏹ 停止</button>
+                        </div>
+                        <div id="lis-qe-status" style="margin-top:6px">选择月份和项目后，点击"检测映射"。</div>
+                        <div class="qe-progress" id="lis-qe-progress"><div class="qe-progress-bar" id="lis-qe-pbar"></div><div class="qe-progress-text" id="lis-qe-ptext"></div></div>
+                        <div class="qe-mapping-info" id="lis-qe-mapinfo"></div>
+                    </div>
+                </div>
+
+                <!-- 导出结果 -->
+                <div class="qe-step" id="lis-qe-result-section" style="display:none">
+                    <div class="qe-step-hd">
+                        <span class="qe-step-num">✓</span>
+                        <span class="qe-step-title">导出结果</span>
+                        <button class="qe-download-all" id="lis-qe-download-all" disabled>📦 一键下载全部 (ZIP)</button>
+                    </div>
+                    <div class="qe-step-body">
+                        <div class="qe-result-list" id="lis-qe-results"></div>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(panel);
+
+        // --- 事件绑定 ---
+        document.getElementById('lis-qe-mini').addEventListener('click', () => panel.classList.remove('show'));
+        document.getElementById('lis-qe-close').addEventListener('click', () => panel.classList.remove('show'));
+
+        // 全选/反选
+        document.getElementById('lis-qe-toggle-all').addEventListener('click', () => {
+            const checks = panel.querySelectorAll('.qe-gcheck');
+            const allChecked = Array.from(checks).every(c => c.checked);
+            checks.forEach(c => c.checked = !allChecked);
+        });
+
+        // 免疫组展开/折叠
+        panel.querySelectorAll('.qe-immune-toggle').forEach(el => {
+            el.addEventListener('click', () => {
+                const target = document.getElementById(el.dataset.target);
+                if (target) {
+                    target.classList.toggle('show');
+                    el.textContent = target.classList.contains('show') ? '收起 ▴' : '展开设置 ▾';
+                }
+            });
+        });
+
+        // 保存设置
+        document.getElementById('lis-qe-save').addEventListener('click', () => {
+            const cfg = qeCollectConfig();
+            qeSaveConfig(cfg);
+            const btn = document.getElementById('lis-qe-save');
+            btn.textContent = '✅ 已保存';
+            btn.classList.add('saved');
+            setTimeout(() => { btn.textContent = '💾 保存设置'; btn.classList.remove('saved'); }, 2000);
+        });
+
+        // 检测映射
+        document.getElementById('lis-qe-detect').addEventListener('click', async () => {
+            qeSetStatus('正在检测项目映射...', 'info');
+            document.getElementById('lis-qe-detect').disabled = true;
+            try {
+                const mappings = await qeDetectMappings(qeSetStatus);
+                qeSaveMappings(mappings);
+                qeShowMappingInfo(mappings);
+            } catch(e) {
+                qeSetStatus('检测失败: ' + e.message, 'error');
+            }
+            document.getElementById('lis-qe-detect').disabled = false;
+        });
+
+        // 开始导出
+        document.getElementById('lis-qe-export').addEventListener('click', () => qeStartExport());
+        document.getElementById('lis-qe-cancel').addEventListener('click', () => {
+            qeAbortFlag = true;
+            qeSetStatus('正在停止...', 'info');
+        });
+
+        // 一键下载全部
+        document.getElementById('lis-qe-download-all').addEventListener('click', () => qeDownloadAllZip());
+
+        // ESC 关闭
+        panel.addEventListener('keydown', e => {
+            if (e.key === 'Escape') panel.classList.remove('show');
+        });
+
+        // 加载已有映射信息
+        const savedMap = qeLoadMappings();
+        if (Object.keys(savedMap).length > 1) qeShowMappingInfo(savedMap);
+    }
+
+    function qeSetStatus(text, type) {
+        const el = document.getElementById('lis-qe-status');
+        if (!el) return;
+        el.textContent = text || '';
+        el.classList.remove('ok', 'error', 'info');
+        if (type) el.classList.add(type);
+    }
+
+    function qeShowMappingInfo(mappings) {
+        const el = document.getElementById('lis-qe-mapinfo');
+        if (!el) return;
+        const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
+        const found = qeMappingCount(mappings);
+        const meta = mappings._meta;
+        const groupStats = QE_GROUPS.map(g => {
+            const n = g.projects.filter(p => mappings[p.code]).length;
+            return `${g.name} ${n}/${g.projects.length}`;
+        }).join('　');
+        const missing = [];
+        QE_GROUPS.forEach(g => {
+            g.projects.forEach(p => {
+                if (!mappings[p.code]) missing.push(g.name + '/' + p.name);
+            });
+        });
+        const metaHint = meta && meta.year && meta.month
+            ? `<br><span style="font-size:10px;color:#607d8b">映射月份: ${meta.year}-${String(meta.month).padStart(2, '0')}</span>` : '';
+        el.innerHTML = `已匹配 <b>${found}/${total}</b> 个项目${metaHint}<br><span style="font-size:10px;color:#607d8b">${groupStats}</span>` +
+            (missing.length ? `<br>未匹配: ${missing.join('、')}` : '<br>✅ 全部匹配');
+    }
+
+    // 从 UI 收集配置
+    function qeCollectConfig() {
+        const panel = document.getElementById('lis-qe-panel');
+        if (!panel) return {};
+        const cfg = {};
+
+        // 月份
+        const monthInput = document.getElementById('lis-qe-month');
+        if (monthInput && monthInput.value) {
+            const parts = monthInput.value.split('-');
+            cfg._year = parseInt(parts[0], 10);
+            cfg._month = parseInt(parts[1], 10);
+        }
+
+        // 选中的组
+        cfg.selectedGroups = Array.from(panel.querySelectorAll('.qe-gcheck:checked')).map(c => c.value);
+
+        // 批号
+        cfg.lots = {};
+        panel.querySelectorAll('.qe-lot-input').forEach(input => {
+            const gid = input.dataset.group;
+            const type = input.dataset.type;
+            const code = input.dataset.code;
+            const val = input.value.trim();
+            if (!cfg.lots[gid]) cfg.lots[gid] = {};
+            if (type === 'baseLot') cfg.lots[gid].baseLot = val;
+            else if (type === 'lot0') { if (!cfg.lots[gid].lots) cfg.lots[gid].lots = []; cfg.lots[gid].lots[0] = val; }
+            else if (type === 'lot1') { if (!cfg.lots[gid].lots) cfg.lots[gid].lots = []; cfg.lots[gid].lots[1] = val; }
+            else if (type === 'lot') cfg.lots[gid].lot = val;
+            else if (type === 'coag_main') cfg.lots[gid]._main = val;
+            else if (type === 'coag_dimer') cfg.lots[gid]._dimer = val;
+            else if (type === 'proj' && code) cfg.lots[gid][code] = val;
+        });
+
+        // 操作者
+        cfg.operators = {};
+        panel.querySelectorAll('.qe-op-input').forEach(input => {
+            const ids = (input.dataset.ids || '').split(',');
+            ids.forEach(id => { if (id) cfg.operators[id] = input.value.trim(); });
+        });
+
+        return cfg;
+    }
+
+    // 显示进度
+    function qeShowProgress(current, total, text) {
+        const prog = document.getElementById('lis-qe-progress');
+        const bar = document.getElementById('lis-qe-pbar');
+        const ptxt = document.getElementById('lis-qe-ptext');
+        if (prog) prog.classList.add('show');
+        if (bar) bar.style.width = (total > 0 ? (current / total * 100) : 0) + '%';
+        if (ptxt) ptxt.textContent = text || `${current}/${total}`;
+    }
+    function qeHideProgress() {
+        const prog = document.getElementById('lis-qe-progress');
+        if (prog) prog.classList.remove('show');
+    }
+
+    // 主导出流程
+    async function qeStartExport() {
+        if (qeExporting) return;
+
+        const cfg = qeCollectConfig();
+        if (!cfg.selectedGroups || !cfg.selectedGroups.length) {
+            qeSetStatus('请至少选择一个导出项目。', 'error');
+            return;
+        }
+
+        // 保存配置
+        qeSaveConfig(cfg);
+
+        const mappings = qeLoadMappings();
+        if (!qeMappingCount(mappings)) {
+            qeSetStatus('请先点击"检测映射"来识别质控项目。', 'error');
+            return;
+        }
+        const mapMeta = mappings._meta;
+        if (mapMeta && cfg._year && cfg._month &&
+            (mapMeta.year !== cfg._year || mapMeta.month !== cfg._month)) {
+            qeSetStatus(`映射为 ${mapMeta.year}-${String(mapMeta.month).padStart(2, '0')} 月检测，导出 ${cfg._year}-${String(cfg._month).padStart(2, '0')} 月；血常规将自动切换有数据的质控物`, 'info');
+        }
+
+        qeExporting = true;
+        qeAbortFlag = false;
+        const exportBtn = document.getElementById('lis-qe-export');
+        const cancelBtn = document.getElementById('lis-qe-cancel');
+        const detectBtn = document.getElementById('lis-qe-detect');
+        if (exportBtn) exportBtn.disabled = true;
+        if (cancelBtn) cancelBtn.style.display = '';
+        if (detectBtn) detectBtn.disabled = true;
+
+        const resultSection = document.getElementById('lis-qe-result-section');
+        const resultList = document.getElementById('lis-qe-results');
+        if (resultSection) resultSection.style.display = '';
+        if (resultList) resultList.innerHTML = '';
+
+        const groupsToExport = QE_GROUPS.filter(g => cfg.selectedGroups.includes(g.id));
+        const totalGroups = groupsToExport.length;
+        const results = [];
+
+        for (let gi = 0; gi < totalGroups; gi++) {
+            if (qeAbortFlag) break;
+            const group = groupsToExport[gi];
+            qeSetStatus(`正在导出 ${group.name} (${gi+1}/${totalGroups})...`, 'info');
+            qeShowProgress(gi, totalGroups, `${group.name} (${gi+1}/${totalGroups})`);
+
+            try {
+                const rows = await qeFetchGroupData(group, cfg, mappings, qeSetStatus);
+                if (rows.length > 0) {
+                    const xlsxData = qeBuildXlsx(group.name, rows);
+                    const blob = new Blob([xlsxData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                    results.push({ name: group.file, blob, rows: rows.length });
+                    qeAddResultItem(group.file, rows.length, blob);
+                    qeSetStatus(`${group.name}: 导出完成，${rows.length} 行数据`, 'ok');
+                } else {
+                    qeSetStatus(`${group.name}: 无数据`, 'info');
+                    qeAddResultItem(group.file, 0, null);
+                }
+            } catch(e) {
+                qeSetStatus(`${group.name}: 导出失败 - ${e.message}`, 'error');
+                qeAddResultItem(group.file, 0, null, e.message);
+            }
+        }
+
+        qeShowProgress(totalGroups, totalGroups, '完成');
+        qeExporting = false;
+        qeAbortFlag = false;
+        if (exportBtn) exportBtn.disabled = false;
+        if (cancelBtn) cancelBtn.style.display = 'none';
+        if (detectBtn) detectBtn.disabled = false;
+
+        // 启用一键下载（无论是否完整导出）
+        const dlAllBtn = document.getElementById('lis-qe-download-all');
+        if (dlAllBtn) dlAllBtn.disabled = false;
+
+        if (!qeAbortFlag) {
+            qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。`, 'ok');
+        } else {
+            qeSetStatus('导出已停止。', 'info');
+        }
+    }
+
+    function qeAddResultItem(filename, rowCount, blob, error) {
+        const list = document.getElementById('lis-qe-results');
+        if (!list) return;
+        const div = document.createElement('div');
+        div.className = 'qe-result-item';
+        let statusHtml = '';
+        let btnHtml = '';
+        if (error) {
+            statusHtml = `<span class="qe-ri-status err">❌ ${esc(error)}</span>`;
+        } else if (rowCount > 0) {
+            statusHtml = `<span class="qe-ri-status ok">✅ ${rowCount} 行</span>`;
+            if (blob) {
+                btnHtml = `<button data-fn="${esc(filename)}">下载</button>`;
+            }
+        } else {
+            statusHtml = `<span class="qe-ri-status" style="color:#9e9e9e">无数据</span>`;
+        }
+        div.innerHTML = `<span class="qe-ri-name">${esc(filename)}</span>${statusHtml}${btnHtml}`;
+        if (btnHtml) {
+            const dlBtn = div.querySelector('button');
+            dlBtn._blob = blob;
+            dlBtn.addEventListener('click', () => {
+                qeDownloadBlob(blob, filename);
+            });
+        }
+        list.appendChild(div);
+    }
+
+    // --- 初始化 ---
+    function initQEExport() {
+        if (qeInited) return;
+        qeInited = true;
+        qeCreateFab();
+        qeCreatePanel();
+        dbg('[LIS-QE] 质控数据导出模块已加载');
+    }
+
+    let qeProbeTimer = null;
+    function startQEProbe() {
+        if (qeProbeTimer) return;
+        const probe = () => {
+            const fab = document.getElementById('lis-qe-fab');
+            if (!qeInited) initQEExport();
+            if (fab) fab.style.display = 'flex';
+        };
+        probe();
+        qeProbeTimer = setInterval(probe, 2000);
+    }
+
+    // ============================================================
     //  模块 C：一体化工作台（核心）
     // ============================================================
     let wsData = [];      // 加载的标本数据
     let wsMachines = [];  // 当前加载的仪器列表
     let wsActiveMachine = ''; // 当前选中的仪器 DR, ''=全部
     let wsActiveWG = ''; // 当前选中的工作组 DR, ''=全部工作组
+    let wsSelectedMachinesByWG = {}; // {工作组DR: [仪器DR]}，空数组/无记录=该工作组全部仪器
     let wsCategory = 'normal'; // 当前分类: 'normal'/'abnormal'/'incomplete'/'all'
     let wsClassifiedCache = {}; // 分类缓存 {[reportDR]: {status, items, row, reportDR}}
     const _CLASSIFIED_CACHE_MAX = 1000;
@@ -3113,6 +4682,44 @@
         if (options.raw) _classifyRawCache = {};
     }
 
+    function normalizeWSMachineFilterState(raw) {
+        const out = {};
+        if (!raw || typeof raw !== 'object') return out;
+        Object.keys(raw).forEach(wg => {
+            const arr = Array.isArray(raw[wg]) ? raw[wg] : [];
+            const selected = [...new Set(arr.map(v => String(v || '')).filter(Boolean))];
+            if (selected.length) out[String(wg)] = selected;
+        });
+        return out;
+    }
+
+    function getWSSelectedMachineSet(wg) {
+        const key = String(wg || '');
+        if (!key) return new Set();
+        return new Set((wsSelectedMachinesByWG[key] || []).map(String).filter(Boolean));
+    }
+
+    function setWSSelectedMachineSet(wg, set) {
+        const key = String(wg || '');
+        if (!key) return;
+        const arr = [...set].map(String).filter(Boolean);
+        if (arr.length) wsSelectedMachinesByWG[key] = arr;
+        else delete wsSelectedMachinesByWG[key];
+    }
+
+    function wsMachineFilterSetForActiveWG() {
+        return wsActiveWG ? getWSSelectedMachineSet(wsActiveWG) : new Set();
+    }
+
+    function rowPassWSMachineFilter(row) {
+        if (!row) return false;
+        if (wsActiveWG && row._wg !== wsActiveWG) return false;
+        const selected = wsMachineFilterSetForActiveWG();
+        if (selected.size > 0) return selected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));
+        if (wsActiveMachine) return String(row._mdr || prWorkGroupMachineDR(row) || '') === String(wsActiveMachine);
+        return true;
+    }
+
     function detailLRUGet(key) {
         if (_detailLRU.has(key)) {
             const v = _detailLRU.get(key);
@@ -3142,7 +4749,8 @@
             localStorage.setItem(K.wsState, JSON.stringify({
                 wg: wsActiveWG,
                 cat: wsCategory,
-                mdr: wsActiveMachine
+                mdr: wsActiveMachine,
+                multiMdr: wsSelectedMachinesByWG
             }));
         } catch(e) {}
     }
@@ -3154,7 +4762,8 @@
             const wg = Object.prototype.hasOwnProperty.call(saved, 'wg') ? String(saved.wg) : fallback.wg;
             const cat = WS_CATEGORIES.includes(saved.cat) ? saved.cat : fallback.cat;
             const mdr = Object.prototype.hasOwnProperty.call(saved, 'mdr') ? String(saved.mdr) : fallback.mdr;
-            return { wg, cat, mdr };
+            const multiMdr = (saved.multiMdr && typeof saved.multiMdr === 'object') ? saved.multiMdr : {};
+            return { wg, cat, mdr, multiMdr };
         } catch(e) {
             return fallback;
         }
@@ -3164,14 +4773,27 @@
         wsActiveWG = state.wg;
         wsCategory = state.cat;
         wsActiveMachine = state.mdr;
+        wsSelectedMachinesByWG = normalizeWSMachineFilterState(state.multiMdr || {});
+        if (wsActiveWG && wsActiveMachine && !getWSSelectedMachineSet(wsActiveWG).size) {
+            setWSSelectedMachineSet(wsActiveWG, new Set([String(wsActiveMachine)]));
+            wsActiveMachine = '';
+        }
     }
 
     function normalizeWSMachineSelection() {
-        if (!wsActiveMachine) return;
-        const ok = wsMachines.some(m =>
-            String(m.RowID) === String(wsActiveMachine) && (!wsActiveWG || m._wg === wsActiveWG)
-        );
-        if (!ok) wsActiveMachine = '';
+        const byWG = {};
+        Object.keys(wsSelectedMachinesByWG || {}).forEach(wg => {
+            const valid = new Set(wsMachines.filter(m => String(m._wg || '') === String(wg)).map(m => String(m.RowID || '')));
+            const selected = (wsSelectedMachinesByWG[wg] || []).map(String).filter(mdr => valid.has(mdr));
+            if (selected.length) byWG[wg] = [...new Set(selected)];
+        });
+        wsSelectedMachinesByWG = byWG;
+        if (wsActiveMachine) {
+            const ok = wsMachines.some(m =>
+                String(m.RowID) === String(wsActiveMachine) && (!wsActiveWG || m._wg === wsActiveWG)
+            );
+            if (!ok) wsActiveMachine = '';
+        }
     }
 
     // 打开工作台
@@ -3190,6 +4812,7 @@
         _classifyVersion++;
         wsClassifying = false;
         wsLoading = false; // 重置加载状态，防止上次 closeWS 时 loadWSData 还在运行
+        _wsLoadSeq++; // 作废关闭前可能仍在飞行的 loadWSData
         wsAbnormalIndex = -1;
         wsChecked.clear();
         wsData = [];
@@ -3234,6 +4857,7 @@
         clearTimeout(_abnormalPrewarmTimer);
         _abnormalPrewarmTimer = null;
         wsLoading = false; // 重置加载状态，防止下次 openWS 被阻塞
+        _wsLoadSeq++; // 作废关闭时仍在飞行的 loadWSData
     }
 
     function findWSSpecimenByReportDR(reportDR) {
@@ -3308,7 +4932,7 @@
     async function loadWSData(options = {}) {
         const force = !!(options && options.force);
         if (wsLoading && !force) return { skipped: true };
-        const seq = force ? ++_wsLoadSeq : _wsLoadSeq;
+        const seq = ++_wsLoadSeq;
         if (force) {
             wsLoading = false;
             wsClassifying = false;
@@ -3376,6 +5000,7 @@
             allMachines.push(...r.machines);
         }
         if (seq !== _wsLoadSeq) return;
+        if (!isWSVisible()) return;
 
         // 防止空数据覆盖已有数据（网络异常/会话过期时服务器可能返回空）
         if (allData.length === 0 && wsData.length > 0) {
@@ -3637,13 +5262,12 @@
         // 读取当前搜索框值（不能用旧的 wsSearchQuery）
         const _q = ($('#lis-ws-search') || {}).value || '';
         // 缓存检查
-        const ck = wsActiveWG + '|' + wsActiveMachine + '|' + wsCategory + '|' + _q + '|' + (wsSort.field + wsSort.asc) + '|' + _classifyVersion;
+        const machineFilterKey = wsActiveWG ? [...wsMachineFilterSetForActiveWG()].sort().join(',') : wsActiveMachine;
+        const ck = wsActiveWG + '|' + machineFilterKey + '|' + wsCategory + '|' + _q + '|' + (wsSort.field + wsSort.asc) + '|' + _classifyVersion;
         if (_filteredCache && _filteredCacheKey === ck) return _filteredCache;
         let d = [...wsData];
-        // 工作组过滤
-        if (wsActiveWG) d = d.filter(r => r._wg === wsActiveWG);
-        // 仪器过滤
-        if (wsActiveMachine) d = d.filter(r => r._mdr === wsActiveMachine);
+        // 工作组 + 仪器过滤（选中工作组后支持多选仪器）
+        if (wsActiveWG || wsActiveMachine) d = d.filter(rowPassWSMachineFilter);
         // 分类过滤
         if (wsCategory === 'normal') {
             d = d.filter(r => {
@@ -3701,7 +5325,8 @@
 
     // --- 统一计数：一次遍历产出工作组计数 + 分类计数 ---
     function calcUnifiedCounts() {
-        const ck = wsData.length + '|' + wsActiveWG + '|' + wsActiveMachine;
+        const machineFilterKey = wsActiveWG ? [...wsMachineFilterSetForActiveWG()].sort().join(',') : wsActiveMachine;
+        const ck = wsData.length + '|' + wsActiveWG + '|' + machineFilterKey;
         if (_countsCache && _countsCacheKey === ck) return _countsCache;
 
         // 工作组计数
@@ -3832,32 +5457,47 @@
         </button>`;
         h += '</div>';
 
-        // 第二行：仪器标签（仅显示选中工作组的仪器）
+        // 第二行：仪器标签。选中具体工作组时支持多选；全部工作组下保留旧版单选仪器模式。
         h += '<div class="ws-mach-row">';
-        // 全部仪器按钺（按当前工作组筛选）
-        let ac = mc['_all'] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
         if (wsActiveWG) {
-            ac = {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-            sortWSMachines(wsMachines.filter(m => m._wg === wsActiveWG)).forEach(m => {
+            const selectedSet = getWSSelectedMachineSet(wsActiveWG);
+            const wgMachines = sortWSMachines(wsMachines.filter(m => m._wg === wsActiveWG));
+            const ac = {total:0, normalReady:0, abnormalReady:0, incomplete:0};
+            wgMachines.forEach(m => {
                 const mc2 = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
                 ac.total += mc2.total; ac.normalReady += mc2.normalReady;
                 ac.abnormalReady += mc2.abnormalReady; ac.incomplete += mc2.incomplete;
             });
-        }
-        h += `<button class="ws-mach-tab ${!wsActiveMachine?'on':''}" data-m="">
-            <span class="ws-tab-name">全部仪器</span>
-            <span class="mach-cnt">${ac.total}</span>
-        </button>`;
-
-        // 筛选当前工作组的仪器
-        const wgMachines = sortWSMachines(wsMachines.filter(m => !wsActiveWG || m._wg === wsActiveWG));
-        wgMachines.forEach(m => {
-            const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-            h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${escAttr(m.RowID)}">
-                <span class="ws-tab-name">${esc(m.CName||m.Name)}</span>
-                <span class="mach-cnt">${c.total}</span>
+            h += `<button class="ws-mach-tab ws-mach-all ${selectedSet.size===0?'on':''}" data-action="all">
+                <span class="ws-tab-name">全部仪器</span>
+                <span class="mach-cnt">${ac.total}</span>
             </button>`;
-        });
+            wgMachines.forEach(m => {
+                const mdr = String(m.RowID || '');
+                const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
+                const checked = selectedSet.has(mdr);
+                h += `<button class="ws-mach-tab ws-mach-multi ${checked?'on':''}" data-multi-m="${escAttr(mdr)}" title="点击勾选/取消该仪器">
+                    <span class="ws-mach-check">${checked ? '✓' : ''}</span>
+                    <span class="ws-tab-name">${esc(m.CName||m.Name)}</span>
+                    <span class="mach-cnt">${c.total}</span>
+                </button>`;
+            });
+            if (!wgMachines.length) h += '<span class="cat-stats">当前工作组暂无仪器</span>';
+        } else {
+            const ac = mc['_all'] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
+            h += `<button class="ws-mach-tab ${!wsActiveMachine?'on':''}" data-m="">
+                <span class="ws-tab-name">全部仪器</span>
+                <span class="mach-cnt">${ac.total}</span>
+            </button>`;
+            const wgMachines = sortWSMachines(wsMachines);
+            wgMachines.forEach(m => {
+                const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
+                h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${escAttr(m.RowID)}">
+                    <span class="ws-tab-name">${esc((m.CName||m.Name||'') + (m._wgn ? ' · ' + m._wgn : ''))}</span>
+                    <span class="mach-cnt">${c.total}</span>
+                </button>`;
+            });
+        }
         h += '</div>';
 
         tabs.innerHTML = h;
@@ -3875,8 +5515,39 @@
             renderWSTable();
         }));
 
-        // 仪器标签事件
+        // 多选仪器事件（具体工作组下）
+        tabs.querySelectorAll('.ws-mach-all').forEach(b => b.addEventListener('click', () => {
+            if (!wsActiveWG) return;
+            invalidateCaches();
+            setWSSelectedMachineSet(wsActiveWG, new Set());
+            wsActiveMachine = '';
+            wsAbnormalIndex = -1;
+            wsChecked.clear();
+            saveWSState();
+            renderWSTabs();
+            renderWSCategoryBar();
+            renderWSTable();
+        }));
+        tabs.querySelectorAll('.ws-mach-multi').forEach(b => b.addEventListener('click', () => {
+            if (!wsActiveWG) return;
+            invalidateCaches();
+            const mdr = String(b.dataset.multiM || '');
+            const selected = getWSSelectedMachineSet(wsActiveWG);
+            if (selected.has(mdr)) selected.delete(mdr);
+            else if (mdr) selected.add(mdr);
+            setWSSelectedMachineSet(wsActiveWG, selected);
+            wsActiveMachine = '';
+            wsAbnormalIndex = -1;
+            wsChecked.clear();
+            saveWSState();
+            renderWSTabs();
+            renderWSCategoryBar();
+            renderWSTable();
+        }));
+
+        // 仪器标签事件（全部工作组下仍为单选）
         tabs.querySelectorAll('.ws-mach-tab').forEach(b => b.addEventListener('click', () => {
+            if (b.classList.contains('ws-mach-all') || b.classList.contains('ws-mach-multi')) return;
             invalidateCaches();
             wsActiveMachine = b.dataset.m;
             wsAbnormalIndex = -1;
@@ -3896,8 +5567,7 @@
 
         // 统计各分类数量（基于当前工作组+仪器过滤）
         let filtered = wsData;
-        if (wsActiveWG) filtered = filtered.filter(r => r._wg === wsActiveWG);
-        if (wsActiveMachine) filtered = filtered.filter(r => r._mdr === wsActiveMachine);
+        if (wsActiveWG || wsActiveMachine) filtered = filtered.filter(rowPassWSMachineFilter);
 
         let normalCount = 0, abnormalCount = 0, incompleteCount = 0, pendingCount = 0;
         filtered.forEach(r => {
@@ -3966,8 +5636,7 @@
                 try {
                     // 重新计算过滤数据（不依赖闭包中的 filtered）
                     let currentFiltered = wsData;
-                    if (wsActiveWG) currentFiltered = currentFiltered.filter(r => r._wg === wsActiveWG);
-                    if (wsActiveMachine) currentFiltered = currentFiltered.filter(r => r._mdr === wsActiveMachine);
+                    if (wsActiveWG || wsActiveMachine) currentFiltered = currentFiltered.filter(rowPassWSMachineFilter);
 
                     // 智能选择：有勾选则只审选中的，否则审全部正常标本
                     let sourceData;
@@ -4007,13 +5676,29 @@
     let _abnormalKeyHandler = null; // 异常视图键盘监听器
     let _abnormalKeyTargets = [];
     let _abnormalGridHijackHandler = null;
+    let _abnormalEnterLastAt = 0;
 
     function isDetailPanelVisible() {
         return !!(detailPanel && detailPanel.classList.contains('show'));
     }
 
     function updateAbnormalEnterBridge() {
-        try { window.__lisAbnormalEnterActive = (wsCategory === 'abnormal' && !isDetailPanelVisible()); } catch(e) {}
+        const active = wsCategory === 'abnormal' && isWSVisible() && !isDetailPanelVisible();
+        try {
+            window.__lisAbnormalEnterActive = active;
+            window.__lisAbnormalEnterToken = active
+                ? (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12))
+                : '';
+        } catch(e) {}
+    }
+
+    function isTrustedAbnormalEnterMessage(e) {
+        if (!e || !e.data || e.data.type !== 'lis-enhancer-abnormal-enter') return false;
+        const reportWin = getReportIframeWin();
+        if (!reportWin || e.source !== reportWin) return false;
+        if (e.origin !== window.location.origin) return false;
+        const token = window.__lisAbnormalEnterToken;
+        return !!(token && e.data.token === token);
     }
 
     function releaseNativeReportFocus(iframeWin) {
@@ -4052,7 +5737,10 @@
 
     function triggerAbnormalEnterAudit() {
         updateAbnormalEnterBridge();
-        if (wsCategory !== 'abnormal' || isDetailPanelVisible()) return false;
+        if (wsCategory !== 'abnormal' || !isWSVisible() || isDetailPanelVisible()) return false;
+        const now = Date.now();
+        if (now - _abnormalEnterLastAt < 250) return true;
+        _abnormalEnterLastAt = now;
         if (_abnormalAuditInProgress) {
             if (!_abnormalAuditQueued) {
                 _abnormalAuditQueued = true;
@@ -4111,9 +5799,14 @@ window.__lisEnhancerReleaseReportFocus=function(){
 window.addEventListener('keydown',function(e){
   if(e.key!=='Enter'||e.shiftKey)return;
   var active=false;
-  try{active=!!(window.parent&&window.parent.__lisAbnormalEnterActive);}catch(err){}
-  if(!active)return;
-  try{window.parent.postMessage({type:'lis-enhancer-abnormal-enter'},'*');}catch(err){}
+  var active=false,token='',origin='';
+  try{
+    active=!!(window.parent&&window.parent.__lisAbnormalEnterActive);
+    token=String(window.parent.__lisAbnormalEnterToken||'');
+    origin=window.parent.location.origin;
+  }catch(err){}
+  if(!active||!token)return;
+  try{window.parent.postMessage({type:'lis-enhancer-abnormal-enter',token:token},origin);}catch(err){}
   e.preventDefault();
   e.stopImmediatePropagation();
 },true);
@@ -4306,7 +5999,17 @@ window.addEventListener('keydown',function(e){
             counts = { visible: filteredData().length, total: wsData.length };
         }
         const groupName = wsActiveWG ? ((WG_MAP[wsActiveWG] || {}).name || wsActiveWG) : '全部工作组';
-        const machineName = wsActiveMachine ? ((wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).CName || (wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).Name || '当前仪器') : '全部仪器';
+        const selectedMachines = wsMachineFilterSetForActiveWG();
+        let machineName = '全部仪器';
+        if (wsActiveWG && selectedMachines.size > 0) {
+            const names = wsMachines
+                .filter(m => m._wg === wsActiveWG && selectedMachines.has(String(m.RowID)))
+                .map(m => m.CName || m.Name || m.RowID)
+                .filter(Boolean);
+            machineName = names.length <= 2 ? names.join('、') : `已选${selectedMachines.size}台仪器`;
+        } else if (wsActiveMachine) {
+            machineName = ((wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).CName || (wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).Name || '当前仪器');
+        }
         const parts = [`${groupName}`, `${machineName}`, `${counts.visible}/${counts.total || 0}条`];
         if (typeof counts.normal === 'number') parts.push(`正常${counts.normal}`);
         if (typeof counts.abnormal === 'number') parts.push(`异常${counts.abnormal}`);
@@ -4708,7 +6411,7 @@ window.addEventListener('keydown',function(e){
                 dbg('预热中止：刷新列表后用户已接管原生选择');
                 return;
             }
-            if (item.labno && typeof iframeWin.FindFast === 'function') {
+            if (item.labno && typeof iframeWin.FindFast === 'function' && canScriptSelectNativeRow(iframeWin, reportDR)) {
                 try { iframeWin.FindFast(item.labno); await sleep(60); } catch(e) {}
                 iframeWin = getReportIframeWin() || iframeWin;
             }
@@ -4992,12 +6695,16 @@ window.addEventListener('keydown',function(e){
                 : `异常审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;
             const skipSelect = _abnormalNativeReadyDR === targetDR;
             let prep = { ok: false, iframeWin, lastMdr: _abnormalLastMdr };
-            if (detailReady && skipSelect) {
+            // 关键：详情已加载就跳过选行（和详情面板审核一样），直接审核
+            if (detailReady) {
                 prep.ok = true;
+                prep.iframeWin = iframeWin;
+                prep.lastMdr = _abnormalLastMdr;
+                dbg('异常审核: 详情已加载，跳过选行');
             } else {
                 prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, {
                     lastMdr: _abnormalLastMdr,
-                    skipSelect: detailReady || skipSelect,
+                    skipSelect: skipSelect,
                     abnormalFast: true,
                     forceSelect: true
                 });
@@ -5533,7 +7240,7 @@ window.addEventListener('keydown',function(e){
         }
 
         // 获取选中的标本
-        const selectedSpecimens = wsData.filter(r => wsChecked.has(r.ReportDR));
+        const selectedSpecimens = filteredData().filter(r => wsChecked.has(r.ReportDR));
         if (selectedSpecimens.length === 0) {
             toast('未找到选中的标本', 'w');
             return;
@@ -7375,6 +9082,7 @@ function fillNativeLoginForm(creds, lastWG) {
         const jq = iframeWin.jQuery || iframeWin.$;
         if (!jq) return false;
         try {
+            installNativeStatExceptionGuard(iframeWin);
             const wl = jq(NATIVE_WORKLIST_SEL);
             if (wl.length && wl.datagrid) {
                 const opts = wl.datagrid('options') || {};
@@ -7540,6 +9248,121 @@ function fillNativeLoginForm(creds, lastWG) {
         return '';
     }
 
+    function isIgnorableNativeStatException(text) {
+        const t = String(text || '');
+        if (!t) return false;
+        const hasStatMethod = t.indexOf('DHCStatVisitNumItm') !== -1 || t.indexOf('zStatVisitStatusMTHD') !== -1;
+        const hasIndexAuthDate = t.indexOf('IndexAuthDate') !== -1 || t.indexOf('RPVisitNumberReportI') !== -1;
+        const hasSubscript = t.indexOf('SUBSCRIPT') !== -1 || t.indexOf('ZSUBSCRIPT') !== -1 || t.indexOf('系统发生异常') !== -1;
+        return hasStatMethod && hasIndexAuthDate && hasSubscript;
+    }
+
+    function closeIgnorableNativeExceptionDialogs(doc, jq) {
+        let closed = false;
+        try {
+            const allWins = doc.querySelectorAll('.messager-window:not([style*="display: none"]), .window:not([style*="display: none"])');
+            for (const w of allWins) {
+                if (w.offsetParent === null) continue;
+                const text = (w.textContent || '').trim();
+                if (!isIgnorableNativeStatException(text)) continue;
+                const btns = w.querySelectorAll('a.l-btn, button');
+                for (const b of btns) {
+                    const bText = (b.textContent || b.value || '').trim();
+                    if (bText === '确定' || bText === 'OK' || bText === '关闭' || bText === '是') {
+                        try { jq && jq(b).click ? jq(b).click() : b.click(); } catch(e) { try { b.click(); } catch(e2) {} }
+                        closed = true;
+                        break;
+                    }
+                }
+                try {
+                    if (!closed && jq) {
+                        const panel = jq(w);
+                        const closeBtn = panel.find('.panel-tool-close');
+                        if (closeBtn.length) { closeBtn.click(); closed = true; }
+                    }
+                } catch(e) {}
+                if (closed) dbg('已关闭原始 LIS 统计异常弹窗（不影响审核结果确认）');
+            }
+        } catch(e) {}
+        return closed;
+    }
+
+    function installNativeStatExceptionGuard(iframeWin) {
+        if (!iframeWin) return;
+        try {
+            const doc = iframeWin.document;
+            if (doc && !iframeWin.__lisStatExceptionPageGuard) {
+                const s = doc.createElement('script');
+                s.setAttribute('data-lis-enhancer', 'stat-exception-guard');
+                s.textContent = `(function(){
+  if(window.__lisStatExceptionPageGuard)return;
+  window.__lisStatExceptionPageGuard=true;
+  function ignorable(text){
+    var t=String(text||'');
+    if(!t)return false;
+    var hasStat=t.indexOf('DHCStatVisitNumItm')!==-1||t.indexOf('zStatVisitStatusMTHD')!==-1;
+    var hasDate=t.indexOf('IndexAuthDate')!==-1||t.indexOf('RPVisitNumberReportI')!==-1;
+    var hasSub=t.indexOf('SUBSCRIPT')!==-1||t.indexOf('ZSUBSCRIPT')!==-1||t.indexOf('系统发生异常')!==-1;
+    return hasStat&&hasDate&&hasSub;
+  }
+  var oldAlert=window.alert;
+  window.alert=function(msg){
+    if(ignorable(msg)){window.__lisLastIgnoredStatException=String(msg||'').slice(0,500);return;}
+    return oldAlert.apply(this,arguments);
+  };
+  function patchMessager(){
+    try{
+      var jq=window.jQuery||window.$;
+      if(!jq||!jq.messager||typeof jq.messager.alert!=='function'||jq.messager.__lisStatExceptionPageGuard)return;
+      var old=jq.messager.alert;
+      jq.messager.alert=function(title,msg){
+        if(ignorable(title)||ignorable(msg)){window.__lisLastIgnoredStatException=String(msg||title||'').slice(0,500);return;}
+        return old.apply(this,arguments);
+      };
+      jq.messager.__lisStatExceptionPageGuard=true;
+    }catch(e){}
+  }
+  patchMessager();
+  setTimeout(patchMessager,300);
+  setTimeout(patchMessager,1200);
+})();`;
+                (doc.head || doc.documentElement).appendChild(s);
+                s.remove();
+                iframeWin.__lisStatExceptionPageGuard = true;
+            }
+        } catch(e) {}
+        try {
+            if (!iframeWin.__lisStatAlertGuard) {
+                const origAlert = iframeWin.alert;
+                iframeWin.__lisOriginalAlert = iframeWin.__lisOriginalAlert || origAlert;
+                iframeWin.alert = function(msg) {
+                    if (isIgnorableNativeStatException(msg)) {
+                        try { iframeWin.__lisLastIgnoredStatException = String(msg || '').slice(0, 500); } catch(e) {}
+                        dbg('已拦截原始 LIS 统计异常 alert（不影响审核结果确认）');
+                        return;
+                    }
+                    return origAlert.apply(this, arguments);
+                };
+                iframeWin.__lisStatAlertGuard = true;
+            }
+        } catch(e) {}
+        try {
+            const jq = iframeWin.jQuery || iframeWin.$;
+            if (jq && jq.messager && typeof jq.messager.alert === 'function' && !jq.messager.__lisStatExceptionGuard) {
+                const origMessagerAlert = jq.messager.alert;
+                jq.messager.alert = function(title, msg) {
+                    if (isIgnorableNativeStatException(title) || isIgnorableNativeStatException(msg)) {
+                        try { iframeWin.__lisLastIgnoredStatException = String(msg || title || '').slice(0, 500); } catch(e) {}
+                        dbg('已拦截原始 LIS 统计异常 messager（不影响审核结果确认）');
+                        return;
+                    }
+                    return origMessagerAlert.apply(this, arguments);
+                };
+                jq.messager.__lisStatExceptionGuard = true;
+            }
+        } catch(e) {}
+    }
+
     function isNativeButtonDisabled(btn, jq) {
         if (!btn) return true;
         try {
@@ -7573,6 +9396,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
         while (Date.now() < end) {
             await sleep(Date.now() < fastEnd ? (turbo ? 35 : 50) : (turbo ? 80 : 150));
+            closeIgnorableNativeExceptionDialogs(doc, jq);
 
             if (targetReportDR && expectedStatuses && expectedStatuses.length) {
                 const found = findNativeRowByReportDR(iframeWin, targetReportDR);
@@ -7852,6 +9676,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
         if (!btn) { dbg('按钮 ' + btnId + ' 不存在'); return false; }
         if (!jq) { dbg('原生 jQuery 不存在'); return false; }
+        if (iframeWin) installNativeStatExceptionGuard(iframeWin);
 
         const batchMode = !!options.batchMode;
         const caSessionReady = !!options.caSessionReady;
@@ -8688,11 +10513,13 @@ function fillNativeLoginForm(creds, lastWG) {
             }
 
             if (wsCategory === 'abnormal' || wsCategory === 'normal') {
+                const selectedMachineSet = wsMachineFilterSetForActiveWG();
                 toClassify.sort((a, b) => {
                     const score = r => {
                         let s = 0;
                         if (wsActiveWG && r._wg === wsActiveWG) s -= 100;
-                        if (wsActiveMachine && prWorkGroupMachineDR(r) === wsActiveMachine) s -= 50;
+                        if (selectedMachineSet.size && selectedMachineSet.has(String(prWorkGroupMachineDR(r) || r._mdr || ''))) s -= 50;
+                        else if (wsActiveMachine && prWorkGroupMachineDR(r) === wsActiveMachine) s -= 50;
                         return s;
                     };
                     const diff = score(a) - score(b);
@@ -9383,26 +11210,72 @@ function fillNativeLoginForm(creds, lastWG) {
             const el = jq(sel);
             if (el.length && el.datagrid) {
                 try {
-                    const rows = el.datagrid('getRows');
-                    if (!rows || rows.length === 0) { dbg('selectNativeRow:', sel, '无行数据'); continue; }
-                    for (let i = 0; i < rows.length; i++) {
-                        if (String(rows[i].ReportDR) === String(reportDR)) {
-                            const opts = el.datagrid('options') || {};
-                            el.datagrid('selectRow', i);
-                            if (iframeWin.me) {
-                                iframeWin.me.selectedGrid = el;
-                                iframeWin.me.curReportDR = String(reportDR);
-                            }
-                            try {
-                                if (typeof opts.onSelect === 'function') opts.onSelect.call(el[0], i, rows[i]);
-                                else if (typeof opts.onClickRow === 'function') opts.onClickRow.call(el[0], i, rows[i]);
-                            } catch(e) { dbg('触发行选择回调异常:', e.message); }
-                            const loaded = isReportDetailLoaded(iframeWin, reportDR);
-                            dbg('选中原生行:', i, 'ReportDR:', reportDR, 'selector:', sel, 'detailReady=', loaded);
-                            return true;
+                    // 用 getData 获取原始数据（不受展开行影响）
+                    let dataRows;
+                    try {
+                        const data = el.datagrid('getData');
+                        dataRows = data && data.rows ? data.rows : null;
+                    } catch(e) {}
+                    if (!dataRows) dataRows = el.datagrid('getRows');
+                    if (!dataRows || dataRows.length === 0) { dbg('selectNativeRow:', sel, '无行行数据'); continue; }
+
+                    let targetIdx = -1;
+                    let targetRow = null;
+                    for (let i = 0; i < dataRows.length; i++) {
+                        if (String(dataRows[i].ReportDR) === String(reportDR)) {
+                            targetIdx = i;
+                            targetRow = dataRows[i];
+                            break;
                         }
                     }
-                    dbg('selectNativeRow:', sel, '未找到 ReportDR:', reportDR, '共', rows.length, '行, 列表:', rows.slice(0,5).map(r => r.ReportDR).join(','));
+                    if (targetIdx < 0) { dbg('selectNativeRow:', sel, '未找到 ReportDR:', reportDR, '共', dataRows.length, '行'); continue; }
+
+                    const opts = el.datagrid('options') || {};
+
+                    // 清除选中
+                    try { el.datagrid('clearSelections'); } catch(e) {}
+
+                    // 尝试用 DOM 直接点击目标行（绕过索引问题）
+                    let domClicked = false;
+                    try {
+                        const gridBody = el.closest('.datagrid').find('.datagrid-body');
+                        const rows = gridBody.find('tr.datagrid-row');
+                        rows.each(function() {
+                            const rowJq = jq(this);
+                            const rowIdx = rowJq.attr('datagrid-row-index');
+                            if (rowIdx !== undefined) {
+                                const rowData = el.datagrid('getRows')[parseInt(rowIdx)];
+                                if (rowData && String(rowData.ReportDR) === String(reportDR)) {
+                                    // 确认是父行（非子行）
+                                    if (!rowJq.hasClass('treegrid-tr-tree') && !rowJq.hasClass('datagrid-row-child')) {
+                                        rowJq.trigger('click');
+                                        domClicked = true;
+                                        dbg('selectNativeRow: DOM 点击行 index=' + rowIdx, 'ReportDR=' + reportDR);
+                                        return false; // break each
+                                    }
+                                }
+                            }
+                        });
+                    } catch(e) { dbg('selectNativeRow: DOM 点击失败', e.message); }
+
+                    if (!domClicked) {
+                        // 回退：用 selectRow
+                        el.datagrid('selectRow', targetIdx);
+                    }
+
+                    if (iframeWin.me) {
+                        iframeWin.me.selectedGrid = el;
+                        iframeWin.me.curReportDR = String(reportDR);
+                    }
+                    if (!domClicked) {
+                        try {
+                            if (typeof opts.onSelect === 'function') opts.onSelect.call(el[0], targetIdx, targetRow);
+                            else if (typeof opts.onClickRow === 'function') opts.onClickRow.call(el[0], targetIdx, targetRow);
+                        } catch(e) { dbg('触发行选择回调异常:', e.message); }
+                    }
+                    const loaded = isReportDetailLoaded(iframeWin, reportDR);
+                    dbg('选中原生行:', targetIdx, 'ReportDR:', reportDR, 'PatName:', targetRow.PatName || '', 'domClicked:', domClicked, 'selector:', sel, 'detailReady=', loaded);
+                    return true;
                 } catch(e) { dbg('selectNativeRow error:', sel, e); }
             }
         }
@@ -9473,7 +11346,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
             return { ok: true, iframeWin };
         }
-        if (item.labno && iframeWin && typeof iframeWin.FindFast === 'function') {
+        if (item.labno && iframeWin && typeof iframeWin.FindFast === 'function' && canScriptSelectNativeRow(iframeWin, item.reportDR)) {
             try {
                 iframeWin.FindFast(item.labno);
                 await sleep(80);
@@ -9994,7 +11867,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (window.__lisAbnormalEnterBridge) return;
         window.__lisAbnormalEnterBridge = true;
         window.addEventListener('message', e => {
-            if (!e.data || e.data.type !== 'lis-enhancer-abnormal-enter') return;
+            if (!isTrustedAbnormalEnterMessage(e)) return;
             triggerAbnormalEnterAudit();
         });
         updateAbnormalEnterBridge();
@@ -10011,7 +11884,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!location.href.includes('iMedicalLIS')) return;
 
         dbg('========================================');
-        dbg('iMedicalLIS 增强助手 v7.20.43');
+        dbg('iMedicalLIS 增强助手 v7.21.1');
         dbg('隐私模式：所有数据仅本地处理，无任何上传');
         dbg('========================================');
 
@@ -10040,6 +11913,7 @@ function fillNativeLoginForm(creds, lastWG) {
         checkNavigateTarget();
         checkAuditQueueResume();
         startQCInputProbe();
+        startQEProbe();
         injectToolbar();
         initReportEnhance();
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
@@ -10050,6 +11924,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (_authTimer) { clearInterval(_authTimer); _authTimer = null; }
         if (_batchScanTimer) { clearInterval(_batchScanTimer); _batchScanTimer = null; }
         if (qcProbeTimer) { clearInterval(qcProbeTimer); qcProbeTimer = null; }
+        if (qeProbeTimer) { clearInterval(qeProbeTimer); qeProbeTimer = null; }
         if (wsTimer) { clearInterval(wsTimer); wsTimer = null; }
     });
 
