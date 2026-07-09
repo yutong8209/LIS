@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.59.0
+// @version      7.59.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -49,7 +49,9 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.0';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.1';
+    // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
+    const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
     // 批审单条硬超时（秒审 / 需 CA）；超时后二次校验，仍无果则跳过/重试，避免整批卡死
     // 秒审 / 首条 CA 后确认都宜短：真漏审靠队尾重试+补审，不靠首条空等十几秒
@@ -3888,10 +3890,53 @@
         return rows;
     }
 
+    // 从本机 serve 拉取 vendor 脚本并 eval 进油猴沙箱（@require 失败时的兜底）
+    async function qeLoadVendorScript(fileName, globalName) {
+        const has = () => {
+            try {
+                if (globalName === 'XLSX') return typeof XLSX !== 'undefined' && XLSX && XLSX.utils;
+                if (globalName === 'JSZip') return typeof JSZip !== 'undefined';
+            } catch(e) {}
+            return false;
+        };
+        if (has()) return true;
+        const urls = [
+            VENDOR_BASE + '/' + fileName,
+            'http://localhost:8765/vendor/' + fileName
+        ];
+        for (const url of urls) {
+            try {
+                const r = await fetch(url, { cache: 'no-cache', mode: 'cors' });
+                if (!r.ok) continue;
+                const code = await r.text();
+                if (!code || code.length < 100) continue;
+                // 在脚本作用域执行，使 XLSX/JSZip 对本模块可见
+                (0, eval)(code);
+                if (has()) {
+                    dbg('[LIS-QE] 已从本机加载', fileName);
+                    return true;
+                }
+            } catch(e) {
+                dbg('[LIS-QE] 加载失败', url, e.message);
+            }
+        }
+        return false;
+    }
+
+    async function qeEnsureXlsx() {
+        if (typeof XLSX !== 'undefined' && XLSX && XLSX.utils) return true;
+        return qeLoadVendorScript('xlsx.full.min.js', 'XLSX');
+    }
+
+    async function qeEnsureJSZip() {
+        if (typeof JSZip !== 'undefined') return true;
+        return qeLoadVendorScript('jszip.min.js', 'JSZip');
+    }
+
     // --- Excel 生成 ---
     function qeBuildXlsx(groupName, rows) {
-        if (typeof XLSX === 'undefined') {
-            throw new Error('SheetJS (XLSX) 未加载，请检查网络连接');
+        if (typeof XLSX === 'undefined' || !XLSX.utils) {
+            throw new Error('SheetJS 未加载：请先运行 python3 ~/脚本/serve.py，再刷新页面后重试');
         }
         const wb = XLSX.utils.book_new();
         const header = ['项目编码', '月', '日', '次', '批号', '数值', '备注', '操作者'];
@@ -3931,9 +3976,8 @@
             qeSetStatus('没有可打包的文件，请先完成导出。', 'error');
             return;
         }
-        if (typeof JSZip === 'undefined') {
-            // 兜底：逐个下载（浏览器可能拦截多文件，但总比没有好）
-            qeSetStatus('JSZip 未加载（请保持 serve.py 运行），改为逐个下载…', 'info');
+        if (!(await qeEnsureJSZip())) {
+            qeSetStatus('JSZip 未加载：请运行 python3 ~/脚本/serve.py 后刷新，改为逐个下载…', 'info');
             for (let i = 0; i < files.length; i++) {
                 qeDownloadBlob(files[i].blob, files[i].name);
                 await sleep(400);
@@ -4350,6 +4394,13 @@
         if (detectBtn) detectBtn.disabled = true;
 
         try {
+        // SheetJS：@require 可能因 serve 未启动而失败，导出前再从本机补拉
+        qeSetStatus('正在加载 Excel 组件（本机 serve）…', 'info');
+        if (!(await qeEnsureXlsx())) {
+            qeSetStatus('SheetJS 未加载：请先运行  python3 ~/脚本/serve.py  ，保持窗口不关，再刷新本页后重试导出。', 'error');
+            return;
+        }
+
         const resultSection = document.getElementById('lis-qe-result-section');
         const resultList = document.getElementById('lis-qe-results');
         if (resultSection) resultSection.style.display = '';
