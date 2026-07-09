@@ -4855,23 +4855,19 @@
         if (qi) qi.textContent = force ? '强制刷新中...' : '加载中...';
 
         const curDR = wgDR();
-        const targetWGs = WG; // 加载所有工作组的数据
+        // 优先加载当前登录的工作组，其他组后台延迟加载
+        const priorityWG = WG.find(w => w.dr === curDR);
+        const otherWGs = WG.filter(w => w.dr !== curDR);
+        const hasPriority = !!priorityWG;
 
-        const allData = [];
-        const allMachines = [];
-
-        // 并行加载所有工作组
-        const wgResults = await Promise.all(targetWGs.map(async (w) => {
+        async function loadOneWG(w) {
             let machines;
             try {
                 machines = await loadMachines(w.dr);
             } catch(e) { machines = []; }
-
             const ss = buildSS(w.dr);
             const wgData = [];
             const wgMachines = [];
-
-            // 并行加载该工作组下所有仪器
             const machineResults = await Promise.all(machines.filter(m => m.RowID).map(async (m) => {
                 const result = { rows: [], pending: [], machine: m };
                 try {
@@ -4882,7 +4878,6 @@
                 } catch(e) {}
                 return result;
             }));
-
             for (const mr of machineResults) {
                 const m = mr.machine;
                 mr.rows.forEach(r => {
@@ -4896,40 +4891,65 @@
                 wgData.push(...mr.rows, ...mr.pending);
                 wgMachines.push({ ...m, _wg: w.dr, _wgn: w.name, _wgc: w.color, _wgi: w.icon });
             }
-
             return { data: wgData, machines: wgMachines };
-        }));
+        }
 
-        for (const r of wgResults) {
+        function applyResults(results, partial) {
+            const allData = [];
+            const allMachines = [];
+            for (const r of results) {
+                allData.push(...r.data);
+                allMachines.push(...r.machines);
+            }
+            if (allData.length === 0 && wsData.length > 0 && !partial) {
+                dbg('刷新返回空数据，保留原有', wsData.length, '条');
+                if (qi) qi.textContent = `刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
+                if (force) showToast('工作台强制刷新仍返回空数据，可能需要重新登录或刷新浏览器页面', 'warning');
+                return false;
+            }
+            wsData = allData;
+            wsMachines = allMachines;
+            if (wsData.length > 0) _lastWSNonEmptyAt = Date.now();
+            normalizeWSMachineSelection();
+            pruneStaleClassificationCache(wsData);
+            calcMachineCounts();
+            const label = partial ? '优先' : '';
+            if (qi) qi.textContent = `${wsData.length} 条${label} | ${new Date().toLocaleTimeString()}`;
+            invalidateCaches({ raw: true, detail: true });
+            renderWSTabs();
+            renderWSCategoryBar();
+            renderWSTable();
+            updateWSFooter();
+            return true;
+        }
+
+        if (hasPriority) {
+            // 阶段1：优先加载当前工作组，立即渲染
+            const priorityResult = await loadOneWG(priorityWG);
             if (seq !== _wsLoadSeq) return;
-            allData.push(...r.data);
-            allMachines.push(...r.machines);
-        }
-        if (seq !== _wsLoadSeq) return;
-        if (!isWSVisible()) return;
+            if (!isWSVisible()) return;
+            applyResults([priorityResult], true);
+            classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
 
-        // 防止空数据覆盖已有数据（网络异常/会话过期时服务器可能返回空）
-        if (allData.length === 0 && wsData.length > 0) {
-            dbg('刷新返回空数据，保留原有', wsData.length, '条');
-            if (qi) qi.textContent = `刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
-            if (force) showToast('工作台强制刷新仍返回空数据，可能需要重新登录或刷新浏览器页面', 'warning');
-            return { ok: false, empty: true, preserved: true };
+            // 阶段2：后台加载其余工作组，完成后追加渲染
+            if (otherWGs.length > 0) {
+                const otherResults = await Promise.all(otherWGs.map(w => loadOneWG(w)));
+                if (seq !== _wsLoadSeq) return;
+                if (!isWSVisible()) return;
+                applyResults([priorityResult, ...otherResults], false);
+                classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
+            }
+        } else {
+            // 无法识别当前工作组，退回全量并行加载
+            const wgResults = await Promise.all(WG.map(w => loadOneWG(w)));
+            if (seq !== _wsLoadSeq) return;
+            if (!isWSVisible()) return;
+            if (!applyResults(wgResults, false)) {
+                return { ok: false, empty: true, preserved: wsData.length > 0 };
+            }
+            classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
         }
-        wsData = allData;
-        wsMachines = allMachines;
-        if (wsData.length > 0) _lastWSNonEmptyAt = Date.now();
-        normalizeWSMachineSelection();
-        pruneStaleClassificationCache(wsData);
-        calcMachineCounts();
 
-        if (qi) qi.textContent = `${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;
-        invalidateCaches({ raw: true, detail: true });
-        renderWSTabs();
-        renderWSCategoryBar();
-        renderWSTable(); // 先用未分类数据渲染，让用户立即看到标本列表
-        updateWSFooter();
-        // 分类在后台进行，每批次完成后更新计数，最终更新表格
-        classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
         if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
         return { ok: true, count: wsData.length };
         } catch(e) {
@@ -11955,6 +11975,8 @@ function fillNativeLoginForm(creds, lastWG) {
         startQEProbe();
         injectToolbar();
         initReportEnhance();
+        // 预热仪器缓存：提前加载所有工作组的仪器列表，打开工作台时秒返
+        WG.forEach(w => { loadMachines(w.dr).catch(() => {}); });
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
     }
 
