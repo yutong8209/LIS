@@ -47,14 +47,7 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (function(){
-        try {
-            const t = (document.currentScript && document.currentScript.textContent) || '';
-            const m = t.match(/@version\s+([\d.]+)/);
-            if (m) return m[1];
-        } catch(e){}
-        return '7.36.0';
-    })();
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.54.0';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
 
     // ==================== 工具 ====================
@@ -151,9 +144,9 @@
     }
 
     // 同步 API（保持向后兼容，用于非 async 上下文）
-    const savePwd = p => { try { localStorage.setItem(K.pwd, encPwd(p)); } catch(e){} };
+    const savePwd = p => { try { localStorage.setItem(K.pwd, encPwd(p)); } catch(e){ dbg('savePwd 失败:', e.message); } };
     const loadPwd = () => { try { const v=localStorage.getItem(K.pwd); return v?decPwd(v):''; } catch(e){ return ''; } };
-    const saveCAPwd = p => { try { localStorage.setItem(K.caPwd, encPwd(p)); } catch(e){} };
+    const saveCAPwd = p => { try { localStorage.setItem(K.caPwd, encPwd(p)); } catch(e){ dbg('saveCAPwd 失败:', e.message); } };
     const loadCAPwd = () => { try { const v=localStorage.getItem(K.caPwd); return v?decPwd(v):''; } catch(e){ return ''; } };
 
     // 异步 API（AES-GAM 加密，用于 async 上下文）
@@ -176,11 +169,11 @@
             if (pwd && !localStorage.getItem(K.pwd)?.startsWith('V2:')) await savePwdAsync(pwd);
             const caPwd = loadCAPwd();
             if (caPwd && !localStorage.getItem(K.caPwd)?.startsWith('V2:')) await saveCAPwdAsync(caPwd);
-        } catch(e) {}
+        } catch(e) { dbg('migratePwdStorage 失败:', e.message); }
     }
-    const saveCAAuth = (dr) => { try { localStorage.setItem(K.caAuth, JSON.stringify({ time: Date.now(), wg: dr || wgDR() })); } catch(e){} };
+    const saveCAAuth = (dr) => { try { localStorage.setItem(K.caAuth, JSON.stringify({ time: Date.now(), wg: dr || wgDR() })); } catch(e){ dbg('saveCAAuth 失败:', e.message); } };
     const loadCAAuth = () => { try { const v=localStorage.getItem(K.caAuth); if(!v) return null; const o=JSON.parse(v); return o; } catch(e){ return null; } };
-    const clearCAAuth = () => { try { localStorage.removeItem(K.caAuth); } catch(e){} };
+    const clearCAAuth = () => { try { localStorage.removeItem(K.caAuth); } catch(e){ dbg('clearCAAuth 失败:', e.message); } };
     const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     const escAttr = s => esc(s);
     // 通过原生 setter 设置 input 值（兼容 EasyUI/React 等框架）
@@ -244,8 +237,13 @@
             const r = await fetch(u, { credentials: 'same-origin', signal: ctrl.signal });
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const text = await r.text();
-            if (!text || (text.trim()[0] !== '{' && text.trim()[0] !== '[')) throw new Error('非JSON响应');
-            return JSON.parse(text);
+            const trimmed = text.trim().replace(/^\uFEFF/, '');
+            if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) {
+                const hint = trimmed.length > 100 ? trimmed.slice(0, 100) + '...' : trimmed;
+                dbg('非JSON响应:', r.status, r.headers.get('content-type'), hint);
+                throw new Error(trimmed.includes('<html') || trimmed.includes('<!DOCTYPE') ? '会话可能已过期，请刷新页面重新登录' : '非JSON响应');
+            }
+            return JSON.parse(trimmed);
         } catch(e) {
             if (e.name === 'AbortError') dbg(externalSignal && externalSignal.aborted ? 'fetch 已取消:' : 'fetch 超时:', u);
             else console.error('[LIS] fetch error:', e);
@@ -830,13 +828,13 @@
                     else dbg('[WS] 工作台打开中，跳过 refreshAuthUI');
                 }
             } else { localStorage.setItem(K.au, sessionStorage.getItem('AuInfo')); }
-        } catch(e){}
+        } catch(e){ dbg('restoreAuth AuInfo 失败:', e.message); }
         try {
             if (!sessionStorage.getItem('EntryInfo')) {
                 const s = localStorage.getItem(K.ent);
                 if (s) sessionStorage.setItem('EntryInfo', s);
             } else { localStorage.setItem(K.ent, sessionStorage.getItem('EntryInfo')); }
-        } catch(e){}
+        } catch(e){ dbg('restoreAuth EntryInfo 失败:', e.message); }
     }
 
     function refreshAuthUI() {
@@ -2257,9 +2255,9 @@
     }
 
     function prNeedsDetailEvenWithoutResult(filters) {
-        return !!(filters.doctor || filters.diagnosis || filters.ward || filters.ageMin === filters.ageMin ||
-            filters.ageMax === filters.ageMax || filters.item || filters.resultText || filters.judge ||
-            filters.abnormal || filters.resultOp || filters.resultMin === filters.resultMin || filters.resultMax === filters.resultMax);
+        return !!(filters.doctor || filters.diagnosis || filters.ward || !Number.isNaN(filters.ageMin) ||
+            !Number.isNaN(filters.ageMax) || filters.item || filters.resultText || filters.judge ||
+            filters.abnormal || filters.resultOp || !Number.isNaN(filters.resultMin) || !Number.isNaN(filters.resultMax));
     }
 
     function prTextMatch(value, q) {
@@ -7046,7 +7044,7 @@ window.addEventListener('keydown',function(e){
     const QUEUE_SAVE_THROTTLE = 10; // 每 N 条才全量落盘一次
     let _queueSaveMod = 0;
     function _writeFullQueue(queue) {
-        try { localStorage.setItem(K.auditQueue, JSON.stringify({ ...queue, time: Date.now() })); } catch(e) {}
+        try { localStorage.setItem(K.auditQueue, JSON.stringify({ ...queue, time: Date.now() })); } catch(e) { dbg('_writeFullQueue 失败:', e.message); }
     }
     function _writeQueueProgress(queue) {
         // 轻量写入：只保留 current 进度，断点续跑仍能继续（在下次全量写时补全其余字段）
