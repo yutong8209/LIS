@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.53.1
+// @version      7.53.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6993,19 +6993,39 @@ window.addEventListener('keydown',function(e){
     }
 
     let _saveQueueTimer = null;
+    // 批量写入节流：批审标本多时，避免每条都全量序列化整队写 localStorage（O(N²) 卡顿）
+    const QUEUE_SAVE_THROTTLE = 10; // 每 N 条才全量落盘一次
+    let _queueSaveMod = 0;
+    function _writeFullQueue(queue) {
+        try { localStorage.setItem(K.auditQueue, JSON.stringify({ ...queue, time: Date.now() })); } catch(e) {}
+    }
+    function _writeQueueProgress(queue) {
+        // 轻量写入：只保留 current 进度，断点续跑仍能继续（在下次全量写时补全其余字段）
+        try {
+            const raw = localStorage.getItem(K.auditQueue);
+            let base = raw ? JSON.parse(raw) : null;
+            if (!base || !base.items) base = queue;
+            base.current = queue.current;
+            base.time = Date.now();
+            localStorage.setItem(K.auditQueue, JSON.stringify(base));
+        } catch(e) { try { _writeFullQueue(queue); } catch(_) {} }
+    }
     function saveAuditQueue(queue) {
         clearTimeout(_saveQueueTimer);
-        _saveQueueTimer = setTimeout(() => {
-            try {
-                localStorage.setItem(K.auditQueue, JSON.stringify({ ...queue, time: Date.now() }));
-            } catch(e) {}
-        }, 200);
+        _saveQueueTimer = setTimeout(() => { try { _writeFullQueue(queue); } catch(e) {} }, 200);
     }
     function saveAuditQueueNow(queue) {
         clearTimeout(_saveQueueTimer);
+        // 全量写入（切换组/中止/结束前必须调用，保证 items 完整）
         try {
-            localStorage.setItem(K.auditQueue, JSON.stringify({ ...queue, time: Date.now() }));
+            _writeFullQueue(queue);
         } catch(e) {}
+    }
+    // 批审循环内每条调用：节流全量写入，其余只更新进度
+    function saveAuditQueueTick(queue) {
+        _queueSaveMod = (_queueSaveMod + 1) % QUEUE_SAVE_THROTTLE;
+        if (_queueSaveMod === 0) { try { _writeFullQueue(queue); } catch(e) {} }
+        else { try { _writeQueueProgress(queue); } catch(e) { try { _writeFullQueue(queue); } catch(_) {} } }
     }
 
     function loadAuditQueue() {
@@ -9585,10 +9605,10 @@ function fillNativeLoginForm(creds, lastWG) {
         const caSessionReady = !!options.caSessionReady;
         const isAudit = btnId === 'btn_ReportAuth' || options.action === 'audit';
         const expectedStatuses = options.expectedStatuses || (isAudit ? ['3'] : []);
-        const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? (caSessionReady ? 5000 : 10000) : 15000) : 8000);
+        const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? (caSessionReady ? 5000 : 7000) : 15000) : 8000);
         const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : (caSessionReady && isAudit);
-        const maxPoll = caSessionReady ? 4 : (batchMode ? 8 : 20);
-        const pollSleep = caSessionReady ? 40 : (batchMode ? 60 : 200);
+        const maxPoll = caSessionReady ? 4 : (batchMode ? 5 : 20);
+        const pollSleep = caSessionReady ? 40 : (batchMode ? 45 : 200);
         const missingStableMs = batchMode ? 450 : 900;
 
         let targetReportDR = options.targetReportDR ? String(options.targetReportDR) : '';
@@ -11545,7 +11565,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     const auditCtx = auditTargetContext(iframeWin, item.reportDR);
                     let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
                         action: 'audit', expectedStatuses: ['3'], batchMode: true,
-                        timeoutMs: batchCAReady ? 6000 : 10000, keepWS: queue.keepWS,
+                        timeoutMs: batchCAReady ? 6000 : 7000, keepWS: queue.keepWS,
                         caSessionReady: batchCAReady,
                         missingAsSuccess: auditCtx.allowMissingSuccess,
                         targetReportDR: item.reportDR
@@ -11586,7 +11606,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     dbg('逐行审核异常:', item.name, e.message);
                 } finally {
                     queue.current++;
-                    saveAuditQueueNow(queue);
+                    saveAuditQueueTick(queue);
                     await sleep(0);
                     try { iframeWin = getReportIframeWin(); if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; } } catch(e) {}
                 }
