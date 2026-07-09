@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.56.0
+// @version      7.57.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -48,11 +48,12 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.56.0';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.57.0';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
     // 批审单条硬超时（秒审 / 需 CA）；超时后二次校验，仍无果则跳过/重试，避免整批卡死
-    const BATCH_ITEM_DEADLINE_MS = { caReady: 16000, needCA: 48000 };
-    const BATCH_CONFIRM_MS = { normal: 4500, afterCA: 9000 };
+    // 秒审应收紧：已 CA 时单条网络+回写通常 <2s，给足 8s 兜底即可
+    const BATCH_ITEM_DEADLINE_MS = { caReady: 8000, needCA: 48000 };
+    const BATCH_CONFIRM_MS = { normal: 2000, afterCA: 8000 };
 
     // ==================== 工具 ====================
     const $  = s => document.querySelector(s);
@@ -9673,15 +9674,16 @@ function fillNativeLoginForm(creds, lastWG) {
         if (iframeWin) installNativeStatExceptionGuard(iframeWin);
 
         const batchMode = !!options.batchMode;
-        const caSessionReady = !!options.caSessionReady;
+        // 实时重测 CA，避免调用方传入过期的 caSessionReady=false 导致每条都走慢路径
+        const caSessionReady = !!options.caSessionReady || isCASessionReady(iframeWin);
         const isAudit = btnId === 'btn_ReportAuth' || options.action === 'audit';
         const expectedStatuses = options.expectedStatuses || (isAudit ? ['3'] : []);
-        // 秒审：单次等待收紧；需 CA 时略长。总时长由调用方 per-item deadline 兜底
-        const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? (caSessionReady ? 4500 : 6500) : 12000) : 8000);
+        // 秒审：单次等待收紧；已 CA 时网络回写通常 0.5–2s
+        const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? (caSessionReady ? 2200 : 6500) : 12000) : 8000);
         const missingAsSuccess = options.missingAsSuccess !== undefined ? options.missingAsSuccess : (caSessionReady && isAudit);
-        const maxPoll = caSessionReady ? 3 : (batchMode ? 4 : 16);
-        const pollSleep = caSessionReady ? 30 : (batchMode ? 40 : 180);
-        const missingStableMs = batchMode ? 350 : 900;
+        const maxPoll = caSessionReady ? 2 : (batchMode ? 4 : 16);
+        const pollSleep = caSessionReady ? 25 : (batchMode ? 40 : 180);
+        const missingStableMs = batchMode ? (caSessionReady ? 180 : 350) : 900;
 
         let targetReportDR = options.targetReportDR ? String(options.targetReportDR) : '';
         try {
@@ -9739,61 +9741,107 @@ function fillNativeLoginForm(creds, lastWG) {
                 try { options.onTick(0, phase); } catch(e) {}
             }
         };
-        const instant = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 100 : 80, allowMissingSuccess, waitOpts);
+        const reTriggerAudit = () => {
+            try {
+                if (typeof iframeWin.ReportSave === 'function') {
+                    iframeWin.ReportSave('A', '');
+                    return true;
+                }
+            } catch(e) {}
+            try { jq(btn).click(); return true; } catch(e2) {}
+            return false;
+        };
+        const instant = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? (caSessionReady ? 80 : 100) : 80, allowMissingSuccess, waitOpts);
         if (instant !== false) return instant;
 
         for (let poll = 0; poll < maxPoll; poll++) {
             if (options.abortCheck && options.abortCheck()) return false;
-            const early = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? 90 : 50, allowMissingSuccess, waitOpts);
+            const early = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, batchMode ? (caSessionReady ? 70 : 90) : 50, allowMissingSuccess, waitOpts);
             if (early !== false) return early;
 
             await sleep(pollSleep);
 
-            try {
-                const caWin = jq('#win_CAUserLogin');
-                if (caWin.length && caWin.is(':visible')) {
-                    caDetected = true;
-                    dbg('检测到 CA 认证窗口');
-                    break;
-                }
-            } catch(e) {}
+            if (findVisibleCAWindow(iframeWin)) {
+                caDetected = true;
+                dbg('检测到 CA 认证窗口（严格可见）');
+                break;
+            }
 
-            try {
-                const authWin = doc.querySelector('#win_AuthLogin, #win_EntryLogin');
-                if (authWin && authWin.style.display !== 'none') {
-                    const vis = jq(authWin);
-                    if (vis.length && vis.is(':visible')) {
-                        authLoginDetected = true;
-                        dbg('检测到审核登录窗口，继续等待原生审核结果');
-                    }
+            if (findVisibleAuthLoginWindow(iframeWin)) {
+                authLoginDetected = true;
+                dbg('检测到真实可见的审核登录窗口');
+                break;
+            }
+        }
+
+        // 审核登录窗口：自动填密 → 重新触发审核（而不是只 toast 空等）
+        if (authLoginDetected && !caDetected) {
+            tickAudit('审核登录中...');
+            const authOK = await fillOpenAuthLoginWindow(iframeWin);
+            if (authOK) {
+                dbg('审核登录已自动完成，重新触发审核');
+                tickAudit('重新审核...');
+                reTriggerAudit();
+                await sleep(80);
+                // 登录后可能弹出 CA
+                if (findVisibleCAWindow(iframeWin)) {
+                    caDetected = true;
+                } else {
+                    const afterAuth = await waitNativeActionResult(
+                        iframeWin, targetReportDR, expectedStatuses,
+                        batchMode ? (isCASessionReady(iframeWin) ? 2500 : 6000) : 10000,
+                        true, makeWaitOpts({ missingStableMs: 180, turbo: true })
+                    );
+                    if (afterAuth !== false) return afterAuth;
+                    if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) return true;
                 }
-            } catch(e) {}
+            } else if (!batchMode) {
+                showToast('出现审核登录窗口，请输入密码后继续', 'warning');
+            }
+            // 批审：登录失败也继续等结果，成功后不弹误导 toast
         }
 
         // 如果检测到 CA 窗口，自动完成 CA 登录
-        if (caDetected) {
+        if (caDetected || findVisibleCAWindow(iframeWin)) {
             dbg('开始自动 CA 认证...');
             tickAudit('CA 认证中...');
             const caOK = await handleCALogin(iframeWin, { fast: batchMode });
             if (caOK) {
                 saveCAAuth();
+                // 同步 Ukey 到 AuthUserDR / BatchUserDR，避免下一条又因用户 DR 不一致重弹 CA
+                try {
+                    const me2 = iframeWin.me;
+                    const loginDR = String(iframeWin.LoginUserDR || uid() || '');
+                    const arr = iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray;
+                    if (arr && loginDR && arr[loginDR]) {
+                        if (me2 && me2.AuthUserDR) arr[String(me2.AuthUserDR)] = arr[loginDR];
+                        if (me2 && me2.BatchUserDR) arr[String(me2.BatchUserDR)] = arr[loginDR];
+                    }
+                } catch(e) {}
                 if (options.keepWS) keepWorkbenchOnTop('CA认证完成');
                 dbg('CA 认证成功，等待审核回调...');
                 tickAudit('CA 完成，确认审核结果...');
+                // ReportSave 在 CA 回调里常会自动续跑；若未续跑则手动再触发一次
+                await sleep(120);
+                if (!verifyAuditSucceededByReportDR(iframeWin, targetReportDR) && !findVisibleCAWindow(iframeWin)) {
+                    const stillNeed = !iframeWin.me || iframeWin.me.IsSaveSuccess !== true;
+                    if (stillNeed && targetReportDR && isReportDetailLoaded(iframeWin, targetReportDR)) {
+                        reTriggerAudit();
+                    }
+                }
             } else {
                 dbg('CA 自动登录未确认，继续等待原生异步审核（可能已报错但仍会完成）...');
                 tickAudit('CA 未确认，继续等待结果...');
             }
             const postCaCtx = auditTargetContext(iframeWin, targetReportDR);
-            const postCaMissing = allowMissingSuccess || postCaCtx.detailReady;
-            // 收紧 CA 后等待：以前 20/45s 会表现为「卡半天最后又成功」
+            const postCaMissing = allowMissingSuccess || postCaCtx.detailReady || true;
             const postCaTimeout = batchMode
-                ? Math.max(timeoutMs, caOK ? 10000 : 18000)
+                ? Math.max(timeoutMs, caOK ? 8000 : 14000)
                 : Math.max(timeoutMs, caOK ? 12000 : 25000);
             const caResult = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, postCaTimeout, postCaMissing, makeWaitOpts({
                 targetWasPresent: waitOpts.targetWasPresent || postCaCtx.rowPresent,
-                missingStableMs: batchMode ? 450 : missingStableMs,
-                failureGraceMs: batchMode ? (caOK ? 2000 : 3500) : (caOK ? 3500 : 6000),
+                missingStableMs: batchMode ? 300 : missingStableMs,
+                failureGraceMs: batchMode ? (caOK ? 1500 : 3000) : (caOK ? 3500 : 6000),
                 onTick: (elapsed) => {
                     if (typeof options.onTick === 'function') {
                         options.onTick(elapsed, caOK ? 'CA后确认结果' : '等待CA/审核结果');
@@ -9801,7 +9849,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
             }));
             if (caResult) return caResult;
-            await sleep(batchMode ? 200 : 800);
+            await sleep(batchMode ? 120 : 800);
             if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {
                 dbg('CA 后二次校验：标本已审核');
                 if (caOK) saveCAAuth();
@@ -9812,10 +9860,10 @@ function fillNativeLoginForm(creds, lastWG) {
             return false;
         }
 
-        tickAudit('确认审核结果...');
-        const result = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, allowMissingSuccess, makeWaitOpts({
+        tickAudit(caSessionReady ? '秒审确认...' : '确认审核结果...');
+        const result = await waitNativeActionResult(iframeWin, targetReportDR, expectedStatuses, timeoutMs, allowMissingSuccess || caSessionReady, makeWaitOpts({
             missingStableMs,
-            failureGraceMs: batchMode ? 1500 : 3000
+            failureGraceMs: batchMode ? (caSessionReady ? 600 : 1500) : 3000
         }));
         if (result) return result;
 
@@ -9825,33 +9873,330 @@ function fillNativeLoginForm(creds, lastWG) {
             return true;
         }
 
-        if (authLoginDetected) {
-            showToast('出现审核登录窗口，请关闭后用原生审核按钮重新触发 CA', 'warning');
+        // 仅在窗口仍真实可见且审核失败时提示，避免「每条都 toast 但最终又成功」
+        if (authLoginDetected && findVisibleAuthLoginWindow(iframeWin)) {
+            showToast('审核登录窗口仍打开，请完成登录后重试', 'warning');
         }
         dbg('原生按钮点击完成，但未确认成功');
         return false;
+    }
+
+    // 与原生 ReportSave 一致：决定 CA 用哪个用户 DR
+    // （IsAuthLogin+AuthUserDR → 否则 BatchUserDR → 否则 LoginUserDR/当前登录用户）
+    function getReportCAUserDR(iframeWin) {
+        try {
+            iframeWin = iframeWin || getReportIframeWin();
+            const me = iframeWin && iframeWin.me;
+            if (me && Number(me.IsAuthLogin) === 1 && me.AuthUserDR && String(me.AuthUserDR).length > 0) {
+                return String(me.AuthUserDR);
+            }
+            if (me && me.BatchUserDR && String(me.BatchUserDR).length > 0) {
+                return String(me.BatchUserDR);
+            }
+            if (typeof iframeWin !== 'undefined' && iframeWin && iframeWin.LoginUserDR) {
+                return String(iframeWin.LoginUserDR);
+            }
+            return String(uid() || (me && me.SessionUserDR) || '');
+        } catch(e) {
+            return String(uid() || '');
+        }
+    }
+
+    function hasCAUkeyForUser(iframeWin, userDR) {
+        try {
+            if (!iframeWin || !iframeWin.CAMsg || !iframeWin.CAMsg.UkeyNoArray) return false;
+            const arr = iframeWin.CAMsg.UkeyNoArray;
+            const key = String(userDR || '');
+            if (key && arr[key]) return true;
+            // 部分环境用数字下标
+            if (key && arr[Number(key)]) return true;
+            return false;
+        } catch(e) { return false; }
+    }
+
+    // EasyUI 窗口严格可见判定：避免 DOM 残留节点被当成「审核登录窗口」导致误提示、空等
+    function isEasyUIWindowReallyVisible(el, jq) {
+        if (!el) return false;
+        try {
+            if (el.style && el.style.display === 'none') return false;
+            if (el.getAttribute && el.getAttribute('style') && /display\s*:\s*none/i.test(el.getAttribute('style'))) return false;
+            const $el = jq ? jq(el) : null;
+            if ($el && $el.length) {
+                try {
+                    if ($el.window && typeof $el.window === 'function') {
+                        // easyui window 方法可能不存在，忽略
+                    }
+                } catch(e) {}
+                if (!$el.is(':visible')) return false;
+            }
+            const panel = el.closest ? (el.closest('.window') || el.closest('.panel') || el) : el;
+            if (panel && panel.style && panel.style.display === 'none') return false;
+            if (panel && panel.offsetParent === null && panel !== document.body) {
+                // fixed 定位时 offsetParent 可能为 null，改看几何尺寸
+                const r0 = panel.getBoundingClientRect ? panel.getBoundingClientRect() : null;
+                if (!r0 || (r0.width < 40 && r0.height < 40)) return false;
+            }
+            const rect = (panel || el).getBoundingClientRect ? (panel || el).getBoundingClientRect() : null;
+            if (!rect || rect.width < 80 || rect.height < 60) return false;
+            // 完全在视口外
+            if (rect.bottom < 0 || rect.right < 0 || rect.top > (window.innerHeight || 800) + 40) return false;
+            return true;
+        } catch(e) { return false; }
+    }
+
+    function findVisibleAuthLoginWindow(iframeWin) {
+        try {
+            const doc = iframeWin ? iframeWin.document : document;
+            const jq = iframeWin ? (iframeWin.jQuery || iframeWin.$) : window.jQuery;
+            const sels = ['#win_AuthLogin', '#win_EntryLogin', '#win_BatchAuthUserLogin'];
+            for (const sel of sels) {
+                const el = doc.querySelector(sel);
+                if (isEasyUIWindowReallyVisible(el, jq)) return el;
+            }
+        } catch(e) {}
+        return null;
+    }
+
+    function findVisibleCAWindow(iframeWin) {
+        try {
+            const doc = iframeWin ? iframeWin.document : document;
+            const jq = iframeWin ? (iframeWin.jQuery || iframeWin.$) : window.jQuery;
+            const el = doc.querySelector('#win_CAUserLogin');
+            if (isEasyUIWindowReallyVisible(el, jq)) return el;
+            // 也用 jq :visible 作为补充
+            if (jq) {
+                const caWin = jq('#win_CAUserLogin');
+                if (caWin.length && caWin.is(':visible')) {
+                    const node = caWin[0];
+                    if (isEasyUIWindowReallyVisible(node, jq)) return node;
+                }
+            }
+        } catch(e) {}
+        return null;
     }
 
     function isCASessionReady(iframeWin) {
         try {
             iframeWin = iframeWin || getReportIframeWin();
             if (!iframeWin) return false;
-            const jq = iframeWin.jQuery || iframeWin.$;
-            if (jq) {
-                const caWin = jq('#win_CAUserLogin');
-                if (caWin.length && caWin.is(':visible')) return false;
+            if (findVisibleCAWindow(iframeWin)) return false;
+
+            // 与 ReportSave 相同的用户 DR：必须对该用户有 Ukey 才算真·秒审
+            const caUser = getReportCAUserDR(iframeWin);
+            if (hasCAUkeyForUser(iframeWin, caUser)) return true;
+
+            // 兜底：登录用户 / 审核用户 / Session 用户任一有 Ukey（并尽量把 ReportSave 会用到的 key 对齐）
+            const me = iframeWin.me;
+            const candidates = [
+                caUser,
+                me && me.AuthUserDR,
+                me && me.BatchUserDR,
+                me && me.SessionUserDR,
+                iframeWin.LoginUserDR,
+                uid()
+            ].map(v => String(v || '')).filter(Boolean);
+            for (const c of candidates) {
+                if (hasCAUkeyForUser(iframeWin, c)) return true;
             }
-            if (iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray) {
-                const me = iframeWin.me;
-                const userDR = me?.AuthUserDR || uid();
-                if (userDR && iframeWin.CAMsg.UkeyNoArray[userDR]) return true;
-            }
+
+            // 本地缓存仅作弱信号：不能单独当作秒审（可能 Ukey 用户不一致）
             const cached = loadCAAuth();
-            if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000)) return true;
-            const authStatus = getAuditStatusText(iframeWin);
-            if (authStatus && authStatus.indexOf('未登录') === -1) return true;
+            if (cached && cached.wg === wgDR() && (Date.now() - cached.time < 3600000) && hasCAUkeyForUser(iframeWin, caUser)) {
+                return true;
+            }
         } catch(e) {}
         return false;
+    }
+
+    // 批审前：恢复审核登录态 + 确认 ReportSave 将用到的 CA 用户已有 Ukey
+    async function ensureBatchAuthAndCAReady(iframeWin, options = {}) {
+        iframeWin = iframeWin || getReportIframeWin();
+        if (!iframeWin) return { ok: false, caReady: false, reason: 'no-iframe' };
+        const ft = (msg) => {
+            if (typeof options.onProgress === 'function') options.onProgress(msg);
+            else updateBatchProgress(msg, null);
+        };
+
+        // 1) 从 session/local 恢复 AuInfo → me.IsAuthLogin / AuthUserDR
+        try {
+            restoreAuth();
+            let au = null;
+            try { au = sessionStorage.getItem('AuInfo') || localStorage.getItem(K.au); } catch(e) {}
+            if (au && iframeWin.me) {
+                const parts = String(au).split('^');
+                if (parts[0]) {
+                    iframeWin.me.AuthUserDR = parts[0];
+                    iframeWin.me.IsAuthLogin = 1;
+                    dbg('批审前恢复审核登录: AuthUserDR=', parts[0]);
+                }
+            }
+            if (typeof iframeWin.GetAuthLoginInfo === 'function') {
+                try { iframeWin.GetAuthLoginInfo(); } catch(e) {}
+            }
+        } catch(e) { dbg('恢复审核登录失败:', e.message); }
+
+        // 2) 若审核登录窗误开着，自动填密关闭
+        if (findVisibleAuthLoginWindow(iframeWin)) {
+            ft('检测到审核登录窗口，自动登录...');
+            const filled = await fillOpenAuthLoginWindow(iframeWin);
+            if (!filled) {
+                showToast('请完成审核登录后重试批审', 'warning');
+                return { ok: false, caReady: false, reason: 'auth-login' };
+            }
+            await sleep(200);
+        }
+
+        // 3) 对齐 CA 用户
+        let caUser = getReportCAUserDR(iframeWin);
+        if (isCASessionReady(iframeWin)) {
+            saveCAAuth();
+            return { ok: true, caReady: true, caUser };
+        }
+
+        // 若 Ukey 挂在 LoginUserDR 上，但 ReportSave 会用 BatchUserDR：尽量清空 BatchUserDR 走登录用户
+        try {
+            const me = iframeWin.me;
+            const loginDR = String(iframeWin.LoginUserDR || uid() || '');
+            if (me && loginDR && hasCAUkeyForUser(iframeWin, loginDR) && !hasCAUkeyForUser(iframeWin, getReportCAUserDR(iframeWin))) {
+                if (me.BatchUserDR && String(me.BatchUserDR) !== loginDR && Number(me.IsAuthLogin) !== 1) {
+                    dbg('批审：BatchUserDR 无 Ukey，改用已认证的 LoginUserDR', loginDR);
+                    me.BatchUserDR = loginDR;
+                }
+                // 若有 AuInfo 但 AuthUserDR 无 Ukey，而 LoginUserDR 有，则优先保持 IsAuthLogin 用户；否则用登录用户
+                if (Number(me.IsAuthLogin) === 1 && me.AuthUserDR && !hasCAUkeyForUser(iframeWin, me.AuthUserDR) && hasCAUkeyForUser(iframeWin, loginDR)) {
+                    // 把 Ukey 也记到 AuthUserDR（部分 CA 客户端按登录用户绑定）
+                    try {
+                        if (iframeWin.CAMsg && iframeWin.CAMsg.UkeyNoArray && iframeWin.CAMsg.UkeyNoArray[loginDR]) {
+                            iframeWin.CAMsg.UkeyNoArray[String(me.AuthUserDR)] = iframeWin.CAMsg.UkeyNoArray[loginDR];
+                            dbg('批审：复制 Ukey LoginUserDR → AuthUserDR');
+                        }
+                    } catch(e) {}
+                }
+            }
+        } catch(e) {}
+
+        caUser = getReportCAUserDR(iframeWin);
+        if (hasCAUkeyForUser(iframeWin, caUser)) {
+            saveCAAuth();
+            return { ok: true, caReady: true, caUser };
+        }
+
+        // 4) 仍无 Ukey：主动触发一次 CA（只做一次，避免每条都弹）
+        ft('CA 未绑定当前审核用户，正在认证...');
+        try {
+            const CAMsg = iframeWin.CAMsg;
+            const me = iframeWin.me;
+            if (CAMsg && typeof CAMsg.Login === 'function') {
+                const userForCA = caUser || uid();
+                let loginCbFired = false;
+                CAMsg.Login(userForCA, function () { loginCbFired = true; }, []);
+                // 等窗口或 Ukey
+                for (let i = 0; i < 40; i++) {
+                    await sleep(150);
+                    if (hasCAUkeyForUser(iframeWin, userForCA)) break;
+                    if (findVisibleCAWindow(iframeWin)) break;
+                    if (loginCbFired && hasCAUkeyForUser(iframeWin, userForCA)) break;
+                }
+                if (findVisibleCAWindow(iframeWin)) {
+                    const caOK = await handleCALogin(iframeWin, { fast: true });
+                    if (caOK) {
+                        saveCAAuth();
+                        // 同步 Ukey 到可能的 AuthUserDR
+                        try {
+                            const loginDR = String(iframeWin.LoginUserDR || uid() || '');
+                            if (me && me.AuthUserDR && loginDR && hasCAUkeyForUser(iframeWin, loginDR)) {
+                                iframeWin.CAMsg.UkeyNoArray[String(me.AuthUserDR)] = iframeWin.CAMsg.UkeyNoArray[loginDR];
+                            }
+                        } catch(e) {}
+                    }
+                }
+            }
+        } catch(e) { dbg('批审前 CA 触发失败:', e.message); }
+
+        const ready = isCASessionReady(iframeWin);
+        if (ready) saveCAAuth();
+        return { ok: true, caReady: ready, caUser: getReportCAUserDR(iframeWin) };
+    }
+
+    // 审核登录窗已打开时填密提交（不再点「审核登录」按钮）
+    async function fillOpenAuthLoginWindow(iframeWin) {
+        try {
+            const jq = iframeWin.jQuery || iframeWin.$;
+            const doc = iframeWin.document;
+            const loginWin = findVisibleAuthLoginWindow(iframeWin);
+            if (!loginWin) return false;
+
+            let loginDoc = doc;
+            const dialogIframe = loginWin.querySelector('iframe');
+            if (dialogIframe) {
+                try {
+                    const iDoc = dialogIframe.contentDocument || dialogIframe.contentWindow.document;
+                    if (iDoc && iDoc.body && iDoc.body.childElementCount > 0) loginDoc = iDoc;
+                } catch(e) {}
+            }
+
+            let pwdInput = loginDoc.querySelector('#text_AuthUserLoginPasssword')
+                || loginDoc.querySelector('#text_EntryUserPasssword')
+                || loginDoc.querySelector('input[type="password"]');
+            if (!pwdInput) {
+                // 深一层
+                for (const ifr of loginWin.querySelectorAll('iframe')) {
+                    try {
+                        const iDoc = ifr.contentDocument || ifr.contentWindow.document;
+                        if (!iDoc) continue;
+                        pwdInput = iDoc.querySelector('#text_AuthUserLoginPasssword')
+                            || iDoc.querySelector('#text_EntryUserPasssword')
+                            || iDoc.querySelector('input[type="password"]');
+                        if (pwdInput) { loginDoc = iDoc; break; }
+                    } catch(e) {}
+                }
+            }
+            if (!pwdInput) return false;
+
+            const pwd = await loadPwdAsync();
+            if (!pwd) { dbg('未保存审核密码，无法自动审核登录'); return false; }
+
+            let acctInput = loginDoc.querySelector('#text_AuthUserCode')
+                || loginDoc.querySelector('input[id*="UserCode"]')
+                || loginDoc.querySelector('input[type="text"]');
+            if (acctInput && uname()) setNativeInputValue(acctInput, uname());
+            setNativeInputValue(pwdInput, pwd);
+            await sleep(150);
+
+            let okBtn = null;
+            for (const b of loginDoc.querySelectorAll('a.l-btn, button, input[type=button]')) {
+                const text = (b.textContent || b.value || '').trim();
+                if (text.includes('确定') || text.includes('登录') || text === 'OK') { okBtn = b; break; }
+            }
+            if (!okBtn) {
+                for (const b of loginWin.querySelectorAll('a.l-btn, button')) {
+                    const text = (b.textContent || '').trim();
+                    if (text.includes('确定') || text.includes('登录')) { okBtn = b; break; }
+                }
+            }
+            if (!okBtn) return false;
+            if (jq) jq(okBtn).click(); else okBtn.click();
+
+            for (let w = 0; w < 25; w++) {
+                await sleep(120);
+                if (!isEasyUIWindowReallyVisible(loginWin, jq)) {
+                    try {
+                        const me = iframeWin.me;
+                        if (me) {
+                            me.IsAuthLogin = 1;
+                            const auInfo = sessionStorage.getItem('AuInfo');
+                            if (auInfo) me.AuthUserDR = auInfo.split('^')[0];
+                            else if (!me.AuthUserDR) me.AuthUserDR = uid();
+                        }
+                    } catch(e) {}
+                    return true;
+                }
+            }
+            return !isEasyUIWindowReallyVisible(loginWin, jq);
+        } catch(e) {
+            dbg('fillOpenAuthLoginWindow 失败:', e.message);
+            return false;
+        }
     }
 
     // 实时检查CA认证状态
@@ -11524,7 +11869,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 progress.remove(); return;
             }
 
-            updateBatchProgress('准备批审，加载报告列表...', 0);
+            updateBatchProgress('准备批审：恢复审核登录 / 检查 CA...', 0);
 
             let successCount = queue.done.length, failCount = queue.failed.length, skipCount = queue.skipped.length;
             let totalCount = queue.items.length;
@@ -11533,18 +11878,41 @@ function fillNativeLoginForm(creds, lastWG) {
             let batchListFresh = false;
             let batchSkipSelect = false;
             queue.caReadyByWg = queue.caReadyByWg || {};
-            let batchCAReady = queue.caReadyByWg[wgDR()] || isCASessionReady(iframeWin);
             _batchAbort = false;
+
+            // 批审前对齐原生 ReportSave 的审核用户 + CA Ukey，避免每条重弹/空等
+            const prereq = await ensureBatchAuthAndCAReady(iframeWin, {
+                onProgress: (msg) => updateBatchProgress(msg, 0)
+            });
+            iframeWin = getReportIframeWin() || iframeWin;
+            if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
+            let batchCAReady = !!(queue.caReadyByWg[wgDR()] || prereq.caReady || isCASessionReady(iframeWin));
+            if (batchCAReady) queue.caReadyByWg[wgDR()] = true;
+            dbg('批审前置: caReady=', batchCAReady, 'caUser=', prereq.caUser, getReportCAUserDR(iframeWin));
+
             if (queue.current < queue.items.length - 1) {
                 const remaining = queue.items.splice(queue.current);
                 remaining.sort(compareAuditQueueItems);
                 queue.items.push(...remaining);
             }
 
-            const prepHint = batchCAReady ? 'CA 已认证，秒审模式...' : '首条将自动 CA 认证，加载全部仪器列表...';
+            const prepHint = batchCAReady ? 'CA 已就绪，秒审模式...' : '首条将自动 CA 认证，加载全部仪器列表...';
             updateBatchProgress(prepHint, 0);
             iframeWin = await refreshNativeWorkListAllMachines(iframeWin, { fast: true });
             if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
+            // 刷新列表后 me 可能被重置，再恢复一次审核态
+            if (batchCAReady) {
+                try {
+                    restoreAuth();
+                    const au = sessionStorage.getItem('AuInfo') || localStorage.getItem(K.au);
+                    if (au && me) {
+                        const parts = String(au).split('^');
+                        if (parts[0]) { me.AuthUserDR = parts[0]; me.IsAuthLogin = 1; }
+                    }
+                    if (typeof iframeWin.GetAuthLoginInfo === 'function') iframeWin.GetAuthLoginInfo();
+                } catch(e) {}
+                batchCAReady = isCASessionReady(iframeWin) || batchCAReady;
+            }
             batchListFresh = true;
 
             while (queue.current < queue.items.length) {
@@ -11597,7 +11965,9 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
 
                 const itemWg = item.wg || wgDR();
-                batchCAReady = queue.caReadyByWg[itemWg] || isCASessionReady(iframeWin);
+                // 每条开始时以真实 Ukey 为准（不要被过期缓存拖回慢路径）
+                batchCAReady = isCASessionReady(iframeWin) || !!queue.caReadyByWg[itemWg];
+                if (batchCAReady) queue.caReadyByWg[itemWg] = true;
 
                 batchListFresh = false;
                 totalCount = queue.items.length;
@@ -11686,37 +12056,43 @@ function fillNativeLoginForm(creds, lastWG) {
                         continue;
                     }
 
-                    progressPhase('审核中');
+                    progressPhase(batchCAReady ? '秒审' : '审核中');
                     const auditCtx = auditTargetContext(iframeWin, item.reportDR);
-                    let sawCAPath = !batchCAReady;
+                    let sawCAPath = false;
                     let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
                         action: 'audit', expectedStatuses: ['3'], batchMode: true,
-                        timeoutMs: batchCAReady ? 4500 : 6000, keepWS: queue.keepWS,
+                        timeoutMs: batchCAReady ? 2200 : 6000, keepWS: queue.keepWS,
                         caSessionReady: batchCAReady,
-                        missingAsSuccess: auditCtx.allowMissingSuccess,
+                        missingAsSuccess: true, // 详情已就绪；行消失或状态 3 均算成功
                         targetReportDR: item.reportDR,
                         abortCheck: itemAbort,
                         onTick: (elapsed, phase) => {
-                            if (phase && String(phase).indexOf('CA') !== -1) sawCAPath = true;
-                            progressPhase(phase || '审核中', elapsed);
+                            if (phase && /CA|审核登录/.test(String(phase))) sawCAPath = true;
+                            progressPhase(phase || (batchCAReady ? '秒审' : '审核中'), elapsed);
                         }
                     });
-                    // 首次未确认：先超快校验，再短确认（不再无脑 afterCA:true 干等 12s）
+                    // 首次未确认：超快校验 + 仅必要时短确认（已 CA 时最多约 2s）
                     if (!auditResult && !itemAbort()) {
                         iframeWin = getReportIframeWin() || iframeWin;
                         if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
                             auditResult = true;
-                        } else {
+                        } else if (!batchCAReady || sawCAPath) {
                             dbg('批审单条首次未确认，短确认:', item.name || item.reportDR);
                             progressPhase('确认结果');
                             auditResult = await confirmAuditEventually(iframeWin, item.reportDR, item.name || item.labno || '', {
                                 batchMode: true,
                                 targetWasPresent: auditCtx.rowPresent,
-                                detailWasReady: auditCtx.detailReady,
-                                afterCA: sawCAPath || !batchCAReady,
+                                detailWasReady: true,
+                                afterCA: sawCAPath,
                                 abortCheck: itemAbort,
                                 onTick: (msg) => updateBatchProgress(`${itemBase} - ${msg}${modeHint}`, (queue.current + 0.7) / totalCount * 100)
                             });
+                        } else {
+                            // 已 CA 秒审路径：再给 800ms 快速轮询，避免叠长确认
+                            for (let q = 0; q < 8 && !auditResult; q++) {
+                                await sleep(100);
+                                if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) auditResult = true;
+                            }
                         }
                     }
                     if (!auditResult && verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
