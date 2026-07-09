@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.59.2
+// @version      7.59.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -49,7 +49,7 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.2';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.3';
     // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
     const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
@@ -4022,7 +4022,114 @@
         btn.textContent = n > 0 ? `📦 打包下载 ZIP (${n})` : '📦 打包下载 ZIP';
     }
 
-    // 一键 ZIP：本地 vendor/jszip.min.js
+    // CRC32 表（ZIP 本地实现用，不依赖 JSZip，避免油猴沙箱卡住）
+    let _qeCrcTable = null;
+    function qeCrc32(u8) {
+        if (!_qeCrcTable) {
+            _qeCrcTable = new Uint32Array(256);
+            for (let n = 0; n < 256; n++) {
+                let c = n;
+                for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+                _qeCrcTable[n] = c >>> 0;
+            }
+        }
+        let crc = 0xFFFFFFFF;
+        for (let i = 0; i < u8.length; i++) crc = _qeCrcTable[(crc ^ u8[i]) & 0xFF] ^ (crc >>> 8);
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    function qeU16(n) { return new Uint8Array([n & 0xFF, (n >>> 8) & 0xFF]); }
+    function qeU32(n) {
+        return new Uint8Array([n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF]);
+    }
+    function qeConcatBytes(parts) {
+        let len = 0;
+        parts.forEach(p => { len += p.length; });
+        const out = new Uint8Array(len);
+        let off = 0;
+        parts.forEach(p => { out.set(p, off); off += p.length; });
+        return out;
+    }
+
+    // 纯 JS 生成 ZIP（仅 STORE 存储，xlsx 本身已压缩，体积几乎无差）
+    function qeBuildZipBlobSync(entries) {
+        // entries: [{ name: string, data: Uint8Array }]
+        const enc = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+        const localParts = [];
+        const centralParts = [];
+        let offset = 0;
+        entries.forEach(ent => {
+            const nameBytes = enc ? enc.encode(ent.name) : (() => {
+                const a = new Uint8Array(ent.name.length);
+                for (let i = 0; i < ent.name.length; i++) a[i] = ent.name.charCodeAt(i) & 0xFF;
+                return a;
+            })();
+            const data = ent.data;
+            const crc = qeCrc32(data);
+            const size = data.length >>> 0;
+            // Local file header
+            const local = qeConcatBytes([
+                qeU32(0x04034b50),
+                qeU16(20), // version needed
+                qeU16(0),  // flags
+                qeU16(0),  // method STORE
+                qeU16(0), qeU16(0), // time/date
+                qeU32(crc),
+                qeU32(size),
+                qeU32(size),
+                qeU16(nameBytes.length),
+                qeU16(0), // extra len
+                nameBytes,
+                data
+            ]);
+            localParts.push(local);
+            // Central directory header
+            const central = qeConcatBytes([
+                qeU32(0x02014b50),
+                qeU16(20), qeU16(20),
+                qeU16(0), qeU16(0),
+                qeU16(0), qeU16(0),
+                qeU32(crc),
+                qeU32(size), qeU32(size),
+                qeU16(nameBytes.length),
+                qeU16(0), qeU16(0), // extra, comment
+                qeU16(0), qeU16(0), // disk, int attr
+                qeU32(0), // ext attr
+                qeU32(offset),
+                nameBytes
+            ]);
+            centralParts.push(central);
+            offset += local.length;
+        });
+        const centralDir = qeConcatBytes(centralParts);
+        const end = qeConcatBytes([
+            qeU32(0x06054b50),
+            qeU16(0), qeU16(0),
+            qeU16(entries.length), qeU16(entries.length),
+            qeU32(centralDir.length),
+            qeU32(offset),
+            qeU16(0)
+        ]);
+        const all = qeConcatBytes(localParts.concat([centralDir, end]));
+        return new Blob([all], { type: 'application/zip' });
+    }
+
+    async function qeBlobToU8(blob) {
+        if (!blob) return new Uint8Array(0);
+        if (blob.arrayBuffer) {
+            const ab = await blob.arrayBuffer();
+            return new Uint8Array(ab);
+        }
+        // 极旧环境
+        return new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(new Uint8Array(fr.result));
+            fr.onerror = () => reject(fr.error || new Error('FileReader failed'));
+            fr.readAsArrayBuffer(blob);
+        });
+    }
+
+    // 一键 ZIP：纯本地实现，不依赖 JSZip（避免「打包中…」卡住）
     async function qeDownloadAllZip() {
         const files = qeCollectPackableFiles();
         if (!files.length) {
@@ -4035,45 +4142,35 @@
             zipBtn.textContent = '打包中…';
         }
         try {
-            qeSetStatus(`正在加载 ZIP 组件并打包 ${files.length} 个文件…`, 'info');
-            if (!(await qeEnsureJSZip())) {
-                qeSetStatus('JSZip 未加载：请运行 python3 ~/脚本/serve.py 后刷新。改为逐个下载…', 'info');
-                for (let i = 0; i < files.length; i++) {
-                    qeDownloadBlob(files[i].blob, files[i].name);
-                    await sleep(400);
-                }
-                qeSetStatus(`已触发 ${files.length} 个文件逐个下载（无 ZIP）。`, 'ok');
-                return;
-            }
-            const Zip = qeJSZipLib || qeGetGlobal('JSZip');
-            if (!Zip) {
-                qeSetStatus('JSZip 对象不可用，改为逐个下载…', 'error');
-                for (let i = 0; i < files.length; i++) {
-                    qeDownloadBlob(files[i].blob, files[i].name);
-                    await sleep(400);
-                }
-                return;
-            }
             qeSetStatus(`正在打包 ${files.length} 个 Excel…`, 'info');
-            const zip = new Zip();
-            files.forEach(f => zip.file(f.name, f.blob));
-            const zipBlob = await zip.generateAsync({
-                type: 'blob',
-                compression: 'DEFLATE',
-                compressionOptions: { level: 6 }
-            });
+            const entries = [];
+            for (let i = 0; i < files.length; i++) {
+                qeSetStatus(`读取文件 ${i + 1}/${files.length}：${files[i].name}`, 'info');
+                // 让出主线程，刷新 UI
+                await sleep(0);
+                const u8 = await qeBlobToU8(files[i].blob);
+                entries.push({ name: files[i].name, data: u8 });
+            }
+            qeSetStatus('正在生成 ZIP…', 'info');
+            await sleep(0);
+            const zipBlob = qeBuildZipBlobSync(entries);
             const cfg = qeCollectConfig();
             const ym = (cfg._year && cfg._month)
                 ? `${cfg._year}${String(cfg._month).padStart(2, '0')}`
                 : today().replace(/-/g, '').slice(0, 6);
             qeDownloadBlob(zipBlob, `质控数据_${ym}.zip`);
-            qeSetStatus(`✅ ZIP 已下载（${files.length} 个表格）。`, 'ok');
+            qeSetStatus(`✅ ZIP 已下载（${files.length} 个表格，约 ${Math.round(zipBlob.size / 1024)} KB）。`, 'ok');
         } catch(e) {
             dbg('[LIS-QE] ZIP 失败:', e && e.message);
             qeSetStatus('ZIP 失败: ' + (e && e.message ? e.message : e) + '，改为逐个下载…', 'error');
-            for (let i = 0; i < files.length; i++) {
-                qeDownloadBlob(files[i].blob, files[i].name);
-                await sleep(400);
+            try {
+                for (let i = 0; i < files.length; i++) {
+                    qeDownloadBlob(files[i].blob, files[i].name);
+                    await sleep(350);
+                }
+                qeSetStatus(`已触发 ${files.length} 个文件逐个下载。`, 'ok');
+            } catch(e2) {
+                qeSetStatus('逐个下载也失败: ' + (e2 && e2.message ? e2.message : e2), 'error');
             }
         } finally {
             qeUpdateZipButton();
