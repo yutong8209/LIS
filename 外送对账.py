@@ -539,25 +539,286 @@ def _load_lis_many(paths):
     return pd.concat(frames, ignore_index=True)
 
 
-def _build_merged_patient_days(tp: pd.DataFrame, lis: pd.DataFrame) -> pd.DataFrame:
+def _merge_patient_days_with_slack(
+    tp: pd.DataFrame, lis: pd.DataFrame, day_slack: int = 1
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """返回 (both, only_tp_day, only_lis_day, all_merged)。日期允许 ±day_slack。"""
     tp_day = _patient_day_agg_tp(tp)
     lis_day = _patient_day_agg_lis(lis)
     merged = tp_day.merge(lis_day, on=["姓名", "日期"], how="outer", indicator=True)
-    merged["机构标准物价"] = merged["机构标准物价"].fillna(0)
-    merged["医院报告费用"] = merged["医院报告费用"].fillna(0)
-    merged["差额"] = merged["机构标准物价"] - merged["医院报告费用"]
+    only_tp = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"]).copy()
+    only_lis = merged[merged["_merge"] == "right_only"].drop(columns=["_merge"]).copy()
+    both = merged[merged["_merge"] == "both"].drop(columns=["_merge"]).copy()
 
-    def _status(r):
-        if r["_merge"] == "left_only":
-            return "仅机构有"
-        if r["_merge"] == "right_only":
-            return "仅医院有"
-        if abs(r["差额"]) < 0.02:
-            return "金额一致"
-        return "金额不一致"
+    if day_slack > 0 and (len(only_tp) or len(only_lis)):
+        extra_rows = []
+        ot, ol = only_tp.copy(), only_lis.copy()
+        used_tp, used_lis = set(), set()
+        for i, r in ot.iterrows():
+            cands = ol[
+                (ol["姓名"] == r["姓名"])
+                & ((ol["日期"] - r["日期"]).abs() <= pd.Timedelta(days=day_slack))
+            ]
+            if cands.empty:
+                continue
+            j = cands.iloc[0].name
+            if j in used_lis:
+                continue
+            used_tp.add(i)
+            used_lis.add(j)
+            row = {**r.to_dict()}
+            for k in lis_day.columns:
+                if k not in ("姓名", "日期"):
+                    row[k] = cands.iloc[0][k]
+            row["日期说明"] = f"机构{r['日期'].date()} / 医院{cands.iloc[0]['日期'].date()}"
+            extra_rows.append(row)
+        if extra_rows:
+            both = pd.concat([both, pd.DataFrame(extra_rows)], ignore_index=True)
+            only_tp = ot.drop(index=list(used_tp))
+            only_lis = ol.drop(index=list(used_lis))
 
-    merged["状态"] = merged.apply(_status, axis=1)
-    return merged
+    both = both.copy()
+    both["机构标准物价"] = both["机构标准物价"].fillna(0)
+    both["医院报告费用"] = both["医院报告费用"].fillna(0)
+    both["差额"] = both["机构标准物价"] - both["医院报告费用"]
+    both["状态"] = both["差额"].abs().lt(0.02).map({True: "金额一致", False: "金额不一致"})
+    only_tp = only_tp.copy()
+    only_tp["状态"] = "仅机构有"
+    only_tp["机构标准物价"] = only_tp["机构标准物价"].fillna(0)
+    only_tp["医院报告费用"] = 0
+    only_tp["差额"] = only_tp["机构标准物价"]
+    only_lis = only_lis.copy()
+    only_lis["状态"] = "仅医院有"
+    only_lis["医院报告费用"] = only_lis["医院报告费用"].fillna(0)
+    only_lis["机构标准物价"] = 0
+    only_lis["差额"] = -only_lis["医院报告费用"]
+
+    all_m = pd.concat([both, only_tp, only_lis], ignore_index=True, sort=False)
+    return both, only_tp, only_lis, all_m
+
+
+def _presence_details(
+    tp: pd.DataFrame, lis: pd.DataFrame, only_tp_day: pd.DataFrame, only_lis_day: pd.DataFrame, day_slack: int = 1
+) -> dict[str, pd.DataFrame]:
+    """
+    有/无对照明细：
+    - 机构有医院无：整日在机构侧、医院侧对不上的明细行
+    - 医院有机构无：整日在医院侧、机构侧对不上的标本/结果行
+    - 病人级：整个周期内姓名只出现在一侧
+    - 同日缺项：两边都有该患者日，但某项目只在一侧
+    """
+    # --- 病人级（忽略日期）---
+    tp_names = set(tp["患者"].astype(str))
+    lis_names = set(lis["姓名"].astype(str))
+    only_name_tp = sorted(tp_names - lis_names)
+    only_name_lis = sorted(lis_names - tp_names)
+
+    def _tp_patient_rows(names):
+        if not names:
+            return pd.DataFrame(columns=["姓名", "机构条数", "标准物价合计", "结算合计", "条码示例", "项目汇总", "日期范围"])
+        sub = tp[tp["患者"].isin(names)]
+        g = sub.groupby("患者", as_index=False).agg(
+            机构条数=("单项名称", "count"),
+            标准物价合计=("标准物价", "sum"),
+            结算合计=("结算金额", "sum"),
+            条码示例=("条码号", lambda s: "、".join(list(dict.fromkeys(x for x in s if x))[:5])),
+            项目汇总=("单项名称", lambda s: "；".join(sorted(set(s))[:12])),
+            最早=("日期", "min"),
+            最晚=("日期", "max"),
+        )
+        g["日期范围"] = g.apply(
+            lambda r: f"{r['最早'].date()}~{r['最晚'].date()}" if hasattr(r["最早"], "date") else "",
+            axis=1,
+        )
+        return g.rename(columns={"患者": "姓名"})[
+            ["姓名", "机构条数", "标准物价合计", "结算合计", "条码示例", "项目汇总", "日期范围"]
+        ].sort_values("姓名")
+
+    def _lis_patient_rows(names):
+        if not names:
+            return pd.DataFrame(columns=["姓名", "医院标本数", "报告费用合计", "检验号示例", "项目汇总", "日期范围"])
+        sub = lis[lis["姓名"].isin(names)]
+        by_lab = sub.drop_duplicates("检验号")
+        g1 = by_lab.groupby("姓名", as_index=False).agg(
+            医院标本数=("检验号", "nunique"),
+            报告费用合计=("报告费用", "sum"),
+            检验号示例=("检验号", lambda s: "、".join(list(dict.fromkeys(s.astype(str)))[:5])),
+            最早=("日期", "min"),
+            最晚=("日期", "max"),
+        )
+        g2 = sub.groupby("姓名", as_index=False).agg(
+            项目汇总=("项目", lambda s: "；".join(sorted(set(x for x in s if x))[:12]))
+        )
+        g = g1.merge(g2, on="姓名", how="left")
+        g["日期范围"] = g.apply(
+            lambda r: f"{r['最早'].date()}~{r['最晚'].date()}" if hasattr(r["最早"], "date") else "",
+            axis=1,
+        )
+        return g[["姓名", "医院标本数", "报告费用合计", "检验号示例", "项目汇总", "日期范围"]].sort_values("姓名")
+
+    # --- 患者日仅一侧 → 展开明细 ---
+    only_tp_keys = set(zip(only_tp_day["姓名"], only_tp_day["日期"])) if len(only_tp_day) else set()
+    only_lis_keys = set(zip(only_lis_day["姓名"], only_lis_day["日期"])) if len(only_lis_day) else set()
+
+    inst_only_lines = []
+    for (name, day) in sorted(only_tp_keys, key=lambda x: (str(x[1]), x[0])):
+        sub = tp[(tp["患者"] == name) & (tp["日期"] == day)]
+        # 该姓名在医院 ±slack 是否有任何记录（跨日提示）
+        near = lis[
+            (lis["姓名"] == name)
+            & ((lis["日期"] - day).abs() <= pd.Timedelta(days=max(day_slack, 3)))
+        ]
+        near_hint = ""
+        if len(near):
+            days = sorted({d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10] for d in near["日期"].unique()})
+            near_hint = "医院附近有记录：" + "、".join(days[:5])
+        else:
+            near_hint = "医院同期未找到该病人外送记录"
+        for _, r in sub.iterrows():
+            inst_only_lines.append(
+                {
+                    "姓名": name,
+                    "送检日期": day,
+                    "条码号": r["条码号"],
+                    "机构项目": r["单项名称"],
+                    "标准物价": r["标准物价"],
+                    "结算金额": r["结算金额"],
+                    "说明": near_hint,
+                }
+            )
+    df_inst_only = pd.DataFrame(inst_only_lines)
+
+    hosp_only_lines = []
+    for (name, day) in sorted(only_lis_keys, key=lambda x: (str(x[1]), x[0])):
+        sub = lis[(lis["姓名"] == name) & (lis["日期"] == day)]
+        near = tp[
+            (tp["患者"] == name)
+            & ((tp["日期"] - day).abs() <= pd.Timedelta(days=max(day_slack, 3)))
+        ]
+        if len(near):
+            days = sorted({d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10] for d in near["日期"].unique()})
+            near_hint = "机构附近有记录：" + "、".join(days[:5])
+        else:
+            near_hint = "机构账单同期未找到该病人"
+        # 按检验号去重展示费用，项目列合并
+        for labno, g in sub.groupby("检验号", sort=False):
+            first = g.iloc[0]
+            items = "；".join(sorted(set(g["项目"].astype(str)) | set(g["组合"].astype(str))))
+            hosp_only_lines.append(
+                {
+                    "姓名": name,
+                    "核收日期": day,
+                    "检验号": labno,
+                    "报告状态": first.get("报告状态", ""),
+                    "报告费用": first["报告费用"],
+                    "组合项目": items[:120],
+                    "说明": near_hint,
+                }
+            )
+    df_hosp_only = pd.DataFrame(hosp_only_lines)
+
+    # --- 同日都有，但项目只在一侧（用 exact 共有日；slack 日也算共有）---
+    # 共有：姓名在 both 里出现的机构日 / 医院日
+    both_days_tp = set()
+    both_days_lis = set()
+    # rebuild both with slack from only sets complement
+    tp_all_keys = set(zip(tp["患者"], tp["日期"]))
+    lis_all_keys = set(zip(lis["姓名"], lis["日期"]))
+    # 对每个机构行找是否有模糊项目匹配（姓名+日期±slack）
+    matched_tp_idx = set()
+    matched_lis_idx = set()
+    lis_by_name: dict[str, list[int]] = {}
+    for i, r in lis.iterrows():
+        lis_by_name.setdefault(r["姓名"], []).append(i)
+
+    for ti, tr in tp.iterrows():
+        cands = lis_by_name.get(tr["患者"], [])
+        hit = None
+        for li in cands:
+            if li in matched_lis_idx:
+                continue
+            lr = lis.loc[li]
+            if abs((lr["日期"] - tr["日期"]).days) > day_slack:
+                continue
+            if _items_match(tr["单项名称"], lr["项目"], lr["组合"]):
+                hit = li
+                break
+        if hit is not None:
+            matched_tp_idx.add(ti)
+            matched_lis_idx.add(hit)
+
+    # 未匹配且「对方有该人该日附近」→ 同日缺项；否则若整日仅一侧已在上面列出
+    item_only_tp = []
+    for ti, tr in tp.iterrows():
+        if ti in matched_tp_idx:
+            continue
+        if (tr["患者"], tr["日期"]) in only_tp_keys:
+            continue  # 已在机构有医院无
+        # 医院是否有该人 ±slack
+        has_near = any(
+            abs((lis.loc[li, "日期"] - tr["日期"]).days) <= day_slack
+            for li in lis_by_name.get(tr["患者"], [])
+        )
+        if not has_near:
+            continue
+        item_only_tp.append(
+            {
+                "姓名": tr["患者"],
+                "日期": tr["日期"],
+                "侧": "仅机构有此项目",
+                "项目": tr["单项名称"],
+                "条码号或检验号": tr["条码号"],
+                "金额": tr["标准物价"],
+                "说明": "同人同日(±容差)医院有其它结果，但匹配不到该项目",
+            }
+        )
+
+    item_only_lis = []
+    for li, lr in lis.iterrows():
+        if li in matched_lis_idx:
+            continue
+        if (lr["姓名"], lr["日期"]) in only_lis_keys:
+            continue
+        has_near = (
+            ((tp["患者"] == lr["姓名"]) & ((tp["日期"] - lr["日期"]).abs() <= pd.Timedelta(days=day_slack))).any()
+        )
+        if not has_near:
+            continue
+        item_only_lis.append(
+            {
+                "姓名": lr["姓名"],
+                "日期": lr["日期"],
+                "侧": "仅医院有此项目",
+                "项目": lr["项目"] or lr["组合"],
+                "条码号或检验号": lr["检验号"],
+                "金额": lr["医嘱费用"] or lr["报告费用"],
+                "说明": "同人同日(±容差)机构有其它项目，但匹配不到该项",
+            }
+        )
+
+    df_item_gap = pd.concat(
+        [pd.DataFrame(item_only_tp), pd.DataFrame(item_only_lis)],
+        ignore_index=True,
+        sort=False,
+    )
+    if len(df_item_gap):
+        df_item_gap = df_item_gap.sort_values(["日期", "姓名", "侧"])
+
+    return {
+        "病人仅机构有": _tp_patient_rows(only_name_tp),
+        "病人仅医院有": _lis_patient_rows(only_name_lis),
+        "机构有医院无_明细": df_inst_only,
+        "医院有机构无_明细": df_hosp_only,
+        "同日项目缺失": df_item_gap if len(df_item_gap) else pd.DataFrame(),
+        "stats": {
+            "病人仅机构": len(only_name_tp),
+            "病人仅医院": len(only_name_lis),
+            "机构日明细行": len(df_inst_only),
+            "医院标本行": len(df_hosp_only),
+            "同日缺项行": len(df_item_gap) if len(df_item_gap) else 0,
+            "项目匹配成功": len(matched_tp_idx),
+        },
+    }
 
 
 def write_clean_report(
@@ -566,23 +827,27 @@ def write_clean_report(
     lis: pd.DataFrame,
     sheets: dict,
     src_label: str = "",
+    day_slack: int = 1,
 ) -> Path:
-    """生成简洁 4 页对账分析表。"""
+    """生成简洁对账分析表（金额 + 有/无对照）。"""
     if Workbook is None:
         raise SystemExit("需要 openpyxl：pip3 install openpyxl")
 
-    merged = _build_merged_patient_days(tp, lis)
+    both, only_tp_day, only_lis_day, merged = _merge_patient_days_with_slack(tp, lis, day_slack)
+    presence = _presence_details(tp, lis, only_tp_day, only_lis_day, day_slack)
+
     tp_std = float(tp["标准物价"].sum())
     tp_settle = float(tp["结算金额"].sum())
     lis_fee = float(lis.drop_duplicates("检验号")["报告费用"].sum())
     delta = tp_std - lis_fee
 
-    n_both = int((merged["状态"].isin(["金额一致", "金额不一致"])).sum())
-    n_ok = int((merged["状态"] == "金额一致").sum())
-    n_amt = int((merged["状态"] == "金额不一致").sum())
-    n_only_tp = int((merged["状态"] == "仅机构有").sum())
-    n_only_lis = int((merged["状态"] == "仅医院有").sum())
-    abs_diff = float(merged.loc[merged["状态"] == "金额不一致", "差额"].abs().sum()) if n_amt else 0.0
+    n_both = len(both)
+    n_ok = int((both["状态"] == "金额一致").sum()) if n_both else 0
+    n_amt = int((both["状态"] == "金额不一致").sum()) if n_both else 0
+    n_only_tp = len(only_tp_day)
+    n_only_lis = len(only_lis_day)
+    abs_diff = float(both.loc[both["状态"] == "金额不一致", "差额"].abs().sum()) if n_amt else 0.0
+    pst = presence["stats"]
 
     issues = merged[merged["状态"] != "金额一致"].copy()
     issues["_o"] = issues["状态"].map({"金额不一致": 0, "仅机构有": 1, "仅医院有": 2})
@@ -700,9 +965,9 @@ def write_clean_report(
     ws["A6"].font = font_muted
     ws.row_dimensions[6].height = 30
 
-    ws["A8"] = "匹配情况"
+    ws["A8"] = "金额匹配"
     ws["A8"].font = Font(name="Microsoft YaHei", size=12, bold=True, color="0F766E")
-    headers = ["患者日双方都有", "其中金额一致", "其中金额不一致", "仅机构有", "仅医院有", "不一致金额合计(|差|)"]
+    headers = ["患者日双方都有", "其中金额一致", "其中金额不一致", "仅机构有(日)", "仅医院有(日)", "不一致金额合计(|差|)"]
     vals = [n_both, n_ok, n_amt, n_only_tp, n_only_lis, abs_diff]
     for i, h in enumerate(headers, 1):
         cell = ws.cell(row=9, column=i, value=h)
@@ -719,22 +984,53 @@ def write_clean_report(
             cell.fill = fill_ok
         if i == 3 and v:
             cell.fill = fill_bad
+        if i in (4, 5) and v:
+            cell.fill = fill_warn if i == 4 else fill_info
         if i == 6:
             cell.number_format = money_fmt
             cell.fill = fill_warn
 
-    ws["A12"] = "怎么看"
+    ws["A12"] = "有/无对照（谁多了谁少了）"
     ws["A12"].font = Font(name="Microsoft YaHei", size=12, bold=True, color="0F766E")
+    h2 = ["病人只在机构", "病人只在医院", "机构有·医院无(明细行)", "医院有·机构无(标本)", "同日项目缺失", "项目模糊匹配成功"]
+    v2 = [
+        pst["病人仅机构"],
+        pst["病人仅医院"],
+        pst["机构日明细行"],
+        pst["医院标本行"],
+        pst["同日缺项行"],
+        pst["项目匹配成功"],
+    ]
+    for i, h in enumerate(h2, 1):
+        cell = ws.cell(row=13, column=i, value=h)
+        cell.font = font_h
+        cell.fill = fill_head
+        cell.border = thin
+        cell.alignment = center
+    for i, v in enumerate(v2, 1):
+        cell = ws.cell(row=14, column=i, value=v)
+        cell.font = font_n
+        cell.border = thin
+        cell.alignment = center
+        if v and i in (1, 3):
+            cell.fill = fill_warn
+        if v and i in (2, 4):
+            cell.fill = fill_info
+        if v and i == 5:
+            cell.fill = fill_bad
+
+    ws["A16"] = "怎么看"
+    ws["A16"].font = Font(name="Microsoft YaHei", size=12, bold=True, color="0F766E")
     tips = [
-        "1. 先看上方总金额：差不多说明大盘没问题。",
-        "2. 打开「待核实清单」：只列有问题的患者日（红=钱不对，黄=仅机构，蓝=仅医院）。",
-        "3. 金额不一致：同一人同一天两边收费不同（打包计价、多收/少收、跨项目）。",
-        "4. 仅机构有 / 仅医院有：漏登、漏送、或送检日与核收日不在同一天。",
-        "5. 「项目名提示」：机构名对不上医院名时，容易条数多、偶发金额差。",
-        "6. 「底稿_全部患者日」含金额一致的记录，需要抽查时用。",
+        "1. 金额：看上方总差额 +「待核实清单」里红色「金额不一致」。",
+        "2. 「机构有·医院无」：机构账单有、医院外送记录对不上（漏登/跨日/未进外送组）。",
+        "3. 「医院有·机构无」：医院 LIS 有外送结果、机构表没有（下月账单/未结算/未送检）。",
+        "4. 「同日项目缺失」：同一人差不多同一天两边都有，但某个项目只出现在一侧。",
+        "5. 「病人只在…」：整个导出周期内姓名只出现在一侧（比按天更狠的漏项）。",
+        "6. 说明列若写「附近有记录」多半是送检日与核收日差了几天，不是真失踪。",
     ]
     for i, t in enumerate(tips):
-        r = 13 + i
+        r = 17 + i
         ws.merge_cells(f"A{r}:H{r}")
         ws[f"A{r}"] = t
         ws[f"A{r}"].font = font_n
@@ -788,6 +1084,128 @@ def write_clean_report(
                 cell.alignment = center if ci <= 8 else left
                 if ci in (4, 5, 6) and v != "":
                     cell.number_format = money_fmt
+
+    def _write_table(ws, title, subtitle, headers, rows, money_cols=(), date_cols=(), fill_default=None):
+        ws.sheet_view.showGridLines = False
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(len(headers), 1))
+        ws.cell(row=1, column=1, value=title).font = font_title
+        ws.cell(row=1, column=1).fill = fill_title
+        ws.row_dimensions[1].height = 30
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max(len(headers), 1))
+        ws.cell(row=2, column=1, value=subtitle).font = font_muted
+        for i, h in enumerate(headers, 1):
+            cell = ws.cell(row=4, column=i, value=h)
+            cell.font = font_white
+            cell.fill = fill_title
+            cell.alignment = center
+            cell.border = thin
+        ws.freeze_panes = "A5"
+        if not rows:
+            ws.cell(row=5, column=1, value="（无）").font = Font(
+                name="Microsoft YaHei", size=12, bold=True, color="15803D"
+            )
+            return
+        ws.auto_filter.ref = f"A4:{get_column_letter(len(headers))}{4 + len(rows)}"
+        for ri, row in enumerate(rows, 5):
+            for ci, h in enumerate(headers, 1):
+                v = row.get(h, "")
+                if h in date_cols and v != "" and v is not None:
+                    v = fmt_date(v)
+                cell = ws.cell(row=ri, column=ci, value=v if v is not None else "")
+                cell.font = font_n
+                cell.border = thin
+                cell.fill = fill_default or fill_white
+                cell.alignment = center if ci <= 6 else left
+                if h in money_cols and v != "" and v is not None:
+                    try:
+                        cell.value = float(v)
+                        cell.number_format = money_fmt
+                    except Exception:
+                        pass
+
+    fill_white = PatternFill("solid", fgColor="FFFFFF")
+
+    # ---- 机构有·医院无 ----
+    ws_a = wb.create_sheet("机构有·医院无")
+    set_widths(ws_a, [10, 12, 16, 28, 12, 12, 40])
+    df_a = presence["机构有医院无_明细"]
+    rows_a = df_a.to_dict("records") if len(df_a) else []
+    # normalize keys for header
+    _write_table(
+        ws_a,
+        f"机构有 · 医院无（{len(rows_a)} 行明细）",
+        "机构账单里有这些项目/条码，但按姓名+日期(±容差)在医院外送导出里对不上。看「说明」是否其实只是跨日。",
+        ["姓名", "送检日期", "条码号", "机构项目", "标准物价", "结算金额", "说明"],
+        rows_a,
+        money_cols=("标准物价", "结算金额"),
+        date_cols=("送检日期",),
+        fill_default=fill_warn,
+    )
+    # 病人级附录
+    df_pa = presence["病人仅机构有"]
+    if len(df_pa):
+        start = 6 + max(len(rows_a), 1)
+        ws_a.cell(row=start, column=1, value="【附录】整个周期姓名只出现在机构、医院一次都没有：").font = font_h
+        for i, h in enumerate(["姓名", "机构条数", "标准物价合计", "结算合计", "条码示例", "项目汇总", "日期范围"], 1):
+            cell = ws_a.cell(row=start + 1, column=i, value=h)
+            cell.font = font_white
+            cell.fill = fill_title
+        for ri, (_, row) in enumerate(df_pa.iterrows(), start + 2):
+            for ci, h in enumerate(["姓名", "机构条数", "标准物价合计", "结算合计", "条码示例", "项目汇总", "日期范围"], 1):
+                cell = ws_a.cell(row=ri, column=ci, value=row[h])
+                cell.font = font_n
+                cell.fill = fill_warn
+                cell.border = thin
+                if h in ("标准物价合计", "结算合计"):
+                    cell.number_format = money_fmt
+
+    # ---- 医院有·机构无 ----
+    ws_b = wb.create_sheet("医院有·机构无")
+    set_widths(ws_b, [10, 12, 14, 10, 12, 36, 40])
+    df_b = presence["医院有机构无_明细"]
+    rows_b = df_b.to_dict("records") if len(df_b) else []
+    _write_table(
+        ws_b,
+        f"医院有 · 机构无（{len(rows_b)} 条标本）",
+        "医院 LIS 外送导出有这些检验号/结果，但机构汇总表按姓名+日期(±容差)对不上。可能下月才出账、或未送该机构。",
+        ["姓名", "核收日期", "检验号", "报告状态", "报告费用", "组合项目", "说明"],
+        rows_b,
+        money_cols=("报告费用",),
+        date_cols=("核收日期",),
+        fill_default=fill_info,
+    )
+    df_pb = presence["病人仅医院有"]
+    if len(df_pb):
+        start = 6 + max(len(rows_b), 1)
+        ws_b.cell(row=start, column=1, value="【附录】整个周期姓名只出现在医院、机构一次都没有：").font = font_h
+        for i, h in enumerate(["姓名", "医院标本数", "报告费用合计", "检验号示例", "项目汇总", "日期范围"], 1):
+            cell = ws_b.cell(row=start + 1, column=i, value=h)
+            cell.font = font_white
+            cell.fill = fill_title
+        for ri, (_, row) in enumerate(df_pb.iterrows(), start + 2):
+            for ci, h in enumerate(["姓名", "医院标本数", "报告费用合计", "检验号示例", "项目汇总", "日期范围"], 1):
+                cell = ws_b.cell(row=ri, column=ci, value=row[h])
+                cell.font = font_n
+                cell.fill = fill_info
+                cell.border = thin
+                if h == "报告费用合计":
+                    cell.number_format = money_fmt
+
+    # ---- 同日项目缺失 ----
+    ws_c = wb.create_sheet("同日项目缺失")
+    set_widths(ws_c, [10, 12, 16, 28, 16, 12, 40])
+    df_c = presence["同日项目缺失"]
+    rows_c = df_c.to_dict("records") if len(df_c) else []
+    _write_table(
+        ws_c,
+        f"同日项目缺失（{len(rows_c)} 行）",
+        "同一病人在日期容差内两边都有记录，但某一项目/结果只出现在一侧（名称不同也会落这里）。",
+        ["姓名", "日期", "侧", "项目", "条码号或检验号", "金额", "说明"],
+        rows_c,
+        money_cols=("金额",),
+        date_cols=("日期",),
+        fill_default=fill_bad,
+    )
 
     # ---- 项目名提示 ----
     ws3 = wb.create_sheet("项目名提示")
@@ -929,7 +1347,7 @@ def main(argv=None):
     raw_sheets = compare(tp, lis, day_slack=args.slack)
 
     src_label = "机构：" + "、".join(p.name for p in tp_paths) + "　LIS：" + "、".join(p.name for p in lis_paths)
-    write_clean_report(out_path, tp, lis, raw_sheets, src_label=src_label)
+    write_clean_report(out_path, tp, lis, raw_sheets, src_label=src_label, day_slack=args.slack)
     print("已生成简洁分析表:", out_path)
 
     if args.verbose:
