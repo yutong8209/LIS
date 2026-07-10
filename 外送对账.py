@@ -5,8 +5,9 @@
 
 用法：
   python3 ~/脚本/外送对账.py
+  # 弹窗一次可 ⌘ 多选：机构 xlsx + LIS csv（也可多月多个文件，自动合并）
   python3 ~/脚本/外送对账.py --机构 ~/Downloads/外送机构汇总.xlsx --lis ~/Downloads/lis导出.csv
-  python3 ~/脚本/外送对账.py --机构 a.xlsx --lis b.csv -o ~/Downloads/对账结果.xlsx
+  python3 ~/脚本/外送对账.py --机构 a.xlsx b.xlsx --lis c.csv d.csv -o ~/Downloads/对账结果.xlsx
 
 匹配策略（机构无医院检验号、条码也对不上时）：
   1) 患者姓名 + 日期（机构送检日 / LIS 核收日）
@@ -418,27 +419,84 @@ def compare(tp: pd.DataFrame, lis: pd.DataFrame, day_slack: int = 0) -> dict[str
     }
 
 
+def _classify_input_paths(paths):
+    """按扩展名区分机构表(xlsx/xls) 与 LIS 导出(csv)。"""
+    tp_paths, lis_paths, other = [], [], []
+    for p in paths:
+        if not p:
+            continue
+        path = Path(p)
+        ext = path.suffix.lower()
+        if ext in (".xlsx", ".xls", ".xlsm"):
+            tp_paths.append(path)
+        elif ext == ".csv":
+            lis_paths.append(path)
+        else:
+            other.append(path)
+    return tp_paths, lis_paths, other
+
+
 def _pick_files_gui():
+    """
+    一次弹窗可多选：同时选机构汇总(xlsx) + LIS 导出(csv)。
+    macOS Finder：⌘ 点选多个；或 Shift 连选。
+    """
     try:
         import tkinter as tk
-        from tkinter import filedialog
+        from tkinter import filedialog, messagebox
     except Exception:
-        return None, None, None
+        return [], [], None
+
     root = tk.Tk()
     root.withdraw()
-    root.attributes("-topmost", True)
-    tp = filedialog.askopenfilename(
-        title="选择【外送机构汇总】Excel",
-        filetypes=[("Excel", "*.xlsx *.xls"), ("All", "*.*")],
+    try:
+        root.attributes("-topmost", True)
+    except Exception:
+        pass
+
+    paths = filedialog.askopenfilenames(
+        title="同时选择【机构汇总 xlsx】和【LIS 导出 csv】（可多选，⌘ 连选）",
+        filetypes=[
+            ("对账文件", "*.xlsx *.xls *.xlsm *.csv"),
+            ("Excel 机构表", "*.xlsx *.xls *.xlsm"),
+            ("CSV LIS导出", "*.csv"),
+            ("所有文件", "*.*"),
+        ],
     )
-    if not tp:
-        return None, None, None
-    lis = filedialog.askopenfilename(
-        title="选择【LIS 结果导出】CSV",
-        filetypes=[("CSV", "*.csv"), ("All", "*.*")],
-    )
-    if not lis:
-        return None, None, None
+    if not paths:
+        root.destroy()
+        return [], [], None
+
+    tp_paths, lis_paths, other = _classify_input_paths(paths)
+    if other:
+        messagebox.showwarning(
+            "未识别的文件",
+            "以下文件扩展名无法识别，已忽略：\n" + "\n".join(str(p.name) for p in other),
+        )
+    if not tp_paths or not lis_paths:
+        # 缺一类时再补选一次（仍支持多选）
+        if not tp_paths:
+            extra = filedialog.askopenfilenames(
+                title="还缺【机构汇总】Excel，请选择（可多选）",
+                filetypes=[("Excel", "*.xlsx *.xls *.xlsm"), ("所有文件", "*.*")],
+            )
+            tp_paths, _, _ = _classify_input_paths(list(extra or []))
+        if not lis_paths:
+            extra = filedialog.askopenfilenames(
+                title="还缺【LIS 结果导出】CSV，请选择（可多选）",
+                filetypes=[("CSV", "*.csv"), ("所有文件", "*.*")],
+            )
+            _, lis_paths, _ = _classify_input_paths(list(extra or []))
+
+    if not tp_paths or not lis_paths:
+        messagebox.showerror(
+            "文件不齐",
+            "需要对账必须同时有：\n· 机构汇总 .xlsx\n· LIS 导出 .csv\n\n"
+            "请在同一窗口里 ⌘ 多选两类文件，或分两次补选。",
+        )
+        root.destroy()
+        return [], [], None
+
     out = filedialog.asksaveasfilename(
         title="保存对账结果",
         defaultextension=".xlsx",
@@ -446,52 +504,81 @@ def _pick_files_gui():
         filetypes=[("Excel", "*.xlsx")],
     )
     root.destroy()
-    return tp, lis, out
+    return tp_paths, lis_paths, out or None
+
+
+def _load_tp_many(paths):
+    frames = []
+    for p in paths:
+        print("读取机构表:", p)
+        frames.append(_read_tp(p))
+    if not frames:
+        raise SystemExit("未读到机构表")
+    if len(frames) == 1:
+        return frames[0]
+    return pd.concat(frames, ignore_index=True)
+
+
+def _load_lis_many(paths):
+    frames = []
+    for p in paths:
+        print("读取 LIS 导出:", p)
+        frames.append(_read_lis(p))
+    if not frames:
+        raise SystemExit("未读到 LIS 导出")
+    if len(frames) == 1:
+        return frames[0]
+    return pd.concat(frames, ignore_index=True)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="外送机构汇总 vs LIS 结果导出 对账")
-    ap.add_argument("--机构", dest="tp", help="外送机构汇总 xlsx")
-    ap.add_argument("--lis", dest="lis", help="LIS 病人结果导出 csv")
+    ap.add_argument("--机构", dest="tp", nargs="*", default=None, help="外送机构汇总 xlsx（可多个）")
+    ap.add_argument("--lis", dest="lis", nargs="*", default=None, help="LIS 病人结果导出 csv（可多个）")
     ap.add_argument("-o", "--输出", dest="out", help="对账结果 xlsx 路径")
     ap.add_argument("--日期容差", dest="slack", type=int, default=1, help="姓名匹配时允许的日差（送检日与核收日偏差），默认 1")
     args = ap.parse_args(argv)
 
-    tp_path, lis_path, out_path = args.tp, args.lis, args.out
-    if not tp_path or not lis_path:
+    tp_paths = [Path(p).expanduser() for p in (args.tp or [])]
+    lis_paths = [Path(p).expanduser() for p in (args.lis or [])]
+    out_path = args.out
+
+    if not tp_paths or not lis_paths:
         g_tp, g_lis, g_out = _pick_files_gui()
-        tp_path = tp_path or g_tp
-        lis_path = lis_path or g_lis
+        if not tp_paths:
+            tp_paths = list(g_tp or [])
+        if not lis_paths:
+            lis_paths = list(g_lis or [])
         out_path = out_path or g_out
 
-    if not tp_path or not lis_path:
+    if not tp_paths or not lis_paths:
         # 尝试 Downloads 默认文件名
         dl = Path.home() / "Downloads"
         cand_tp = list(dl.glob("*外送*汇总*.xlsx")) + list(dl.glob("外送机构汇总.xlsx"))
         cand_lis = list(dl.glob("*lis*导出*.csv")) + list(dl.glob("*结果*.csv")) + list(dl.glob("lis*.csv"))
-        if not tp_path and cand_tp:
-            tp_path = str(sorted(cand_tp, key=lambda p: p.stat().st_mtime, reverse=True)[0])
-            print("自动选用机构表:", tp_path)
-        if not lis_path and cand_lis:
-            lis_path = str(sorted(cand_lis, key=lambda p: p.stat().st_mtime, reverse=True)[0])
-            print("自动选用 LIS 导出:", lis_path)
+        if not tp_paths and cand_tp:
+            tp_paths = [sorted(cand_tp, key=lambda p: p.stat().st_mtime, reverse=True)[0]]
+            print("自动选用机构表:", tp_paths[0])
+        if not lis_paths and cand_lis:
+            lis_paths = [sorted(cand_lis, key=lambda p: p.stat().st_mtime, reverse=True)[0]]
+            print("自动选用 LIS 导出:", lis_paths[0])
 
-    if not tp_path or not lis_path:
-        print("请指定 --机构 与 --lis，或在弹窗中选择文件。", file=sys.stderr)
+    if not tp_paths or not lis_paths:
+        print(
+            "请同时选择机构 xlsx 与 LIS csv。\n"
+            "弹窗：⌘ 多选两类文件；命令行：--机构 a.xlsx --lis b.csv",
+            file=sys.stderr,
+        )
         return 2
 
-    tp_path = Path(tp_path).expanduser()
-    lis_path = Path(lis_path).expanduser()
     if not out_path:
-        out_path = tp_path.parent / f"外送对账结果_{pd.Timestamp.now():%Y%m%d_%H%M%S}.xlsx"
+        out_path = tp_paths[0].parent / f"外送对账结果_{pd.Timestamp.now():%Y%m%d_%H%M%S}.xlsx"
     else:
         out_path = Path(out_path).expanduser()
 
-    print("读取机构表:", tp_path)
-    tp = _read_tp(tp_path)
-    print("读取 LIS 导出:", lis_path)
-    lis = _read_lis(lis_path)
-    print(f"机构 {len(tp)} 行 / LIS {len(lis)} 行，开始比对…")
+    tp = _load_tp_many(tp_paths)
+    lis = _load_lis_many(lis_paths)
+    print(f"机构 {len(tp)} 行（{len(tp_paths)} 个文件） / LIS {len(lis)} 行（{len(lis_paths)} 个文件），开始比对…")
     sheets = compare(tp, lis, day_slack=args.slack)
 
     with pd.ExcelWriter(out_path, engine="openpyxl") as w:
