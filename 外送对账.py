@@ -42,7 +42,11 @@ ITEM_ALIASES = {
     "尿培养及鉴定": ["尿培养", "尿培养及鉴定"],
     "粪便培养及鉴定": ["粪便培养", "大便培养", "粪便培养(沙门氏菌、志贺氏菌)"],
     "一般细菌培养及鉴定": ["一般细菌培养", "一般细菌培养及鉴定"],
-    "药敏试验": ["血液药敏定性", "痰药敏定性", "尿液药敏定性", "一般细菌药敏", "药敏"],
+    # 本院血培养报告里「细菌一/二」常为培养鉴定/药敏结果行；血液药敏定性为独立药敏单
+    "药敏试验": [
+        "血液药敏定性", "痰药敏定性", "尿液药敏定性", "一般细菌药敏", "药敏",
+        "细菌一", "细菌二",
+    ],
     "涂片找抗酸杆菌": ["涂片找抗酸杆菌", "结核菌涂片"],
     # 感染 / DNA / 真菌
     "结核杆菌DNA(TB-DNA)检测": ["结核杆菌DNA", "TB-DNA", "各类病原体DNA测定", "各类病原体DNA测定（定性）", "各类病原体DNA测定（定量）"],
@@ -112,14 +116,14 @@ def _norm_name(s: str) -> str:
     s = str(s or "").strip()
     if not s or s.lower() == "nan":
         return ""
+    # 先保留左右侧标记，避免「血培养（右）」被收成「血培养」后与组合行误等同
+    s = re.sub(r"[（(]([左右上下])[)）]", r"\1", s)
     s = re.sub(r"[\(（][^）\)]*[\)）]", "", s)
     s = re.sub(r"\[[^\]]*\]", "", s)
     s = re.sub(r"(测定|检测|检验|定量|定性|浓度|及鉴定)", "", s)
     s = re.sub(r"[\s\-_/·•,，.。+＋]", "", s)
     s = s.replace("（", "").replace("）", "").replace("(", "").replace(")", "")
-    # 统一写法
     s = s.replace("β", "β").replace("Β", "β")
-    s = s.replace("端b型钠尿肽前体", "端b型钠尿肽前体")
     return s.lower()
 
 
@@ -181,10 +185,26 @@ def _score_one_side(inst_name: str, hosp_name: str) -> int:
 
 def match_score(inst_name: str, lis_item: str, lis_set: str = "") -> int:
     """
-    优先「项目」列命中，避免血培养通过组合名误吃「细菌一」行。
+    优先「项目」列命中。
+    - 血培养只认项目名是培养，不靠组合去抢「细菌一」
+    - 药敏可认「血液药敏定性」或培养单上的「细菌一/二」
     """
     si = _score_one_side(inst_name, lis_item)
     ss = _score_one_side(inst_name, lis_set)
+    inst_n = _norm_name(inst_name)
+    item_n = _norm_name(lis_item)
+
+    # 机构=血培养：禁止仅靠组合命中去匹配「细菌一/二」行
+    if "血培养" in inst_n or inst_n.endswith("培养"):
+        if item_n in ("细菌一", "细菌二"):
+            return 0
+        if si >= 70:
+            return si + 5
+        # 组合命中且项目也是培养相关才行
+        if ss >= 70 and ("培养" in item_n or item_n == inst_n):
+            return max(ss - 10, 70)
+        return si if si >= 70 else 0
+
     if si >= 70:
         return si + 5
     if ss >= 70:
