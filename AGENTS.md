@@ -13,7 +13,9 @@ A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Ta
 | `vendor/xlsx.full.min.js` | SheetJS 本地副本（质控导出，不走公网 CDN） |
 | `start_serve_mac.command` | Mac startup script — double-click or add to Login Items. |
 | `start_serve.bat` | Windows 启动 serve（质控导出必需） |
+| `外送对账.py` / `外送对账.bat` / `外送对账.command` | 外送少收分析（机构账单 vs LIS 导出） |
 | `Windows安装-含质控.md` | Windows 安装步骤（审核 + 质控） |
+| `Windows-外送对账.md` | Windows 外送少收分析用法 |
 | `browser_control.py` | CLI for screenshot, click, type, key — outputs JSON. |
 | `image-reader.py` | CLI to read local image metadata (path, format, size). |
 | `image-reader-hook.py` | Stdin hook that detects image paths in text and prints info. |
@@ -42,7 +44,8 @@ python3 ~/脚本/lis_proxy.py
 python3 ~/脚本/lis_proxy.py --cache-api   # 仅调试接口时
 ```
 
-Windows 完整安装（审核 + 质控导出）：见 **`Windows安装-含质控.md`**。
+Windows 完整安装（审核 + 质控导出）：见 **`Windows安装-含质控.md`**。  
+Windows 外送少收分析：见 **`Windows-外送对账.md`**（双击 `外送对账.bat`）。
 
 ## Dependencies & setup
 
