@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.59.4
+// @version      7.59.5
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -49,7 +49,7 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.4';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.5';
     const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
     // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
     const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
@@ -6021,8 +6021,35 @@ window.addEventListener('keydown',function(e){
         });
     }
 
-    // F4 统一入口：面板打开走详情审核；列表与 Enter 共用 auditAbnormalSpecimen（预热/排队/卡片）
+    // 批审确认框打开时：F4 / Enter = 点「确认审核」（单条正常时省鼠标）
+    function tryConfirmBatchDialogByHotkey(e) {
+        const dialog = document.getElementById('lis-audit-confirm');
+        if (!dialog || !dialog.classList.contains('show')) return false;
+        if (!e || (e.key !== 'F4' && !(e.key === 'Enter' && !e.shiftKey))) return false;
+        // 确认框内勾选「我确认…」时 Enter 留给勾选框，F4 仍触发确认
+        if (e.key === 'Enter') {
+            const t = e.target;
+            if (t && (t.id === 'lis-ab-check' || (t.tagName === 'INPUT' && t.type === 'checkbox'))) return false;
+        }
+        const btn = document.getElementById('lis-ab-confirm');
+        if (!btn || btn.disabled) return false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        btn.click();
+        return true;
+    }
+
+    // F4 统一入口：批审确认框优先；面板打开走详情审核；列表与 Enter 共用 auditAbnormalSpecimen
     function triggerF4Audit() {
+        // 批审确认对话框（含一键批审详细信息页）
+        const dialog = document.getElementById('lis-audit-confirm');
+        if (dialog && dialog.classList.contains('show')) {
+            const btn = document.getElementById('lis-ab-confirm');
+            if (btn && !btn.disabled) {
+                btn.click();
+                return;
+            }
+        }
         if (isDetailPanelVisible() && currentDetailSpecimen) {
             void _auditFromDetailPanel();
             return;
@@ -6057,10 +6084,18 @@ window.addEventListener('keydown',function(e){
     function _installF4Bridge() {
         if (_f4BridgeHandler) { _attachF4BridgeToIframe(); return; }
         _f4BridgeHandler = e => {
+            // 批审确认框：任意分类下 F4/Enter 均可确认
+            if (tryConfirmBatchDialogByHotkey(e)) return;
             if (shouldIgnoreAbnormalKeyEvent(e)) return;
+            if (e.key !== 'F4') return;
+            // 详情面板 F4：任意分类（正常标本详情也可 F4 审）
+            if (isDetailPanelVisible() && currentDetailSpecimen) {
+                e.preventDefault(); e.stopImmediatePropagation();
+                triggerF4Audit();
+                return;
+            }
             if (wsCategory !== 'abnormal') return;
             if (!isDetailPanelVisible()) return; // 列表视图下由 _abnormalKeyHandler 处理，避免双重触发
-            if (e.key !== 'F4') return;
             e.preventDefault(); e.stopImmediatePropagation();
             triggerF4Audit();
         };
@@ -7218,6 +7253,7 @@ window.addEventListener('keydown',function(e){
         const flowHint = wgNames.length > 1
             ? `<p style="margin:8px 0 0;font-size:12px;color:#5c6b7a;line-height:1.55">含 <b>${wgNames.length}</b> 个工作组（${esc(wgNames.join('、'))}），将自动切换；<b>每组首条</b>自动 CA 认证，同组后续秒审，无需手动预审。</p>`
             : `<p style="margin:8px 0 0;font-size:12px;color:#5c6b7a;line-height:1.55"><b>首条</b>将自动触发 CA 认证（capping 登录），同组后续秒审，<b>无需</b>手动先审一条。</p>`;
+        const hotkeyHint = `<p style="margin:10px 0 0;font-size:12px;color:#0d6655;line-height:1.5"><kbd style="background:#e8f5e9;padding:1px 6px;border-radius:3px">F4</kbd> 或 <kbd style="background:#e8f5e9;padding:1px 6px;border-radius:3px">Enter</kbd> 确认审核 · Esc 取消</p>`;
 
         const dialog = document.createElement('div');
         dialog.id = 'lis-audit-confirm';
@@ -7231,6 +7267,7 @@ window.addEventListener('keydown',function(e){
                     <div class="ab-section">
                         <h5><span class="ab-count" style="background:#27ae60">${normalData.length}</span> 正常标本（将自动审核）</h5>
                         ${flowHint}
+                        ${hotkeyHint}
                         <div class="ab-list" style="max-height:300px;overflow-y:auto">
                             ${normalData.map(r => `<div class="ab-item">
                                 <span class="ab-name">${esc(r.row.PatName||'未知')}</span>
@@ -7242,22 +7279,47 @@ window.addEventListener('keydown',function(e){
                 </div>
                 <div class="ab-ft">
                     <button class="ab-cancel" id="lis-ab-cancel">取消</button>
-                    <button class="ab-confirm ok" id="lis-ab-confirm">确认审核 (${normalData.length})</button>
+                    <button class="ab-confirm ok" id="lis-ab-confirm">确认审核 (${normalData.length}) · F4</button>
                 </div>
             </div>`;
         document.body.appendChild(dialog);
         dialog.classList.add('show');
 
         const confirmBtn = document.getElementById('lis-ab-confirm');
-        document.getElementById('lis-ab-close').addEventListener('click', () => dialog.remove());
-        document.getElementById('lis-ab-cancel').addEventListener('click', () => dialog.remove());
-        dialog.addEventListener('click', e => { if (e.target === dialog) dialog.remove(); });
-        confirmBtn.addEventListener('click', () => {
+        let closed = false;
+        const closeDialog = () => {
+            if (closed) return;
+            closed = true;
+            document.removeEventListener('keydown', keyHandler, true);
             dialog.remove();
+        };
+        const doConfirm = () => {
+            if (closed || !confirmBtn || confirmBtn.disabled) return;
+            closeDialog();
             executeBatchAudit(normalData).catch(e => {
                 console.error('[LIS] 批审异常:', e);
             });
-        });
+        };
+        const keyHandler = e => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                closeDialog();
+                return;
+            }
+            if (e.key === 'F4' || (e.key === 'Enter' && !e.shiftKey)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                doConfirm();
+            }
+        };
+        document.addEventListener('keydown', keyHandler, true);
+        document.getElementById('lis-ab-close').addEventListener('click', closeDialog);
+        document.getElementById('lis-ab-cancel').addEventListener('click', closeDialog);
+        dialog.addEventListener('click', e => { if (e.target === dialog) closeDialog(); });
+        confirmBtn.addEventListener('click', doConfirm);
+        // 焦点便于直接按键
+        try { confirmBtn.focus(); } catch(e) {}
     }
 
     // --- 批审操作条 ---
@@ -12058,11 +12120,12 @@ function fillNativeLoginForm(creds, lastWG) {
                         <input type="checkbox" id="lis-ab-check" />
                         <label for="lis-ab-check">我确认以上 ${normal.length} 个正常标本的检验结果均适合自动审核</label>
                     </div>
+                    <p style="margin:8px 0 0;font-size:12px;color:#0d6655"><kbd style="background:#e8f5e9;padding:1px 6px;border-radius:3px">F4</kbd> 勾选并确认审核 · Esc 取消</p>
                 </div>
                 <div class="ab-ft">
                     <button class="ab-export" id="lis-ab-export">📥 导出审核清单</button>
                     <button class="ab-cancel" id="lis-ab-cancel">取消</button>
-                    <button class="ab-confirm ok" id="lis-ab-confirm" disabled>✅ 确认审核 (${normal.length})</button>
+                    <button class="ab-confirm ok" id="lis-ab-confirm" disabled>✅ 确认审核 (${normal.length}) · F4</button>
                 </div>
             </div>
         `;
@@ -12078,24 +12141,47 @@ function fillNativeLoginForm(creds, lastWG) {
             confirmBtn.disabled = !checkBtn.checked;
         });
 
-        // ESC 关闭（与其他关闭路径共用清理）
-        let escRemoved = false;
-        const escHandler = e => {
-            if (e.key === 'Escape') {
-                cleanupAndRemove();
-            }
-        };
+        let closed = false;
         const cleanupAndRemove = () => {
-            if (!escRemoved) { document.removeEventListener('keydown', escHandler); escRemoved = true; }
+            if (closed) return;
+            closed = true;
+            document.removeEventListener('keydown', keyHandler, true);
             dialog.remove();
         };
-        document.addEventListener('keydown', escHandler);
+        const doConfirm = () => {
+            if (closed || normal.length === 0) return;
+            // F4：自动勾选确认，避免再点一次复选框
+            if (checkBtn && !checkBtn.checked) {
+                checkBtn.checked = true;
+                confirmBtn.disabled = false;
+            }
+            if (confirmBtn.disabled) return;
+            cleanupAndRemove();
+            executeBatchAudit(normal).catch(e => {
+                console.error('[LIS] 批审异常:', e);
+            });
+        };
+        const keyHandler = e => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                cleanupAndRemove();
+                return;
+            }
+            if (e.key === 'F4' || (e.key === 'Enter' && !e.shiftKey && e.target !== checkBtn)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                doConfirm();
+            }
+        };
+        document.addEventListener('keydown', keyHandler, true);
 
         document.getElementById('lis-ab-close').addEventListener('click', cleanupAndRemove);
         document.getElementById('lis-ab-cancel').addEventListener('click', cleanupAndRemove);
         dialog.addEventListener('click', e => { if (e.target === dialog) cleanupAndRemove(); });
 
         confirmBtn.addEventListener('click', () => {
+            if (confirmBtn.disabled) return;
             cleanupAndRemove();
             executeBatchAudit(normal).catch(e => {
                 console.error('[LIS] 批审异常:', e);
