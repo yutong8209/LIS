@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.60.1
+// @version      7.60.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -315,7 +315,9 @@
 #lis-pr-hd button,#lis-pr-tools button{height:26px;border:1px solid #9dc6df;background:#fff;color:#246489;border-radius:4px;padding:0 10px;font-size:11px;font-weight:700;cursor:pointer}
 #lis-pr-hd button:hover,#lis-pr-tools button:hover{background:#f5fbff;border-color:#4f9cca}
 #lis-pr-hd .pr-close{font-size:18px;line-height:20px;padding:0 8px;color:#7b8b96}
-#lis-pr-tools{display:flex;flex-wrap:wrap;align-items:flex-end;gap:7px 8px;padding:8px 10px;background:#fbfdff;border-bottom:1px solid #d5e4ef;flex-shrink:0;max-height:40vh;overflow-y:auto;overflow-x:hidden}
+/* 筛选区可滚动；底部操作条固定不挤出视口 */
+#lis-pr-tools{display:flex;flex-direction:column;background:#fbfdff;border-bottom:1px solid #d5e4ef;flex-shrink:0;max-height:42vh;overflow:hidden;padding:0}
+#lis-pr-tools-scroll{display:flex;flex-wrap:wrap;align-items:flex-end;gap:7px 8px;padding:8px 10px;overflow-y:auto;overflow-x:hidden;flex:1 1 auto;min-height:0}
 #lis-pr-tools label{display:flex;flex:0 0 auto;flex-direction:column;gap:3px;font-size:10px;color:#526575;font-weight:700;line-height:1.05;white-space:nowrap}
 #lis-pr-tools input,#lis-pr-tools select{width:100%;height:26px;box-sizing:border-box;border:1px solid #c3ced8;border-radius:4px;padding:2px 7px;font-size:12px;color:#213547;background:#fff;outline:none}
 #lis-pr-tools input:focus,#lis-pr-tools select:focus{border-color:#4f9cca;box-shadow:0 0 0 2px rgba(79,156,202,.12)}
@@ -326,24 +328,24 @@
 #lis-pr-tools .pr-lg{width:168px}
 /* 工作组/仪器：整行铺开 + 自动换行，四组（含外送）一次看全，无需横拖 */
 #lis-pr-tools .pr-mach-tree-wrap{flex:1 1 100%;width:100%;max-width:100%;align-self:stretch}
-#lis-pr-machine-tree{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;border:1px solid #c3ced8;border-radius:4px;background:#fff;padding:6px;min-height:54px;max-height:160px;overflow:auto}
-.pr-wg-box{border:1px solid #d9e3ec;border-radius:4px;background:#fbfdff;min-width:150px;max-width:220px;flex:1 1 150px}
+#lis-pr-machine-tree{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;border:1px solid #c3ced8;border-radius:4px;background:#fff;padding:6px;min-height:48px;max-height:120px;overflow:auto}
+.pr-wg-box{border:1px solid #d9e3ec;border-radius:4px;background:#fbfdff;min-width:140px;max-width:200px;flex:1 1 140px}
 .pr-wg-box[data-wg="1"]{border-top:2px solid #e74c3c}
 .pr-wg-box[data-wg="3"]{border-top:2px solid #3498db}
 .pr-wg-box[data-wg="4"]{border-top:2px solid #2ecc71}
 .pr-wg-box[data-wg="5"]{border-top:2px solid #9b59b6}
 .pr-wg-head{height:22px;display:flex;align-items:center;gap:5px;padding:0 7px;font-size:11px;font-weight:800;color:#246489;cursor:pointer;border-bottom:1px solid #edf1f5;user-select:none}
 .pr-wg-head input{width:12px!important;height:12px!important;margin:0}
-.pr-wg-body{padding:4px 6px;display:flex;flex-direction:column;gap:3px;max-height:88px;overflow:auto}
+.pr-wg-body{padding:4px 6px;display:flex;flex-direction:column;gap:3px;max-height:72px;overflow:auto}
 .pr-wg-box.collapsed .pr-wg-body{display:none}
-.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:5px;font-size:11px!important;font-weight:600!important;color:#334155!important;line-height:1.2!important;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:5px;font-size:11px!important;font-weight:600!important;color:#334155!important;line-height:1.2!important;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
 .pr-mach-option input{width:12px!important;height:12px!important;margin:0}
 #lis-pr-tools .pr-wide{width:208px}
 #lis-pr-tools .pr-xl{width:220px}
 #lis-pr-tools .pr-section{flex:1 0 100%;display:flex;align-items:center;margin:2px 0 0;padding:3px 8px;font-size:11px;font-weight:800;color:#246489;background:#edf5fb;border-left:3px solid #145b86;border-radius:0 4px 4px 0}
 #lis-pr-tools .pr-section:first-child{margin-top:0}
-#lis-pr-tools .pr-actions{display:flex;flex:0 0 auto;align-items:flex-end;gap:6px;margin-left:auto;min-width:292px}
-#lis-pr-tools .pr-actions button{min-width:64px;height:26px}
+#lis-pr-tools .pr-actions{display:flex;flex:0 0 auto;align-items:center;justify-content:flex-end;gap:8px;width:100%;margin:0;padding:8px 10px;min-width:0;box-sizing:border-box;background:#f1f7fb;border-top:1px solid #d5e4ef}
+#lis-pr-tools .pr-actions button{min-width:72px;height:30px;font-size:12px}
 #lis-pr-tools #lis-pr-query{background:#145b86;color:#fff;border-color:#0f4668;box-shadow:0 1px 4px rgba(20,91,134,.25)}
 #lis-pr-tools #lis-pr-query:hover{background:#0f4668}
 #lis-pr-tools .pr-date input{cursor:pointer;background:#fff}
@@ -2849,16 +2851,21 @@
         }, true);
     }
 
-    /* 修复：只拦截工具栏区域的滚轮（工具栏 overflow:visible 需手动滚动），
-       #lis-pr-body 使用原生 overflow:auto 滚动，不阻止默认行为 */
+    /* 修复：筛选滚动区可滚轮；查询按钮条固定在下方不跟着滚走 */
     function prBindWheelScroll(panel) {
         panel.addEventListener('wheel', e => {
+            const scroll = document.getElementById('lis-pr-tools-scroll');
             const tools = document.getElementById('lis-pr-tools');
-            if (tools && e.target && e.target.closest && e.target.closest('#lis-pr-tools')) {
-                if (tools.scrollHeight > tools.clientHeight) {
-                    tools.scrollTop += e.deltaY;
+            if (scroll && e.target && e.target.closest && e.target.closest('#lis-pr-tools-scroll')) {
+                if (scroll.scrollHeight > scroll.clientHeight) {
+                    scroll.scrollTop += e.deltaY;
                     e.preventDefault();
                 }
+                e.stopPropagation();
+                return;
+            }
+            // 操作条区域不抢 body 滚动
+            if (tools && e.target && e.target.closest && e.target.closest('#lis-pr-tools .pr-actions')) {
                 e.stopPropagation();
             }
         }, { passive: false, capture: true });
@@ -2979,6 +2986,7 @@
                 <button class="pr-close" id="lis-pr-close" title="关闭">×</button>
             </div>
             <div id="lis-pr-tools">
+                <div id="lis-pr-tools-scroll">
                 <div class="pr-section">标本范围</div>
                 <label class="pr-date">开始日期<input type="text" id="lis-pr-start" readonly placeholder="选择日期"></label>
                 <label class="pr-date">结束日期<input type="text" id="lis-pr-end" readonly placeholder="选择日期"></label>
@@ -3016,6 +3024,7 @@
                 <label class="pr-xs">数值≥<input type="number" step="any" id="lis-pr-result-min"></label>
                 <label class="pr-xs">数值≤<input type="number" step="any" id="lis-pr-result-max"></label>
                 <label class="pr-toggle"><input type="checkbox" id="lis-pr-abnormal"><span>仅异常结果</span></label>
+                </div>
                 <div class="pr-actions">
                     <button id="lis-pr-query">查询</button>
                     <button id="lis-pr-cancel" style="display:none;background:#fff3e0;color:#e65100;border-color:#ff9800">停止</button>
