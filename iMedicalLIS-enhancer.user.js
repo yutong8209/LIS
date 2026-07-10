@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.59.3
+// @version      7.59.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -49,7 +49,8 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.3';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.4';
+    const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
     // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
     const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
     const AUDIT_QUEUE_LOCK_TTL = 45000;
@@ -5142,25 +5143,63 @@
         }
 
         if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
-        return { ok: true, count: wsData.length };
+        return { ok: true, count: wsData.length, empty: wsData.length === 0 };
         } catch(e) {
             dbg('loadWSData 异常:', e);
             if (qi) qi.textContent = '加载失败';
-            return { ok: false, error: e };
+            return { ok: false, error: e, empty: true };
         } finally {
             if (seq === _wsLoadSeq) wsLoading = false;
         }
+    }
+
+    // 整页刷新并在加载后自动重新打开工作台（锁屏会话失效时等同浏览器强刷）
+    function hardReloadPageForWS(reason) {
+        try {
+            sessionStorage.setItem(WS_REOPEN_KEY, '1');
+            // 记住工作台状态，刷新后恢复
+            saveWSState();
+        } catch(e) {}
+        showToast(reason || '正在刷新页面以恢复会话…', 'warning');
+        setTimeout(() => {
+            try {
+                // 优先强制从服务器重载，避免磁盘缓存的过期页面
+                if (typeof location.reload === 'function') location.reload();
+                else location.href = location.href;
+            } catch(e) {
+                try { location.href = location.href; } catch(e2) {}
+            }
+        }, 350);
+    }
+
+    function maybeReopenWSAfterReload() {
+        try {
+            if (sessionStorage.getItem(WS_REOPEN_KEY) !== '1') return;
+            sessionStorage.removeItem(WS_REOPEN_KEY);
+        } catch(e) { return; }
+        // 等页面/会话就绪再开工作台
+        const tryOpen = (n) => {
+            if (n <= 0) return;
+            try {
+                if (!document.getElementById('lis-ws')) {
+                    setTimeout(() => tryOpen(n - 1), 400);
+                    return;
+                }
+                if (!isWSVisible()) openWS();
+                else loadWSData({ force: true }).catch(() => {});
+            } catch(e) {
+                setTimeout(() => tryOpen(n - 1), 400);
+            }
+        };
+        setTimeout(() => tryOpen(15), 600);
     }
 
     async function forceRefreshWS() {
         dbg('[WS] 强制刷新工作台状态');
         stopWSRefresh();
         clearMachineCache();
-        const oldData = wsData;
-        const oldMachines = wsMachines;
-        const oldCounts = wsMachineCounts;
-        const oldClassified = wsClassifiedCache;
         const hadData = wsData.length > 0 || _lastWSNonEmptyAt > 0;
+        const alreadyEmpty = wsData.length === 0;
         wsLoading = false;
         wsClassifying = false;
         wsClassifiedCache = {};
@@ -5168,29 +5207,46 @@
         wsChecked.clear();
         wsAbnormalIndex = -1;
         invalidateCaches({ detail: true, raw: true });
+        // 界面立即反馈
+        const qi = document.getElementById('lis-qi');
+        if (qi) qi.textContent = '强制刷新中...';
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
         updateWSFooter();
         try {
             const result = await loadWSData({ force: true });
-            if (hadData && result && result.empty) {
-                wsData = oldData;
-                wsMachines = oldMachines;
-                wsMachineCounts = oldCounts;
-                wsClassifiedCache = oldClassified;
-                _classifyVersion++;
-                invalidateCaches({ detail: true, raw: true });
-                renderWSTabs();
-                renderWSCategoryBar();
-                renderWSTable();
-                updateWSFooter();
-                showToast('工作台仍返回 0，正在刷新浏览器页面...', 'warning');
-                setTimeout(() => {
-                    try { window.location.reload(); } catch(e) {}
-                }, 800);
+            const err = result && result.error;
+            const empty = !result || result.empty || result.count === 0 || wsData.length === 0;
+            const errMsg = err && (err.message || String(err)) || '';
+            const sessionDead = /会话|过期|非JSON|HTTP 401|HTTP 403|登录/i.test(errMsg);
+
+            // 软刷新成功拿到数据 → 正常继续
+            if (result && result.ok && !empty && !err) {
+                dbg('[WS] 强制刷新成功，条数=', wsData.length);
+                showToast('工作台已刷新（' + wsData.length + ' 条）', 'success');
+                return;
             }
+
+            // 锁屏/会话失效常见：一直 0 或接口失败 → 整页刷新（与浏览器强刷同效果）
+            // 条件：曾经有过数据、或当前已是全 0、或明确会话错误
+            if (sessionDead || hadData || alreadyEmpty || empty) {
+                hardReloadPageForWS(
+                    sessionDead
+                        ? '会话可能已失效，正在刷新页面…'
+                        : '工作台数据异常（全 0 或加载失败），正在刷新页面…'
+                );
+                return;
+            }
+        } catch(e) {
+            dbg('[WS] forceRefreshWS 异常:', e);
+            hardReloadPageForWS('刷新异常，正在刷新页面…');
+            return;
         } finally {
+            // 若即将整页刷新则不必再开定时器
+            try {
+                if (sessionStorage.getItem(WS_REOPEN_KEY) === '1') return;
+            } catch(e) {}
             if (isWSVisible()) startWSRefresh();
         }
     }
@@ -5507,20 +5563,24 @@
                 <input type="text" class="ws-search" id="lis-ws-search" placeholder="姓名 / 检验号 / 流水号" />
             </div>
             <div class="ws-acts">
-                <button class="ws-icon-btn" id="lis-ws-refresh" title="刷新">↻</button>
+                <button class="ws-icon-btn" id="lis-ws-refresh" title="强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）">↻</button>
                 <button class="ws-icon-btn" id="lis-ws-pwd" title="CA密码">钥</button>
                 <button class="ws-icon-btn danger" id="lis-ws-close" title="关闭">×</button>
             </div>`;
 
-
-        
-        // 初始检查CA状态
         document.getElementById('lis-ws-refresh').addEventListener('click', () => {
             dbg('刷新按钮被点击');
             const btn = document.getElementById('lis-ws-refresh');
-            if (btn) btn.classList.add('spinning');
+            if (btn) {
+                btn.classList.add('spinning');
+                btn.title = '刷新中…';
+            }
             forceRefreshWS().finally(() => {
-                if (btn) { btn.classList.remove('spinning'); }
+                // 若已触发整页刷新，按钮会随页面销毁
+                if (btn && document.body.contains(btn)) {
+                    btn.classList.remove('spinning');
+                    btn.title = '强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）';
+                }
             });
         });
         document.getElementById('lis-ws-close').addEventListener('click', closeWS);
@@ -12953,6 +13013,8 @@ function fillNativeLoginForm(creds, lastWG) {
         initReportEnhance();
         // 预热仪器缓存：提前加载所有工作组的仪器列表，打开工作台时秒返
         WG.forEach(w => { loadMachines(w.dr).catch(() => {}); });
+        // 工作台内点刷新触发的整页重载后，自动重新打开工作台
+        maybeReopenWSAfterReload();
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
     }
 
