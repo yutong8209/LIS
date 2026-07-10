@@ -66,6 +66,19 @@ ITEM_ALIASES = {
     "药敏试验": ["血液药敏定性", "痰药敏定性", "尿液药敏定性", "药敏", "细菌一", "细菌二"],
     "痰培养及鉴定": ["痰培养", "痰培养及鉴定"],
     "尿培养及鉴定": ["尿培养", "尿培养及鉴定"],
+    # --- 机构名 vs 本院结果/组合名（少收误判常见）---
+    "维生素B12(Vit B12)测定": ["血清维生素B12", "维生素B12", "VitB12", "贫血标志物"],
+    "维生素B12测定": ["血清维生素B12", "维生素B12", "贫血标志物"],
+    "粪便培养及鉴定": ["粪便培养", "大便培养", "粪便培养(沙门氏菌、志贺氏菌)", "粪便培养(沙门氏菌、志贺氏菌)"],
+    "碘(I)测定": ["血清碘", "微量元素碘测定", "碘"],
+    "结核感染T细胞(TB-IGRA)检测": ["结核感染T细胞斑点检测", "结核感染T细胞检测判断", "TB-IGRA", "IGRA"],
+    "抗核抗体检测14项": [
+        "免疫测定", "抗核抗体", "抗核小体抗体", "抗U1nRNP抗体", "抗Sm抗体",
+        "抗SS-A抗体", "抗SS-B抗体", "抗JO-1抗体", "抗ScL-70抗体",
+    ],
+    "乙型肝炎病毒DNA(HBV-DNA)测定": ["乙型肝炎DNA", "乙型肝炎DNA检测", "HBV-DNA", "乙肝DNA"],
+    "叶酸测定": ["叶酸", "血清叶酸", "贫血标志物"],
+    "铁蛋白测定": ["铁蛋白", "血清铁蛋白", "贫血标志物"],
 }
 
 
@@ -220,11 +233,28 @@ def _patient_day_agg_lis(lis: pd.DataFrame) -> pd.DataFrame:
 
 
 def _items_match(tp_name: str, lis_item: str, lis_set: str) -> bool:
+    """机构项目名 vs 医院项目/组合：别名集合相交，或归一化后互相包含。"""
     a = _item_keys(tp_name)
     if not a:
         return False
     b = _item_keys(lis_item) | _item_keys(lis_set)
-    return bool(a & b)
+    if a & b:
+        return True
+    # 归一化互相包含：维生素b12 ⊂ 血清维生素b12；粪便培养 ⊂ 粪便培养沙门…
+    an = _norm_name(tp_name)
+    candidates = {_norm_name(lis_item), _norm_name(lis_set)} | b
+    candidates.discard("")
+    if not an:
+        return False
+    for bn in candidates:
+        if not bn:
+            continue
+        if len(an) >= 3 and len(bn) >= 3 and (an in bn or bn in an):
+            return True
+        # 微量元素单字（碘/硒等）
+        if an in ("碘", "硒", "铜", "锌", "铁", "钙", "镁") and an in bn:
+            return True
+    return False
 
 
 def compare(tp: pd.DataFrame, lis: pd.DataFrame, day_slack: int = 0) -> dict[str, pd.DataFrame]:
