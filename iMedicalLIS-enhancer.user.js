@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.59.5
+// @version      7.59.6
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5760,7 +5760,7 @@
 
         // 左侧：一键批审按钮（放在最前面，避免被详情面板遮挡）
         if (wsCategory === 'normal' && normalCount > 0) {
-            h += `<button class="nb-btn" id="lis-ws-batch" style="padding:5px 16px;font-size:12px;margin-right:8px">⚡ 一键批审 ${normalCount}</button>`;
+            h += `<button class="nb-btn" id="lis-ws-batch" style="padding:5px 16px;font-size:12px;margin-right:8px" title="F4 打开确认 · 再按 F4 确认批审">⚡ 一键批审 ${normalCount} · F4</button>`;
         }
 
         h += `<button class="cat-tab cat-normal ${wsCategory==='normal'?'on':''}" data-cat="normal">
@@ -5783,6 +5783,8 @@
         h += '<div class="cat-right">';
         if (wsCategory === 'abnormal' && abnormalCount > 0) {
             h += '<span class="cat-stats"><kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 移动</span>';
+        } else if (wsCategory === 'normal' && normalCount > 0) {
+            h += '<span class="cat-stats"><kbd>F4</kbd> 一键批审 · 再按确认</span>';
         }
         const fd = filteredData();
         h += `<span class="cat-stats">${fd.length} / ${totalCount} 条</span>`;
@@ -5810,41 +5812,65 @@
             batchBtn.onclick = (ev) => {
                 ev.stopPropagation();
                 dbg('一键批审按钮被点击');
-                try {
-                    // 重新计算过滤数据（不依赖闭包中的 filtered）
-                    let currentFiltered = wsData;
-                    if (wsActiveWG || wsActiveMachine) currentFiltered = currentFiltered.filter(rowPassWSMachineFilter);
-
-                    // 智能选择：有勾选则只审选中的，否则审全部正常标本
-                    let sourceData;
-                    if (wsChecked.size > 0) {
-                        sourceData = currentFiltered.filter(r => wsChecked.has(r.ReportDR));
-                    } else {
-                        sourceData = currentFiltered;
-                    }
-                    const normalData = sourceData.filter(r => {
-                        const status = String(r.Status || r.ReportStatus || '');
-                        if (status === '3' || status === '4') return false;
-                        const complete = String(r.IsComplete || '');
-                        if (complete !== '1') return false;
-                        const cached = wsClassifiedCache[r.ReportDR];
-                        return cached && cached.status === 'NORMAL' && !isClassificationStale(r);
-                    }).map(r => ({ status: 'NORMAL', items: [], row: r, reportDR: r.ReportDR }));
-                    if (normalData.length === 0) {
-                        if (wsClassifying) {
-                            showToast('标本正在分类中，请稍候再试', 'warning');
-                        } else {
-                            showToast('没有可审核的正常标本', 'warning');
-                        }
-                        return;
-                    }
-                    dbg('一键批审:', normalData.length, '个标本');
-                    confirmAndBatchAudit(normalData);
-                } catch(e) {
-                    dbg('一键批审错误:', e);
-                    showToast('批审出错: ' + e.message, 'error');
-                }
+                openWorkbenchBatchAudit();
             };
+        }
+    }
+
+    // 工作台「正常可审」一键批审入口（按钮 / F4 共用）
+    // 有勾选则只审勾选中的正常标本，否则审当前筛选下全部正常可审
+    function openWorkbenchBatchAudit() {
+        try {
+            if (_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress) {
+                showToast('正在审核中，请稍候', 'warning');
+                return false;
+            }
+            // 批审确认框已打开时不重复弹出（由 F4 走确认）
+            const existing = document.getElementById('lis-audit-confirm');
+            if (existing && existing.classList.contains('show')) return false;
+
+            let currentFiltered = wsData;
+            if (wsActiveWG || wsActiveMachine) currentFiltered = currentFiltered.filter(rowPassWSMachineFilter);
+
+            let sourceData;
+            if (wsChecked.size > 0) {
+                sourceData = currentFiltered.filter(r => wsChecked.has(r.ReportDR));
+            } else {
+                sourceData = currentFiltered;
+            }
+            const normalData = sourceData.filter(r => {
+                const status = String(r.Status || r.ReportStatus || '');
+                if (status === '3' || status === '4') return false;
+                const complete = String(r.IsComplete || '');
+                if (complete !== '1') return false;
+                const cached = wsClassifiedCache[r.ReportDR];
+                return cached && cached.status === 'NORMAL' && !isClassificationStale(r);
+            }).map(r => {
+                const cached = wsClassifiedCache[r.ReportDR];
+                return {
+                    status: 'NORMAL',
+                    items: (cached && cached.items) || [],
+                    row: r,
+                    reportDR: r.ReportDR
+                };
+            });
+            if (normalData.length === 0) {
+                if (wsClassifying) {
+                    showToast('标本正在分类中，请稍候再试', 'warning');
+                } else if (wsChecked.size > 0) {
+                    showToast('勾选中没有可审核的正常标本', 'warning');
+                } else {
+                    showToast('没有可审核的正常标本', 'warning');
+                }
+                return false;
+            }
+            dbg('一键批审:', normalData.length, '个标本');
+            confirmAndBatchAudit(normalData);
+            return true;
+        } catch (e) {
+            dbg('一键批审错误:', e);
+            showToast('批审出错: ' + e.message, 'error');
+            return false;
         }
     }
 
@@ -6032,26 +6058,52 @@ window.addEventListener('keydown',function(e){
             if (t && (t.id === 'lis-ab-check' || (t.tagName === 'INPUT' && t.type === 'checkbox'))) return false;
         }
         const btn = document.getElementById('lis-ab-confirm');
-        if (!btn || btn.disabled) return false;
+        if (!btn) return false;
+        // F4：自动勾选「我确认…」（若有）后确认
+        if (e.key === 'F4') {
+            const checkBtn = document.getElementById('lis-ab-check');
+            if (checkBtn && !checkBtn.checked) {
+                checkBtn.checked = true;
+                btn.disabled = false;
+            }
+        }
+        if (btn.disabled) return false;
         e.preventDefault();
         e.stopImmediatePropagation();
         btn.click();
         return true;
     }
 
-    // F4 统一入口：批审确认框优先；面板打开走详情审核；列表与 Enter 共用 auditAbnormalSpecimen
+    // F4 统一入口优先级：
+    // 1) 批审确认框 → 确认批审
+    // 2) 详情面板 → 审当前条
+    // 3) 异常待审列表 → 审焦点条
+    // 4) 正常可审列表 → 弹出一键批审确认（再按一次 F4 确认）
     function triggerF4Audit() {
         // 批审确认对话框（含一键批审详细信息页）
         const dialog = document.getElementById('lis-audit-confirm');
         if (dialog && dialog.classList.contains('show')) {
             const btn = document.getElementById('lis-ab-confirm');
+            const checkBtn = document.getElementById('lis-ab-check');
+            // 需勾选的确认框：F4 自动勾选并确认
+            if (checkBtn && !checkBtn.checked) {
+                checkBtn.checked = true;
+                if (btn) btn.disabled = false;
+            }
             if (btn && !btn.disabled) {
                 btn.click();
                 return;
             }
+            // 确认框已打开则不再落到其它 F4 语义
+            return;
         }
         if (isDetailPanelVisible() && currentDetailSpecimen) {
             void _auditFromDetailPanel();
+            return;
+        }
+        // 正常可审列表：F4 = 打开一键批审确认
+        if (isWSVisible() && wsCategory === 'normal') {
+            openWorkbenchBatchAudit();
             return;
         }
         if (wsCategory !== 'abnormal' || !isWSVisible()) return;
@@ -6090,6 +6142,12 @@ window.addEventListener('keydown',function(e){
             if (e.key !== 'F4') return;
             // 详情面板 F4：任意分类（正常标本详情也可 F4 审）
             if (isDetailPanelVisible() && currentDetailSpecimen) {
+                e.preventDefault(); e.stopImmediatePropagation();
+                triggerF4Audit();
+                return;
+            }
+            // 正常可审列表：F4 打开一键批审确认（再按 F4 确认）
+            if (isWSVisible() && wsCategory === 'normal') {
                 e.preventDefault(); e.stopImmediatePropagation();
                 triggerF4Audit();
                 return;
@@ -6299,8 +6357,8 @@ window.addEventListener('keydown',function(e){
     // --- 正常可审视图 ---
     function renderNormalView(data, body) {
         let h = `<div class="ws-normal-banner">
-            <span class="nb-text">✅ ${data.length} 个标本结果正常，可一键审核</span>
-            <button class="nb-btn" id="lis-norm-batch">⚡ 一键批审 ${data.length}</button>
+            <span class="nb-text">✅ ${data.length} 个标本结果正常，可一键审核 · <kbd style="background:#e8f5e9;padding:1px 6px;border-radius:3px">F4</kbd> 打开确认，再按确认批审</span>
+            <button class="nb-btn" id="lis-norm-batch" title="F4 打开确认 · 再按 F4 确认批审">⚡ 一键批审 ${data.length} · F4</button>
         </div>`;
 
         h += '<table><thead><tr>';
@@ -6322,21 +6380,11 @@ window.addEventListener('keydown',function(e){
         h += '</tbody></table>';
         body.innerHTML = h;
 
-        // 一键批审按钮
+        // 一键批审按钮（与顶栏 / F4 共用 openWorkbenchBatchAudit）
         const batchBtn = document.getElementById('lis-norm-batch');
         if (batchBtn) {
             batchBtn.addEventListener('click', () => {
-                const formatted = data
-                    .map(r => {
-                        const c = wsClassifiedCache[r.ReportDR];
-                        return (c && !isClassificationStale(r)) ? c : null;
-                    })
-                    .filter(c => c && c.status === 'NORMAL');
-                if (formatted.length !== data.length) {
-                    showToast('部分标本尚未完成正常分类，请稍候刷新后再批审', 'warning');
-                    return;
-                }
-                confirmAndBatchAudit(formatted);
+                openWorkbenchBatchAudit();
             });
         }
 
