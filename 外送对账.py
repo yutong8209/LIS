@@ -576,14 +576,22 @@ def _classify_input_paths(paths):
 
 def _pick_files_gui():
     """
-    一次弹窗可多选：同时选机构汇总(xlsx) + LIS 导出(csv)。
-    macOS Finder：⌘ 点选多个；或 Shift 连选。
+    少收模式选文件：
+    一次弹窗 ⌘ 多选 机构汇总(xlsx) + LIS 导出(csv)。
+    默认打开「下载」文件夹。
     """
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox
     except Exception:
         return [], [], None
+
+    dl = Path.home() / "Downloads"
+    if not dl.is_dir():
+        dl = Path.home() / "下载"
+    if not dl.is_dir():
+        dl = Path.home()
+    initial = str(dl)
 
     root = tk.Tk()
     root.withdraw()
@@ -592,8 +600,18 @@ def _pick_files_gui():
     except Exception:
         pass
 
+    messagebox.showinfo(
+        "外送少收分析",
+        "请同时选择两类文件（⌘ 多选）：\n\n"
+        "1. 外送机构汇总表（.xlsx）—— 基准\n"
+        "2. LIS 病人结果导出（.csv）—— 日期建议比机构单更宽\n\n"
+        "只统计「机构有、医院没有」的少收；\n"
+        "医院多出来的不统计。",
+    )
+
     paths = filedialog.askopenfilenames(
-        title="同时选择【机构汇总 xlsx】和【LIS 导出 csv】（可多选，⌘ 连选）",
+        title="少收分析：⌘ 多选【机构汇总 xlsx】+【LIS 导出 csv】",
+        initialdir=initial,
         filetypes=[
             ("对账文件", "*.xlsx *.xls *.xlsm *.csv"),
             ("Excel 机构表", "*.xlsx *.xls *.xlsm"),
@@ -612,16 +630,17 @@ def _pick_files_gui():
             "以下文件扩展名无法识别，已忽略：\n" + "\n".join(str(p.name) for p in other),
         )
     if not tp_paths or not lis_paths:
-        # 缺一类时再补选一次（仍支持多选）
         if not tp_paths:
             extra = filedialog.askopenfilenames(
-                title="还缺【机构汇总】Excel，请选择（可多选）",
+                title="还缺【机构汇总】Excel（基准账单）",
+                initialdir=initial,
                 filetypes=[("Excel", "*.xlsx *.xls *.xlsm"), ("所有文件", "*.*")],
             )
             tp_paths, _, _ = _classify_input_paths(list(extra or []))
         if not lis_paths:
             extra = filedialog.askopenfilenames(
-                title="还缺【LIS 结果导出】CSV，请选择（可多选）",
+                title="还缺【LIS 结果导出】CSV（日期宜更宽）",
+                initialdir=initial,
                 filetypes=[("CSV", "*.csv"), ("所有文件", "*.*")],
             )
             _, lis_paths, _ = _classify_input_paths(list(extra or []))
@@ -629,16 +648,20 @@ def _pick_files_gui():
     if not tp_paths or not lis_paths:
         messagebox.showerror(
             "文件不齐",
-            "需要对账必须同时有：\n· 机构汇总 .xlsx\n· LIS 导出 .csv\n\n"
-            "请在同一窗口里 ⌘ 多选两类文件，或分两次补选。",
+            "少收分析需要同时有：\n"
+            "· 机构汇总 .xlsx（基准）\n"
+            "· LIS 导出 .csv（对照，日期可更宽）\n\n"
+            "请 ⌘ 多选两类文件后再试。",
         )
         root.destroy()
         return [], [], None
 
+    stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     out = filedialog.asksaveasfilename(
-        title="保存对账结果",
+        title="保存少收分析表",
+        initialdir=initial,
         defaultextension=".xlsx",
-        initialfile="外送对账结果.xlsx",
+        initialfile=f"外送少收分析_{stamp}.xlsx",
         filetypes=[("Excel", "*.xlsx")],
     )
     root.destroy()
@@ -1901,9 +1924,11 @@ def main(argv=None):
     tp_paths = [Path(p).expanduser() for p in (args.tp or [])]
     lis_paths = [Path(p).expanduser() for p in (args.lis or [])]
     out_path = args.out
+    used_gui = False
 
     if not tp_paths or not lis_paths:
         g_tp, g_lis, g_out = _pick_files_gui()
+        used_gui = True
         if not tp_paths:
             tp_paths = list(g_tp or [])
         if not lis_paths:
@@ -1942,13 +1967,34 @@ def main(argv=None):
         print("已生成双向分析表:", out_path)
         return 0
 
-    _, st = write_shortfall_report(out_path, tp, lis, src_label=src_label)
+    out_path, st = write_shortfall_report(out_path, tp, lis, src_label=src_label)
     print("已生成少收分析表:", out_path)
     print(
         f"机构标准物价 {st['机构标准物价合计']:,.2f} | 已匹配 {st['已匹配标准物价']:,.2f} | "
         f"少收(标准物价) {st['少收标准物价']:,.2f} | 少收(结算) {st['少收结算金额']:,.2f} | "
         f"匹配 {st['已匹配行数']}/{st['机构总行数']} ({st['匹配率']}%)"
     )
+    # 仅弹窗选文件时显示完成摘要（避免命令行被对话框卡住）
+    if used_gui:
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo(
+                "少收分析完成",
+                f"已保存：\n{out_path}\n\n"
+                f"机构标准物价：{st['机构标准物价合计']:,.2f}\n"
+                f"已匹配金额：{st['已匹配标准物价']:,.2f}\n"
+                f"医院少收（标准物价）：{st['少收标准物价']:,.2f}\n"
+                f"医院少收（结算参考）：{st['少收结算金额']:,.2f}\n"
+                f"匹配：{st['已匹配行数']}/{st['机构总行数']}（{st['匹配率']}%）\n\n"
+                f"请看工作表：一眼看懂 / 少收明细",
+            )
+            root.destroy()
+        except Exception:
+            pass
     return 0
 
 
