@@ -15,8 +15,9 @@
   3) 金额：机构「标准物价」≈ 医院「报告费用/医嘱费用」（收费价）
      机构「结算金额」是机构结算折扣价，默认不与医院收费价直接比
 
-输出工作表：
-  使用说明 / 汇总 / 仅机构有 / 仅医院有 / 金额差异 / 项目差异 / 项目名对照
+默认输出 4 页简洁表：
+  一眼看懂 / 待核实清单 / 项目名提示 / 底稿_全部患者日
+加 --详细 可额外输出原始多表。
 """
 
 from __future__ import annotations
@@ -27,6 +28,13 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+except ImportError:
+    Workbook = None  # type: ignore
 
 # 机构项目名 → 医院常见项目/组合名（可继续往下加）
 ITEM_ALIASES = {
@@ -531,12 +539,351 @@ def _load_lis_many(paths):
     return pd.concat(frames, ignore_index=True)
 
 
+def _build_merged_patient_days(tp: pd.DataFrame, lis: pd.DataFrame) -> pd.DataFrame:
+    tp_day = _patient_day_agg_tp(tp)
+    lis_day = _patient_day_agg_lis(lis)
+    merged = tp_day.merge(lis_day, on=["姓名", "日期"], how="outer", indicator=True)
+    merged["机构标准物价"] = merged["机构标准物价"].fillna(0)
+    merged["医院报告费用"] = merged["医院报告费用"].fillna(0)
+    merged["差额"] = merged["机构标准物价"] - merged["医院报告费用"]
+
+    def _status(r):
+        if r["_merge"] == "left_only":
+            return "仅机构有"
+        if r["_merge"] == "right_only":
+            return "仅医院有"
+        if abs(r["差额"]) < 0.02:
+            return "金额一致"
+        return "金额不一致"
+
+    merged["状态"] = merged.apply(_status, axis=1)
+    return merged
+
+
+def write_clean_report(
+    out_path: Path,
+    tp: pd.DataFrame,
+    lis: pd.DataFrame,
+    sheets: dict,
+    src_label: str = "",
+) -> Path:
+    """生成简洁 4 页对账分析表。"""
+    if Workbook is None:
+        raise SystemExit("需要 openpyxl：pip3 install openpyxl")
+
+    merged = _build_merged_patient_days(tp, lis)
+    tp_std = float(tp["标准物价"].sum())
+    tp_settle = float(tp["结算金额"].sum())
+    lis_fee = float(lis.drop_duplicates("检验号")["报告费用"].sum())
+    delta = tp_std - lis_fee
+
+    n_both = int((merged["状态"].isin(["金额一致", "金额不一致"])).sum())
+    n_ok = int((merged["状态"] == "金额一致").sum())
+    n_amt = int((merged["状态"] == "金额不一致").sum())
+    n_only_tp = int((merged["状态"] == "仅机构有").sum())
+    n_only_lis = int((merged["状态"] == "仅医院有").sum())
+    abs_diff = float(merged.loc[merged["状态"] == "金额不一致", "差额"].abs().sum()) if n_amt else 0.0
+
+    issues = merged[merged["状态"] != "金额一致"].copy()
+    issues["_o"] = issues["状态"].map({"金额不一致": 0, "仅机构有": 1, "仅医院有": 2})
+    issues["absd"] = issues["差额"].abs()
+    issues = issues.sort_values(["_o", "absd"], ascending=[True, False])
+
+    nmap = sheets.get("项目名对照", pd.DataFrame())
+
+    thin = Border(
+        left=Side(style="thin", color="D0D7DE"),
+        right=Side(style="thin", color="D0D7DE"),
+        top=Side(style="thin", color="D0D7DE"),
+        bottom=Side(style="thin", color="D0D7DE"),
+    )
+    fill_title = PatternFill("solid", fgColor="0F766E")
+    fill_head = PatternFill("solid", fgColor="CCFBF1")
+    fill_ok = PatternFill("solid", fgColor="DCFCE7")
+    fill_bad = PatternFill("solid", fgColor="FEE2E2")
+    fill_warn = PatternFill("solid", fgColor="FEF3C7")
+    fill_info = PatternFill("solid", fgColor="E0F2FE")
+    fill_card = PatternFill("solid", fgColor="F0FDFA")
+    font_title = Font(name="Microsoft YaHei", size=16, bold=True, color="FFFFFF")
+    font_h = Font(name="Microsoft YaHei", size=11, bold=True, color="134E4A")
+    font_n = Font(name="Microsoft YaHei", size=10, color="1F2937")
+    font_big = Font(name="Microsoft YaHei", size=20, bold=True, color="0F766E")
+    font_big_bad = Font(name="Microsoft YaHei", size=20, bold=True, color="B91C1C")
+    font_muted = Font(name="Microsoft YaHei", size=9, color="6B7280")
+    font_white = Font(name="Microsoft YaHei", size=10, bold=True, color="FFFFFF")
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    money_fmt = "#,##0.00"
+
+    def set_widths(ws, widths):
+        for i, w in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    def fmt_date(v):
+        if hasattr(v, "strftime"):
+            return v.strftime("%Y-%m-%d")
+        return str(v)[:10]
+
+    wb = Workbook()
+
+    # ---- 一眼看懂 ----
+    ws = wb.active
+    ws.title = "一眼看懂"
+    ws.sheet_view.showGridLines = False
+    set_widths(ws, [18, 16, 16, 16, 16, 16, 24, 14])
+
+    ws.merge_cells("A1:H1")
+    ws["A1"] = "外送对账 · 一眼看懂"
+    ws["A1"].font = font_title
+    ws["A1"].fill = fill_title
+    ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 36
+
+    ws.merge_cells("A2:H2")
+    ws["A2"] = (
+        f"{src_label}　　日期容差：±1天　　生成：{pd.Timestamp.now():%Y-%m-%d %H:%M}　　"
+        f"机构 {tp['日期'].min().date()}~{tp['日期'].max().date()}　"
+        f"医院 {lis['日期'].min().date()}~{lis['日期'].max().date()}"
+    )
+    ws["A2"].font = font_muted
+
+    ws.merge_cells("A4:B4")
+    ws["A4"] = "机构标准物价合计"
+    ws.merge_cells("C4:D4")
+    ws["C4"] = "医院报告费用合计"
+    ws.merge_cells("E4:F4")
+    ws["E4"] = "两边差额（机构−医院）"
+    ws.merge_cells("G4:H4")
+    ws["G4"] = "结论"
+    for col in ("A4", "C4", "E4", "G4"):
+        ws[col].font = font_h
+        ws[col].fill = fill_card
+        ws[col].alignment = center
+
+    ws.merge_cells("A5:B5")
+    ws["A5"] = tp_std
+    ws["A5"].number_format = money_fmt
+    ws["A5"].font = font_big
+    ws.merge_cells("C5:D5")
+    ws["C5"] = lis_fee
+    ws["C5"].number_format = money_fmt
+    ws["C5"].font = font_big
+    ws.merge_cells("E5:F5")
+    ws["E5"] = delta
+    ws["E5"].number_format = money_fmt
+    ws["E5"].font = font_big if abs(delta) < 1 else font_big_bad
+    if abs(delta) < 50 and n_amt <= 5:
+        conclusion, cfill = "大体一致，仅少量明细需核实", fill_ok
+    elif abs(delta) < 1000:
+        conclusion, cfill = "总金额接近，差异集中在少数患者日", fill_warn
+    else:
+        conclusion, cfill = "总金额偏差较大，请先看「待核实清单」", fill_bad
+    ws.merge_cells("G5:H5")
+    ws["G5"] = conclusion
+    ws["G5"].font = Font(name="Microsoft YaHei", size=12, bold=True)
+    ws["G5"].fill = cfill
+    for r in (4, 5):
+        for c in range(1, 9):
+            cell = ws.cell(row=r, column=c)
+            cell.border = thin
+            cell.alignment = center
+            if r == 5 and c <= 6:
+                cell.fill = fill_card
+    ws.row_dimensions[5].height = 40
+
+    ws.merge_cells("A6:H6")
+    ws["A6"] = (
+        f"比对口径：机构「标准物价」≈ 医院「报告费用」（收费价）。"
+        f"机构「结算金额」合计 {tp_settle:,.2f} 元是折扣回款，不要和医院收费直接比。"
+        f"条码号≠检验号，按 姓名+日期 对齐。"
+    )
+    ws["A6"].font = font_muted
+    ws.row_dimensions[6].height = 30
+
+    ws["A8"] = "匹配情况"
+    ws["A8"].font = Font(name="Microsoft YaHei", size=12, bold=True, color="0F766E")
+    headers = ["患者日双方都有", "其中金额一致", "其中金额不一致", "仅机构有", "仅医院有", "不一致金额合计(|差|)"]
+    vals = [n_both, n_ok, n_amt, n_only_tp, n_only_lis, abs_diff]
+    for i, h in enumerate(headers, 1):
+        cell = ws.cell(row=9, column=i, value=h)
+        cell.font = font_h
+        cell.fill = fill_head
+        cell.border = thin
+        cell.alignment = center
+    for i, v in enumerate(vals, 1):
+        cell = ws.cell(row=10, column=i, value=v)
+        cell.font = font_n
+        cell.border = thin
+        cell.alignment = center
+        if i == 2:
+            cell.fill = fill_ok
+        if i == 3 and v:
+            cell.fill = fill_bad
+        if i == 6:
+            cell.number_format = money_fmt
+            cell.fill = fill_warn
+
+    ws["A12"] = "怎么看"
+    ws["A12"].font = Font(name="Microsoft YaHei", size=12, bold=True, color="0F766E")
+    tips = [
+        "1. 先看上方总金额：差不多说明大盘没问题。",
+        "2. 打开「待核实清单」：只列有问题的患者日（红=钱不对，黄=仅机构，蓝=仅医院）。",
+        "3. 金额不一致：同一人同一天两边收费不同（打包计价、多收/少收、跨项目）。",
+        "4. 仅机构有 / 仅医院有：漏登、漏送、或送检日与核收日不在同一天。",
+        "5. 「项目名提示」：机构名对不上医院名时，容易条数多、偶发金额差。",
+        "6. 「底稿_全部患者日」含金额一致的记录，需要抽查时用。",
+    ]
+    for i, t in enumerate(tips):
+        r = 13 + i
+        ws.merge_cells(f"A{r}:H{r}")
+        ws[f"A{r}"] = t
+        ws[f"A{r}"].font = font_n
+
+    # ---- 待核实清单 ----
+    ws2 = wb.create_sheet("待核实清单")
+    ws2.sheet_view.showGridLines = False
+    set_widths(ws2, [12, 12, 12, 14, 14, 10, 10, 10, 34, 34])
+    ws2.merge_cells("A1:J1")
+    ws2["A1"] = f"待核实清单（只显示有差异 · 共 {len(issues)} 条）"
+    ws2["A1"].font = font_title
+    ws2["A1"].fill = fill_title
+    ws2.row_dimensions[1].height = 32
+    ws2.merge_cells("A2:J2")
+    ws2["A2"] = f"金额不一致 {n_amt} · 仅机构 {n_only_tp} · 仅医院 {n_only_lis} · 不一致金额合计 {abs_diff:,.2f}"
+    ws2["A2"].font = font_muted
+
+    cols = ["状态", "姓名", "日期", "机构标准物价", "医院报告费用", "差额", "机构条数", "医院标本数", "机构项目", "医院项目"]
+    for i, h in enumerate(cols, 1):
+        cell = ws2.cell(row=4, column=i, value=h)
+        cell.font = font_white
+        cell.fill = fill_title
+        cell.alignment = center
+        cell.border = thin
+    ws2.freeze_panes = "A5"
+    if len(issues) == 0:
+        ws2["A5"] = "没有差异，全部金额一致"
+        ws2["A5"].font = Font(name="Microsoft YaHei", size=12, bold=True, color="15803D")
+    else:
+        ws2.auto_filter.ref = f"A4:J{4 + len(issues)}"
+        for ri, (_, row) in enumerate(issues.iterrows(), 5):
+            status = row["状态"]
+            fill = fill_bad if status == "金额不一致" else (fill_warn if status == "仅机构有" else fill_info)
+            vals = [
+                status,
+                row["姓名"],
+                fmt_date(row["日期"]),
+                float(row["机构标准物价"] or 0),
+                float(row["医院报告费用"] or 0),
+                float(row["差额"] or 0),
+                int(row["机构明细条数"]) if pd.notna(row.get("机构明细条数")) else "",
+                int(row["医院标本数"]) if pd.notna(row.get("医院标本数")) else "",
+                str(row.get("机构项目") or "")[:100],
+                str(row.get("医院项目") or "")[:100],
+            ]
+            for ci, v in enumerate(vals, 1):
+                cell = ws2.cell(row=ri, column=ci, value=v)
+                cell.font = font_n if ci > 1 else Font(name="Microsoft YaHei", size=10, bold=True)
+                cell.border = thin
+                cell.fill = fill
+                cell.alignment = center if ci <= 8 else left
+                if ci in (4, 5, 6) and v != "":
+                    cell.number_format = money_fmt
+
+    # ---- 项目名提示 ----
+    ws3 = wb.create_sheet("项目名提示")
+    ws3.sheet_view.showGridLines = False
+    set_widths(ws3, [40, 10, 50])
+    ws3.merge_cells("A1:C1")
+    ws3["A1"] = "机构项目名能否对上医院（否=优先人工核对/补别名）"
+    ws3["A1"].font = font_title
+    ws3["A1"].fill = fill_title
+    ws3.row_dimensions[1].height = 30
+    for i, h in enumerate(["机构项目", "匹配?", "医院侧对应名"], 1):
+        cell = ws3.cell(row=3, column=i, value=h)
+        cell.font = font_white
+        cell.fill = fill_title
+        cell.alignment = center
+    if len(nmap):
+        nm = nmap.copy()
+        nm["_o"] = nm["是否匹配到医院名"].map({"否": 0, "是": 1})
+        nm = nm.sort_values(["_o", "机构项目"])
+        for ri, (_, row) in enumerate(nm.iterrows(), 4):
+            ok = row["是否匹配到医院名"] == "是"
+            fill = fill_ok if ok else fill_warn
+            for ci, v in enumerate(
+                [
+                    row["机构项目"],
+                    row["是否匹配到医院名"],
+                    row.get("医院侧对应名") or "（未匹配）",
+                ],
+                1,
+            ):
+                cell = ws3.cell(row=ri, column=ci, value=v)
+                cell.font = font_n
+                cell.fill = fill
+                cell.border = thin
+                cell.alignment = left if ci != 2 else center
+
+    # ---- 底稿 ----
+    ws4 = wb.create_sheet("底稿_全部患者日")
+    ws4.sheet_view.showGridLines = False
+    set_widths(ws4, [12, 12, 12, 14, 14, 10, 10, 36, 36])
+    ws4.merge_cells("A1:I1")
+    ws4["A1"] = "全部患者日（含金额一致，抽查用）"
+    ws4["A1"].font = font_title
+    ws4["A1"].fill = fill_title
+    ws4.row_dimensions[1].height = 28
+    heads = ["状态", "姓名", "日期", "机构标准物价", "医院报告费用", "差额", "机构条数", "机构项目", "医院项目"]
+    for i, h in enumerate(heads, 1):
+        cell = ws4.cell(row=3, column=i, value=h)
+        cell.font = font_white
+        cell.fill = fill_title
+        cell.alignment = center
+    alld = merged.copy()
+    alld["_o"] = alld["状态"].map({"金额不一致": 0, "仅机构有": 1, "仅医院有": 2, "金额一致": 3})
+    alld = alld.sort_values(["_o", "日期", "姓名"])
+    ws4.auto_filter.ref = f"A3:I{3 + len(alld)}"
+    ws4.freeze_panes = "A4"
+    for ri, (_, row) in enumerate(alld.iterrows(), 4):
+        status = row["状态"]
+        fill = {
+            "金额一致": fill_ok,
+            "金额不一致": fill_bad,
+            "仅机构有": fill_warn,
+            "仅医院有": fill_info,
+        }[status]
+        vals = [
+            status,
+            row["姓名"],
+            fmt_date(row["日期"]),
+            float(row["机构标准物价"] or 0),
+            float(row["医院报告费用"] or 0),
+            float(row["差额"] or 0),
+            int(row["机构明细条数"]) if pd.notna(row.get("机构明细条数")) else "",
+            str(row.get("机构项目") or "")[:100],
+            str(row.get("医院项目") or "")[:100],
+        ]
+        for ci, v in enumerate(vals, 1):
+            cell = ws4.cell(row=ri, column=ci, value=v)
+            cell.font = font_n
+            cell.fill = fill
+            cell.border = thin
+            cell.alignment = center if ci <= 7 else left
+            if ci in (4, 5, 6):
+                cell.number_format = money_fmt
+
+    out_path = Path(out_path)
+    wb.save(out_path)
+    return out_path
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="外送机构汇总 vs LIS 结果导出 对账")
     ap.add_argument("--机构", dest="tp", nargs="*", default=None, help="外送机构汇总 xlsx（可多个）")
     ap.add_argument("--lis", dest="lis", nargs="*", default=None, help="LIS 病人结果导出 csv（可多个）")
     ap.add_argument("-o", "--输出", dest="out", help="对账结果 xlsx 路径")
     ap.add_argument("--日期容差", dest="slack", type=int, default=1, help="姓名匹配时允许的日差（送检日与核收日偏差），默认 1")
+    ap.add_argument("--详细", dest="verbose", action="store_true", help="额外输出原始多工作表（调试用）")
     args = ap.parse_args(argv)
 
     tp_paths = [Path(p).expanduser() for p in (args.tp or [])]
@@ -572,24 +919,32 @@ def main(argv=None):
         return 2
 
     if not out_path:
-        out_path = tp_paths[0].parent / f"外送对账结果_{pd.Timestamp.now():%Y%m%d_%H%M%S}.xlsx"
+        out_path = tp_paths[0].parent / f"外送对账_简洁分析_{pd.Timestamp.now():%Y%m%d_%H%M%S}.xlsx"
     else:
         out_path = Path(out_path).expanduser()
 
     tp = _load_tp_many(tp_paths)
     lis = _load_lis_many(lis_paths)
     print(f"机构 {len(tp)} 行（{len(tp_paths)} 个文件） / LIS {len(lis)} 行（{len(lis_paths)} 个文件），开始比对…")
-    sheets = compare(tp, lis, day_slack=args.slack)
+    raw_sheets = compare(tp, lis, day_slack=args.slack)
 
-    with pd.ExcelWriter(out_path, engine="openpyxl") as w:
-        for name, df in sheets.items():
-            if df is None:
-                df = pd.DataFrame()
-            df.to_excel(w, sheet_name=name[:31], index=False)
+    src_label = "机构：" + "、".join(p.name for p in tp_paths) + "　LIS：" + "、".join(p.name for p in lis_paths)
+    write_clean_report(out_path, tp, lis, raw_sheets, src_label=src_label)
+    print("已生成简洁分析表:", out_path)
 
-    print("已生成:", out_path)
-    s = sheets["汇总"]
-    print(s.to_string(index=False))
+    if args.verbose:
+        detail_path = out_path.with_name(out_path.stem + "_详细底表.xlsx")
+        with pd.ExcelWriter(detail_path, engine="openpyxl") as w:
+            for name, df in raw_sheets.items():
+                if df is None:
+                    df = pd.DataFrame()
+                df.to_excel(w, sheet_name=name[:31], index=False)
+        print("已额外生成详细底表:", detail_path)
+
+    # 控制台一句话结论
+    tp_std = float(tp["标准物价"].sum())
+    lis_fee = float(lis.drop_duplicates("检验号")["报告费用"].sum())
+    print(f"机构标准物价 {tp_std:,.2f}  |  医院报告费用 {lis_fee:,.2f}  |  差额 {tp_std - lis_fee:,.2f}")
     return 0
 
 
