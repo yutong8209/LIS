@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.59.6
-// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出 + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
+// @version      7.60.0
+// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -39,12 +39,19 @@
     const DATAGRID_SELECTORS = [NATIVE_WORKLIST_SEL, '#dg', '#dgReport', '.datagrid-f'];
     const DATAGRID_SELECTORS_EXTENDED = ['#dg', '#dgReport', '.datagrid-f', 'table.datagrid-f', '#workList', '.datagrid-view'];
 
+    // 审核工作台 / 质控：只含本科室自检组（不含外送）
     const WG = [
         { dr:'1', name:'临检', color:'#e74c3c', icon:'🩸' },
         { dr:'3', name:'生化', color:'#3498db', icon:'🧪' },
         { dr:'4', name:'免疫', color:'#2ecc71', icon:'🛡️' },
     ];
-    const WG_MAP = {}; WG.forEach(w => WG_MAP[w.dr] = w);
+    // 仅「病人结果筛选导出」追加：外送标本（第三方回传结果，需对账金额；不进审核/质控台）
+    const WG_EXPORT_ONLY = [
+        { dr:'5', name:'外送', color:'#9b59b6', icon:'📦' },
+    ];
+    const WG_EXPORT = WG.concat(WG_EXPORT_ONLY);
+    const WG_MAP = {};
+    WG_EXPORT.forEach(w => { WG_MAP[w.dr] = w; });
 
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
@@ -1908,7 +1915,7 @@
     function prActiveFilterSummary(filters) {
         const parts = [];
         parts.push(`${filters.start || today()} 至 ${filters.end || today()}`);
-        const wgNames = (filters.wgs || []).map(dr => (WG.find(w => String(w.dr) === String(dr)) || {}).name || dr);
+        const wgNames = (filters.wgs || []).map(dr => (WG_MAP[dr] || WG_EXPORT.find(w => String(w.dr) === String(dr)) || {}).name || dr);
         parts.push(`工作组=${wgNames.length ? wgNames.join('/') : '全部'}`);
         if ((filters.machines || []).length) {
             const names = Array.from(document.querySelectorAll('.lis-pr-machine-check:checked')).map(o => {
@@ -1977,7 +1984,8 @@
         const oldSelected = new Set(prCheckedValues('.lis-pr-machine-check'));
         const oldWGs = new Set(prCheckedValues('.lis-pr-wg-check'));
         box.innerHTML = '<span style="font-size:11px;color:#7b8b96;padding:4px 6px">仪器加载中...</span>';
-        const targetWGs = WG;
+        // 结果导出含外送；审核/质控仍只用 WG
+        const targetWGs = WG_EXPORT;
         try {
             const groups = await Promise.all(targetWGs.map(async w => {
                 const machines = await loadMachines(w.dr).catch(() => []);
@@ -2050,7 +2058,9 @@
         const effectiveWGSet = new Set(selectedWGs);
         machinePairs.forEach(x => effectiveWGSet.add(x.wg));
         const effectiveWGs = Array.from(effectiveWGSet).filter(Boolean);
-        const targetWGs = effectiveWGs.length ? WG.filter(w => effectiveWGs.includes(w.dr)) : WG;
+        const targetWGs = effectiveWGs.length
+            ? WG_EXPORT.filter(w => effectiveWGs.includes(w.dr) || effectiveWGs.includes(String(w.dr)))
+            : WG_EXPORT;
         const wgTotal = targetWGs.length;
         dbg('prLoadRows 有效查询范围:', '工作组=' + (targetWGs.map(w => w.name).join('/') || '全部'), '仪器=' + (machinePairs.map(x => x.wg + '|' + x.mdr).join(',') || '全部'));
 
@@ -2363,12 +2373,74 @@
         return ref.trim();
     }
 
-    function prRowsFromDetailData(specimen, data) {
+    // 规范化金额展示（去掉 ￥/逗号，保留数字字符串）
+    function prNormalizePrice(value) {
+        if (value == null || value === '') return '';
+        let s = String(value).trim();
+        if (!s) return '';
+        s = s.replace(/[￥¥,\s]/g, '');
+        return s === '-' ? '' : s;
+    }
+
+    // 按 VisitNumber 缓存医嘱组合费用（FindVisitNumberTSList → TestSetFee）
+    const _prTestSetFeeCache = new Map();
+    const _prTestSetFeeInflight = new Map();
+    async function prFetchTestSetFees(visitNumberDR, signal) {
+        const key = String(visitNumberDR || '');
+        if (!key) return [];
+        if (_prTestSetFeeCache.has(key)) return _prTestSetFeeCache.get(key);
+        if (_prTestSetFeeInflight.has(key)) return _prTestSetFeeInflight.get(key);
+        const promise = (async () => {
+            try {
+                const url = BASE + '/lis/ashx/ashVisitNumber.ashx?method=FindVisitNumberTSList&VisitNumberDR=' + encodeURIComponent(key);
+                const data = await fetchJRetry(url, 15000, signal, 1, 200);
+                const rows = (data && data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+                const list = rows.map(r => ({
+                    dr: String(r.TestSetDR || ''),
+                    desc: String(r.TestSetDesc || r.TestSetName || '').trim(),
+                    fee: prNormalizePrice(r.TestSetFee != null ? r.TestSetFee : r.Price)
+                })).filter(x => x.desc || x.fee);
+                _prTestSetFeeCache.set(key, list);
+                return list;
+            } catch (e) {
+                if (e && e.name === 'AbortError') throw e;
+                _prTestSetFeeCache.set(key, []);
+                return [];
+            } finally {
+                _prTestSetFeeInflight.delete(key);
+            }
+        })();
+        _prTestSetFeeInflight.set(key, promise);
+        return promise;
+    }
+
+    function prMatchTestSetFee(feeList, testSetName) {
+        if (!feeList || !feeList.length) return { fee: '', detail: '' };
+        const detail = feeList.map(x => (x.desc || '医嘱') + (x.fee !== '' ? (':' + x.fee) : '')).join('; ');
+        if (!testSetName) return { fee: feeList.length === 1 ? (feeList[0].fee || '') : '', detail };
+        const name = String(testSetName).trim();
+        const hit = feeList.find(x => x.desc && (x.desc === name || name.includes(x.desc) || x.desc.includes(name)));
+        if (hit) return { fee: hit.fee || '', detail };
+        if (feeList.length === 1) return { fee: feeList[0].fee || '', detail };
+        return { fee: '', detail };
+    }
+
+    function prRowsFromDetailData(specimen, data, feeList) {
         const itemInfo = prAsArray(data && data.ItemInfo);
         const labInfo = prAsArray(data && data.LabInfo)[0] || {};
+        // 报告头费用：与原生界面「费用」字段一致（LabInfo.Price）
+        const reportPrice = prNormalizePrice(labInfo.Price != null ? labInfo.Price : specimen.Price);
+        const visitNumberDR = labInfo.VisitNumberDR || specimen.VisitNumberDR || specimen.VisitNumber || '';
+        const labTestSet = labInfo.TestSetDesc || specimen.TestSetDesc || '';
+        const feeDetailFromList = (feeList && feeList.length)
+            ? feeList.map(x => (x.desc || '医嘱') + (x.fee !== '' ? (':' + x.fee) : '')).join('; ')
+            : '';
         return itemInfo.map(item => {
             const result = ((item.TextRes && String(item.TextRes).trim()) ? item.TextRes : (item.Result || '')).trim();
             const status = classifyResultItem(item);
+            const itemTestSet = item.TestSetName || item.TestSetDesc || labTestSet;
+            const itemPrice = prNormalizePrice(item.Price);
+            const matched = prMatchTestSetFee(feeList, itemTestSet || labTestSet);
             return {
                 workGroup: specimen._wgn || '',
                 machine: specimen._mn || '',
@@ -2376,8 +2448,8 @@
                 patientType: prPatientTypeText(specimen, labInfo),
                 sex: specimen.Sex || labInfo.Sex || labInfo.Species || '',
                 age: specimen.Age || labInfo.Age || '',
-                labno: specimen.Labno || '',
-                episodeNo: specimen.EpisodeNo || '',
+                labno: specimen.Labno || labInfo.Labno || '',
+                episodeNo: specimen.EpisodeNo || labInfo.EpisodeNo || '',
                 regNo: specimen.RegNo || labInfo.RegNo || '',
                 recordNo: specimen.RecordNo || labInfo.RecordNo || '',
                 location: specimen.Location || specimen.LocationName || labInfo.Location || labInfo.LocationName || '',
@@ -2385,16 +2457,22 @@
                 doctor: specimen.Doctor || specimen.DoctorName || specimen.ReqDoctorName || specimen.ApplyDoctorName || labInfo.Doctor || labInfo.DoctorName || labInfo.ReqDoctorName || '',
                 diagnosis: specimen.Diagnose || specimen.Diagnosis || labInfo.Diagnose || labInfo.Diagnosis || '',
                 specimen: specimen.Specimen || specimen.SpecimenDesc || labInfo.Specimen || labInfo.SpecimenDesc || '',
-                testSet: specimen.TestSetDesc || '',
-                acceptDT: specimen.AcceptDT || labInfo.AcceptDT || '',
-                reportStatus: prStatusText(specimen.Status || specimen.ReportStatus),
+                testSet: itemTestSet || labTestSet,
+                acceptDT: specimen.AcceptDT || labInfo.AcceptDT || labInfo.AcceptDate || '',
+                reportStatus: prStatusText(specimen.Status || specimen.ReportStatus || labInfo.Status),
                 itemName: item.CName || item.Name || '',
                 itemSynonym: item.Synonym || item.Code || '',
                 result,
                 unit: item.Unit || item.Units || '',
                 refRange: cleanRefRange(item.RefRanges || item.RefRange || item.ReferenceRange || ''),
                 abFlag: item.AbFlag || '',
-                status
+                status,
+                // 收费：报告总费用 / 单项价（常空）/ 医嘱组合价 / 医嘱费用明细
+                reportPrice,
+                itemPrice,
+                testSetFee: matched.fee,
+                feeDetail: matched.detail || feeDetailFromList,
+                visitNumberDR
             };
         });
     }
@@ -2413,7 +2491,15 @@
 
         const rawCache = (typeof _classifyRawCache !== 'undefined') ? _classifyRawCache[reportDR] : null;
         if (rawCache && rawCache.data) {
-            const rows = prRowsFromDetailData(specimen, rawCache.data);
+            const lab0 = prAsArray(rawCache.data.LabInfo)[0] || {};
+            const vn = lab0.VisitNumberDR || specimen.VisitNumberDR || specimen.VisitNumber || '';
+            let feeList = [];
+            if (vn) {
+                try { feeList = await prFetchTestSetFees(vn, signal); } catch (e) {
+                    if (e && e.name === 'AbortError') throw e;
+                }
+            }
+            const rows = prRowsFromDetailData(specimen, rawCache.data, feeList);
             prCacheSet(ck, rows);
             return rows.filter(row => prResultPass(row, filters));
         }
@@ -2443,7 +2529,19 @@
                 p.set('P3', '');
                 data = await fetchJRetry(CSP + '?' + p.toString(), 20000, signal, 2, 250);
             }
-            const rows = prRowsFromDetailData(specimen, data);
+            // 医嘱组合费用：有 VisitNumberDR 时并行拉取（按 VN 缓存，多报告共享）
+            const labInfo0 = prAsArray(data && data.LabInfo)[0] || {};
+            const visitNumberDR = labInfo0.VisitNumberDR || specimen.VisitNumberDR || specimen.VisitNumber || '';
+            let feeList = [];
+            if (visitNumberDR) {
+                try {
+                    feeList = await prFetchTestSetFees(visitNumberDR, signal);
+                } catch (e) {
+                    if (e && e.name === 'AbortError') throw e;
+                    feeList = [];
+                }
+            }
+            const rows = prRowsFromDetailData(specimen, data, feeList);
             prCacheSet(ck, rows);
             return rows;
         })();
@@ -2475,7 +2573,7 @@
         const endIdx = Math.min(startIdx + prPageSize, totalRows);
         const pageRows = rows.slice(startIdx, endIdx);
 
-        let h = '<table><thead><tr><th>姓名</th><th>性别</th><th>年龄</th><th>类型</th><th>科室</th><th>诊断</th><th>检验号</th><th>流水号</th><th>仪器</th><th>标本</th><th>组合</th><th>项目</th><th>结果</th><th>参考范围</th><th>状态</th><th>核收时间</th></tr></thead><tbody>';
+        let h = '<table><thead><tr><th>姓名</th><th>性别</th><th>年龄</th><th>类型</th><th>科室</th><th>诊断</th><th>检验号</th><th>流水号</th><th>仪器</th><th>标本</th><th>组合</th><th>项目</th><th>结果</th><th>参考范围</th><th>报告费用</th><th>医嘱费用</th><th>状态</th><th>核收时间</th></tr></thead><tbody>';
         pageRows.forEach(r => {
             const cls = r.status === 'CRITICAL' ? 'pr-critical' : (r.status === 'HIGH' ? 'pr-high' : (r.status === 'LOW' ? 'pr-low' : (r.status === 'ABNORMAL' ? 'pr-abn' : '')));
             h += `<tr>
@@ -2493,6 +2591,8 @@
                 <td>${esc(r.itemName)}</td>
                 <td class="${cls}">${esc(r.result)}${r.unit ? ' ' + esc(r.unit) : ''}</td>
                 <td>${esc(r.refRange)}</td>
+                <td>${esc(r.reportPrice || '')}</td>
+                <td title="${esc(r.feeDetail || '')}">${esc(r.testSetFee || r.feeDetail || '')}</td>
                 <td>${esc(classifyStatusText(r.status))}</td>
                 <td>${esc(r.acceptDT)}</td>
             </tr>`;
@@ -2534,11 +2634,13 @@
             const ok = window.confirm(`本次查询有 ${prLastDetailFailures} 个标本明细读取失败，导出的结果可能不完整。仍然导出吗？`);
             if (!ok) return;
         }
-        const headers = ['工作组','仪器','姓名','病人类型','性别','年龄','检验号','流水号','登记号','病案号','科室','病区','医生','诊断','标本','组合','核收时间','报告状态','项目','结果','单位','参考范围','异常标志','判断'];
+        // 金额：报告费用=报告头总价（按标本去重汇总）；医嘱费用=组合价；项目费用=单项价（本院常为空）
+        const headers = ['工作组','仪器','姓名','病人类型','性别','年龄','检验号','流水号','登记号','病案号','科室','病区','医生','诊断','标本','组合','核收时间','报告状态','项目','结果','单位','参考范围','异常标志','判断','报告费用','医嘱费用','项目费用','医嘱费用明细'];
         const rows = prData.map(r => [
             r.workGroup, r.machine, r.patient, r.patientType, r.sex, r.age, r.labno, r.episodeNo, r.regNo, r.recordNo,
             r.location, r.ward, r.doctor, r.diagnosis, r.specimen, r.testSet, r.acceptDT, r.reportStatus, r.itemName,
-            r.result, r.unit, r.refRange, r.abFlag, classifyStatusText(r.status)
+            r.result, r.unit, r.refRange, r.abFlag, classifyStatusText(r.status),
+            r.reportPrice || '', r.testSetFee || '', r.itemPrice || '', r.feeDetail || ''
         ]);
         const csv = '\uFEFF' + headers.map(prCsvCell).join(',') + '\n' + rows.map(row => row.map(prCsvCell).join(',')).join('\n');
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -2551,7 +2653,7 @@
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-        showToast('病人结果已导出', 'success');
+        showToast('病人结果已导出（含费用列；报告费用请按检验号去重汇总）', 'success');
     }
 
     function prClearFilters() {
@@ -2902,7 +3004,7 @@
                 </div>
             </div>
             <div id="lis-pr-status">请选择条件后查询。数据仅在本机浏览器内处理。</div>
-            <div id="lis-pr-body"><div class="pr-empty">点击"查询"后显示病人结果明细。<br>这里导出的是结果数据，不是正式报告单。</div></div>`;
+            <div id="lis-pr-body"><div class="pr-empty">点击"查询"后显示病人结果明细。<br>含临检/生化/免疫/外送；导出附带报告费用与医嘱费用（对账用）。<br>这里导出的是结果数据，不是正式报告单。</div></div>`;
         document.body.appendChild(panel);
 
         const start = document.getElementById('lis-pr-start');
