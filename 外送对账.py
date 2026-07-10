@@ -33,52 +33,78 @@ try:
 except ImportError:
     Workbook = None  # type: ignore
 
-# 机构项目名 → 医院常见项目/组合名（可继续往下加）
+# 机构项目名 → 本院可接受的项目/组合名（单向，禁止共用套餐名把不同细项串在一起）
+# 注意：不要把「贫血标志物」「铁三项」同时挂到多个互不相同的细项上（会交叉误匹配）
 ITEM_ALIASES = {
-    "微量元素检测5项": ["微量元素五项测定", "微量元素五项", "微量元素"],
-    "铁三项": ["铁三项", "铁离子(Fe)测定", "总铁结合力(TiBC)测定", "不饱和铁结合力(UIBC)测定", "铁饱和度(ISAT)检测", "血清铁饱和度"],
-    "N末端B型脑钠肽前体(NT-proBNP)测定": ["N端-B型钠尿肽前体", "脑利钠肽", "NT-proBNP", "N末端B型脑钠肽前体"],
-    "N端-B型钠尿肽前体": ["N末端B型脑钠肽前体(NT-proBNP)测定", "脑利钠肽"],
-    "25-羟基维生素D(VD(25-OH))测定": ["25羟基维生素D测定", "25-羟基维生素D[VD(25-OH)]", "25羟基维生素D"],
-    "25羟基维生素D测定": ["25-羟基维生素D(VD(25-OH))测定", "25-羟基维生素D[VD(25-OH)]"],
+    # 培养 / 药敏 / 涂片
     "血培养及鉴定": ["血培养及鉴定", "血培养（右）", "血培养（左）", "血培养(右)", "血培养(左)", "血培养"],
-    "一般细菌培养及鉴定": ["一般细菌培养及鉴定", "一般细菌培养"],
-    "喹硫平(Quetiapine)浓度测定": ["喹硫平", "喹硫平浓度测定"],
-    "利培酮(Risperidone)浓度测定": ["利培酮", "利培酮浓度测定"],
-    "奥卡西平(Oxcarbazepine)浓度测定": ["奥卡西平", "奥卡西平+10-羟基卡马西平", "奥卡西平浓度测定"],
-    "卡马西平(CARB)浓度测定": ["卡马西平", "卡马西平浓度测定"],
-    "阿立哌唑(Aripiprazole)浓度测定": ["阿立哌唑", "阿立哌唑浓度测定"],
-    "氨磺必利(Amisulpride)浓度测定": ["氨磺必利", "氨磺必利浓度测定"],
-    "齐拉西酮(Ziprasidone)浓度测定": ["齐拉西酮", "齐拉西酮浓度测定"],
-    "乙型肝炎病毒DNA(HBV-DNA)测定": ["乙型肝炎病毒DNA", "HBV-DNA", "乙肝DNA"],
-    "真菌(1、3)-β-D-葡聚糖检测(G试验)": ["真菌(1.3)-β-D-葡聚糖检测", "G试验", "真菌葡聚糖"],
-    "血皮质醇(CORT)测定(8am)": ["血皮质醇(早8点)", "血皮质醇", "皮质醇"],
+    "痰培养及鉴定": ["痰培养", "痰培养及鉴定"],
+    "尿培养及鉴定": ["尿培养", "尿培养及鉴定"],
+    "粪便培养及鉴定": ["粪便培养", "大便培养", "粪便培养(沙门氏菌、志贺氏菌)"],
+    "一般细菌培养及鉴定": ["一般细菌培养", "一般细菌培养及鉴定"],
+    "药敏试验": ["血液药敏定性", "痰药敏定性", "尿液药敏定性", "一般细菌药敏", "药敏"],
+    "涂片找抗酸杆菌": ["涂片找抗酸杆菌", "结核菌涂片"],
+    # 感染 / DNA / 真菌
+    "结核杆菌DNA(TB-DNA)检测": ["结核杆菌DNA", "TB-DNA", "各类病原体DNA测定", "各类病原体DNA测定（定性）", "各类病原体DNA测定（定量）"],
+    "结核感染T细胞(TB-IGRA)检测": ["结核感染T细胞斑点检测", "结核感染T细胞检测判断", "TB-IGRA", "IGRA"],
+    "乙型肝炎病毒DNA(HBV-DNA)测定": ["乙型肝炎DNA", "乙型肝炎DNA检测", "HBV-DNA", "乙肝DNA"],
+    "真菌(1、3)-β-D-葡聚糖检测(G试验)": ["真菌(1.3)-β-D-葡聚糖检测", "G试验"],
+    "曲霉菌半乳甘露聚糖检测(GM试验)": ["曲霉菌半乳甘露聚糖检测", "GM试验"],
+    # 贫血三项（各自只对应本院同名细项，不共用贫血标志物以免交叉）
+    "维生素B12(Vit B12)测定": ["血清维生素B12", "维生素B12", "VitB12"],
+    "维生素B12测定": ["血清维生素B12", "维生素B12"],
+    "叶酸(FOL)测定": ["叶酸", "血清叶酸"],
+    "叶酸测定": ["叶酸", "血清叶酸"],
+    "铁蛋白(FER)测定": ["铁蛋白", "血清铁蛋白"],
+    "铁蛋白测定": ["铁蛋白", "血清铁蛋白"],
+    # 铁三项细项
+    "铁离子(Fe)测定": ["血清铁离子", "铁测定", "微量元素铁测定", "全血铁", "铁离子"],
+    "总铁结合力(TiBC)测定": ["血清总铁结合力测定", "总铁结合力", "TiBC"],
+    "不饱和铁结合力(UIBC)测定": ["血清不饱和铁结合力", "不饱和铁结合力", "UIBC"],
+    "铁饱和度(ISAT)检测": ["血清铁饱和度", "铁饱和度", "ISAT"],
+    # 微量元素
+    "微量元素检测5项": ["微量元素五项测定", "微量元素五项"],
+    "硒(Se)测定": ["硒", "微量元素硒测定"],
+    "碘(I)测定": ["血清碘", "微量元素碘测定", "碘"],
+    # 生化 / 免疫
+    "N末端B型脑钠肽前体(NT-proBNP)测定": ["N端-B型钠尿肽前体", "脑利钠肽", "NT-proBNP"],
+    "25-羟基维生素D(VD(25-OH))测定": ["25羟基维生素D测定", "25-羟基维生素D[VD(25-OH)]", "25羟基维生素D"],
     "补体C3测定": ["补体C3"],
     "补体C4测定": ["补体C4"],
     "铜蓝蛋白(CER)测定": ["铜蓝蛋白"],
-    "铁蛋白(FER)测定": ["铁蛋白"],
-    "硒(Se)测定": ["硒"],
-    "结核杆菌DNA(TB-DNA)检测": ["结核杆菌DNA", "TB-DNA"],
-    "涂片找抗酸杆菌": ["涂片找抗酸杆菌", "结核菌涂片"],
-    "哌罗匹隆(Perospirone)浓度测定": ["哌罗匹隆浓度测定", "哌罗匹隆"],
-    "托吡酯(Topiramate)浓度测定": ["托吡酯浓度测定", "托吡酯"],
-    "米那普仑(Milnacipran)浓度测定": ["米那普仑浓度测定", "米那普仑"],
-    "药敏试验": ["血液药敏定性", "痰药敏定性", "尿液药敏定性", "药敏", "细菌一", "细菌二"],
-    "痰培养及鉴定": ["痰培养", "痰培养及鉴定"],
-    "尿培养及鉴定": ["尿培养", "尿培养及鉴定"],
-    # --- 机构名 vs 本院结果/组合名（少收误判常见）---
-    "维生素B12(Vit B12)测定": ["血清维生素B12", "维生素B12", "VitB12", "贫血标志物"],
-    "维生素B12测定": ["血清维生素B12", "维生素B12", "贫血标志物"],
-    "粪便培养及鉴定": ["粪便培养", "大便培养", "粪便培养(沙门氏菌、志贺氏菌)", "粪便培养(沙门氏菌、志贺氏菌)"],
-    "碘(I)测定": ["血清碘", "微量元素碘测定", "碘"],
-    "结核感染T细胞(TB-IGRA)检测": ["结核感染T细胞斑点检测", "结核感染T细胞检测判断", "TB-IGRA", "IGRA"],
+    "空腹C肽(C-P)测定": ["空腹C肽", "C肽"],
+    "促甲状腺受体抗体(TR-Ab)测定": ["促甲状腺受体抗体", "促甲状腺激素受体抗体", "TR-Ab", "TRAb"],
+    "血皮质醇(CORT)测定(8am)": ["血皮质醇(早8点)", "血皮质醇", "皮质醇"],
     "抗核抗体检测14项": [
-        "免疫测定", "抗核抗体", "抗核小体抗体", "抗U1nRNP抗体", "抗Sm抗体",
-        "抗SS-A抗体", "抗SS-B抗体", "抗JO-1抗体", "抗ScL-70抗体",
+        "免疫测定", "抗核抗体", "抗核小体抗体", "抗U1nRNP抗体", "抗U1nRNP抗体[U1nRNP]",
+        "抗Sm抗体", "抗Sm抗体[Sm]", "抗SS-A抗体", "抗SS-A抗体[SS-A]", "抗SS-B抗体", "抗SS-B抗体[SS-B]",
+        "抗JO-1抗体", "抗JO-1抗体[Jo-1]", "抗ScL-70抗体", "抗ScL-70抗体[SCL-70]",
+        "抗Ro52抗体", "抗Ro52抗体[Ro52]", "抗组蛋白抗体", "抗线粒体抗体Ⅱ型",
+        "抗增殖细胞核抗原抗体", "抗CENP-B蛋白抗体", "抗PM-Scl抗体", "抗核糖体P蛋白抗体",
     ],
-    "乙型肝炎病毒DNA(HBV-DNA)测定": ["乙型肝炎DNA", "乙型肝炎DNA检测", "HBV-DNA", "乙肝DNA"],
-    "叶酸测定": ["叶酸", "血清叶酸", "贫血标志物"],
-    "铁蛋白测定": ["铁蛋白", "血清铁蛋白", "贫血标志物"],
+    # 精神药 / 抗癫痫药浓度
+    "喹硫平(Quetiapine)浓度测定": ["喹硫平"],
+    "利培酮(Risperidone)浓度测定": ["利培酮", "利培酮+9-羟基利培酮", "9-羟基利培酮"],
+    "奥氮平(Olanza)浓度测定": ["奥氮平"],
+    "奥卡西平(Oxcarbazepine)浓度测定": ["奥卡西平", "奥卡西平+10-羟基卡马西平", "10-羟基卡马西平"],
+    "卡马西平(CARB)浓度测定": ["卡马西平"],  # 不要配到奥卡西平组合
+    "阿立哌唑(Aripiprazole)浓度测定": ["阿立哌唑", "阿立哌唑+脱氢阿立哌唑", "脱氢阿立哌唑"],
+    "氨磺必利(Amisulpride)浓度测定": ["氨磺必利"],
+    "齐拉西酮(Ziprasidone)浓度测定": ["齐拉西酮"],
+    "氯氮平(CLZ)浓度测定": ["氯氮平"],
+    "丙戊酸(VPA)浓度测定": ["丙戊酸"],
+    "帕利哌酮(Paliperidone)浓度测定": ["帕利哌酮"],
+    "哌罗匹隆(Perospirone)浓度测定": ["哌罗匹隆", "哌罗匹隆浓度测定"],
+    "托吡酯(Topiramate)浓度测定": ["托吡酯", "托吡酯浓度测定"],
+    "米那普仑(Milnacipran)浓度测定": ["米那普仑", "米那普仑浓度测定"],
+    "文拉法辛(Venlafaxine)浓度测定": ["文拉法辛", "去甲文拉法辛+0-去甲文拉法辛", "O-去甲文拉法辛", "0-去甲文拉法辛"],
+    "氟西汀+去甲氟西汀(Fluoxetine+ norfluoxetine)浓度测定": ["氟西汀", "氟西汀+去甲氟西汀", "去甲氟西汀"],
+    "氟伏沙明(Fluvoxamine)浓度测定": ["氟伏沙明"],
+    "舍曲林(Sertraline)浓度测定": ["舍曲林"],
+    "艾司西酞普兰(Escitalopram)浓度测定": ["艾司西酞普兰"],
+    "左乙拉西坦(Levetiracetam)浓度测定": ["左乙拉西坦"],
+    "布南色林(Blonaserin)浓度测定": ["布南色林"],
+    "吡仑帕奈(Perampanel)浓度测定": ["吡仑帕奈"],
 }
 
 
@@ -87,31 +113,88 @@ def _norm_name(s: str) -> str:
     if not s or s.lower() == "nan":
         return ""
     s = re.sub(r"[\(（][^）\)]*[\)）]", "", s)
-    s = re.sub(r"(测定|检测|检验|定量|定性|浓度)", "", s)
-    s = re.sub(r"[\s\-_/·•,，.。\[\]【】]", "", s)
+    s = re.sub(r"\[[^\]]*\]", "", s)
+    s = re.sub(r"(测定|检测|检验|定量|定性|浓度|及鉴定)", "", s)
+    s = re.sub(r"[\s\-_/·•,，.。+＋]", "", s)
     s = s.replace("（", "").replace("）", "").replace("(", "").replace(")", "")
+    # 统一写法
+    s = s.replace("β", "β").replace("Β", "β")
+    s = s.replace("端b型钠尿肽前体", "端b型钠尿肽前体")
     return s.lower()
 
 
-def _build_alias_norm_map() -> dict[str, set[str]]:
-    """归一名 → 一组等价归一名"""
-    m: dict[str, set[str]] = {}
-    for a, blist in ITEM_ALIASES.items():
-        keys = {_norm_name(a), *(_norm_name(b) for b in blist)}
-        keys.discard("")
-        for k in keys:
-            m.setdefault(k, set()).update(keys)
-    return m
-
-
-ALIAS_NORM = _build_alias_norm_map()
+def _alias_targets_for_institution(inst_name: str) -> set[str]:
+    """机构项目 → 可接受的医院归一名集合（单向，不反向污染）。"""
+    out = {_norm_name(inst_name)}
+    inst_n = _norm_name(inst_name)
+    for key, blist in ITEM_ALIASES.items():
+        kn = _norm_name(key)
+        if not kn:
+            continue
+        # 键完全相等，或机构名与键互相包含（长度够长）
+        if kn == inst_n or (len(kn) >= 3 and len(inst_n) >= 3 and (kn in inst_n or inst_n in kn)):
+            out.add(kn)
+            for b in blist:
+                bn = _norm_name(b)
+                if bn:
+                    out.add(bn)
+    # 常见前缀：血清/全血
+    if inst_n:
+        if not inst_n.startswith("血清"):
+            out.add("血清" + inst_n)
+        if inst_n.startswith("血清"):
+            out.add(inst_n[2:])
+    out.discard("")
+    return out
 
 
 def _item_keys(name: str) -> set[str]:
+    """兼容旧调用：医院侧键仅自身归一化（不再做反向别名合并）。"""
     n = _norm_name(name)
-    if not n:
-        return set()
-    return {n} | ALIAS_NORM.get(n, set())
+    return {n} if n else set()
+
+
+def _score_one_side(inst_name: str, hosp_name: str) -> int:
+    """机构名 vs 单个医院字段（项目 或 组合）。"""
+    an = _norm_name(inst_name)
+    bn = _norm_name(hosp_name)
+    if not an or not bn:
+        return 0
+    targets = _alias_targets_for_institution(inst_name)
+    if an == bn:
+        return 100
+    if bn in targets:
+        return 90
+    if bn == "血清" + an or bn == "全血" + an:
+        return 85
+    if bn.startswith("血清") and bn[2:] == an:
+        return 85
+    # 仅允许医院名以机构名开头（血培养→血培养左）；禁止 endswith（卡马西平≠羟基卡马西平）
+    if len(an) >= 3 and bn.startswith(an):
+        return 80
+    if len(bn) >= 3 and an.startswith(bn) and len(bn) / max(len(an), 1) >= 0.7:
+        return 75
+    if an in ("碘", "硒", "铜", "锌", "钙", "镁") and (bn == an or an in bn):
+        return 88
+    return 0
+
+
+def match_score(inst_name: str, lis_item: str, lis_set: str = "") -> int:
+    """
+    优先「项目」列命中，避免血培养通过组合名误吃「细菌一」行。
+    """
+    si = _score_one_side(inst_name, lis_item)
+    ss = _score_one_side(inst_name, lis_set)
+    if si >= 70:
+        return si + 5
+    if ss >= 70:
+        return max(ss - 15, 70)
+    return max(si, ss)
+
+
+def _items_match(tp_name: str, lis_item: str, lis_set: str) -> bool:
+    """是否可视为同一项目（阈值 70）。"""
+    return match_score(tp_name, lis_item, lis_set) >= 70
 
 
 def _read_tp(path: Path) -> pd.DataFrame:
@@ -1347,10 +1430,12 @@ def match_institution_baseline(tp: pd.DataFrame, lis: pd.DataFrame) -> dict:
             if li in used_lis:
                 continue
             lr = lis.loc[li]
-            if not _items_match(tr["单项名称"], lr["项目"], lr["组合"]):
+            score = match_score(tr["单项名称"], lr["项目"], lr["组合"])
+            if score < 70:
                 continue
             day_diff = abs((lr["日期"] - tr["日期"]).days) if pd.notna(lr["日期"]) and pd.notna(tr["日期"]) else 9999
-            cands.append((day_diff, li))
+            # 先比匹配分，再比日差（同分优先日期近）
+            cands.append((-score, day_diff, li, score))
         if not cands:
             missing_rows.append(
                 {
@@ -1365,8 +1450,8 @@ def match_institution_baseline(tp: pd.DataFrame, lis: pd.DataFrame) -> dict:
                 }
             )
             continue
-        cands.sort(key=lambda x: x[0])
-        day_diff, li = cands[0]
+        cands.sort()
+        _, day_diff, li, score = cands[0]
         used_lis.add(li)
         lr = lis.loc[li]
         matched_rows.append(
@@ -1382,6 +1467,7 @@ def match_institution_baseline(tp: pd.DataFrame, lis: pd.DataFrame) -> dict:
                 "医院项目": lr["项目"],
                 "医院组合": lr["组合"],
                 "日差天数": day_diff if day_diff < 9999 else "",
+                "匹配分": score,
                 "匹配结果": "已匹配",
             }
         )
@@ -1709,7 +1795,40 @@ def write_shortfall_report(out_path: Path, tp: pd.DataFrame, lis: pd.DataFrame, 
         fill=fill_warn,
     )
 
-    # ===== 5. 已匹配（抽查）=====
+    # ===== 5. 项目名称对照（机构 → 本院）=====
+    ws_map = wb.create_sheet("项目名称对照")
+    ws_map.sheet_view.showGridLines = False
+    set_widths(ws_map, [40, 14, 50])
+    ws_map.merge_cells("A1:C1")
+    ws_map["A1"] = "机构项目名 → 本院可匹配名（别名表 + 规则）"
+    ws_map["A1"].font = font_title
+    ws_map["A1"].fill = fill_ok_t
+    for i, h in enumerate(["机构项目", "对照方式", "本院对应示例"], 1):
+        cell = ws_map.cell(row=3, column=i, value=h)
+        cell.font = font_white
+        cell.fill = fill_ok_t
+        cell.alignment = center
+    # 用本次数据中的机构项目列表
+    inst_names = sorted(tp["单项名称"].dropna().unique())
+    lis_names = sorted(set(lis["项目"].dropna().astype(str)) | set(lis["组合"].dropna().astype(str)))
+    for ri, name in enumerate(inst_names, 4):
+        hits = []
+        for ln in lis_names:
+            sc = match_score(name, ln, "")
+            if sc >= 70:
+                hits.append((sc, ln))
+        hits = sorted(hits, reverse=True)[:8]
+        how = "别名/规则" if hits else "未建立对照"
+        sample = "；".join(f"{n}({s})" for s, n in hits) if hits else "（无）"
+        fill = fill_ok if hits else fill_bad
+        for ci, v in enumerate([name, how, sample], 1):
+            cell = ws_map.cell(row=ri, column=ci, value=v)
+            cell.font = font_n
+            cell.fill = fill
+            cell.border = thin
+            cell.alignment = left if ci != 2 else center
+
+    # ===== 6. 已匹配（抽查）=====
     ws5 = wb.create_sheet("已匹配清单")
     ws5.sheet_view.showGridLines = False
     set_widths(ws5, [10, 12, 14, 24, 12, 12, 12, 14, 20, 20, 10])
