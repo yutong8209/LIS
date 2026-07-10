@@ -600,9 +600,10 @@ def _pick_files_gui():
     except Exception:
         pass
 
+    multi_hint = "Ctrl" if sys.platform.startswith("win") else "⌘"
     messagebox.showinfo(
         "外送少收分析",
-        "请同时选择两类文件（⌘ 多选）：\n\n"
+        f"请同时选择两类文件（{multi_hint} 多选）：\n\n"
         "1. 外送机构汇总表（.xlsx）—— 基准\n"
         "2. LIS 病人结果导出（.csv）—— 日期建议比机构单更宽\n\n"
         "只统计「机构有、医院没有」的少收；\n"
@@ -610,7 +611,7 @@ def _pick_files_gui():
     )
 
     paths = filedialog.askopenfilenames(
-        title="少收分析：⌘ 多选【机构汇总 xlsx】+【LIS 导出 csv】",
+        title=f"少收分析：{multi_hint} 多选【机构汇总 xlsx】+【LIS 导出 csv】",
         initialdir=initial,
         filetypes=[
             ("对账文件", "*.xlsx *.xls *.xlsm *.csv"),
@@ -651,7 +652,7 @@ def _pick_files_gui():
             "少收分析需要同时有：\n"
             "· 机构汇总 .xlsx（基准）\n"
             "· LIS 导出 .csv（对照，日期可更宽）\n\n"
-            "请 ⌘ 多选两类文件后再试。",
+            f"请 {multi_hint} 多选两类文件后再试。",
         )
         root.destroy()
         return [], [], None

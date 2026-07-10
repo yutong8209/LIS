@@ -3,5 +3,9 @@ pillow>=10.0.0
 mss>=9.0.0
 pyautogui>=0.9.54
 
+# 外送少收分析（外送对账.py / 外送对账.bat）
+pandas>=2.0.0
+openpyxl>=3.1.0
+
 # MCP 图片识别（可选，mcp-image-reader/）
 mcp>=1.0.0
