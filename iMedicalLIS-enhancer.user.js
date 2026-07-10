@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.60.0
+// @version      7.60.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -324,17 +324,19 @@
 #lis-pr-tools .pr-sm{width:104px}
 #lis-pr-tools .pr-md{width:132px}
 #lis-pr-tools .pr-lg{width:168px}
-#lis-pr-tools .pr-mach-tree-wrap{width:480px;align-self:stretch}
-#lis-pr-machine-tree{display:flex;gap:6px;align-items:stretch;border:1px solid #c3ced8;border-radius:4px;background:#fff;padding:4px;min-height:54px;max-height:96px;overflow:auto}
-.pr-wg-box{border:1px solid #d9e3ec;border-radius:4px;background:#fbfdff;min-width:148px;max-width:180px;flex:0 0 auto}
+/* 工作组/仪器：整行铺开 + 自动换行，四组（含外送）一次看全，无需横拖 */
+#lis-pr-tools .pr-mach-tree-wrap{flex:1 1 100%;width:100%;max-width:100%;align-self:stretch}
+#lis-pr-machine-tree{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;border:1px solid #c3ced8;border-radius:4px;background:#fff;padding:6px;min-height:54px;max-height:160px;overflow:auto}
+.pr-wg-box{border:1px solid #d9e3ec;border-radius:4px;background:#fbfdff;min-width:150px;max-width:220px;flex:1 1 150px}
 .pr-wg-box[data-wg="1"]{border-top:2px solid #e74c3c}
 .pr-wg-box[data-wg="3"]{border-top:2px solid #3498db}
 .pr-wg-box[data-wg="4"]{border-top:2px solid #2ecc71}
+.pr-wg-box[data-wg="5"]{border-top:2px solid #9b59b6}
 .pr-wg-head{height:22px;display:flex;align-items:center;gap:5px;padding:0 7px;font-size:11px;font-weight:800;color:#246489;cursor:pointer;border-bottom:1px solid #edf1f5;user-select:none}
 .pr-wg-head input{width:12px!important;height:12px!important;margin:0}
-.pr-wg-body{padding:4px 6px;display:flex;flex-direction:column;gap:3px;max-height:64px;overflow:auto}
+.pr-wg-body{padding:4px 6px;display:flex;flex-direction:column;gap:3px;max-height:88px;overflow:auto}
 .pr-wg-box.collapsed .pr-wg-body{display:none}
-.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:5px;font-size:11px!important;font-weight:600!important;color:#334155!important;line-height:1.2!important;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:5px;font-size:11px!important;font-weight:600!important;color:#334155!important;line-height:1.2!important;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
 .pr-mach-option input{width:12px!important;height:12px!important;margin:0}
 #lis-pr-tools .pr-wide{width:208px}
 #lis-pr-tools .pr-xl{width:220px}
@@ -2162,14 +2164,27 @@
         return data;
     }
 
+    function prIsExportOnlyWG(wg) {
+        return String(wg || '') === '5' || String((WG_MAP[wg] || {}).name || '') === '外送';
+    }
+
     function prMayHaveResult(row) {
-        const resultFlag = String(row.ResultFlag || '').toUpperCase();
-        const complete = String(row.IsComplete || '');
+        // 外送：第三方回传结果时，工作列表 ResultFlag/IsComplete 经常仍是 N/0，不能据此跳过
+        if (prIsExportOnlyWG(row && row._wg)) return true;
+        // 已初审/审核/复审：通常有结果，即使标志位滞后也读明细
+        const st = String((row && (row.Status || row.ReportStatus)) || '');
+        if (st === '2' || st === '3' || st === '4') return true;
+        const resultFlag = String((row && row.ResultFlag) || '').toUpperCase();
+        const complete = String((row && row.IsComplete) || '');
         if (resultFlag === 'N' && complete === '0') return false;
         return true;
     }
 
     function prNeedsDetailEvenWithoutResult(filters) {
+        // 仅查外送（勾工作组或仪器）时强制读明细，避免 ResultFlag 误杀
+        const onlyExportWG = (filters.wgs || []).length > 0 && (filters.wgs || []).every(prIsExportOnlyWG);
+        const onlyExportMachine = (filters.machines || []).length > 0 && (filters.machines || []).every(v => String(v).split('|')[0] === '5');
+        if (onlyExportWG || onlyExportMachine) return true;
         return !!(filters.doctor || filters.diagnosis || filters.ward || !Number.isNaN(filters.ageMin) ||
             !Number.isNaN(filters.ageMax) || filters.item || filters.resultText || filters.judge ||
             filters.abnormal || filters.resultOp || !Number.isNaN(filters.resultMin) || !Number.isNaN(filters.resultMax));
@@ -2881,7 +2896,12 @@
                 return;
             }
             const mustReadDetail = prNeedsDetailEvenWithoutResult(filters);
-            const detailRows = mustReadDetail ? rows : rows.filter(prMayHaveResult);
+            let detailRows = mustReadDetail ? rows : rows.filter(prMayHaveResult);
+            // 兜底：若按标志位全部被跳过，仍尝试读明细（外送/标志滞后常见）
+            if (!detailRows.length && rows.length) {
+                dbg('病人结果：工作列表标志均为暂无结果，仍尝试读取明细', rows.length);
+                detailRows = rows;
+            }
             const skippedNoResult = rows.length - detailRows.length;
             if (!detailRows.length) {
                 prSetStatus(`找到 ${rows.length} 个标本，但工作列表显示暂无结果。当前生效：${activeSummary}`, 'info');
