@@ -1,33 +1,68 @@
-# Windows 安装说明（审核 + 质控导出）
+# Windows 整包转移安装说明
 
-适用于把本工具箱拷到 Windows，在浏览器里用 **iMedicalLIS 增强助手**（含质控数据导出 / ZIP 打包）。
+把 Mac 上的 **LIS 工具箱** 整套拷到 Windows 使用。包含：
 
-当前脚本版本以文件头 `@version` 为准（如 7.59.3）。
+| 模块 | 做什么 | 怎么启动 |
+|------|--------|----------|
+| **审核工作台** | 批审、F4 异常审、工作台 | 浏览器 + 油猴脚本 |
+| **病人结果导出** | 筛选导出（含外送组） | 同上，点「结果」 |
+| **质控导出** | 质控数据 xlsx / ZIP | 同上 + **必须开 serve** |
+| **外送少收分析** | 机构账单 vs LIS 导出对账 | 双击 **`外送对账.bat`**（独立，可不装油猴） |
+
+脚本版本以 `iMedicalLIS-enhancer.user.js` 文件头 `@version` 为准。
 
 ---
 
-## 1. 需要拷贝的文件
+## 0. 建议：整夹拷贝
 
-把整个文件夹拷过去最省事，至少保证：
+从 U 盘 / 网盘 / `git clone` 把整个目录拷到 Windows，例如：
 
 ```text
-某目录\LIS脚本\          （名字随意）
-├── iMedicalLIS-enhancer.user.js   ← 油猴脚本
-├── serve.py                       ← 本机小服务器
-├── start_serve.bat                ← 双击启动（Windows）
+D:\LIS脚本\
+```
+
+**不要只拷一个 user.js**，否则质控、对账会缺文件。
+
+---
+
+## 1. 需要保留的文件（清单）
+
+### 1.1 审核 + 结果导出 + 质控（浏览器）
+
+```text
+D:\LIS脚本\
+├── iMedicalLIS-enhancer.user.js   ← 油猴主脚本（必拷）
+├── serve.py                       ← 本机小服务器（必拷）
+├── start_serve.bat                ← 双击启动 serve（必拷）
 └── vendor\
-    └── xlsx.full.min.js           ← 质控导出 Excel 必需
+    └── xlsx.full.min.js           ← 质控 Excel 必需（必拷）
 ```
 
 可选：
 
-- `vendor/jszip.min.js`（当前 ZIP 已是纯 JS，可不拷）
+- `vendor/jszip.min.js`（当前 ZIP 多为纯 JS，可不拷）
 - `质控模板\`（上传模板，与脚本导出独立）
-- `AGENTS.md` / `HANDTEST.md`（说明）
+- `HANDTEST.md`（手测清单）
+
+### 1.2 外送少收分析（桌面小工具）
+
+```text
+D:\LIS脚本\
+├── 外送对账.py                    ← 主程序（必拷）
+└── 外送对账.bat                   ← 双击运行（必拷）
+```
+
+### 1.3 说明文档（建议一起拷）
+
+```text
+Windows安装-含质控.md              ← 本文
+AGENTS.md                          ← 总览
+requirements.txt                   ← Python 依赖列表
+```
 
 ---
 
-## 2. 安装 Python 3
+## 2. 安装 Python 3（只装一次）
 
 1. 打开 https://www.python.org/downloads/  
 2. 安装时**勾选** `Add python.exe to PATH`  
@@ -37,46 +72,62 @@
 python --version
 ```
 
-能显示 `Python 3.x` 即可（`serve.py` 只用标准库，不用 pip 装包）。
+能显示 `Python 3.x` 即可。
+
+### 安装 Python 依赖
+
+在脚本目录执行：
+
+```bat
+cd /d D:\LIS脚本
+python -m pip install -r requirements.txt
+```
+
+至少需要（外送对账用）：
+
+```bat
+python -m pip install pandas openpyxl
+```
+
+说明：
+
+- **`serve.py`（审核/质控更新）**：主要用标准库，不装包也能跑 serve  
+- **`外送对账.bat`**：需要 `pandas`、`openpyxl`；缺了 bat 会尝试自动安装  
 
 ---
 
-## 3. 启动本机服务（质控必需）
+## 3. 模块 A：审核 + 结果导出 + 质控（油猴）
 
-**每次要用质控导出前，先启动服务，并保持窗口不关。**
+### 3.1 启动本机服务
+
+**质控导出、脚本在线更新依赖 serve。**  
+每次要用前启动，并**保持窗口不关**。
 
 - 双击 `start_serve.bat`  
-  或在该目录执行：
+  或：
 
 ```bat
+cd /d D:\LIS脚本
 python serve.py
 ```
 
-成功时窗口会显示类似：
+成功时类似：
 
 ```text
 地址: http://localhost:8765/
 SheetJS: http://localhost:8765/vendor/xlsx.full.min.js
 ```
 
-浏览器自检（任选）：
+浏览器自检：
 
 | 地址 | 期望 |
 |------|------|
 | http://localhost:8765/iMedicalLIS-enhancer.user.js | 一大段脚本源码 |
 | http://localhost:8765/vendor/xlsx.full.min.js | 开头含 `xlsx.js` / `SheetJS` |
 
-若 404 或打不开：
+可把 `start_serve.bat` 放到「启动」文件夹，开机自动开。
 
-- 确认 bat 窗口还在跑  
-- 确认 `vendor\xlsx.full.min.js` 在 serve 同目录下  
-- 换用管理员以外的普通用户再开一次  
-
-可把 `start_serve.bat` 放到「启动」文件夹，开机自动开服务。
-
----
-
-## 4. 安装 Tampermonkey 与脚本
+### 3.2 安装 Tampermonkey 与脚本
 
 1. Edge / Chrome 安装扩展 **Tampermonkey**  
 2. 安装脚本（二选一）：
@@ -89,7 +140,7 @@ SheetJS: http://localhost:8765/vendor/xlsx.full.min.js
 **方式 B**  
 - Tampermonkey → 添加新脚本 → 粘贴 `iMedicalLIS-enhancer.user.js` 全文 → 保存  
 
-3. 检查脚本头 `@match` 是否包含本院 LIS 地址，例如：
+3. 检查 `@match` 是否包含本院 LIS 地址，例如：
 
 ```text
 // @match  http://10.0.29.100/iMedicalLIS/*
@@ -98,82 +149,157 @@ SheetJS: http://localhost:8765/vendor/xlsx.full.min.js
 
 若 Windows 访问的 IP/端口不同，在 Tampermonkey 里改或增加一行。
 
-4. 打开 LIS 页面并**强制刷新**（Ctrl+F5），确认脚本生效（如右下角浮动按钮、质控 📊 等）。
+4. 打开 LIS，**Ctrl+F5** 强制刷新，确认生效（浮动钮、质控 📊、「结果」等）。
 
----
-
-## 5. 质控导出怎么用
-
-1. **serve 已启动**  
-2. 进入 LIS **质控相关页面**（脚本会显示质控导出入口）  
-3. 打开「质控数据导出」面板  
-4. 选月份、项目 → **检测映射** → **开始导出**  
-5. 可点各文件「下载」，或 **打包下载 ZIP**  
-
-若提示「SheetJS 未加载」：
-
-1. 启动 / 重启 `start_serve.bat`  
-2. 浏览器打开 xlsx 地址确认能访问  
-3. Tampermonkey 里对脚本点「检查更新」或重装  
-4. LIS 页面 Ctrl+F5  
-
-批号、操作者等配置保存在**本机该浏览器**，换电脑要重新保存一次。
-
----
-
-## 6. 审核功能（同一脚本）
-
-不依赖 SheetJS，但建议仍开着 serve 以便更新脚本：
+### 3.3 审核功能
 
 | 功能 | 入口 |
 |------|------|
 | 审核工作台 | 页面浮动按钮 |
-| 一键批审 | 工作台内 |
-| 异常 F4 / Enter | 异常列表 |
-| 顶部悬停小条 | 已关闭，请用工作台 |
+| 一键批审 / F4 | 工作台（正常可审 / 异常待审） |
+| 病人结果筛选导出 | 「结果」按钮（含 **外送** 工作组） |
 
-CA / 审核密码：在脚本设置里保存；需本机 CA 环境与医院要求一致。
+CA / 审核密码：在脚本设置里保存；需本机 CA 与医院要求一致。
+
+### 3.4 质控导出
+
+1. **serve 已启动**  
+2. 进入 LIS **质控相关页面**  
+3. 打开「质控数据导出」  
+4. 选月份、项目 → **检测映射** → **开始导出**  
+5. 单文件下载或 **打包 ZIP**  
+
+若提示「SheetJS 未加载」：开 serve → 检查 `vendor\xlsx.full.min.js` → TM 检查更新 → LIS Ctrl+F5。
+
+### 3.5 结果导出（给外送对账用）
+
+1. 点 **「结果」**  
+2. 日期选 **比机构账单更宽**（前后多几天～半个月）  
+3. 勾 **外送**（或只勾外送仪器）  
+4. 查询 → **导出 CSV**  
+5. 文件一般在浏览器「下载」文件夹  
 
 ---
 
-## 7. 日常检查清单
+## 4. 模块 B：外送少收分析（独立工具）
 
-| 步骤 | 说明 |
+**不依赖** 当天是否开着 serve、是否打开 LIS（分析时只要两份表）。
+
+### 4.1 原理
+
+| 项目 | 说明 |
 |------|------|
-| ① 开 serve | 双击 `start_serve.bat`，窗口保持 |
-| ② 开浏览器 | 能上内网 LIS |
-| ③ 打开 LIS | Ctrl+F5 刷新 |
-| ④ 质控导出 | 映射 → 导出 → 单下/ZIP |
-| ⑤ 下班 | 可关 serve 窗口 |
+| **基准** | 外送机构汇总表 `.xlsx` |
+| **对照** | LIS 结果导出 `.csv`（日期宜更宽） |
+| **只查** | 机构有、医院没有 → **可能少收** |
+| **不查** | 医院有、机构没有 |
+| **匹配** | 姓名 + 项目名（别名/模糊），日期不强制同一天 |
 
----
+结果表主要页：
 
-## 8. 更新脚本（Win）
+- **一眼看懂** — 少收总额  
+- **少收明细** — 核心清单  
+- **按病人汇总 / 按项目汇总**  
+- **项目名称对照**  
+- **已匹配清单**  
 
-1. 覆盖新的 `iMedicalLIS-enhancer.user.js`（及如有变化的 `vendor\`）  
-2. serve 运行中：Tampermonkey → 该脚本 → **检查更新** / 重新打开 install URL  
-3. LIS 强制刷新  
+### 4.2 日常操作
 
----
+1. 准备好：机构 `.xlsx` + LIS `.csv`（见 §3.5）  
+2. 双击 **`外送对账.bat`**  
+3. 弹窗里用 **Ctrl 多选** 两个文件  
+4. 保存 `外送少收分析_时间戳.xlsx`  
+5. 看摘要与「少收明细」  
 
-## 9. 常见问题
+命令行示例：
+
+```bat
+cd /d D:\LIS脚本
+python 外送对账.py --机构 "%USERPROFILE%\Downloads\外送机构汇总.xlsx" --lis "%USERPROFILE%\Downloads\lis 导出.csv" -o "%USERPROFILE%\Downloads\外送少收分析.xlsx"
+```
+
+### 4.3 外送对账常见问题
 
 | 现象 | 处理 |
 |------|------|
-| 质控报 SheetJS 未加载 | 开 serve；检查 vendor\xlsx；刷新/重装脚本 |
-| ZIP 无反应 / 旧版卡住 | 升级到 ≥7.59.3（纯 JS 打包，不依赖 JSZip） |
-| 脚本不出现 | 检查 @match、TM 已启用、是否装在当前浏览器 |
-| 批审数字不准 | 以列表是否消失为准 |
-| 两台电脑 | 各装一份脚本 + 各开自己的 localhost:8765 |
+| bat 一闪而过 | 在目录打开 cmd 再运行 bat，看是否缺 Python |
+| 缺 pandas / openpyxl | `python -m pip install pandas openpyxl` |
+| 少收为 0 仍觉得有漏 | 看「项目名称对照」；加宽 LIS 日期；新项目名需补 `ITEM_ALIASES` |
+| 中文控制台乱码 | 以生成的 Excel 为准 |
 
 ---
 
-## 10. 与 Mac 的差异
+## 5. 日常检查清单（整套）
+
+| 步骤 | 审核/结果 | 质控 | 外送对账 |
+|------|-----------|------|----------|
+| ① 开 `start_serve.bat` | 建议（更新脚本） | **必须** | 不必 |
+| ② 开浏览器进 LIS | 要 | 要 | 导出 CSV 时要 |
+| ③ Ctrl+F5 | 要 | 要 | 导出时建议 |
+| ④ 业务操作 | 批审 / 结果导出 | 质控导出 | 双击 `外送对账.bat` |
+| ⑤ 下班 | 可关 serve | 可关 serve | — |
+
+---
+
+## 6. 更新（Win）
+
+### 油猴脚本 / 质控
+
+1. 覆盖新的 `iMedicalLIS-enhancer.user.js`（及有变化的 `vendor\`）  
+2. serve 运行中：Tampermonkey → **检查更新** / 重新打开 install URL  
+3. LIS 强制刷新  
+
+### 外送对账
+
+覆盖新的 `外送对账.py`（和如有改动的 `外送对账.bat`）即可，无需重装油猴。
+
+---
+
+## 7. 常见问题（总表）
+
+| 现象 | 处理 |
+|------|------|
+| 质控 SheetJS 未加载 | 开 serve；检查 vendor\xlsx；重装脚本；Ctrl+F5 |
+| ZIP 无反应 | 升级脚本到较新版本（纯 JS 打包） |
+| 脚本不出现 | 查 @match、TM 已启用、是否装在当前浏览器 |
+| 批审数字不准 | 以列表是否审完为准 |
+| 两台电脑 | 各拷一份工具箱；浏览器本地配置不共用 |
+| 外送对账找不到 Python | 重装 Python 并勾选 PATH |
+
+---
+
+## 8. 与 Mac 的差异
 
 | | Mac | Windows |
 |--|-----|---------|
 | 启动 serve | `start_serve_mac.command` | `start_serve.bat` |
-| Python 命令 | 多为 `python3` | 多为 `python` / `py -3` |
-| 路径 | `~/脚本` | 任意盘符目录均可 |
+| 外送对账 | `外送对账.command` | **`外送对账.bat`** |
+| 文件多选 | ⌘ | **Ctrl** |
+| Python | 多为 `python3` | 多为 `python` / `py -3` |
+| 路径 | `~/脚本` | 任意盘符目录 |
 
-功能相同，配置不共用（浏览器本地存储各自独立）。
+功能与对账逻辑相同；浏览器本地存储、记住的密码等 **不跨电脑同步**。
+
+---
+
+## 9. 给同事的最小拷贝包
+
+**只要审核+质控：**
+
+```text
+iMedicalLIS-enhancer.user.js
+serve.py
+start_serve.bat
+vendor\xlsx.full.min.js
+Windows安装-含质控.md
+```
+
+**只要外送对账：**
+
+```text
+外送对账.py
+外送对账.bat
+Windows安装-含质控.md   （看第 4 节即可）
+```
+
+**整套（推荐）：** 整个 `LIS脚本` 文件夹 + 本文。
