@@ -5,19 +5,16 @@
 
 用法：
   python3 ~/脚本/外送对账.py
-  # 弹窗一次可 ⌘ 多选：机构 xlsx + LIS csv（也可多月多个文件，自动合并）
+  # 弹窗 ⌘ 多选：机构 xlsx + LIS csv（LIS 日期范围建议比机构单更宽）
   python3 ~/脚本/外送对账.py --机构 ~/Downloads/外送机构汇总.xlsx --lis ~/Downloads/lis导出.csv
-  python3 ~/脚本/外送对账.py --机构 a.xlsx b.xlsx --lis c.csv d.csv -o ~/Downloads/对账结果.xlsx
 
-匹配策略（机构无医院检验号、条码也对不上时）：
-  1) 患者姓名 + 日期（机构送检日 / LIS 核收日）
-  2) 项目名模糊归一 + 内置别名表
-  3) 金额：机构「标准物价」≈ 医院「报告费用/医嘱费用」（收费价）
-     机构「结算金额」是机构结算折扣价，默认不与医院收费价直接比
+核心目的（默认「少收」模式）：
+  机构汇总表 = 固定基准
+  医院 LIS 导出 = 对照（日期可更宽，不要求起止一致）
+  只找：机构有、医院没有 → 估算医院少收多少
+  不管：医院有、机构没有（损失不由我院承担）
 
-默认输出 4 页简洁表：
-  一眼看懂 / 待核实清单 / 项目名提示 / 底稿_全部患者日
-加 --详细 可额外输出原始多表。
+匹配：姓名 + 项目名模糊/别名；日期只作参考（优先近的），不强制同一天。
 """
 
 from __future__ import annotations
@@ -1295,13 +1292,441 @@ def write_clean_report(
     return out_path
 
 
+def match_institution_baseline(tp: pd.DataFrame, lis: pd.DataFrame) -> dict:
+    """
+    以机构表为基准：逐行在医院侧找姓名+项目（模糊）匹配。
+    日期不强制同一天，只在多个候选时优先选核收日最接近送检日的。
+    医院有而机构没有的一律忽略。
+    """
+    lis = lis.reset_index(drop=True)
+    used_lis: set[int] = set()
+    lis_by_name: dict[str, list[int]] = {}
+    for i, r in lis.iterrows():
+        lis_by_name.setdefault(str(r["姓名"]), []).append(i)
+
+    matched_rows = []
+    missing_rows = []
+
+    # 稳定顺序：按送检日、姓名
+    tp_sorted = tp.sort_values(["日期", "患者", "单项名称"]).reset_index()
+    for _, tr in tp_sorted.iterrows():
+        ti = int(tr["index"])
+        name = str(tr["患者"])
+        cands = []
+        for li in lis_by_name.get(name, []):
+            if li in used_lis:
+                continue
+            lr = lis.loc[li]
+            if not _items_match(tr["单项名称"], lr["项目"], lr["组合"]):
+                continue
+            day_diff = abs((lr["日期"] - tr["日期"]).days) if pd.notna(lr["日期"]) and pd.notna(tr["日期"]) else 9999
+            cands.append((day_diff, li))
+        if not cands:
+            missing_rows.append(
+                {
+                    "姓名": name,
+                    "送检日期": tr["日期"],
+                    "条码号": tr["条码号"],
+                    "机构项目": tr["单项名称"],
+                    "标准物价": float(tr["标准物价"] or 0),
+                    "结算金额": float(tr["结算金额"] or 0),
+                    "匹配结果": "医院未找到",
+                    "说明": "在宽日期 LIS 导出中，按姓名+项目未匹配到对应记录（可能漏收/未登记外送/名称差异）",
+                }
+            )
+            continue
+        cands.sort(key=lambda x: x[0])
+        day_diff, li = cands[0]
+        used_lis.add(li)
+        lr = lis.loc[li]
+        matched_rows.append(
+            {
+                "姓名": name,
+                "送检日期": tr["日期"],
+                "条码号": tr["条码号"],
+                "机构项目": tr["单项名称"],
+                "标准物价": float(tr["标准物价"] or 0),
+                "结算金额": float(tr["结算金额"] or 0),
+                "医院核收日": lr["日期"],
+                "医院检验号": lr["检验号"],
+                "医院项目": lr["项目"],
+                "医院组合": lr["组合"],
+                "日差天数": day_diff if day_diff < 9999 else "",
+                "匹配结果": "已匹配",
+            }
+        )
+
+    df_miss = pd.DataFrame(missing_rows)
+    df_ok = pd.DataFrame(matched_rows)
+    miss_std = float(df_miss["标准物价"].sum()) if len(df_miss) else 0.0
+    miss_settle = float(df_miss["结算金额"].sum()) if len(df_miss) else 0.0
+    ok_std = float(df_ok["标准物价"].sum()) if len(df_ok) else 0.0
+    total_std = float(tp["标准物价"].sum())
+    total_settle = float(tp["结算金额"].sum())
+
+    # 按病人汇总少收
+    if len(df_miss):
+        by_pat = (
+            df_miss.groupby("姓名", as_index=False)
+            .agg(
+                少收项目数=("机构项目", "count"),
+                少收标准物价=("标准物价", "sum"),
+                少收结算金额=("结算金额", "sum"),
+                条码=("条码号", lambda s: "、".join(list(dict.fromkeys(x for x in s if x))[:6])),
+                项目=("机构项目", lambda s: "；".join(s.astype(str))),
+                送检日期=("送检日期", lambda s: "、".join(sorted({d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10] for d in s}))),
+            )
+            .sort_values("少收标准物价", ascending=False)
+        )
+    else:
+        by_pat = pd.DataFrame()
+
+    # 按项目汇总少收
+    if len(df_miss):
+        by_item = (
+            df_miss.groupby("机构项目", as_index=False)
+            .agg(次数=("姓名", "count"), 少收标准物价=("标准物价", "sum"), 少收结算金额=("结算金额", "sum"))
+            .sort_values("少收标准物价", ascending=False)
+        )
+    else:
+        by_item = pd.DataFrame()
+
+    return {
+        "matched": df_ok,
+        "missing": df_miss,
+        "by_patient": by_pat,
+        "by_item": by_item,
+        "stats": {
+            "机构总行数": len(tp),
+            "已匹配行数": len(df_ok),
+            "未匹配行数": len(df_miss),
+            "匹配率": round(100.0 * len(df_ok) / len(tp), 1) if len(tp) else 0,
+            "机构标准物价合计": total_std,
+            "机构结算金额合计": total_settle,
+            "已匹配标准物价": ok_std,
+            "少收标准物价": miss_std,
+            "少收结算金额": miss_settle,
+            "机构日期": f"{tp['日期'].min().date()} ~ {tp['日期'].max().date()}",
+            "医院日期": f"{lis['日期'].min().date()} ~ {lis['日期'].max().date()}",
+        },
+    }
+
+
+def write_shortfall_report(out_path: Path, tp: pd.DataFrame, lis: pd.DataFrame, src_label: str = "") -> Path:
+    """只输出：医院相对机构少收了什么 / 多少钱。"""
+    if Workbook is None:
+        raise SystemExit("需要 openpyxl：pip3 install openpyxl")
+
+    result = match_institution_baseline(tp, lis)
+    st = result["stats"]
+    df_miss = result["missing"]
+    df_ok = result["matched"]
+    by_pat = result["by_patient"]
+    by_item = result["by_item"]
+
+    thin = Border(
+        left=Side(style="thin", color="D0D7DE"),
+        right=Side(style="thin", color="D0D7DE"),
+        top=Side(style="thin", color="D0D7DE"),
+        bottom=Side(style="thin", color="D0D7DE"),
+    )
+    fill_title = PatternFill("solid", fgColor="B91C1C")
+    fill_ok_t = PatternFill("solid", fgColor="0F766E")
+    fill_head = PatternFill("solid", fgColor="FEE2E2")
+    fill_ok = PatternFill("solid", fgColor="DCFCE7")
+    fill_bad = PatternFill("solid", fgColor="FEE2E2")
+    fill_warn = PatternFill("solid", fgColor="FEF3C7")
+    fill_card = PatternFill("solid", fgColor="FEF2F2")
+    font_title = Font(name="Microsoft YaHei", size=16, bold=True, color="FFFFFF")
+    font_h = Font(name="Microsoft YaHei", size=11, bold=True, color="7F1D1D")
+    font_n = Font(name="Microsoft YaHei", size=10, color="1F2937")
+    font_big = Font(name="Microsoft YaHei", size=22, bold=True, color="B91C1C")
+    font_big_ok = Font(name="Microsoft YaHei", size=18, bold=True, color="0F766E")
+    font_muted = Font(name="Microsoft YaHei", size=9, color="6B7280")
+    font_white = Font(name="Microsoft YaHei", size=10, bold=True, color="FFFFFF")
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    money_fmt = "#,##0.00"
+
+    def set_widths(ws, widths):
+        for i, w in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    def fmt_date(v):
+        if hasattr(v, "strftime"):
+            return v.strftime("%Y-%m-%d")
+        s = str(v)
+        return s[:10] if s and s != "NaT" else ""
+
+    def write_rows(ws, start_row, headers, records, money_cols=(), date_cols=(), fill=None):
+        for i, h in enumerate(headers, 1):
+            cell = ws.cell(row=start_row, column=i, value=h)
+            cell.font = font_white
+            cell.fill = fill_title
+            cell.alignment = center
+            cell.border = thin
+        if not records:
+            ws.cell(row=start_row + 1, column=1, value="（无 · 全部在医院侧找到了）").font = Font(
+                name="Microsoft YaHei", size=12, bold=True, color="15803D"
+            )
+            return start_row + 1
+        for ri, row in enumerate(records, start_row + 1):
+            for ci, h in enumerate(headers, 1):
+                v = row.get(h, "")
+                if h in date_cols:
+                    v = fmt_date(v)
+                cell = ws.cell(row=ri, column=ci, value=v if v is not None else "")
+                cell.font = font_n
+                cell.border = thin
+                cell.fill = fill or fill_bad
+                cell.alignment = center if ci <= 5 else left
+                if h in money_cols and v != "" and v is not None:
+                    try:
+                        cell.value = float(v)
+                        cell.number_format = money_fmt
+                    except Exception:
+                        pass
+        ws.auto_filter.ref = f"A{start_row}:{get_column_letter(len(headers))}{start_row + len(records)}"
+        ws.freeze_panes = f"A{start_row + 1}"
+        return start_row + len(records)
+
+    wb = Workbook()
+
+    # ===== 1. 一眼看懂 =====
+    ws = wb.active
+    ws.title = "一眼看懂"
+    ws.sheet_view.showGridLines = False
+    set_widths(ws, [18, 16, 16, 16, 16, 16, 20, 14])
+
+    ws.merge_cells("A1:H1")
+    ws["A1"] = "外送少收分析 · 以机构账单为基准"
+    ws["A1"].font = font_title
+    ws["A1"].fill = fill_title
+    ws.row_dimensions[1].height = 36
+
+    ws.merge_cells("A2:H2")
+    ws["A2"] = (
+        f"{src_label}　　生成：{pd.Timestamp.now():%Y-%m-%d %H:%M}\n"
+        f"机构账单（基准）{st['机构日期']}　　医院 LIS（对照，宜更宽）{st['医院日期']}"
+    )
+    ws["A2"].font = font_muted
+    ws["A2"].alignment = left
+    ws.row_dimensions[2].height = 34
+
+    ws.merge_cells("A4:B4")
+    ws["A4"] = "机构标准物价合计"
+    ws.merge_cells("C4:D4")
+    ws["C4"] = "已在医院匹配到"
+    ws.merge_cells("E4:F4")
+    ws["E4"] = "医院少收（标准物价）"
+    ws.merge_cells("G4:H4")
+    ws["G4"] = "医院少收（结算金额）"
+    for addr in ("A4", "C4", "E4", "G4"):
+        ws[addr].font = font_h
+        ws[addr].fill = fill_card
+        ws[addr].alignment = center
+
+    ws.merge_cells("A5:B5")
+    ws["A5"] = st["机构标准物价合计"]
+    ws["A5"].number_format = money_fmt
+    ws["A5"].font = Font(name="Microsoft YaHei", size=18, bold=True, color="1F2937")
+    ws.merge_cells("C5:D5")
+    ws["C5"] = st["已匹配标准物价"]
+    ws["C5"].number_format = money_fmt
+    ws["C5"].font = font_big_ok
+    ws.merge_cells("E5:F5")
+    ws["E5"] = st["少收标准物价"]
+    ws["E5"].number_format = money_fmt
+    ws["E5"].font = font_big
+    ws.merge_cells("G5:H5")
+    ws["G5"] = st["少收结算金额"]
+    ws["G5"].number_format = money_fmt
+    ws["G5"].font = font_big
+    for r in (4, 5):
+        for c in range(1, 9):
+            cell = ws.cell(row=r, column=c)
+            cell.border = thin
+            cell.alignment = center
+            if r == 5:
+                cell.fill = fill_card
+    ws.row_dimensions[5].height = 44
+
+    ws.merge_cells("A6:H6")
+    ws["A6"] = (
+        "规则：机构表固定为基准；医院日期可更宽，不要求起止一致。"
+        "只统计「机构有、医院没有」→ 视为我院可能少收。"
+        "「医院有、机构没有」不统计（不由我院承担）。"
+        "金额优先看「标准物价」（收费价）；「结算金额」是机构折扣回款口径，供参考。"
+        "匹配键：姓名 + 项目名（模糊/别名），日期仅作远近排序，不卡死同一天。"
+    )
+    ws["A6"].font = font_muted
+    ws["A6"].alignment = left
+    ws.row_dimensions[6].height = 48
+
+    ws["A8"] = "匹配概况"
+    ws["A8"].font = Font(name="Microsoft YaHei", size=12, bold=True, color="B91C1C")
+    headers = ["机构总行数", "已匹配", "未匹配(少收明细)", "匹配率%", "少收涉及病人数", "少收涉及项目种数"]
+    vals = [
+        st["机构总行数"],
+        st["已匹配行数"],
+        st["未匹配行数"],
+        st["匹配率"],
+        len(by_pat) if len(by_pat) else 0,
+        len(by_item) if len(by_item) else 0,
+    ]
+    for i, h in enumerate(headers, 1):
+        cell = ws.cell(row=9, column=i, value=h)
+        cell.font = font_h
+        cell.fill = fill_head
+        cell.border = thin
+        cell.alignment = center
+    for i, v in enumerate(vals, 1):
+        cell = ws.cell(row=10, column=i, value=v)
+        cell.font = font_n
+        cell.border = thin
+        cell.alignment = center
+        if i == 2:
+            cell.fill = fill_ok
+        if i == 3 and v:
+            cell.fill = fill_bad
+
+    if st["少收标准物价"] <= 0.01:
+        conclusion = "机构账单项目在医院侧均能匹配到，未发现明显少收。"
+        cfill = fill_ok
+    elif st["匹配率"] >= 95:
+        conclusion = "大部分已匹配，少量未匹配请看「少收明细」。"
+        cfill = fill_warn
+    else:
+        conclusion = "存在未匹配项目，请按「少收明细 / 按病人汇总」核实是否漏收。"
+        cfill = fill_bad
+    ws.merge_cells("A12:H12")
+    ws["A12"] = "结论：" + conclusion
+    ws["A12"].font = Font(name="Microsoft YaHei", size=12, bold=True)
+    ws["A12"].fill = cfill
+    ws["A12"].alignment = left
+
+    tips = [
+        "1. 打开「少收明细」：机构有、医院没有的每一行（标准物价可加总=少收收费额）。",
+        "2. 「按病人汇总」「按项目汇总」：看哪些人、哪些项目贡献了少收。",
+        "3. 「已匹配清单」：已对上的，可抽查日差是否合理（培养/药敏跨很多天也正常）。",
+        "4. 若名称差太多导致误判未匹配，把别名补进脚本 ITEM_ALIASES 后再跑。",
+    ]
+    ws["A14"] = "怎么用"
+    ws["A14"].font = Font(name="Microsoft YaHei", size=12, bold=True, color="B91C1C")
+    for i, t in enumerate(tips):
+        r = 15 + i
+        ws.merge_cells(f"A{r}:H{r}")
+        ws[f"A{r}"] = t
+        ws[f"A{r}"].font = font_n
+
+    # ===== 2. 少收明细 =====
+    ws2 = wb.create_sheet("少收明细")
+    ws2.sheet_view.showGridLines = False
+    set_widths(ws2, [10, 12, 16, 28, 12, 12, 12, 40])
+    ws2.merge_cells("A1:H1")
+    ws2["A1"] = f"少收明细 · 机构有且医院未匹配（{st['未匹配行数']} 行）· 少收标准物价 {st['少收标准物价']:,.2f}"
+    ws2["A1"].font = font_title
+    ws2["A1"].fill = fill_title
+    ws2.row_dimensions[1].height = 32
+    ws2.merge_cells("A2:H2")
+    ws2["A2"] = "这是你要找的核心表：只含机构账单有、我院宽日期导出里对不上的项目。"
+    ws2["A2"].font = font_muted
+    miss_records = df_miss.to_dict("records") if len(df_miss) else []
+    write_rows(
+        ws2,
+        4,
+        ["姓名", "送检日期", "条码号", "机构项目", "标准物价", "结算金额", "匹配结果", "说明"],
+        miss_records,
+        money_cols=("标准物价", "结算金额"),
+        date_cols=("送检日期",),
+        fill=fill_bad,
+    )
+
+    # ===== 3. 按病人 =====
+    ws3 = wb.create_sheet("按病人汇总")
+    ws3.sheet_view.showGridLines = False
+    set_widths(ws3, [12, 12, 14, 14, 24, 40, 24])
+    ws3.merge_cells("A1:G1")
+    ws3["A1"] = "少收按病人汇总（按少收标准物价从高到低）"
+    ws3["A1"].font = font_title
+    ws3["A1"].fill = fill_title
+    pat_records = by_pat.to_dict("records") if len(by_pat) else []
+    # rename keys to Chinese headers already in by_pat
+    write_rows(
+        ws3,
+        3,
+        ["姓名", "少收项目数", "少收标准物价", "少收结算金额", "条码", "项目", "送检日期"],
+        pat_records,
+        money_cols=("少收标准物价", "少收结算金额"),
+        fill=fill_warn,
+    )
+
+    # ===== 4. 按项目 =====
+    ws4 = wb.create_sheet("按项目汇总")
+    ws4.sheet_view.showGridLines = False
+    set_widths(ws4, [36, 10, 14, 14])
+    ws4.merge_cells("A1:D1")
+    ws4["A1"] = "少收按机构项目汇总"
+    ws4["A1"].font = font_title
+    ws4["A1"].fill = fill_title
+    item_records = by_item.to_dict("records") if len(by_item) else []
+    write_rows(
+        ws4,
+        3,
+        ["机构项目", "次数", "少收标准物价", "少收结算金额"],
+        item_records,
+        money_cols=("少收标准物价", "少收结算金额"),
+        fill=fill_warn,
+    )
+
+    # ===== 5. 已匹配（抽查）=====
+    ws5 = wb.create_sheet("已匹配清单")
+    ws5.sheet_view.showGridLines = False
+    set_widths(ws5, [10, 12, 14, 24, 12, 12, 12, 14, 20, 20, 10])
+    ws5.merge_cells("A1:K1")
+    ws5["A1"] = f"已匹配清单（{st['已匹配行数']} 行，抽查用 · 医院有、机构没有的不在此表）"
+    ws5["A1"].font = Font(name="Microsoft YaHei", size=14, bold=True, color="FFFFFF")
+    ws5["A1"].fill = fill_ok_t
+    ok_records = df_ok.to_dict("records") if len(df_ok) else []
+    write_rows(
+        ws5,
+        3,
+        [
+            "姓名",
+            "送检日期",
+            "条码号",
+            "机构项目",
+            "标准物价",
+            "结算金额",
+            "医院核收日",
+            "医院检验号",
+            "医院项目",
+            "医院组合",
+            "日差天数",
+        ],
+        ok_records,
+        money_cols=("标准物价", "结算金额"),
+        date_cols=("送检日期", "医院核收日"),
+        fill=fill_ok,
+    )
+    # retitle header fill green for this sheet
+    for c in range(1, 12):
+        cell = ws5.cell(row=3, column=c)
+        cell.fill = fill_ok_t
+
+    out_path = Path(out_path)
+    wb.save(out_path)
+    return out_path, st
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="外送机构汇总 vs LIS 结果导出 对账")
+    ap = argparse.ArgumentParser(description="外送少收分析：以机构账单为基准")
     ap.add_argument("--机构", dest="tp", nargs="*", default=None, help="外送机构汇总 xlsx（可多个）")
-    ap.add_argument("--lis", dest="lis", nargs="*", default=None, help="LIS 病人结果导出 csv（可多个）")
-    ap.add_argument("-o", "--输出", dest="out", help="对账结果 xlsx 路径")
-    ap.add_argument("--日期容差", dest="slack", type=int, default=1, help="姓名匹配时允许的日差（送检日与核收日偏差），默认 1")
-    ap.add_argument("--详细", dest="verbose", action="store_true", help="额外输出原始多工作表（调试用）")
+    ap.add_argument("--lis", dest="lis", nargs="*", default=None, help="LIS 病人结果导出 csv（日期宜更宽）")
+    ap.add_argument("-o", "--输出", dest="out", help="结果 xlsx 路径")
+    ap.add_argument("--日期容差", dest="slack", type=int, default=1, help="仅 --双向 模式使用")
+    ap.add_argument("--双向", dest="bidirectional", action="store_true", help="旧版双向对账（含医院多出的）")
+    ap.add_argument("--详细", dest="verbose", action="store_true", help="双向模式下额外输出底表")
     args = ap.parse_args(argv)
 
     tp_paths = [Path(p).expanduser() for p in (args.tp or [])]
@@ -1317,7 +1742,6 @@ def main(argv=None):
         out_path = out_path or g_out
 
     if not tp_paths or not lis_paths:
-        # 尝试 Downloads 默认文件名
         dl = Path.home() / "Downloads"
         cand_tp = list(dl.glob("*外送*汇总*.xlsx")) + list(dl.glob("外送机构汇总.xlsx"))
         cand_lis = list(dl.glob("*lis*导出*.csv")) + list(dl.glob("*结果*.csv")) + list(dl.glob("lis*.csv"))
@@ -1329,40 +1753,33 @@ def main(argv=None):
             print("自动选用 LIS 导出:", lis_paths[0])
 
     if not tp_paths or not lis_paths:
-        print(
-            "请同时选择机构 xlsx 与 LIS csv。\n"
-            "弹窗：⌘ 多选两类文件；命令行：--机构 a.xlsx --lis b.csv",
-            file=sys.stderr,
-        )
+        print("请同时选择机构 xlsx 与 LIS csv。", file=sys.stderr)
         return 2
 
     if not out_path:
-        out_path = tp_paths[0].parent / f"外送对账_简洁分析_{pd.Timestamp.now():%Y%m%d_%H%M%S}.xlsx"
+        out_path = tp_paths[0].parent / f"外送少收分析_{pd.Timestamp.now():%Y%m%d_%H%M%S}.xlsx"
     else:
         out_path = Path(out_path).expanduser()
 
     tp = _load_tp_many(tp_paths)
     lis = _load_lis_many(lis_paths)
-    print(f"机构 {len(tp)} 行（{len(tp_paths)} 个文件） / LIS {len(lis)} 行（{len(lis_paths)} 个文件），开始比对…")
-    raw_sheets = compare(tp, lis, day_slack=args.slack)
-
+    print(f"机构 {len(tp)} 行 / 医院 {len(lis)} 行")
+    print(f"机构日期 {tp['日期'].min().date()}~{tp['日期'].max().date()}  医院日期 {lis['日期'].min().date()}~{lis['日期'].max().date()}")
     src_label = "机构：" + "、".join(p.name for p in tp_paths) + "　LIS：" + "、".join(p.name for p in lis_paths)
-    write_clean_report(out_path, tp, lis, raw_sheets, src_label=src_label, day_slack=args.slack)
-    print("已生成简洁分析表:", out_path)
 
-    if args.verbose:
-        detail_path = out_path.with_name(out_path.stem + "_详细底表.xlsx")
-        with pd.ExcelWriter(detail_path, engine="openpyxl") as w:
-            for name, df in raw_sheets.items():
-                if df is None:
-                    df = pd.DataFrame()
-                df.to_excel(w, sheet_name=name[:31], index=False)
-        print("已额外生成详细底表:", detail_path)
+    if args.bidirectional:
+        raw_sheets = compare(tp, lis, day_slack=args.slack)
+        write_clean_report(out_path, tp, lis, raw_sheets, src_label=src_label, day_slack=args.slack)
+        print("已生成双向分析表:", out_path)
+        return 0
 
-    # 控制台一句话结论
-    tp_std = float(tp["标准物价"].sum())
-    lis_fee = float(lis.drop_duplicates("检验号")["报告费用"].sum())
-    print(f"机构标准物价 {tp_std:,.2f}  |  医院报告费用 {lis_fee:,.2f}  |  差额 {tp_std - lis_fee:,.2f}")
+    _, st = write_shortfall_report(out_path, tp, lis, src_label=src_label)
+    print("已生成少收分析表:", out_path)
+    print(
+        f"机构标准物价 {st['机构标准物价合计']:,.2f} | 已匹配 {st['已匹配标准物价']:,.2f} | "
+        f"少收(标准物价) {st['少收标准物价']:,.2f} | 少收(结算) {st['少收结算金额']:,.2f} | "
+        f"匹配 {st['已匹配行数']}/{st['机构总行数']} ({st['匹配率']}%)"
+    )
     return 0
 
 
