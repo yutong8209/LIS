@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.60.2
+// @version      7.60.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -549,10 +549,12 @@
 #lis-pr-pagination .pr-pg-jump input{width:52px;height:26px;border:1px solid #cbd5df;border-radius:4px;padding:0 6px;font-size:12px;text-align:center}
 #lis-pr-pagination .pr-pg-total{margin-left:auto;color:#6b7785;white-space:nowrap}
 
-/* --- Toast --- */
-.lis-t{position:fixed;top:50px;right:20px;z-index:100003;padding:10px 18px;border-radius:6px;font-size:13px;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.2);animation:lis-si .3s ease;pointer-events:none}
-.lis-t.e{background:#e74c3c}.lis-t.w{background:#f39c12}.lis-t.s{background:#2ecc71}
+/* --- Toast（须高于工作台 100000 / 详情面板 100005，否则详情打开时提示看不见）--- */
+.lis-t{position:fixed;top:50px;right:20px;z-index:100050;padding:10px 18px;border-radius:6px;font-size:13px;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.2);animation:lis-si .3s ease;pointer-events:none}
+.lis-t.e{background:#e74c3c}.lis-t.w{background:#f39c12}.lis-t.s{background:#2ecc71}.lis-t.i{background:#3498db}
 @keyframes lis-si{from{transform:translateX(100%);opacity:0}}
+#lis-detail-footer .btn-audit:disabled{opacity:.7;cursor:wait}
+#lis-detail-footer .btn-audit.busy{background:#16a085}
 
 /* --- 空状态 --- */
 .ws-empty{text-align:center;padding:60px;color:#95a5a6;font-size:15px}
@@ -7863,7 +7865,7 @@ window.addEventListener('keydown',function(e){
             </div>
             <div id="lis-detail-footer">
                 <span style="font-size:11px;color:#999;margin-right:auto">↑↓ 切换 | Enter 审核 | Esc 关闭</span>
-                <button class="btn-audit" id="lis-detail-audit">✅ 审核</button>
+                <button class="btn-audit" id="lis-detail-audit" title="与 F4 / Enter 相同：审核当前详情标本">✅ 审核 · F4</button>
                 <button class="btn-close" id="lis-detail-close-btn">关闭</button>
             </div>
         `;
@@ -7875,16 +7877,38 @@ window.addEventListener('keydown',function(e){
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:35vw;height:100vh;z-index:100004;display:none;pointer-events:none';
         document.body.appendChild(overlay);
 
-        // 事件绑定
+        // 事件绑定（审核钮与 F4 共用 _auditFromDetailPanel，非互斥）
         document.getElementById('lis-detail-close').addEventListener('click', closeDetailPanel);
         document.getElementById('lis-detail-close-btn').addEventListener('click', closeDetailPanel);
-        document.getElementById('lis-detail-audit').addEventListener('click', () => {
-            if (currentDetailSpecimen) {
-                _auditFromDetailPanel();
-            }
-        });
+        _bindDetailAuditButton();
 
         return detailPanel;
+    }
+
+    // 详情「审核」按钮：每次打开/切换时重绑，避免监听丢失；与 F4 同一入口
+    function _bindDetailAuditButton() {
+        const btn = document.getElementById('lis-detail-audit');
+        if (!btn) return;
+        btn.onclick = (e) => {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            dbg('详情面板审核按钮点击, specimen=', !!(currentDetailSpecimen && currentDetailSpecimen.PatName), currentDetailSpecimen && currentDetailSpecimen.PatName);
+            if (!currentDetailSpecimen) {
+                showToast('当前没有打开的标本详情', 'warning');
+                return;
+            }
+            void _auditFromDetailPanel();
+        };
+    }
+
+    function _setDetailAuditBusy(busy, text) {
+        const btn = document.getElementById('lis-detail-audit');
+        if (!btn) return;
+        btn.disabled = !!busy;
+        btn.classList.toggle('busy', !!busy);
+        btn.textContent = text || (busy ? '⏳ 审核中…' : '✅ 审核 · F4');
     }
 
     function openDetailPanel(specimen, source, sourceIndex) {
@@ -8106,6 +8130,8 @@ window.addEventListener('keydown',function(e){
             nativeBtn.addEventListener('click', () => { navigateToSpecimen(specimen); closeDetailPanel(); });
             footer.insertBefore(nativeBtn, footer.firstChild);
         }
+        _bindDetailAuditButton();
+        _setDetailAuditBusy(false);
 
         // 加载详情（LRU 缓存命中时极快）
         loadDetailResults(specimen);
@@ -8117,8 +8143,8 @@ window.addEventListener('keydown',function(e){
             if (!detailPanel || !detailPanel.classList.contains('show')) return;
             if (e.key === 'Escape') {
                 e.preventDefault(); e.stopImmediatePropagation(); closeDetailPanel();
-            } else if (e.key === 'Enter') {
-                e.preventDefault(); e.stopImmediatePropagation(); _auditFromDetailPanel();
+            } else if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault(); e.stopImmediatePropagation(); void _auditFromDetailPanel();
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault(); e.stopImmediatePropagation();
                 const data = filteredData();
@@ -8131,14 +8157,22 @@ window.addEventListener('keydown',function(e){
             }
         };
         document.addEventListener('keydown', _detailKeyHandler, true);
+        _attachF4BridgeToIframe();
     }
 
     let _detailAuditInProgress = false;
 
     // 从详情面板审核当前标本并自动跳转下一个
+    // 入口：详情「审核」按钮 / F4 / Enter —— 三者同一函数，可同时保留
     async function _auditFromDetailPanel() {
-        if (!currentDetailSpecimen || _detailAuditInProgress) {
-            dbg('详情审核跳过: specimen=', !!currentDetailSpecimen, 'inProgress=', _detailAuditInProgress);
+        if (!currentDetailSpecimen) {
+            dbg('详情审核跳过: 无当前标本');
+            showToast('当前没有打开的标本详情', 'warning');
+            return;
+        }
+        if (_detailAuditInProgress) {
+            dbg('详情审核跳过: 进行中');
+            showToast('正在审核当前详情，请稍候', 'info');
             return;
         }
         if (_auditInProgress) {
@@ -8150,6 +8184,7 @@ window.addEventListener('keydown',function(e){
             return;
         }
         _detailAuditInProgress = true;
+        _setDetailAuditBusy(true, '⏳ 审核中…');
         // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
         const _detailSafetyTimer = setTimeout(() => {
             if (_detailAuditInProgress) {
@@ -8157,7 +8192,8 @@ window.addEventListener('keydown',function(e){
                 showToast('详情审核操作耗时较长，请耐心等待', 'warning');
             }
         }, 60000);
-        dbg('详情审核开始:', currentDetailSpecimen.PatName);
+        dbg('详情审核开始:', currentDetailSpecimen.PatName, 'source=', detailSource);
+        showToast(`正在审核: ${currentDetailSpecimen.PatName || ''}…`, 'info');
         const resumeWSRefresh = !!wsTimer;
         stopWSRefresh();
 
@@ -8180,10 +8216,12 @@ window.addEventListener('keydown',function(e){
             }
 
             const reportDR = specimen.ReportDR;
+            // 详情里人工点审：异常视图允许异常/待定；正常视图要求 NORMAL
+            // 危急值一律拦截（与按钮/F4 一致）
             const classCtx = detailSource === 'abnormal' ? 'abnormal' : 'normal';
             const classCheck = validateAuditClassification(reportDR, classCtx);
             if (!classCheck.ok) {
-                showToast(classCheck.msg, classCtx === 'abnormal' ? 'warning' : 'error');
+                showToast(classCheck.msg || '当前标本不可审核', classCtx === 'abnormal' ? 'warning' : 'error');
                 return;
             }
             if (detailPanel && detailPanel.dataset.rdr === String(reportDR) && detailPanel.dataset.hasCritical === '1') {
@@ -8218,6 +8256,7 @@ window.addEventListener('keydown',function(e){
                 if (me && me.selectedGrid && isReportDetailLoaded(iframeWin, reportDR)) needPrep = false;
             } catch(e) {}
             if (needPrep) {
+                _setDetailAuditBusy(true, '⏳ 定位标本…');
                 const prep = await ensureSpecimenReadyForAudit(iframeWin, specimen, { lastMdr: _abnormalLastMdr });
                 iframeWin = prep.iframeWin || iframeWin;
                 if (prep.lastMdr) _abnormalLastMdr = prep.lastMdr;
@@ -8228,6 +8267,7 @@ window.addEventListener('keydown',function(e){
                 }
             }
 
+            _setDetailAuditBusy(true, '⏳ 提交审核…');
             let auditResult = await executeNativeAudit(iframeWin, specimen, { keepWS: true, fast: true });
             if (auditResult === 'incomplete') {
                 showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
@@ -8279,6 +8319,7 @@ window.addEventListener('keydown',function(e){
         } finally {
             clearTimeout(_detailSafetyTimer);
             _detailAuditInProgress = false;
+            _setDetailAuditBusy(false);
             if (resumeWSRefresh && isWSVisible()) startWSRefresh();
             dbg('详情审核结束, inProgress 重置为 false');
         }
