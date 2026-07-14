@@ -7984,8 +7984,10 @@ window.addEventListener('keydown',function(e){
             });
             footer.insertBefore(nativeBtn, footer.firstChild);
         }
+        _bindDetailAuditButton();
+        _setDetailAuditBusy(false);
 
-        // 注册详情面板键盘监听
+        // 注册详情面板键盘监听（Enter 与审核钮 / F4 同一路径）
         _removeDetailKeyHandler();
         _detailKeyHandler = (e) => {
             if (isPatientResultPanelEvent(e)) return;
@@ -7994,11 +7996,11 @@ window.addEventListener('keydown',function(e){
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 closeDetailPanel();
-            } else if (e.key === 'Enter') {
+            } else if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 dbg('Enter 键捕获 (详情面板), inProgress=', _detailAuditInProgress);
-                _auditFromDetailPanel();
+                void _auditFromDetailPanel();
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault();
                 e.stopImmediatePropagation();
