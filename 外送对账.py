@@ -335,31 +335,6 @@ def _patient_day_agg_lis(lis: pd.DataFrame) -> pd.DataFrame:
     return g1.merge(g2, on=["姓名", "日期"], how="outer").merge(items, on=["姓名", "日期"], how="outer")
 
 
-def _items_match(tp_name: str, lis_item: str, lis_set: str) -> bool:
-    """机构项目名 vs 医院项目/组合：别名集合相交，或归一化后互相包含。"""
-    a = _item_keys(tp_name)
-    if not a:
-        return False
-    b = _item_keys(lis_item) | _item_keys(lis_set)
-    if a & b:
-        return True
-    # 归一化互相包含：维生素b12 ⊂ 血清维生素b12；粪便培养 ⊂ 粪便培养沙门…
-    an = _norm_name(tp_name)
-    candidates = {_norm_name(lis_item), _norm_name(lis_set)} | b
-    candidates.discard("")
-    if not an:
-        return False
-    for bn in candidates:
-        if not bn:
-            continue
-        if len(an) >= 3 and len(bn) >= 3 and (an in bn or bn in an):
-            return True
-        # 微量元素单字（碘/硒等）
-        if an in ("碘", "硒", "铜", "锌", "铁", "钙", "镁") and an in bn:
-            return True
-    return False
-
-
 def compare(tp: pd.DataFrame, lis: pd.DataFrame, day_slack: int = 0) -> dict[str, pd.DataFrame]:
     tp_day = _patient_day_agg_tp(tp)
     lis_day = _patient_day_agg_lis(lis)

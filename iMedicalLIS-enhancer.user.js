@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.60.3
+// @version      7.61.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -56,7 +56,7 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.59.5';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.61.0';
     const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
     // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
     const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
@@ -783,11 +783,19 @@
 
     // ==================== Toast ====================
     function toast(msg, type='s') {
+        // 最多保留 4 条，避免连点 F4 时右上角堆成一片
+        const prev = document.querySelectorAll('.lis-t');
+        if (prev.length >= 4) {
+            for (let i = 0; i <= prev.length - 4; i++) {
+                try { prev[i].remove(); } catch (e) {}
+            }
+        }
         const el = document.createElement('div');
         el.className = 'lis-t ' + type;
         el.textContent = msg;
         document.body.appendChild(el);
-        setTimeout(() => el.remove(), 3000);
+        const ttl = (type === 'e' || type === 'error') ? 5200 : 3000;
+        setTimeout(() => { try { el.remove(); } catch (e) {} }, ttl);
     }
 
     // ============================================================
@@ -2048,8 +2056,11 @@
         return Array.isArray(data) ? data : [];
     }
 
+    let prLastWorkListHadFailures = false; // 最近一次工作列表查询是否有工作组/仪器失败
+
     /* 并行加载所有工作组的标本列表 */
     async function prLoadRows(filters, signal) {
+        prLastWorkListHadFailures = false;
         const cacheKey = prWorkListCacheKey(filters);
         const cachedRows = prWorkListCacheGet(cacheKey);
         if (cachedRows) {
@@ -2143,6 +2154,7 @@
 
         const wgResults = await Promise.all(wgPromises);
         const rows = wgResults.flat();
+        prLastWorkListHadFailures = !!requestFailed;
         dbg('prLoadRows 完成:', '总标本数=' + rows.length, '工作组数=' + wgTotal, 'requestFailed=' + requestFailed);
         // 只在有结果且无失败时缓存，避免缓存空结果
         if (!(signal && signal.aborted) && !requestFailed && rows.length > 0) prWorkListCacheSet(cacheKey, rows);
@@ -2189,9 +2201,11 @@
         const onlyExportWG = (filters.wgs || []).length > 0 && (filters.wgs || []).every(prIsExportOnlyWG);
         const onlyExportMachine = (filters.machines || []).length > 0 && (filters.machines || []).every(v => String(v).split('|')[0] === '5');
         if (onlyExportWG || onlyExportMachine) return true;
-        return !!(filters.doctor || filters.diagnosis || filters.ward || !Number.isNaN(filters.ageMin) ||
-            !Number.isNaN(filters.ageMax) || filters.item || filters.resultText || filters.judge ||
-            filters.abnormal || filters.resultOp || !Number.isNaN(filters.resultMin) || !Number.isNaN(filters.resultMax));
+        // 病人类型/科室等工作列表常缺字段，必须读明细才能筛
+        return !!(filters.patientType || filters.dept || filters.doctor || filters.diagnosis || filters.ward ||
+            !Number.isNaN(filters.ageMin) || !Number.isNaN(filters.ageMax) || filters.item || filters.resultText ||
+            filters.judge || filters.abnormal || filters.resultOp || !Number.isNaN(filters.resultMin) ||
+            !Number.isNaN(filters.resultMax));
     }
 
     function prTextMatch(value, q) {
@@ -2423,7 +2437,7 @@
                 return list;
             } catch (e) {
                 if (e && e.name === 'AbortError') throw e;
-                _prTestSetFeeCache.set(key, []);
+                // 失败不写入空缓存，避免瞬时故障后整会话费用全空
                 return [];
             } finally {
                 _prTestSetFeeInflight.delete(key);
@@ -2898,10 +2912,17 @@
             prSetStatus((filters.wgs || []).length ? '正在查询选中工作组标本列表...' : '正在并行查询所有工作组...', 'info');
             const allRows = await prLoadRows(filters, signal);
             if (signal.aborted || querySeq !== prQuerySeq) return;
+            if (prLastWorkListHadFailures) {
+                prSetStatus(`部分工作组/仪器查询失败，结果可能不完整（已查到 ${allRows.length} 条）。当前生效：${activeSummary}`, 'error');
+                showToast('部分工作组查询失败，结果可能不全', 'warning');
+            }
             const rows = prFilterRows(allRows, filters);
             if (!rows.length) {
                 if (querySeq !== prQuerySeq) return;
-                prSetStatus(`未找到符合条件的标本（共查询 ${allRows.length} 条记录）。当前生效：${activeSummary}`, 'info');
+                prSetStatus(
+                    `未找到符合条件的标本（共查询 ${allRows.length} 条记录）${prLastWorkListHadFailures ? '；且有查询失败' : ''}。当前生效：${activeSummary}`,
+                    prLastWorkListHadFailures ? 'error' : 'info'
+                );
                 return;
             }
             const mustReadDetail = prNeedsDetailEvenWithoutResult(filters);
@@ -2956,7 +2977,11 @@
             const cacheHits = _prDetailCache.size;
             const zeroHint = prData.length ? '' : ` 当前生效：${activeSummary}`;
             const failHint = detailFailures ? `，${detailFailures} 个标本明细读取失败，请重查后再作为完整结果导出` : '';
-            prSetStatus(`完成：${rows.length} 个标本，${prData.length} 条结果${skippedNoResult ? '，跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}${failHint}。明细缓存 ${cacheHits} 个标本。${zeroHint}`, detailFailures ? 'error' : (prData.length ? 'ok' : 'info'));
+            const wlFailHint = prLastWorkListHadFailures ? '；部分工作组列表查询曾失败' : '';
+            prSetStatus(`完成：${rows.length} 个标本，${prData.length} 条结果${skippedNoResult ? '，跳过 ' + skippedNoResult + ' 个暂无结果标本' : ''}${failHint}${wlFailHint}。明细缓存 ${cacheHits} 个标本。${zeroHint}`, (detailFailures || prLastWorkListHadFailures) ? 'error' : (prData.length ? 'ok' : 'info'));
+            if (detailFailures || prLastWorkListHadFailures) {
+                showToast(detailFailures ? `有 ${detailFailures} 个标本明细失败，导出可能不全` : '部分工作组列表查询失败', 'warning');
+            }
         } catch(e) {
             if (querySeq !== prQuerySeq) return;
             if (e.name === 'AbortError') { prSetStatus('查询已取消。', 'info'); return; }
@@ -4758,6 +4783,7 @@
         } finally {
             qeExporting = false;
             qeAbortFlag = false;
+            try { qeHideProgress(); } catch (e) {}
             if (exportBtn) exportBtn.disabled = false;
             if (cancelBtn) cancelBtn.style.display = 'none';
             if (detectBtn) detectBtn.disabled = false;
@@ -4846,6 +4872,7 @@
     let _classifyVersion = 0; // 分类结果版本，驱动过滤缓存失效
     let _wsLoadSeq = 0; // 工作台加载序号，防止旧请求覆盖新刷新
     let _classifyRunSeq = 0; // 分类运行序号，防止旧分类任务影响新刷新
+    let _classifyPendingRerun = false; // 分类进行中又有新数据时，结束后再跑一轮
     let _lastWSNonEmptyAt = 0; // 最近一次成功加载到标本的时间，用于强制刷新兜底
     let _normalKeyHandler = null; // 普通视图键盘监听
     let _abnormalFocusDR = '';
@@ -5167,6 +5194,8 @@
         if (force) {
             wsLoading = false;
             wsClassifying = false;
+            _classifyPendingRerun = false;
+            _classifyRunSeq++; // 作废进行中的分类写回，避免强制刷新后被旧结果污染
             wsClassifiedCache = {};
             _classifyVersion++;
             wsChecked.clear();
@@ -5262,6 +5291,7 @@
                 if (seq !== _wsLoadSeq) return;
                 if (!isWSVisible()) return;
                 applyResults([priorityResult, ...otherResults], false);
+                // 阶段1 分类可能仍在跑：classifyAllSpecimens 会排队重跑，覆盖其余工作组
                 classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
             }
         } else {
@@ -5997,6 +6027,10 @@
                 }
                 return false;
             }
+            // 分类未完成时只含已识别 NORMAL，避免用户以为是「全部正常」
+            if (wsClassifying) {
+                showToast(`分类仍在进行，本次仅批审已识别的 ${normalData.length} 个正常标本`, 'warning');
+            }
             dbg('一键批审:', normalData.length, '个标本');
             confirmAndBatchAudit(normalData);
             return true;
@@ -6272,13 +6306,15 @@ window.addEventListener('keydown',function(e){
             // 批审确认框：任意分类下 F4/Enter 均可确认
             if (tryConfirmBatchDialogByHotkey(e)) return;
             if (shouldIgnoreAbnormalKeyEvent(e)) return;
-            if (e.key !== 'F4') return;
-            // 详情面板 F4：任意分类（正常标本详情也可 F4 审）
+            // 详情面板打开时：F4 / Enter 均审当前详情（焦点常在原生 iframe，Enter 必须靠桥捕获）
             if (isDetailPanelVisible() && currentDetailSpecimen) {
-                e.preventDefault(); e.stopImmediatePropagation();
-                triggerF4Audit();
+                if (e.key === 'F4' || (e.key === 'Enter' && !e.shiftKey)) {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                    triggerF4Audit();
+                }
                 return;
             }
+            if (e.key !== 'F4') return;
             // 正常可审列表：F4 打开一键批审确认（再按 F4 确认）
             if (isWSVisible() && wsCategory === 'normal') {
                 e.preventDefault(); e.stopImmediatePropagation();
@@ -6449,11 +6485,12 @@ window.addEventListener('keydown',function(e){
         }
 
         // 安全网：异常视图下确保键盘 handler 存在
-        if (wsCategory === 'abnormal' && !_abnormalKeyHandler) {
-            _rebindAbnormalKeyHandler();
+        // 详情面板打开时不要重绑列表 handler，避免与详情 F4/Enter 双重触发
+        if (wsCategory === 'abnormal' && !isDetailPanelVisible()) {
+            if (!_abnormalKeyHandler) _rebindAbnormalKeyHandler();
         }
-        // 正常/全部/不完整视图：Escape 关闭工作台
-        if (wsCategory !== 'abnormal') {
+        // 正常/全部/不完整视图：Escape 关闭工作台（详情打开时 Esc 由详情 handler 负责）
+        if (wsCategory !== 'abnormal' && !isDetailPanelVisible()) {
             _normalKeyHandler = (e) => {
                 if (isPatientResultPanelEvent(e)) return;
                 if (e.key === 'Escape') { e.preventDefault(); closeWS(); }
@@ -8002,6 +8039,7 @@ window.addEventListener('keydown',function(e){
                 dbg('Enter 键捕获 (详情面板), inProgress=', _detailAuditInProgress);
                 void _auditFromDetailPanel();
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                if (_detailAuditInProgress) return; // 审核中禁止切换标本
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 // 方向键切换：原地更新内容，不关闭面板
@@ -8096,9 +8134,18 @@ window.addEventListener('keydown',function(e){
     // 原地切换详情面板内容（不关闭面板，避免闪烁）
     function _switchDetailInPlace(specimen, source, sourceIndex) {
         if (!detailPanel || !specimen) return;
+        if (_detailAuditInProgress) {
+            dbg('审核进行中，忽略详情切换');
+            return;
+        }
         currentDetailSpecimen = specimen;
         detailSource = source || null;
         detailSourceIndex = (sourceIndex !== undefined) ? sourceIndex : -1;
+        // 切换时清危急标记，避免沿用上一条 dataset 误拦/误放
+        try {
+            detailPanel.dataset.rdr = String(specimen.ReportDR || '');
+            detailPanel.dataset.hasCritical = '';
+        } catch (e) {}
 
         // 更新标题
         const titleEl = document.getElementById('lis-detail-title');
@@ -8148,6 +8195,7 @@ window.addEventListener('keydown',function(e){
             } else if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault(); e.stopImmediatePropagation(); void _auditFromDetailPanel();
             } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                if (_detailAuditInProgress) return;
                 e.preventDefault(); e.stopImmediatePropagation();
                 const data = filteredData();
                 if (data.length === 0) return;
@@ -11733,7 +11781,11 @@ function fillNativeLoginForm(creds, lastWG) {
 
     // --- 后台分类所有未审核的完整标本 ---
     async function classifyAllSpecimens(loadSeq = _wsLoadSeq) {
-        if (wsClassifying) return;
+        // 正在分类时：记下需要重跑（阶段2追加其它工作组数据后必须再分类）
+        if (wsClassifying) {
+            _classifyPendingRerun = true;
+            return;
+        }
         wsClassifying = true;
         const runSeq = ++_classifyRunSeq;
         try {
@@ -11776,9 +11828,11 @@ function fillNativeLoginForm(creds, lastWG) {
             // 批量分类（每批 8 个）
             for (let i = 0; i < toClassify.length; i += 8) {
                 if (loadSeq !== _wsLoadSeq) return;
+                if (runSeq !== _classifyRunSeq) return; // 强制刷新已作废本轮
                 const batch = toClassify.slice(i, i + 8);
                 const results = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
                 if (loadSeq !== _wsLoadSeq) return;
+                if (runSeq !== _classifyRunSeq) return;
                 results.forEach(r => {
                     if (r && r.reportDR) {
                         r._accessTs = Date.now();
@@ -11803,6 +11857,7 @@ function fillNativeLoginForm(creds, lastWG) {
 
             dbg('分类完成');
             if (loadSeq !== _wsLoadSeq) return;
+            if (runSeq !== _classifyRunSeq) return;
             calcMachineCounts();
             renderWSTabs();
             renderWSCategoryBar();
@@ -11811,6 +11866,11 @@ function fillNativeLoginForm(creds, lastWG) {
             dbg('分类异常:', e);
         } finally {
             if (runSeq === _classifyRunSeq) wsClassifying = false;
+            // 分类期间又追加了数据（其它工作组）：空闲后立刻再跑一轮
+            if (_classifyPendingRerun && runSeq === _classifyRunSeq && loadSeq === _wsLoadSeq) {
+                _classifyPendingRerun = false;
+                classifyAllSpecimens(loadSeq).catch(e => dbg('分类重跑异常:', e));
+            }
         }
     }
 
