@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.61.0
+// @version      7.61.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -56,7 +56,7 @@
     const REFRESH = 30000;
     const K = { au:'LIS_AuInfo_Persist', ent:'LIS_EntryInfo_Persist', pwd:'LIS_AuthPwd_Persist', tgt:'LIS_NavigateTarget', caPwd:'LIS_CAPwd_Persist', caAuth:'LIS_CAAuth_Persist', auditQueue:'LIS_AuditQueue_Persist', auditQueueLock:'LIS_AuditQueueLock', wsState:'LIS_WSState_Persist' };
     const CLASSIFY_STALE_MS = 30 * 60 * 1000;
-    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.61.0';
+    const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.61.1';
     const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
     // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
     const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
@@ -8132,9 +8132,10 @@ window.addEventListener('keydown',function(e){
     }
 
     // 原地切换详情面板内容（不关闭面板，避免闪烁）
-    function _switchDetailInPlace(specimen, source, sourceIndex) {
+    // options.force：审核成功后切下一条时绕过「审核中」锁
+    function _switchDetailInPlace(specimen, source, sourceIndex, options) {
         if (!detailPanel || !specimen) return;
-        if (_detailAuditInProgress) {
+        if (_detailAuditInProgress && !(options && options.force)) {
             dbg('审核进行中，忽略详情切换');
             return;
         }
@@ -8340,6 +8341,7 @@ window.addEventListener('keydown',function(e){
             calcMachineCounts();
 
             // 自动切换到下一个标本（原地更新，不关闭面板）
+            // 须 force：此时 _detailAuditInProgress 仍为 true，否则会被「审中禁切换」误拦
             if (nextReportDR) {
                 const newData = filteredData();
                 const nextSpecimen = newData.find(r => r.ReportDR === nextReportDR);
@@ -8351,7 +8353,7 @@ window.addEventListener('keydown',function(e){
                         renderWSCategoryBar();
                         renderWSTable();
                     });
-                    _switchDetailInPlace(nextSpecimen, source, nextIdx);
+                    _switchDetailInPlace(nextSpecimen, source, nextIdx, { force: true });
                 } else {
                     closeDetailPanel();
                     if (source === 'abnormal') wsCategory = 'normal';
