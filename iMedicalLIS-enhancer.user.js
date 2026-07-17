@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.61.1
+// @version      7.61.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -497,6 +497,10 @@
 .ab-card-item.abnormal{background:#fce4ec;color:#e91e63}
 .ab-card-item.infection-warning{background:#fff3e0;color:#e65100;font-weight:700}
 .ab-card-item.uncertain{background:#f5f5f5;color:#757575}
+/* x8 传染病：梅毒/丙肝/HIV 阳性专用高亮（区别于乙肝两对半，更醒目防漏发） */
+.ab-card-item.inf-tp,.result-table .inf-tp{background:#f3e0ff;color:#6a1b9a;border:1px solid #ab47bc;font-weight:800;text-shadow:0 1px 0 rgba(255,255,255,.5)}
+.ab-card-item.inf-hcv,.result-table .inf-hcv{background:#e0f7fa;color:#006064;border:1px solid #26a69a;font-weight:800;text-shadow:0 1px 0 rgba(255,255,255,.5)}
+.ab-card-item.inf-hiv,.result-table .inf-hiv{background:#ffebee;color:#b71c1c;border:1px solid #e53935;font-weight:800;text-shadow:0 1px 0 rgba(255,255,255,.5)}
 .ab-card-hint{font-size:11px;color:#bbb;white-space:nowrap;margin-left:auto}
 .ws-abnormal-machine{position:sticky;top:0;z-index:2;background:#f1f5f9;border:1px solid #d7dee8;border-radius:5px;padding:4px 10px;margin:8px 0 2px;font-size:11px;font-weight:600;color:#475569;letter-spacing:.02em}
 .ws-abnormal-hint{background:#fff;border:1px solid #d7dee8;border-left:4px solid #2f6fb3;border-radius:6px;padding:7px 10px;margin:10px 0 0;font-size:12px;color:#334155;display:flex;align-items:center;gap:6px}
@@ -6645,6 +6649,11 @@ window.addEventListener('keydown',function(e){
                 else if (st === 'HIGH') cls = 'high';
                 else if (st === 'LOW') cls = 'low';
                 else if (st === 'ABNORMAL') cls = 'abnormal';
+                // x8 传染病面板：梅毒/丙肝/HIV 阳性单独高亮（区别于乙肝两对半）
+                if (st === 'ABNORMAL' && isX8InfectionPanel(r)) {
+                    const spKey = infectionSpecialKey(it.name);
+                    if (spKey && isPositiveResult(it.result)) cls = 'inf-' + spKey;
+                }
                 const prefix = st === 'CRITICAL' ? '危急 ' : '';
                 h += `<span class="ab-card-item ${cls}">${esc(prefix+it.name+' '+it.result+(it.unit||''))}</span>`;
             });
@@ -8716,6 +8725,24 @@ window.addEventListener('keydown',function(e){
             if (critItems > 0) html += `<span style="color:#b71c1c;font-weight:700">🚨 危急: ${critItems}</span>`;
             html += '</div>';
 
+            // x8 传染病面板：梅毒/丙肝/HIV 阳性高亮图例（区别于乙肝两对半）
+            const isX8Inf = isX8InfectionPanel(specimen);
+            const infSpecialPos = isX8Inf ? itemInfo.filter(r => {
+                const res = (r.TextRes && r.TextRes.trim()) ? r.TextRes.trim() : (r.Result || '');
+                const k = infectionSpecialKey(r.CName);
+                return k && isPositiveResult(res);
+            }).map(r => infectionSpecialKey(r.CName)) : [];
+            if (infSpecialPos.length) {
+                const uniq = [...new Set(infSpecialPos)];
+                html += '<div style="display:flex;gap:12px;align-items:center;padding:4px 0 8px;font-size:11px;flex-wrap:wrap">';
+                html += '<span style="color:#555;font-weight:700">⚠ 传染病阳性高亮：</span>';
+                uniq.forEach(k => {
+                    const c = INFECTION_SPECIAL_STYLE[k];
+                    html += `<span style="display:inline-flex;align-items:center;gap:5px;font-weight:800;color:${c.border}"><span style="width:11px;height:11px;border-radius:2px;background:${c.bg};border:1px solid ${c.border};display:inline-block"></span>${INFECTION_SPECIAL_LABELS[k]}</span>`;
+                });
+                html += '</div>';
+            }
+
             // 结果表格（紧凑布局）
             html += '<table class="result-table" style="font-size:12px">';
 
@@ -8799,6 +8826,15 @@ window.addEventListener('keydown',function(e){
                 if (isCritical) statusClass = 'abnormal critical';
                 else if (statusText.includes('高')) statusClass = 'abnormal high';
                 else if (statusText.includes('低')) statusClass = 'abnormal low';
+
+                // x8 传染病面板：梅毒/丙肝/HIV 阳性单独高亮（区别于乙肝两对半）
+                if (isX8Inf && !isCritical) {
+                    const spKey = infectionSpecialKey(r.CName);
+                    if (spKey && isPositiveResult(result)) {
+                        statusClass = 'inf-' + spKey;
+                        rowStyle = 'background:' + INFECTION_SPECIAL_STYLE[spKey].bg + ';border-left:3px solid ' + INFECTION_SPECIAL_STYLE[spKey].border + ';font-weight:700';
+                    }
+                }
 
                 // 参考范围带单位
                 const refWithUnit = unit ? refRange + ' ' + unit : refRange;
@@ -12063,6 +12099,36 @@ function fillNativeLoginForm(creds, lastWG) {
         const num = parseFloat(r);
         if (!isNaN(num) && num < 1) return true;
         return false;
+    }
+
+    // ==================== x8 传染病：梅毒/丙肝/HIV 阳性专用高亮 ====================
+    // 与乙肝两对半阳性（粉色 abnormal）区分，三个项目各一种醒目色，防漏发报告
+    const INFECTION_SPECIAL_MAP = {
+        tp:  ['梅毒螺旋体抗体', '梅毒抗体', 'tp', '梅毒'],                       // 梅毒
+        hcv: ['丙型肝炎病毒抗体测定', '丙型肝炎抗体', '丙肝抗体', '抗-hcv', 'hcv', '丙肝'], // 丙肝
+        hiv: ['人类免疫缺陷病毒抗体测定', '人免疫缺陷病毒抗体测定', 'hiv抗体', 'hiv', '艾滋'] // HIV/艾滋
+    };
+    const INFECTION_SPECIAL_LABELS = { tp: '梅毒', hcv: '丙肝', hiv: 'HIV' };
+    const INFECTION_SPECIAL_STYLE = {
+        tp:  { bg: '#f3e0ff', border: '#ab47bc' }, // 紫
+        hcv: { bg: '#e0f7fa', border: '#26a69a' }, // 青
+        hiv: { bg: '#ffebee', border: '#e53935' }  // 红
+    };
+
+    // 返回项目名称命中的特殊传染病项目 key（tp/hcv/hiv），否则 null
+    function infectionSpecialKey(name) {
+        if (!name) return null;
+        const n = String(name).toLowerCase();
+        for (const key of Object.keys(INFECTION_SPECIAL_MAP)) {
+            if (INFECTION_SPECIAL_MAP[key].some(k => n.includes(k.toLowerCase()))) return key;
+        }
+        return null;
+    }
+
+    // 是否 x8 仪器 / 传染病面板（仅在传染病面板内启用特殊高亮）
+    function isX8InfectionPanel(row) {
+        const machineName = ((row && (row._mn || row.Name || row.CName)) || '').toLowerCase();
+        return machineName.includes('x8') || machineName.includes('传染病');
     }
 
     // --- 获取所有待审核标本 ---
