@@ -21,6 +21,7 @@ A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Ta
 | `mcp-image-reader/` | MCP server: `read_image`, `describe_image` tools. |
 | `质控模板/` | 9 个质控数据上传模板 xlsx（血常规/生化/凝血/血脂/尿常规/内分泌/肿瘤/心肌/传染病） |
 | `lis_proxy.py` | 反向代理 & 代码缓存器 — 默认只缓存静态前端到 `cache/`（`--cache-api` 才缓存接口） |
+| `menubar/lis-audit.5s.sh` | SwiftBar 菜单栏插件 — 显示当前筛选范围的可批审/异常待审数（读 serve.py 的 `/stats`） |
 | `HANDTEST.md` | 发布前手测清单（批审 / F4 必测） |
 | `requirements.txt` | Python 依赖 |
 
@@ -54,6 +55,7 @@ pip3 install -r ~/脚本/requirements.txt
 - **Python packages**: 见 `requirements.txt`（`pillow`, `mss`, `pyautogui`, 可选 `mcp`）
 - **MCP config**: each MCP server has its own `config.json` in its subdirectory（勿提交密钥）。
 - Tampermonkey 更新前请保持 **serve.py 运行**，否则 SheetJS `@require` 与脚本更新会失败。
+- **菜单栏功能**（可选）：`brew install --cask swiftbar`（`jq` 系统自带 `/usr/bin/jq`）。首次启动 SwiftBar 选插件目录为 `~/脚本/menubar`。菜单栏读数依赖 **serve.py 在线**；serve.py 由 launchd 服务 `com.yutong.lis-serve` 托管（改 serve.py 后用 `launchctl kickstart -k gui/$(id -u)/com.yutong.lis-serve` 重启）。SwiftBar 自身在其偏好里勾 "Start at login" 即可开机自启。数据由 userscript 的 `renderWSCategoryBar` 推送到 `POST /stats`，落盘 `.cache/menubar_stats.json`。
 
 ## Coding conventions
 

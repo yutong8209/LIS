@@ -14,6 +14,8 @@ CLAUDE.md
 # Large / temp
 *_files/
 cache/
+.cache/
+.hermes/
 mimo.exe
 patch*.txt
 test.user.js
