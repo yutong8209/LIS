@@ -29,6 +29,23 @@ def _load_stats():
 
 _load_stats()
 
+CMD_FILE = os.path.join(ROOT, '.cache', 'menubar_cmd.json')
+_cmd_lock = threading.Lock()
+_cmd_data = {'id': 0, 'action': None, 'cat': None, 'consumed': True}
+
+
+def _load_cmd():
+    global _cmd_data
+    try:
+        with open(CMD_FILE, 'r', encoding='utf-8') as f:
+            _cmd_data = json.load(f)
+    except Exception:
+        pass
+
+
+_load_cmd()
+
+
 ALLOWED = {
     '/': SCRIPT,
     '/iMedicalLIS-enhancer.user.js': SCRIPT,
@@ -43,6 +60,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == '/stats':
             with _stats_lock:
                 body = json.dumps(_stats_data, ensure_ascii=False).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        # 菜单栏指令读取（SwiftBar 点击 → 通知 userscript 切分类）
+        if path == '/cmd':
+            with _cmd_lock:
+                body = json.dumps(_cmd_data, ensure_ascii=False).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -88,29 +117,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = unquote(urlparse(self.path).path)
-        if path != '/stats':
+        if path == '/stats':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                raw = self.rfile.read(length) if length else b'{}'
+                data = json.loads(raw.decode('utf-8'))
+                data['ts'] = int(time.time())
+                data['ok'] = True
+                global _stats_data
+                with _stats_lock:
+                    _stats_data = data
+                    os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
+                    with open(STATS_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False)
+                self.send_response(204)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+        elif path == '/cmd':
+            # SwiftBar 下拉点击 → 指令（goto 分类）。带 id 防重复消费。
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                raw = self.rfile.read(length) if length else b'{}'
+                data = json.loads(raw.decode('utf-8'))
+                cmd = {
+                    'id': int(time.time() * 1000),
+                    'action': data.get('action'),
+                    'cat': data.get('cat'),
+                    'consumed': False,
+                }
+                global _cmd_data
+                with _cmd_lock:
+                    _cmd_data = cmd
+                    os.makedirs(os.path.dirname(CMD_FILE), exist_ok=True)
+                    with open(CMD_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(cmd, f, ensure_ascii=False)
+                self.send_response(204)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+        else:
             self.send_response(404)
             self.end_headers()
-            return
-        try:
-            length = int(self.headers.get('Content-Length', 0))
-            raw = self.rfile.read(length) if length else b'{}'
-            data = json.loads(raw.decode('utf-8'))
-            data['ts'] = int(time.time())
-            data['ok'] = True
-            global _stats_data
-            with _stats_lock:
-                _stats_data = data
-                os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
-                with open(STATS_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False)
-            self.send_response(204)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-        except Exception as e:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(str(e).encode())
 
     def log_message(self, format, *args):
         pass  # 静默 access 日志；成功提供在 do_GET 里打印
