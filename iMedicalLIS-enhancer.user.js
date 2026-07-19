@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.61.3
+// @version      7.62.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5901,6 +5901,39 @@
         }));
     }
 
+    // 把「当前筛选范围」计数推给本地菜单栏桥（localhost:8765）。失败静默，绝不影响审核。
+    let _menubarPushTimer = null;
+    function pushMenubarStats(counts) {
+        clearTimeout(_menubarPushTimer);
+        _menubarPushTimer = setTimeout(() => {
+            try {
+                fetch('http://localhost:8765/stats', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'text/plain'}, // text/plain 免 CORS 预检
+                    body: JSON.stringify(counts),
+                    keepalive: true
+                }).catch(() => {});
+            } catch (e) {}
+        }, 300); // 去抖，避免频繁渲染刷爆
+    }
+
+    // 推导「当前筛选范围」的可读名称：全部 / 某工作组全部 / 某工作组选N台 / 具体仪器名
+    function describeWSScope() {
+        if (!wsActiveWG && !wsActiveMachine) {
+            const anyMulti = Object.values(wsSelectedMachinesByWG || {}).some(s => (s && s.length));
+            return anyMulti ? '多工作组(自定义)' : '全部仪器';
+        }
+        const wgName = wsActiveWG ? ((WG.find(w => String(w.dr) === String(wsActiveWG)) || {}).name || wsActiveWG) : '';
+        const sel = wsActiveWG ? [...wsMachineFilterSetForActiveWG()] : (wsActiveMachine ? [wsActiveMachine] : []);
+        if (!sel.length) return wgName ? `${wgName}(全部仪器)` : '全部仪器';
+        if (sel.length === 1) {
+            const m = wsMachines.find(x => String(x.RowID) === String(sel[0]));
+            const mn = (m && (m.CName || m.Name)) || sel[0];
+            return wgName ? `${wgName} · ${mn}` : mn;
+        }
+        return wgName ? `${wgName}(${sel.length}台)` : `${sel.length}台仪器`;
+    }
+
     // --- 渲染：分类标签栏 ---
     function renderWSCategoryBar() {
         const bar = $('#lis-ws-bar');
@@ -5957,6 +5990,16 @@
 
         bar.innerHTML = h;
         updateWSFooter({ visible: fd.length, total: totalCount, normal: normalCount, abnormal: abnormalCount, incomplete: incompleteCount, pending: pendingCount });
+
+        // 推菜单栏（当前筛选范围合计）
+        pushMenubarStats({
+            scope: describeWSScope(),
+            normalReady: normalCount,
+            abnormalReady: abnormalCount,
+            pending: pendingCount,
+            incomplete: incompleteCount,
+            total: totalCount
+        });
 
         // 分类标签事件
         bar.querySelectorAll('.cat-tab').forEach(b => b.addEventListener('click', () => {
