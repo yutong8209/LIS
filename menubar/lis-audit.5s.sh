@@ -55,20 +55,20 @@ echo "---"
 echo "$M | $H_FONT sfimage=slider.horizontal.3 sfcolor=$C_BLUE"
 echo "---"
 
-# 用 printf 把数字右对齐到固定宽度，形成整齐右列（SwiftBar 默认字体数字等宽感不足，靠 padding 补足）
+# 用 printf 把数字右对齐到固定宽度，形成整齐右列；点击跳转对应分类
+JUMP="$HOME/lis-menubar/lis_jump.sh"
 row() {
-  local icon="$1" label="$2" val="$3" color="$4"
-  # 标签固定占 8 个中文宽（含空格），数字右对齐占 4 位
+  local icon="$1" label="$2" val="$3" color="$4" cat="$5"
   printf "%s %-7s%4s\n" "$icon" "$label" "$val" \
-    | awk -v c="$color" -v f="size=16 font=.AppleSystemUIFont semibold=true color=$color" \
-      '{ printf "%s | %s\n", $0, f }'
+    | awk -v c="$color" -v f="size=16 font=.AppleSystemUIFont semibold=true color=$color" -v j="$JUMP" -v cat="$cat" \
+      '{ printf "%s | %s bash=%s param1=%s\n", $0, f, j, cat }'
 }
 
-row ":checkmark.circle.fill:" "可批审" "$NR" "$L_GREEN"
-row ":exclamationmark.triangle.fill:" "异常待审" "$AR" "$L_ORANGE"
-row ":tray.fill:" "待排样" "$PD" "$L_INDIGO"
-row ":doc.fill:" "不完整" "$IC" "$L_TEAL"
-row ":number.circle.fill:" "标本总数" "$TO" "$L_BLUE"
+row ":checkmark.circle.fill:" "可批审" "$NR" "$L_GREEN" "normal"
+row ":exclamationmark.triangle.fill:" "异常待审" "$AR" "$L_ORANGE" "abnormal"
+row ":tray.fill:" "待排样" "$PD" "$L_INDIGO" "pending"
+row ":doc.fill:" "不完整" "$IC" "$L_TEAL" "incomplete"
+row ":number.circle.fill:" "标本总数" "$TO" "$L_BLUE" "all"
 
 echo "---"
 echo "更新于 $TIME_TXT | $SUB_FONT sfimage=clock"
