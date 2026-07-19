@@ -61,7 +61,7 @@ row() {
   local icon="$1" label="$2" val="$3" color="$4" cat="$5"
   printf "%s %-7s%4s\n" "$icon" "$label" "$val" \
     | awk -v c="$color" -v f="size=16 font=.AppleSystemUIFont semibold=true color=$color" -v j="$JUMP" -v cat="$cat" \
-      '{ printf "%s | %s bash=%s param1=%s\n", $0, f, j, cat }'
+      '{ printf "%s | %s bash=%s param1=%s terminal=false\n", $0, f, j, cat }'
 }
 
 row ":checkmark.circle.fill:" "可批审" "$NR" "$L_GREEN" "normal"
