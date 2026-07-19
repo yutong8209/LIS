@@ -55,7 +55,9 @@ pip3 install -r ~/脚本/requirements.txt
 - **Python packages**: 见 `requirements.txt`（`pillow`, `mss`, `pyautogui`, 可选 `mcp`）
 - **MCP config**: each MCP server has its own `config.json` in its subdirectory（勿提交密钥）。
 - Tampermonkey 更新前请保持 **serve.py 运行**，否则 SheetJS `@require` 与脚本更新会失败。
-- **菜单栏功能**（可选）：`brew install --cask swiftbar`（`jq` 系统自带 `/usr/bin/jq`）。首次启动 SwiftBar 选插件目录为 `~/脚本/menubar`。菜单栏读数依赖 **serve.py 在线**；serve.py 由 launchd 服务 `com.yutong.lis-serve` 托管（改 serve.py 后用 `launchctl kickstart -k gui/$(id -u)/com.yutong.lis-serve` 重启）。SwiftBar 自身在其偏好里勾 "Start at login" 即可开机自启。数据由 userscript 的 `renderWSCategoryBar` 推送到 `POST /stats`，落盘 `.cache/menubar_stats.json`。
+- **菜单栏功能**（可选）：`brew install --cask swiftbar`（`jq` 系统自带 `/usr/bin/jq`）。菜单栏读数依赖 **serve.py 在线**；serve.py 由 launchd 服务 `com.yutong.lis-serve` 托管（改 serve.py 后用 `launchctl kickstart -k gui/$(id -u)/com.yutong.lis-serve` 重启）。SwiftBar 自身在其偏好里勾 "Start at login" 即可开机自启。数据由 userscript 的 `renderWSCategoryBar` 推送到 `POST /stats`，落盘 `.cache/menubar_stats.json`。
+  - **⚠️ 中文路径坑（必读）**：SwiftBar 的 `PluginDirectory` 偏好会把中文「脚本」存成字面 unicode 转义（`\u811a\u672c`），导致它读不到 `~/脚本/menubar`。正确做法：建纯英文软链接 `ln -sfn "/Users/yutong/脚本/menubar" "/Users/yutong/lis-menubar"`，再把 `PluginDirectory` 设为 `/Users/yutong/lis-menubar`（纯 ASCII）。改插件后若菜单栏没更新，先 `pkill -x SwiftBar && open -a SwiftBar` 重启，再 `open "swiftbar://refreshallplugins"`。
+  - 插件：`menubar/lis-audit.5s.sh`（Apple 风格 SF Symbols + 分类对齐下拉，深色菜单栏专用配色）。
 
 ## Coding conventions
 

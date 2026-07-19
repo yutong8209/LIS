@@ -11,8 +11,14 @@ C_ORANGE="#FF7A00,#FF9F0A"
 C_GRAY="#636366,#8E8E93"
 C_INDIGO="#5E5CE6,#5E5CE6"
 C_BLUE="#007AFF,#0A84FF"
-H_FONT="size=13 font=.AppleSystemUIFont semibold=true"
-SUB_FONT="size=12 font=.AppleSystemUIFont color=#8E8E93,#98989D"
+# 深色菜单栏：弹窗背景在浅灰/蓝玻璃间波动，用更深饱和色（绝不用纯灰）
+L_GREEN="#15602B"
+L_ORANGE="#9B1C1C"
+L_INDIGO="#2E2E9E"
+L_TEAL="#075E78"
+L_BLUE="#0A3D91"
+H_FONT="size=15 font=.AppleSystemUIFont semibold=true color=#000000"
+SUB_FONT="size=13 font=.AppleSystemUIFont color=#3A3A3C"
 
 J=$(curl -s --max-time 2 http://localhost:8765/stats)
 if [ -z "$J" ] || [ "$(echo "$J" | jq -r '.ok // false')" != "true" ]; then
@@ -54,15 +60,15 @@ row() {
   local icon="$1" label="$2" val="$3" color="$4"
   # 标签固定占 8 个中文宽（含空格），数字右对齐占 4 位
   printf "%s %-7s%4s\n" "$icon" "$label" "$val" \
-    | awk -v c="$color" -v f="size=14 font=.AppleSystemUIFont semibold=true color=$color" \
+    | awk -v c="$color" -v f="size=16 font=.AppleSystemUIFont semibold=true color=$color" \
       '{ printf "%s | %s\n", $0, f }'
 }
 
-row ":checkmark.circle.fill:" "可批审" "$NR" "$C_GREEN"
-row ":exclamationmark.triangle.fill:" "异常待审" "$AR" "$C_ORANGE"
-row ":tray.fill:" "待排样" "$PD" "$C_INDIGO"
-row ":doc.fill:" "不完整" "$IC" "$C_GRAY"
-row ":number.circle.fill:" "标本总数" "$TO" "$C_BLUE"
+row ":checkmark.circle.fill:" "可批审" "$NR" "$L_GREEN"
+row ":exclamationmark.triangle.fill:" "异常待审" "$AR" "$L_ORANGE"
+row ":tray.fill:" "待排样" "$PD" "$L_INDIGO"
+row ":doc.fill:" "不完整" "$IC" "$L_TEAL"
+row ":number.circle.fill:" "标本总数" "$TO" "$L_BLUE"
 
 echo "---"
 echo "更新于 $TIME_TXT | $SUB_FONT sfimage=clock"
