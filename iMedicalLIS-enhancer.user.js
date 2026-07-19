@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.62.0
+// @version      7.63.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5901,6 +5901,41 @@
         }));
     }
 
+    // 切换工作台分类（与点击分类标签行为一致：保留勾选、刷新渲染）
+   function switchWSCategory(cat) {
+        if (!cat) return;
+        invalidateCaches();
+        wsCategory = cat;
+        wsAbnormalIndex = -1;
+        saveWSState();
+        renderWSCategoryBar();
+        renderWSTable();
+        updateAbnormalEnterBridge();
+        if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
+    }
+
+    // 菜单栏指令轮询：SwiftBar 下拉点击 → POST /cmd → 这里消费并切分类
+    let _menubarCmdTimer = null;
+    let _menubarCmdLastId = 0;
+    function startMenubarCmdPoller() {
+        if (_menubarCmdTimer) return;
+        _menubarCmdTimer = setInterval(() => {
+            try {
+                fetch('http://localhost:8765/cmd', { cache: 'no-store' })
+                    .then(r => r.ok ? r.json() : null)
+                    .then(cmd => {
+                        if (!cmd || cmd.consumed) return;
+                        if (cmd.id === _menubarCmdLastId) return;
+                        _menubarCmdLastId = cmd.id;
+                        if (cmd.action === 'goto' && cmd.cat) {
+                            switchWSCategory(cmd.cat);
+                        }
+                    })
+                    .catch(() => {});
+            } catch (e) {}
+        }, 1500);
+    }
+
     // 把「当前筛选范围」计数推给本地菜单栏桥（localhost:8765）。失败静默，绝不影响审核。
     let _menubarPushTimer = null;
     function pushMenubarStats(counts) {
@@ -5994,6 +6029,7 @@
         // 推菜单栏（当前筛选范围合计）
         pushMenubarStats({
             scope: describeWSScope(),
+            url: location.href,
             normalReady: normalCount,
             abnormalReady: abnormalCount,
             pending: pendingCount,
@@ -6003,15 +6039,7 @@
 
         // 分类标签事件
         bar.querySelectorAll('.cat-tab').forEach(b => b.addEventListener('click', () => {
-            invalidateCaches();
-            wsCategory = b.dataset.cat;
-            wsAbnormalIndex = -1;
-            // 不清空 wsChecked，保留用户勾选
-            saveWSState();
-            renderWSCategoryBar();
-            renderWSTable();
-            updateAbnormalEnterBridge();
-            if (wsCategory === 'abnormal') prefetchAbnormalAuditContext();
+            switchWSCategory(b.dataset.cat);
         }));
 
         // 一键批审按钮事件
@@ -13477,6 +13505,7 @@ function fillNativeLoginForm(creds, lastWG) {
         WG.forEach(w => { loadMachines(w.dr).catch(() => {}); });
         // 工作台内点刷新触发的整页重载后，自动重新打开工作台
         maybeReopenWSAfterReload();
+        startMenubarCmdPoller(); // 菜单栏下拉点击 → 跨进程切分类
         dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
     }
 
