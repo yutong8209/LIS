@@ -3,12 +3,31 @@
 import http.server
 import mimetypes
 import os
+import json
+import threading
+import time
 from urllib.parse import urlparse, unquote
 
 PORT = 8765
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(ROOT, 'iMedicalLIS-enhancer.user.js')
 VENDOR = os.path.join(ROOT, 'vendor')
+
+STATS_FILE = os.path.join(ROOT, '.cache', 'menubar_stats.json')
+_stats_lock = threading.Lock()
+_stats_data = {'ok': False, 'ts': 0}
+
+
+def _load_stats():
+    global _stats_data
+    try:
+        with open(STATS_FILE, 'r', encoding='utf-8') as f:
+            _stats_data = json.load(f)
+    except Exception:
+        pass
+
+
+_load_stats()
 
 ALLOWED = {
     '/': SCRIPT,
@@ -20,6 +39,18 @@ ALLOWED = {
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = unquote(urlparse(self.path).path)
+        # 菜单栏统计读取
+        if path == '/stats':
+            with _stats_lock:
+                body = json.dumps(_stats_data, ensure_ascii=False).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(body)
+            return
         # 允许 vendor/ 下已登记的静态文件
         filepath = ALLOWED.get(path)
         if not filepath and path.startswith('/vendor/'):
@@ -50,6 +81,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
             print(f'[{self.log_date_time_string()}] {path} ({len(content)} bytes)')
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(str(e).encode())
+
+    def do_POST(self):
+        path = unquote(urlparse(self.path).path)
+        if path != '/stats':
+            self.send_response(404)
+            self.end_headers()
+            return
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            raw = self.rfile.read(length) if length else b'{}'
+            data = json.loads(raw.decode('utf-8'))
+            data['ts'] = int(time.time())
+            data['ok'] = True
+            global _stats_data
+            with _stats_lock:
+                _stats_data = data
+                os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
+                with open(STATS_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False)
+            self.send_response(204)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
         except Exception as e:
             self.send_response(500)
             self.end_headers()
