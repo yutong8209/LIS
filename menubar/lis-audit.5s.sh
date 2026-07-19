@@ -1,17 +1,26 @@
 #!/bin/bash
 # <bitbar.title>LIS 待审</bitbar.title>
-# <bitbar.version>1.0</bitbar.version>
+# <bitbar.version>4.0</bitbar.version>
 # <bitbar.author>LIS-Enhancer</bitbar.author>
-# <bitbar.desc>当前筛选范围的可一键批审/异常待审标本数，下拉含待排样/不完整/总数</bitbar.desc>
+# <bitbar.desc>当前筛选范围待审标本（Apple 风格 SF Symbols，下拉分类对齐）</bitbar.desc>
 # <bitbar.dependencies>curl,jq</bitbar.dependencies>
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+C_GREEN="#34C759,#30D158"
+C_ORANGE="#FF7A00,#FF9F0A"
+C_GRAY="#636366,#8E8E93"
+C_INDIGO="#5E5CE6,#5E5CE6"
+C_BLUE="#007AFF,#0A84FF"
+H_FONT="size=13 font=.AppleSystemUIFont semibold=true"
+SUB_FONT="size=12 font=.AppleSystemUIFont color=#8E8E93,#98989D"
+
 J=$(curl -s --max-time 2 http://localhost:8765/stats)
 if [ -z "$J" ] || [ "$(echo "$J" | jq -r '.ok // false')" != "true" ]; then
-  echo "🔬 --"
+  echo ":antenna.radiowaves.left.and.right.slash: | sfcolor=$C_GRAY"
   echo "---"
-  echo "本地桥未连接 (serve.py 未运行?)"
-  echo "刷新 | refresh=true"
+  echo "本地桥未连接 | $H_FONT sfimage=bolt.horizontal.circle sfcolor=$C_ORANGE"
+  echo "serve.py 未运行？ | $SUB_FONT"
+  echo "刷新 | refresh=true $SUB_FONT sfimage=arrow.clockwise"
   exit 0
 fi
 
@@ -23,23 +32,38 @@ IC=$(echo "$J" | jq -r '.incomplete // 0')
 TO=$(echo "$J" | jq -r '.total // 0')
 TS=$(echo "$J" | jq -r '.ts // 0')
 
-# 菜单栏标题：可批审 / 异常待审（异常>0 时标红提醒）
-if [ "$AR" -gt 0 ] 2>/dev/null; then
-  echo "✅${NR} ⚠️${AR} | color=#c0392b"
-else
-  echo "✅${NR} ⚠️${AR}"
-fi
-echo "---"
-echo "范围：${M}"
-echo "---"
-echo "✅ 可一键批审：${NR}"
-echo "⚠️ 异常待审：${AR}"
-echo "📝 待排样：${PD}"
-echo "📋 结果不完整：${IC}"
-echo "📃 标本总数：${TO}"
-echo "---"
 NOW=$(date +%s)
 AGE=$(( NOW - TS ))
 if [ "$AGE" -lt 0 ]; then AGE=0; fi
-echo "更新于 ${AGE}s 前 | color=gray"
-echo "刷新 | refresh=true"
+if [ "$AGE" -lt 60 ]; then TIME_TXT="${AGE}秒前"; else TIME_TXT="$(( AGE / 60 ))分钟前"; fi
+
+# ── 菜单栏标题：单色 SF Symbols + 数字（异常>0 才显示告警圆点） ──
+if [ "$AR" -gt 0 ] 2>/dev/null; then
+  echo ":checkmark.seal: $NR  :exclamationmark.circle.fill: $AR | size=14"
+else
+  echo ":checkmark.seal: $NR | size=14"
+fi
+
+# ── 下拉：分类行（图标 + 标签 + 大号彩色数字，数字右对齐成列） ──
+echo "---"
+echo "$M | $H_FONT sfimage=slider.horizontal.3 sfcolor=$C_BLUE"
+echo "---"
+
+# 用 printf 把数字右对齐到固定宽度，形成整齐右列（SwiftBar 默认字体数字等宽感不足，靠 padding 补足）
+row() {
+  local icon="$1" label="$2" val="$3" color="$4"
+  # 标签固定占 8 个中文宽（含空格），数字右对齐占 4 位
+  printf "%s %-7s%4s\n" "$icon" "$label" "$val" \
+    | awk -v c="$color" -v f="size=14 font=.AppleSystemUIFont semibold=true color=$color" \
+      '{ printf "%s | %s\n", $0, f }'
+}
+
+row ":checkmark.circle.fill:" "可批审" "$NR" "$C_GREEN"
+row ":exclamationmark.triangle.fill:" "异常待审" "$AR" "$C_ORANGE"
+row ":tray.fill:" "待排样" "$PD" "$C_INDIGO"
+row ":doc.fill:" "不完整" "$IC" "$C_GRAY"
+row ":number.circle.fill:" "标本总数" "$TO" "$C_BLUE"
+
+echo "---"
+echo "更新于 $TIME_TXT | $SUB_FONT sfimage=clock"
+echo "立即刷新 | refresh=true $SUB_FONT sfimage=arrow.clockwise"
