@@ -87,3 +87,4 @@ pip3 install -r ~/脚本/requirements.txt
 - No automated test suite. Verify with `HANDTEST.md`.
 - 密码：HTTP 内网无 WebCrypto 时仅为 base64 可逆存储，勿在共享电脑勾选记住密码。
 - `cache/` 可能曾含接口响应；默认代理已改为不缓存 API，可定期清空 cache。
+- **工作台「不完整」分类语义**：`getWSAuditBucket` 以 LIS 源字段 `IsComplete==='1'` 为硬门槛（非1即 incomplete）。**手工录入/手工添加项目**的标本结果多为默认值、LIS 不置 `IsComplete=1`，故天然落在「不完整」——这是预期行为、非 bug；仪器回传结果的标本才会置1并进入正常/异常。切勿为「手工标本显示不完整」而放宽 `IsComplete` 判定，否则会让真正不完整的标本混入可批审。
