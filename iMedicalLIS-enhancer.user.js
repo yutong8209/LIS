@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.66.0
+// @version      7.67.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5496,32 +5496,55 @@
     // 跨工作组切换：
     // LIS 早期版本提供全局 switchWG(dr)，新版本已移除，改为操作顶部 <select id="sl_changeworkgroup">。
     // 优先用原生 switchWG（兼容旧版），缺失则回退到 UI 切组（设值 + 触发 change）。
+    // 切组后 LIS 异步更新 WorkGroupDR 全局，需等待 wgDR() 真正同步再返回，避免后续误判。
+    function waitWG(dr, timeout = 6000) {
+        return new Promise(res => {
+            if (String(wgDR()) === String(dr)) return res(true);
+            const t0 = Date.now();
+            const tick = () => {
+                if (String(wgDR()) === String(dr)) return res(true);
+                if (Date.now() - t0 > timeout) return res(false);
+                setTimeout(tick, 300);
+            };
+            tick();
+        });
+    }
     async function safeSwitchWG(dr) {
         const wgName = (WG_MAP[dr] || {}).name || dr;
+        console.log('[LIS-诊断][切组] 开始: dr=' + dr + ' name=' + wgName + ' 当前wgDR=' + wgDR());
         const tryNative = () => {
-            try { if (typeof window.switchWG === 'function') { window.switchWG(dr); return true; } }
-            catch (e) { dbg('switchWG 调用异常: ' + e); }
+            try {
+                // 页面全局函数挂在 unsafeWindow 上，沙箱 window 不一定可见；两种都查以便诊断区分
+                const nativeFn = (typeof uw().switchWG === 'function') ? uw().switchWG
+                    : (typeof window.switchWG === 'function' ? window.switchWG : null);
+                console.log('[LIS-诊断][切组] tryNative: 原生switchWG=' + (nativeFn ? '存在' : '不存在'));
+                if (nativeFn) { nativeFn(dr); return true; }
+            } catch (e) { console.log('[LIS-诊断][切组] switchWG调用异常: ' + e); }
             return false;
         };
         const tryUI = () => {
             try {
                 const doc = getUIDoc();
                 const sel = doc && doc.getElementById('sl_changeworkgroup');
+                console.log('[LIS-诊断][切组] tryUI: getUIDoc存在=' + !!doc + ' sl_changeworkgroup存在=' + !!sel);
                 if (!sel) return false;
-                if (String(sel.value) === String(dr)) return true; // 已在目标组
+                console.log('[LIS-诊断][切组] tryUI: sel.value(切前)=' + sel.value + ' 目标dr=' + dr);
+                if (String(sel.value) === String(dr)) { console.log('[LIS-诊断][切组] tryUI: 已在目标组'); return true; }
                 sel.value = String(dr);
                 sel.dispatchEvent(new Event('change', { bubbles: true }));
+                console.log('[LIS-诊断][切组] tryUI: 已设值 sel.value=' + sel.value + ' 已派发change事件');
                 return true;
-            } catch (e) { dbg('UI 切组异常: ' + e); }
+            } catch (e) { console.log('[LIS-诊断][切组] UI切组异常: ' + e); }
             return false;
         };
         // 先试原生（轮询等待最多 ~6s，应对页面异步注册时序），再试 UI
         for (let i = 0; i < 20; i++) {
-            if (tryNative()) return true;
-            if (i === 5 && tryUI()) return true; // 原生不在则早切到 UI 方案
+            if (tryNative()) { const ok = await waitWG(dr); console.log('[LIS-诊断][切组] 原生切组后 waitWG=' + ok + ' wgDR=' + wgDR()); return true; }
+            if (i === 5 && tryUI()) { const ok = await waitWG(dr); console.log('[LIS-诊断][切组] UI切组后 waitWG=' + ok + ' wgDR=' + wgDR() + (ok ? '' : ' ⚠️LIS未响应change/未切组')); return true; }
             await new Promise(r => setTimeout(r, 300));
         }
-        if (tryUI()) return true;
+        if (tryUI()) { const ok = await waitWG(dr); console.log('[LIS-诊断][切组] 兜底UI切组后 waitWG=' + ok + ' wgDR=' + wgDR() + (ok ? '' : ' ⚠️LIS未响应change/未切组')); return true; }
+        console.log('[LIS-诊断][切组] 失败: 最终wgDR=' + wgDR());
         showToast(`无法自动切到${wgName}，请手动切换后继续`, 'warning');
         return false;
     }
@@ -7865,12 +7888,14 @@ window.addEventListener('keydown',function(e){
         const item = currentQueueItem(queue);
         if (!item) return true;
         const curDR = wgDR();
-        if (!item.wg || item.wg === curDR) return true;
+        console.log('[LIS-诊断][ensureWG] item.wg=' + item.wg + ' curDR=' + curDR + ' 是否需切=' + (item.wg && item.wg !== curDR));
         queue.pausedForSwitch = true;
         saveAuditQueueNow(queue);
         const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
         showToast('切换到' + wgName + '继续审核...', 'warning');
+        console.log('[LIS-诊断][ensureWG] 调用safeSwitchWG: item.wg=' + item.wg + ' 切组前wgDR=' + wgDR());
         const switched = await safeSwitchWG(item.wg);
+        console.log('[LIS-诊断][ensureWG] 切组返回 switched=' + switched + ' 切组后wgDR=' + wgDR());
         if (!switched) {
             // 切组失败：放弃自动续跑，避免死循环重试；提示手动切组后单独处理
             clearAuditQueue();
@@ -12669,7 +12694,7 @@ function fillNativeLoginForm(creds, lastWG) {
                             break;
                         }
                     }
-                    if (targetIdx < 0) { dbg('selectNativeRow:', sel, '未找到 ReportDR:', reportDR, '共', dataRows.length, '行'); continue; }
+                    if (targetIdx < 0) { console.log('[LIS-诊断][选行] 未找到 ReportDR=' + reportDR + ' 当前wgDR=' + wgDR() + ' 列表行数=' + dataRows.length + ' selector=' + sel); dbg('selectNativeRow:', sel, '未找到 ReportDR:', reportDR, '共', dataRows.length, '行'); continue; }
 
                     const opts = el.datagrid('options') || {};
 
@@ -12751,6 +12776,7 @@ function fillNativeLoginForm(creds, lastWG) {
         if (!jq || !me) return iframeWin;
         const mdrKey = String(item.mdr || '');
         const machineChanged = mdrKey && String(me.WorkGroupMachineDR || '') !== mdrKey;
+        console.log('[LIS-诊断][刷新列表] mdr=' + mdrKey + ' machineChanged=' + machineChanged + ' force=' + !!options.force + ' me.WorkGroupMachineDR=' + (me && me.WorkGroupMachineDR));
         if (!machineChanged && !options.force) return iframeWin;
         try {
             if (item.mdr) {
@@ -13070,6 +13096,7 @@ function fillNativeLoginForm(creds, lastWG) {
                 }
 
                 if (item.wg && item.wg !== wgDR()) {
+                    console.log('[LIS-诊断][主循环切组] 需要切组: item.wg=' + item.wg + ' 当前wgDR=' + wgDR());
                     if (batchCAReady && wgDR()) queue.caReadyByWg[wgDR()] = true;
                     queue.pausedForSwitch = true;
                     saveAuditQueueNow(queue);
@@ -13077,7 +13104,9 @@ function fillNativeLoginForm(creds, lastWG) {
                     const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
                     showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
                     queuePausedForSwitch = true;
+                    console.log('[LIS-诊断][主循环切组] 调用safeSwitchWG: item.wg=' + item.wg + ' 切组前wgDR=' + wgDR());
                     const switched = await safeSwitchWG(item.wg);
+                    console.log('[LIS-诊断][主循环切组] 切组返回 switched=' + switched + ' 切组后wgDR=' + wgDR());
                     if (!switched) {
                         // 切组失败（LIS 未提供 switchWG 等）：跳过该跨组标本，继续下一个，避免死循环重试
                         queue.skipped.push(item);
