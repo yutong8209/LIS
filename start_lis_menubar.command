@@ -27,3 +27,6 @@ fi
 
 echo ""
 echo "菜单栏已就绪：点开顶部 ✓/◉ 图标即可看待审统计，点击行可跳转工作台。"
+
+# 自动关闭运行本脚本的终端窗口（serve.py 已 nohup 脱离，关窗不影响）
+osascript -e 'tell application "Terminal" to close (every window whose frontmost is true)' 2>/dev/null &

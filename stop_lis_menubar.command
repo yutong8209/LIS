@@ -24,3 +24,6 @@ fi
 
 echo ""
 echo "已全部关闭，无后台进程。下次用运行 start_lis_menubar.command 即可。"
+
+# 自动关闭运行本脚本的终端窗口（避免留一个终端窗口）
+osascript -e 'tell application "Terminal" to close (every window whose frontmost is true)' 2>/dev/null &
