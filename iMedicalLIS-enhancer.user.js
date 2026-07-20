@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.63.0
+// @version      7.64.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5493,7 +5493,24 @@
         });
     }
 
+    // 跨工作组切换：优先用 LIS 原生 switchWG；若当前页面未提供该函数（时序/版本差异），
+    // 安全降级为提示手动切换，避免 "switchWG is not defined" 崩溃导致批审中断。
+    function safeSwitchWG(dr) {
+        try {
+            if (typeof window.switchWG === 'function') {
+                window.switchWG(dr);
+                return true;
+            }
+        } catch (e) {
+            dbg('switchWG 调用异常: ' + e);
+        }
+        const wgName = (WG_MAP[dr] || {}).name || dr;
+        showToast(`无法自动切换到${wgName}，请手动切换后继续`, 'warning');
+        return false;
+    }
+
     function getWSAuditBucket(r) {
+
         const status = String(r.Status || r.ReportStatus || '');
         if (status === '3' || status === '4') return 'audited';
         if (status === '0') return 'pending';
@@ -7293,7 +7310,7 @@ window.addEventListener('keydown',function(e){
             if (spDR && curDR && spDR !== curDR) {
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
                 showToast(`切换到${wgName}继续审核`, 'warning');
-                switchWG(spDR);
+                safeSwitchWG(spDR);
                 return;
             }
 
@@ -7684,7 +7701,7 @@ window.addEventListener('keydown',function(e){
         if (targetDR !== curDR) {
             // 需要切换工作组
             toast('正在切换到 ' + (WG_MAP[targetDR]||{}).name + '...', 'w');
-            switchWG(targetDR);
+            safeSwitchWG(targetDR);
             return;
         }
 
@@ -7836,7 +7853,7 @@ window.addEventListener('keydown',function(e){
         saveAuditQueueNow(queue);
         const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
         showToast('切换到' + wgName + '继续审核...', 'warning');
-        switchWG(item.wg);
+        safeSwitchWG(item.wg);
         runAuditQueueResume(2500);
         return false;
     }
@@ -8374,7 +8391,7 @@ window.addEventListener('keydown',function(e){
             if (spDR && curDR && spDR !== curDR) {
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
                 showToast(`切换到${wgName}继续审核`, 'warning');
-                switchWG(spDR);
+                safeSwitchWG(spDR);
                 return;
             }
 
@@ -13037,7 +13054,7 @@ function fillNativeLoginForm(creds, lastWG) {
                     const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
                     showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
                     queuePausedForSwitch = true;
-                    switchWG(item.wg);
+                    safeSwitchWG(item.wg);
                     runAuditQueueResume(2500);
                     break;
                 }
