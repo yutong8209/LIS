@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.65.0
+// @version      7.66.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5493,23 +5493,36 @@
         });
     }
 
-    // 跨工作组切换：优先用 LIS 原生 switchWG。该函数由 LIS 页面异步注册，
-    // 刚进工作台/恢复队列时可能尚未就绪 → 轮询等待最多 ~6s（每 300ms 试一次），
-    // 成功返回 true；超时仍未就绪才降级提示手动切换，避免 "switchWG is not defined" 或过早失败。
+    // 跨工作组切换：
+    // LIS 早期版本提供全局 switchWG(dr)，新版本已移除，改为操作顶部 <select id="sl_changeworkgroup">。
+    // 优先用原生 switchWG（兼容旧版），缺失则回退到 UI 切组（设值 + 触发 change）。
     async function safeSwitchWG(dr) {
         const wgName = (WG_MAP[dr] || {}).name || dr;
-        for (let i = 0; i < 20; i++) {
+        const tryNative = () => {
+            try { if (typeof window.switchWG === 'function') { window.switchWG(dr); return true; } }
+            catch (e) { dbg('switchWG 调用异常: ' + e); }
+            return false;
+        };
+        const tryUI = () => {
             try {
-                if (typeof window.switchWG === 'function') {
-                    window.switchWG(dr);
-                    return true;
-                }
-            } catch (e) {
-                dbg('switchWG 调用异常: ' + e);
-            }
+                const doc = getUIDoc();
+                const sel = doc && doc.getElementById('sl_changeworkgroup');
+                if (!sel) return false;
+                if (String(sel.value) === String(dr)) return true; // 已在目标组
+                sel.value = String(dr);
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            } catch (e) { dbg('UI 切组异常: ' + e); }
+            return false;
+        };
+        // 先试原生（轮询等待最多 ~6s，应对页面异步注册时序），再试 UI
+        for (let i = 0; i < 20; i++) {
+            if (tryNative()) return true;
+            if (i === 5 && tryUI()) return true; // 原生不在则早切到 UI 方案
             await new Promise(r => setTimeout(r, 300));
         }
-        showToast(`无法自动切换到${wgName}，请手动切换后继续`, 'warning');
+        if (tryUI()) return true;
+        showToast(`无法自动切到${wgName}，请手动切换后继续`, 'warning');
         return false;
     }
 
