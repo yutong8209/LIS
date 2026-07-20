@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.64.0
+// @version      7.64.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7853,7 +7853,13 @@ window.addEventListener('keydown',function(e){
         saveAuditQueueNow(queue);
         const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
         showToast('切换到' + wgName + '继续审核...', 'warning');
-        safeSwitchWG(item.wg);
+        const switched = safeSwitchWG(item.wg);
+        if (!switched) {
+            // 切组失败：放弃自动续跑，避免死循环重试；提示手动切组后单独处理
+            clearAuditQueue();
+            showToast(`无法自动切到${wgName}，已停止自动批审。请手动切到该组后单独处理剩余标本`, 'warning');
+            return false;
+        }
         runAuditQueueResume(2500);
         return false;
     }
@@ -13054,7 +13060,15 @@ function fillNativeLoginForm(creds, lastWG) {
                     const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
                     showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
                     queuePausedForSwitch = true;
-                    safeSwitchWG(item.wg);
+                    const switched = safeSwitchWG(item.wg);
+                    if (!switched) {
+                        // 切组失败（LIS 未提供 switchWG 等）：跳过该跨组标本，继续下一个，避免死循环重试
+                        queue.skipped.push(item);
+                        queue.current++;
+                        saveAuditQueueNow(queue);
+                        showToast(`已跳过跨组标本(${wgName})，请手动切到该组后单独处理`, 'warning');
+                        continue;
+                    }
                     runAuditQueueResume(2500);
                     break;
                 }
