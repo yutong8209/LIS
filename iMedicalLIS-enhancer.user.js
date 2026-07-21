@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.68.0
+// @version      7.78.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -450,6 +450,9 @@
 .mach-cnt{background:#eef2f6;color:#475569;border-radius:10px;padding:0 6px;font-size:10px;min-width:16px;text-align:center;line-height:1.55;font-weight:700}
 .ws-wg-tab.on .mach-cnt,.ws-mach-tab.on .mach-cnt{background:rgba(255,255,255,.22);color:#fff}
 .ws-tab-stat{display:inline-flex;align-items:center;color:#6b7785;font-size:10px;font-weight:700}
+.ws-mach-wrap{flex-wrap:wrap;gap:3px 4px}
+.ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
+.ws-mach-group-label{font-size:10px;font-weight:700;padding:0 2px;white-space:nowrap;opacity:.8}
 .ws-wg-tab.on .ws-tab-stat{color:rgba(255,255,255,.82)}
 
 /* --- 分类标签栏 --- */
@@ -4973,8 +4976,16 @@
     function rowPassWSMachineFilter(row) {
         if (!row) return false;
         if (wsActiveWG && row._wg !== wsActiveWG) return false;
-        const selected = wsMachineFilterSetForActiveWG();
-        if (selected.size > 0) return selected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));
+        if (wsActiveWG) {
+            // 单工作组模式：检查该组的多选仪器
+            const selected = getWSSelectedMachineSet(wsActiveWG);
+            if (selected.size > 0) return selected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));
+        } else {
+            // 全部工作组模式：检查是否有任意组选了仪器
+            const wgSelected = getWSSelectedMachineSet(row._wg || '');
+            if (wgSelected.size > 0) return wgSelected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));
+            // 该组没选仪器 = 该组全部仪器通过
+        }
         if (wsActiveMachine) return String(row._mdr || prWorkGroupMachineDR(row) || '') === String(wsActiveMachine);
         return true;
     }
@@ -5493,6 +5504,92 @@
         });
     }
 
+    // 跨工作组切换：
+    // LIS 原生切换流程：父框架 <select id="sl_changeworkgroup"> → changeLogin(this) → ChangeLogin API → 重载页面。
+    // 本函数直接调用父框架的 changeLogin 完成切组。
+    async function safeSwitchWG(dr) {
+        const wgName = (WG_MAP[dr] || {}).name || dr;
+        try {
+            const topWin = window.top;
+            const topDoc = topWin.document;
+            const sel = topDoc.getElementById('sl_changeworkgroup');
+            if (!sel) {
+                showToast(`未找到工作组切换控件，请手动切到${wgName}`, 'warning');
+                return false;
+            }
+            if (String(sel.value) === String(dr)) return true; // 已在目标组
+            sel.value = String(dr);
+            // 调用父框架原生 changeLogin，与用户手动选工作组完全一致
+            if (typeof topWin.changeLogin === 'function') {
+                topWin.changeLogin(sel);
+                return true;
+            }
+            // 降级：派发 change 事件
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+        } catch (e) {
+            dbg('safeSwitchWG 异常: ' + e);
+            showToast(`切组失败，请手动切到${wgName}`, 'warning');
+            return false;
+        }
+    }
+
+    // --- 异常审核跨组跳转：保存/恢复目标标本 ---
+    const K_ABN_TGT = 'LIS_AbnormalAuditTarget';
+    function saveAbnormalTarget(specimen) {
+        try {
+            localStorage.setItem(K_ABN_TGT, JSON.stringify({
+                reportDR: String(specimen.ReportDR || ''),
+                wg: specimen._wg || '',
+                name: specimen.PatName || '',
+                labno: specimen.Labno || '',
+                ts: Date.now()
+            }));
+        } catch(e) {}
+    }
+    function loadAbnormalTarget() {
+        try {
+            const raw = localStorage.getItem(K_ABN_TGT);
+            if (!raw) return null;
+            const t = JSON.parse(raw);
+            if (!t || !t.reportDR || Date.now() - (t.ts || 0) > 5 * 60 * 1000) {
+                localStorage.removeItem(K_ABN_TGT);
+                return null;
+            }
+            return t;
+        } catch(e) { return null; }
+    }
+    function clearAbnormalTarget() {
+        try { localStorage.removeItem(K_ABN_TGT); } catch(e) {}
+    }
+    function checkAbnormalTarget() {
+        const tgt = loadAbnormalTarget();
+        if (!tgt) return;
+        clearAbnormalTarget();
+        // 切到异常视图，等工作台数据加载完成后找到该标本并自动进入审核
+        if (wsCategory !== 'abnormal') {
+            wsCategory = 'abnormal';
+            saveWSState();
+            renderWSCategoryBar();
+            renderWSTable();
+        }
+        const tryFind = (attempts) => {
+            const found = wsData.find(r => String(r.ReportDR) === tgt.reportDR);
+            if (found) {
+                const idx = filteredData().indexOf(found);
+                if (idx >= 0) {
+                    wsAbnormalIndex = idx;
+                    showToast(`继续审核: ${tgt.name || tgt.labno}`, 'warning');
+                    setTimeout(() => auditAbnormalSpecimen(found), 500);
+                    return;
+                }
+            }
+            if (attempts > 0) setTimeout(() => tryFind(attempts - 1), 1000);
+            else showToast(`未找到标本 ${tgt.name || tgt.labno}，可能已审核`, 'warning');
+        };
+        setTimeout(() => tryFind(10), 1500);
+    }
+
     function getWSAuditBucket(r) {
         const status = String(r.Status || r.ReportStatus || '');
         if (status === '3' || status === '4') return 'audited';
@@ -5579,9 +5676,29 @@
         return String(a.Labno || '').localeCompare(String(b.Labno || ''), 'zh');
     }
 
+    // 确定用户实际所在工作组（多层回退）
+    function resolveCurrentWG() {
+        // 1. 工作台选中的工作组（最可靠）
+        if (wsActiveWG) return wsActiveWG;
+        // 2. LIS 页面全局变量
+        const dr = wgDR();
+        if (dr) return dr;
+        // 3. 从 wsData 推断：有标本的工作组中最常见的
+        const counts = {};
+        wsData.forEach(r => { const w = r._wg; if (w) counts[w] = (counts[w]||0) + 1; });
+        let best = '', bestN = 0;
+        for (const [w, n] of Object.entries(counts)) { if (n > bestN) { best = w; bestN = n; } }
+        return best;
+    }
+
     function compareAuditQueueItems(a, b) {
         const rowA = resolveQueueItemRow(a) || { _wg: a.wg, _mdr: a.mdr, AcceptDT: '', Labno: a.labno };
         const rowB = resolveQueueItemRow(b) || { _wg: b.wg, _mdr: b.mdr, AcceptDT: '', Labno: b.labno };
+        // 当前工作组优先，减少切组次数
+        const curWg = resolveCurrentWG();
+        const aIsCur = String(rowA._wg || a.wg) === curWg ? 0 : 1;
+        const bIsCur = String(rowB._wg || b.wg) === curWg ? 0 : 1;
+        if (aIsCur !== bIsCur) return aIsCur - bIsCur;
         const g = compareSpecimensByMachineGroup(rowA, rowB);
         if (g) return g;
         const va = String(rowA.AcceptDT || '');
@@ -5600,12 +5717,20 @@
         // 读取当前搜索框值（不能用旧的 wsSearchQuery）
         const _q = ($('#lis-ws-search') || {}).value || '';
         // 缓存检查
-        const machineFilterKey = wsActiveWG ? [...wsMachineFilterSetForActiveWG()].sort().join(',') : wsActiveMachine;
+        let machineFilterKey;
+        if (wsActiveWG) {
+            machineFilterKey = [...wsMachineFilterSetForActiveWG()].sort().join(',');
+        } else {
+            // 全部工作组：汇总所有组的选中仪器
+            const allSel = [];
+            WG.forEach(w => { const s = getWSSelectedMachineSet(w.dr); if (s.size) allSel.push(w.dr + ':' + [...s].sort().join(',')); });
+            machineFilterKey = allSel.length ? allSel.sort().join('|') : wsActiveMachine;
+        }
         const ck = wsActiveWG + '|' + machineFilterKey + '|' + wsCategory + '|' + _q + '|' + (wsSort.field + wsSort.asc) + '|' + _classifyVersion;
         if (_filteredCache && _filteredCacheKey === ck) return _filteredCache;
         let d = [...wsData];
-        // 工作组 + 仪器过滤（选中工作组后支持多选仪器）
-        if (wsActiveWG || wsActiveMachine) d = d.filter(rowPassWSMachineFilter);
+        // 工作组 + 仪器过滤
+        if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0)) d = d.filter(rowPassWSMachineFilter);
         // 分类过滤
         if (wsCategory === 'normal') {
             d = d.filter(r => {
@@ -5663,7 +5788,14 @@
 
     // --- 统一计数：一次遍历产出工作组计数 + 分类计数 ---
     function calcUnifiedCounts() {
-        const machineFilterKey = wsActiveWG ? [...wsMachineFilterSetForActiveWG()].sort().join(',') : wsActiveMachine;
+        let machineFilterKey;
+        if (wsActiveWG) {
+            machineFilterKey = [...wsMachineFilterSetForActiveWG()].sort().join(',');
+        } else {
+            const allSel = [];
+            WG.forEach(w => { const s = getWSSelectedMachineSet(w.dr); if (s.size) allSel.push(w.dr + ':' + [...s].sort().join(',')); });
+            machineFilterKey = allSel.length ? allSel.sort().join('|') : wsActiveMachine;
+        }
         const ck = wsData.length + '|' + wsActiveWG + '|' + machineFilterKey;
         if (_countsCache && _countsCacheKey === ck) return _countsCache;
 
@@ -5758,13 +5890,7 @@
     }
 
     // --- 渲染：仪器标签栏（两级：工作组 + 仪器）---
-    function renderWSTabs() {
-        const tabs = $('#lis-ws-tabs');
-        if (!tabs) return;
-        tabs.style.flexShrink = '0';
-        const mc = wsMachineCounts;
-
-        // 按工作组统计
+    function calcWSTabCounts() {
         const wgCounts = {};
         WG.forEach(w => { wgCounts[w.dr] = {total:0, normalReady:0, abnormalReady:0}; });
         wsData.forEach(r => {
@@ -5775,76 +5901,86 @@
             if (bucket === 'normal') wgCounts[wg].normalReady++;
             else if (bucket === 'abnormal') wgCounts[wg].abnormalReady++;
         });
+        return wgCounts;
+    }
 
-        // 第一行：工作组标签
+    let _tabsBuilt = false;
+    let _tabsLastActiveWG = undefined; // 上次构建时的工作组模式
+
+    function renderWSTabs() {
+        const tabs = $('#lis-ws-tabs');
+        if (!tabs) return;
+        tabs.style.flexShrink = '0';
+        const mc = wsMachineCounts;
+        const wgCounts = calcWSTabCounts();
+        // 仅在首次或切换工作组时重建 DOM，其余只更新状态
+        const needRebuild = !_tabsBuilt || _tabsLastActiveWG !== wsActiveWG;
+        if (needRebuild) {
+            _tabsBuilt = true;
+            _tabsLastActiveWG = wsActiveWG;
+            buildWSTabsDOM(tabs, wgCounts, mc);
+        } else {
+            updateWSTabsState(tabs, wgCounts, mc);
+        }
+    }
+
+    function buildWSTabsDOM(tabs, wgCounts, mc) {
         let h = '<div class="ws-wg-row">';
         WG.forEach(w => {
-            const c = wgCounts[w.dr] || {total:0};
-            h += `<button class="ws-wg-tab ${wsActiveWG===w.dr?'on':''}" data-wg="${w.dr}">
+            h += `<button class="ws-wg-tab" data-wg="${w.dr}">
                 <span class="ws-tab-name">${w.name}</span>
-                <span class="ws-tab-stat">正常${c.normalReady || 0}</span>
-                <span class="ws-tab-stat">异常${c.abnormalReady || 0}</span>
-                <span class="mach-cnt">总${c.total}</span>
+                <span class="ws-tab-stat ws-stat-normal"></span>
+                <span class="ws-tab-stat ws-stat-abnormal"></span>
+                <span class="mach-cnt ws-cnt-total"></span>
             </button>`;
         });
-        // 全部工作组
-        const allTotal = WG.reduce((s,w) => s + (wgCounts[w.dr]?.total||0), 0);
-        const allNormal = WG.reduce((s,w) => s + (wgCounts[w.dr]?.normalReady||0), 0);
-        const allAbnormal = WG.reduce((s,w) => s + (wgCounts[w.dr]?.abnormalReady||0), 0);
-        h += `<button class="ws-wg-tab ${!wsActiveWG?'on':''}" data-wg="">
+        h += `<button class="ws-wg-tab" data-wg="">
             <span class="ws-tab-name">全部</span>
-            <span class="ws-tab-stat">正常${allNormal}</span>
-            <span class="ws-tab-stat">异常${allAbnormal}</span>
-            <span class="mach-cnt">总${allTotal}</span>
+            <span class="ws-tab-stat ws-stat-normal"></span>
+            <span class="ws-tab-stat ws-stat-abnormal"></span>
+            <span class="mach-cnt ws-cnt-total"></span>
         </button>`;
         h += '</div>';
 
-        // 第二行：仪器标签。选中具体工作组时支持多选；全部工作组下保留旧版单选仪器模式。
         h += '<div class="ws-mach-row">';
         if (wsActiveWG) {
-            const selectedSet = getWSSelectedMachineSet(wsActiveWG);
-            const wgMachines = sortWSMachines(wsMachines.filter(m => m._wg === wsActiveWG));
-            const ac = {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-            wgMachines.forEach(m => {
-                const mc2 = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-                ac.total += mc2.total; ac.normalReady += mc2.normalReady;
-                ac.abnormalReady += mc2.abnormalReady; ac.incomplete += mc2.incomplete;
-            });
-            h += `<button class="ws-mach-tab ws-mach-all ${selectedSet.size===0?'on':''}" data-action="all">
+            h += `<button class="ws-mach-tab ws-mach-all" data-action="all">
                 <span class="ws-tab-name">全部仪器</span>
-                <span class="mach-cnt">${ac.total}</span>
+                <span class="mach-cnt ws-cnt-mach"></span>
             </button>`;
-            wgMachines.forEach(m => {
+            sortWSMachines(wsMachines.filter(m => m._wg === wsActiveWG)).forEach(m => {
                 const mdr = String(m.RowID || '');
-                const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-                const checked = selectedSet.has(mdr);
-                h += `<button class="ws-mach-tab ws-mach-multi ${checked?'on':''}" data-multi-m="${escAttr(mdr)}" title="点击勾选/取消该仪器">
-                    <span class="ws-mach-check">${checked ? '✓' : ''}</span>
+                h += `<button class="ws-mach-tab ws-mach-multi" data-multi-m="${escAttr(mdr)}" data-wg="${escAttr(wsActiveWG)}">
+                    <span class="ws-mach-check"></span>
                     <span class="ws-tab-name">${esc(m.CName||m.Name)}</span>
-                    <span class="mach-cnt">${c.total}</span>
+                    <span class="mach-cnt ws-cnt-mach"></span>
                 </button>`;
             });
-            if (!wgMachines.length) h += '<span class="cat-stats">当前工作组暂无仪器</span>';
         } else {
-            const ac = mc['_all'] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-            h += `<button class="ws-mach-tab ${!wsActiveMachine?'on':''}" data-m="">
+            h += `<button class="ws-mach-tab ws-mach-all" data-action="all-global">
                 <span class="ws-tab-name">全部仪器</span>
-                <span class="mach-cnt">${ac.total}</span>
+                <span class="mach-cnt ws-cnt-mach"></span>
             </button>`;
-            const wgMachines = sortWSMachines(wsMachines);
-            wgMachines.forEach(m => {
-                const c = mc[m.RowID] || {total:0, normalReady:0, abnormalReady:0, incomplete:0};
-                h += `<button class="ws-mach-tab ${wsActiveMachine===m.RowID?'on':''}" data-m="${escAttr(m.RowID)}">
-                    <span class="ws-tab-name">${esc((m.CName||m.Name||'') + (m._wgn ? ' · ' + m._wgn : ''))}</span>
-                    <span class="mach-cnt">${c.total}</span>
-                </button>`;
+            WG.forEach(w => {
+                const wgMachines = sortWSMachines(wsMachines.filter(m => m._wg === w.dr));
+                if (!wgMachines.length) return;
+                h += `<div class="ws-mach-group">`;
+                h += `<span class="ws-mach-group-label" style="color:${w.color||'#666'}">${esc(w.name)}</span>`;
+                wgMachines.forEach(m => {
+                    const mdr = String(m.RowID || '');
+                    h += `<button class="ws-mach-tab ws-mach-multi" data-multi-m="${escAttr(mdr)}" data-wg="${escAttr(w.dr)}">
+                        <span class="ws-mach-check"></span>
+                        <span class="ws-tab-name">${esc(m.CName||m.Name)}</span>
+                        <span class="mach-cnt ws-cnt-mach"></span>
+                    </button>`;
+                });
+                h += `</div>`;
             });
         }
         h += '</div>';
-
         tabs.innerHTML = h;
 
-        // 工作组标签事件
+        // 事件绑定（只绑一次）
         tabs.querySelectorAll('.ws-wg-tab').forEach(b => b.addEventListener('click', () => {
             invalidateCaches();
             wsActiveWG = b.dataset.wg;
@@ -5856,12 +5992,10 @@
             renderWSCategoryBar();
             renderWSTable();
         }));
-
-        // 多选仪器事件（具体工作组下）
         tabs.querySelectorAll('.ws-mach-all').forEach(b => b.addEventListener('click', () => {
-            if (!wsActiveWG) return;
             invalidateCaches();
-            setWSSelectedMachineSet(wsActiveWG, new Set());
+            if (wsActiveWG) setWSSelectedMachineSet(wsActiveWG, new Set());
+            else WG.forEach(w => setWSSelectedMachineSet(w.dr, new Set()));
             wsActiveMachine = '';
             wsAbnormalIndex = -1;
             wsChecked.clear();
@@ -5871,13 +6005,14 @@
             renderWSTable();
         }));
         tabs.querySelectorAll('.ws-mach-multi').forEach(b => b.addEventListener('click', () => {
-            if (!wsActiveWG) return;
             invalidateCaches();
             const mdr = String(b.dataset.multiM || '');
-            const selected = getWSSelectedMachineSet(wsActiveWG);
+            const wg = b.dataset.wg || wsActiveWG || '';
+            if (!wg) return;
+            const selected = getWSSelectedMachineSet(wg);
             if (selected.has(mdr)) selected.delete(mdr);
             else if (mdr) selected.add(mdr);
-            setWSSelectedMachineSet(wsActiveWG, selected);
+            setWSSelectedMachineSet(wg, selected);
             wsActiveMachine = '';
             wsAbnormalIndex = -1;
             wsChecked.clear();
@@ -5886,19 +6021,46 @@
             renderWSCategoryBar();
             renderWSTable();
         }));
+        updateWSTabsState(tabs, wgCounts, mc);
+    }
 
-        // 仪器标签事件（全部工作组下仍为单选）
-        tabs.querySelectorAll('.ws-mach-tab').forEach(b => b.addEventListener('click', () => {
-            if (b.classList.contains('ws-mach-all') || b.classList.contains('ws-mach-multi')) return;
-            invalidateCaches();
-            wsActiveMachine = b.dataset.m;
-            wsAbnormalIndex = -1;
-            wsChecked.clear();
-            saveWSState();
-            renderWSTabs();
-            renderWSCategoryBar();
-            renderWSTable();
-        }));
+    // 仅更新数字和选中态（不重建 DOM，不闪烁）
+    function updateWSTabsState(tabs, wgCounts, mc) {
+        tabs.querySelectorAll('.ws-wg-tab').forEach(b => {
+            const wg = b.dataset.wg;
+            const isOn = wg ? (wsActiveWG === wg) : !wsActiveWG;
+            b.classList.toggle('on', isOn);
+            const c = wg ? (wgCounts[wg] || {total:0,normalReady:0,abnormalReady:0}) : null;
+            const nEl = b.querySelector('.ws-stat-normal');
+            const aEl = b.querySelector('.ws-stat-abnormal');
+            const tEl = b.querySelector('.ws-cnt-total');
+            if (c) {
+                nEl.textContent = '正常' + (c.normalReady || 0);
+                aEl.textContent = '异常' + (c.abnormalReady || 0);
+                tEl.textContent = '总' + c.total;
+            } else {
+                nEl.textContent = '正常' + WG.reduce((s,w) => s + (wgCounts[w.dr]?.normalReady||0), 0);
+                aEl.textContent = '异常' + WG.reduce((s,w) => s + (wgCounts[w.dr]?.abnormalReady||0), 0);
+                tEl.textContent = '总' + WG.reduce((s,w) => s + (wgCounts[w.dr]?.total||0), 0);
+            }
+        });
+        tabs.querySelectorAll('.ws-mach-tab').forEach(b => {
+            if (b.classList.contains('ws-mach-all')) {
+                const isOn = wsActiveWG ? getWSSelectedMachineSet(wsActiveWG).size === 0 : !WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
+                b.classList.toggle('on', isOn);
+                const el = b.querySelector('.ws-cnt-mach');
+                if (el) el.textContent = (mc['_all']||{total:0}).total;
+            } else if (b.classList.contains('ws-mach-multi')) {
+                const mdr = b.dataset.multiM;
+                const wg = b.dataset.wg || wsActiveWG || '';
+                const checked = wg ? getWSSelectedMachineSet(wg).has(mdr) : false;
+                b.classList.toggle('on', checked);
+                const chk = b.querySelector('.ws-mach-check');
+                if (chk) chk.textContent = checked ? '✓' : '';
+                const el = b.querySelector('.ws-cnt-mach');
+                if (el) el.textContent = (mc[mdr]||{total:0}).total;
+            }
+        });
     }
 
     // 切换工作台分类（与点击分类标签行为一致：保留勾选、刷新渲染）
@@ -5977,7 +6139,7 @@
 
         // 统计各分类数量（基于当前工作组+仪器过滤）
         let filtered = wsData;
-        if (wsActiveWG || wsActiveMachine) filtered = filtered.filter(rowPassWSMachineFilter);
+        if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0)) filtered = filtered.filter(rowPassWSMachineFilter);
 
         let normalCount = 0, abnormalCount = 0, incompleteCount = 0, pendingCount = 0;
         filtered.forEach(r => {
@@ -6579,16 +6741,25 @@ window.addEventListener('keydown',function(e){
             counts = { visible: filteredData().length, total: wsData.length };
         }
         const groupName = wsActiveWG ? ((WG_MAP[wsActiveWG] || {}).name || wsActiveWG) : '全部工作组';
-        const selectedMachines = wsMachineFilterSetForActiveWG();
         let machineName = '全部仪器';
-        if (wsActiveWG && selectedMachines.size > 0) {
-            const names = wsMachines
-                .filter(m => m._wg === wsActiveWG && selectedMachines.has(String(m.RowID)))
-                .map(m => m.CName || m.Name || m.RowID)
-                .filter(Boolean);
-            machineName = names.length <= 2 ? names.join('、') : `已选${selectedMachines.size}台仪器`;
-        } else if (wsActiveMachine) {
-            machineName = ((wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).CName || (wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).Name || '当前仪器');
+        if (wsActiveWG) {
+            const selectedMachines = getWSSelectedMachineSet(wsActiveWG);
+            if (selectedMachines.size > 0) {
+                const names = wsMachines
+                    .filter(m => m._wg === wsActiveWG && selectedMachines.has(String(m.RowID)))
+                    .map(m => m.CName || m.Name || m.RowID)
+                    .filter(Boolean);
+                machineName = names.length <= 2 ? names.join('、') : `已选${selectedMachines.size}台仪器`;
+            }
+        } else {
+            // 全部工作组：汇总各组选中的仪器
+            const allSel = [];
+            WG.forEach(w => { const s = getWSSelectedMachineSet(w.dr); if (s.size) allSel.push({ wg: w.name, n: s.size }); });
+            if (allSel.length) {
+                machineName = allSel.map(s => `${s.wg}${s.n}台`).join('、');
+            } else if (wsActiveMachine) {
+                machineName = ((wsMachines.find(m => String(m.RowID) === String(wsActiveMachine)) || {}).CName || '当前仪器');
+            }
         }
         const parts = [`${groupName}`, `${machineName}`, `${counts.visible}/${counts.total || 0}条`];
         if (typeof counts.normal === 'number') parts.push(`正常${counts.normal}`);
@@ -7288,12 +7459,13 @@ window.addEventListener('keydown',function(e){
                 return;
             }
 
-            const curDR = wgDR();
+            const curDR = resolveCurrentWG();
             const spDR = specimen._wg || '';
             if (spDR && curDR && spDR !== curDR) {
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
                 showToast(`切换到${wgName}继续审核`, 'warning');
-                switchWG(spDR);
+                saveAbnormalTarget(specimen);
+                safeSwitchWG(spDR);
                 return;
             }
 
@@ -7684,7 +7856,7 @@ window.addEventListener('keydown',function(e){
         if (targetDR !== curDR) {
             // 需要切换工作组
             toast('正在切换到 ' + (WG_MAP[targetDR]||{}).name + '...', 'w');
-            switchWG(targetDR);
+            safeSwitchWG(targetDR);
             return;
         }
 
@@ -7830,13 +8002,14 @@ window.addEventListener('keydown',function(e){
     async function ensureAuditQueueWorkGroup(queue) {
         const item = currentQueueItem(queue);
         if (!item) return true;
-        const curDR = wgDR();
-        if (!item.wg || item.wg === curDR) return true;
+        const curDR = String(resolveCurrentWG());
+        const itemWg = String(item.wg || '');
+        if (!itemWg || itemWg === curDR) return true;
         queue.pausedForSwitch = true;
         saveAuditQueueNow(queue);
-        const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
+        const wgName = (WG_MAP[itemWg] || {}).name || itemWg;
         showToast('切换到' + wgName + '继续审核...', 'warning');
-        switchWG(item.wg);
+        safeSwitchWG(item.wg);
         runAuditQueueResume(2500);
         return false;
     }
@@ -7896,12 +8069,14 @@ window.addEventListener('keydown',function(e){
         if (!queue || !queue.items || queue.items.length === 0) return;
         const remaining = queue.items.length - (queue.current || 0);
         if (remaining <= 0) { clearAuditQueue(); return; }
+        // 仅在切组后自动续跑，不弹确认框
         if (queue.pausedForSwitch) {
             showToast(`切换工作组后继续批审（${remaining} 个标本）...`, 'warning');
             runAuditQueueResume(1500);
             return;
         }
-        confirmAuditQueueResume(remaining);
+        // 非切组场景（如页面刷新），静默清理过期队列，不弹窗打扰
+        clearAuditQueue();
     }
 
     // --- F5 快捷键审核选中标本 ---
@@ -8369,12 +8544,13 @@ window.addEventListener('keydown',function(e){
                 return;
             }
 
-            const curDR = wgDR();
+            const curDR = resolveCurrentWG();
             const spDR = specimen._wg || '';
             if (spDR && curDR && spDR !== curDR) {
                 const wgName = (WG_MAP[spDR] || {}).name || spDR;
                 showToast(`切换到${wgName}继续审核`, 'warning');
-                switchWG(spDR);
+                saveAbnormalTarget(specimen);
+                safeSwitchWG(spDR);
                 return;
             }
 
@@ -13029,20 +13205,20 @@ function fillNativeLoginForm(creds, lastWG) {
                     skipCount++; queue.current++; saveAuditQueueNow(queue); continue;
                 }
 
-                if (item.wg && item.wg !== wgDR()) {
-                    if (batchCAReady && wgDR()) queue.caReadyByWg[wgDR()] = true;
+                if (item.wg && item.wg !== resolveCurrentWG()) {
+                    if (batchCAReady && resolveCurrentWG()) queue.caReadyByWg[resolveCurrentWG()] = true;
                     queue.pausedForSwitch = true;
                     saveAuditQueueNow(queue);
                     const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
                     const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
                     showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
                     queuePausedForSwitch = true;
-                    switchWG(item.wg);
+                    safeSwitchWG(item.wg);
                     runAuditQueueResume(2500);
                     break;
                 }
 
-                const itemWg = item.wg || wgDR();
+                const itemWg = item.wg || resolveCurrentWG();
                 // 每条开始时以真实 Ukey 为准（不要被过期缓存拖回慢路径）
                 batchCAReady = isCASessionReady(iframeWin) || !!queue.caReadyByWg[itemWg];
                 if (batchCAReady) queue.caReadyByWg[itemWg] = true;
@@ -13497,6 +13673,7 @@ function fillNativeLoginForm(creds, lastWG) {
         initAbnormalEnterBridge();
         checkNavigateTarget();
         checkAuditQueueResume();
+        checkAbnormalTarget();
         startQCInputProbe();
         startQEProbe();
         injectToolbar();
