@@ -44,3 +44,26 @@ mcp-image-reader/config.json
 .DS_Store
 10秒前
 10s
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+Thumbs.db
+.DS_Store
+._*
+
+# Temporary files
+*.tmp
+*.temp
+
+# Development scripts
+lint.sh
