@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.80.0
+// @version      7.81.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6240,7 +6240,7 @@
             if (existing && existing.classList.contains('show')) return false;
 
             let currentFiltered = wsData;
-            if (wsActiveWG || wsActiveMachine) currentFiltered = currentFiltered.filter(rowPassWSMachineFilter);
+            if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0)) currentFiltered = currentFiltered.filter(rowPassWSMachineFilter);
 
             let sourceData;
             if (wsChecked.size > 0) {
@@ -8040,40 +8040,6 @@ window.addEventListener('keydown',function(e){
                 showToast('续跑批审失败: ' + e.message, 'error');
             });
         }, delayMs);
-    }
-
-    function confirmAuditQueueResume(remaining) {
-        const existing = document.getElementById('lis-queue-resume');
-        if (existing) existing.remove();
-        const dialog = document.createElement('div');
-        dialog.id = 'lis-queue-resume';
-        dialog.innerHTML = `
-            <div id="lis-audit-box" style="max-width:420px">
-                <div class="ab-hd">
-                    <h4>继续批审？</h4>
-                    <button class="ab-close" id="lis-qr-close">✕</button>
-                </div>
-                <div class="ab-body">
-                    <p style="margin:0;font-size:13px;color:#334155;line-height:1.6">
-                        发现上次未完成的批审队列，还有 <b>${remaining}</b> 个标本待处理。是否继续？
-                    </p>
-                </div>
-                <div class="ab-ft">
-                    <button class="ab-cancel" id="lis-qr-cancel">放弃</button>
-                    <button class="ab-confirm ok" id="lis-qr-confirm">继续批审</button>
-                </div>
-            </div>`;
-        document.body.appendChild(dialog);
-        dialog.classList.add('show');
-        const close = () => dialog.remove();
-        document.getElementById('lis-qr-close').addEventListener('click', close);
-        document.getElementById('lis-qr-cancel').addEventListener('click', () => { clearAuditQueue(); close(); });
-        dialog.addEventListener('click', e => { if (e.target === dialog) close(); });
-        document.getElementById('lis-qr-confirm').addEventListener('click', () => {
-            close();
-            showToast(`继续批审（${remaining} 个标本）...`, 'warning');
-            runAuditQueueResume(300);
-        });
     }
 
     function checkAuditQueueResume() {
