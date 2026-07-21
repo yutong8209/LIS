@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.78.0
+// @version      7.80.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5088,6 +5088,7 @@
         wsData = [];
         wsMachines = [];
         wsMachineCounts = {};
+        _tabsBuilt = false;
         invalidateCaches({ detail: true, raw: true });
         wsEl.classList.add('show');
         // 强制 flex 布局（LIS 系统 CSS 会覆盖）
@@ -5538,12 +5539,16 @@
     const K_ABN_TGT = 'LIS_AbnormalAuditTarget';
     function saveAbnormalTarget(specimen) {
         try {
+            // 读取已有 cycle 计数，累加防循环
+            let cycle = 0;
+            try { const old = JSON.parse(localStorage.getItem(K_ABN_TGT) || '{}'); cycle = (old.cycle || 0) + 1; } catch(_) {}
             localStorage.setItem(K_ABN_TGT, JSON.stringify({
                 reportDR: String(specimen.ReportDR || ''),
                 wg: specimen._wg || '',
                 name: specimen.PatName || '',
                 labno: specimen.Labno || '',
-                ts: Date.now()
+                ts: Date.now(),
+                cycle
             }));
         } catch(e) {}
     }
@@ -5556,6 +5561,11 @@
                 localStorage.removeItem(K_ABN_TGT);
                 return null;
             }
+            // 防止无限循环：最多尝试 3 次切组
+            if ((t.cycle || 0) > 3) {
+                localStorage.removeItem(K_ABN_TGT);
+                return null;
+            }
             return t;
         } catch(e) { return null; }
     }
@@ -5565,8 +5575,7 @@
     function checkAbnormalTarget() {
         const tgt = loadAbnormalTarget();
         if (!tgt) return;
-        clearAbnormalTarget();
-        // 切到异常视图，等工作台数据加载完成后找到该标本并自动进入审核
+        // 不立即清空，找到标本后再清（防止页面重载导致丢失）
         if (wsCategory !== 'abnormal') {
             wsCategory = 'abnormal';
             saveWSState();
@@ -5578,6 +5587,7 @@
             if (found) {
                 const idx = filteredData().indexOf(found);
                 if (idx >= 0) {
+                    clearAbnormalTarget();
                     wsAbnormalIndex = idx;
                     showToast(`继续审核: ${tgt.name || tgt.labno}`, 'warning');
                     setTimeout(() => auditAbnormalSpecimen(found), 500);
@@ -5585,7 +5595,7 @@
                 }
             }
             if (attempts > 0) setTimeout(() => tryFind(attempts - 1), 1000);
-            else showToast(`未找到标本 ${tgt.name || tgt.labno}，可能已审核`, 'warning');
+            else { clearAbnormalTarget(); showToast(`未找到标本 ${tgt.name || tgt.labno}，可能已审核`, 'warning'); }
         };
         setTimeout(() => tryFind(10), 1500);
     }
@@ -5905,7 +5915,8 @@
     }
 
     let _tabsBuilt = false;
-    let _tabsLastActiveWG = undefined; // 上次构建时的工作组模式
+    let _tabsLastActiveWG = undefined;
+    let _tabsLastMachineCount = 0; // 上次构建时的仪器数量
 
     function renderWSTabs() {
         const tabs = $('#lis-ws-tabs');
@@ -5913,11 +5924,12 @@
         tabs.style.flexShrink = '0';
         const mc = wsMachineCounts;
         const wgCounts = calcWSTabCounts();
-        // 仅在首次或切换工作组时重建 DOM，其余只更新状态
-        const needRebuild = !_tabsBuilt || _tabsLastActiveWG !== wsActiveWG;
+        // 首次 / 切换工作组 / 仪器数量变化时重建 DOM，其余只更新状态
+        const needRebuild = !_tabsBuilt || _tabsLastActiveWG !== wsActiveWG || _tabsLastMachineCount !== wsMachines.length;
         if (needRebuild) {
             _tabsBuilt = true;
             _tabsLastActiveWG = wsActiveWG;
+            _tabsLastMachineCount = wsMachines.length;
             buildWSTabsDOM(tabs, wgCounts, mc);
         } else {
             updateWSTabsState(tabs, wgCounts, mc);
@@ -7975,7 +7987,7 @@ window.addEventListener('keydown',function(e){
             if (!isAutoAuditableClassified(sp)) return;
             items.push({
                 reportDR: String(reportDR),
-                wg: row._wg || wgDR(),
+                wg: row._wg || resolveCurrentWG(),
                 mdr: prWorkGroupMachineDR(row) || '',
                 labno: row.Labno || '',
                 name: row.PatName || '',
@@ -13140,8 +13152,8 @@ function fillNativeLoginForm(creds, lastWG) {
             });
             iframeWin = getReportIframeWin() || iframeWin;
             if (iframeWin) { jq = iframeWin.jQuery || iframeWin.$; me = iframeWin.me; }
-            let batchCAReady = !!(queue.caReadyByWg[wgDR()] || prereq.caReady || isCASessionReady(iframeWin));
-            if (batchCAReady) queue.caReadyByWg[wgDR()] = true;
+            let batchCAReady = !!(queue.caReadyByWg[resolveCurrentWG()] || prereq.caReady || isCASessionReady(iframeWin));
+            if (batchCAReady) queue.caReadyByWg[resolveCurrentWG()] = true;
             dbg('批审前置: caReady=', batchCAReady, 'caUser=', prereq.caUser, getReportCAUserDR(iframeWin));
 
             if (queue.current < queue.items.length - 1) {
