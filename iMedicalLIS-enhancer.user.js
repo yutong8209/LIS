@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.83.0
+// @version      7.83.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -13975,19 +13975,21 @@ window.addEventListener('keydown',function(e){
     // 阳性标记
     if (r === '+' || r === '阳性' || r === 'POSITIVE' || r === 'POS' || r === 'REACTIVE') {return true;}
     if (/^\+{1,4}$/.test(r) || r.includes('阳性') || r.includes('弱阳')) {return true;}
-    // 数值 > 1（S/CO 值通常 >1 为阳性）
-    // 但如果提供了参考值范围，则按参考值判断
+    // 数值结果：按参考值范围判断
     const num = parseFloat(r);
     if (!isNaN(num)) {
       if (item) {
         const range = getItemRangeValues(item);
         const high = parseComparableNumber(range.high);
-        // 如果有上限参考值，且结果在参考值范围内，则不算阳性
-        if (high && !isNaN(high.value) && num <= high.value) {
-          return false;
+        // 如果有上限参考值，按参考值判断
+        if (high && !isNaN(high.value)) {
+          // 结果在参考值范围内 = 阴性
+          if (num <= high.value) {return false;}
+          // 结果超出参考值范围 = 阳性
+          return true;
         }
       }
-      // 没有参考值或超出参考值范围时，使用通用的 S/CO 逻辑
+      // 没有参考值时，使用通用的 S/CO 逻辑（>1 为阳性）
       if (num > 1) {return true;}
     }
     return false;
