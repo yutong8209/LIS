@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.83.2
+// @version      7.84.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8561,7 +8561,14 @@ window.addEventListener('keydown',function(e){
       iframeWin = getReportIframeWin() || iframeWin;
       if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
           softAuditSuccessHint(iframeWin, reportDR)) {
-        dbg('延迟二次校验：标本已审核成功');
+        dbg('延迟二次校验：标本已审核成功（原生状态）');
+        return true;
+      }
+      // 再检查 wsData（后台轮询可能已更新状态）
+      const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
+      const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
+      if (liveStatus === '3' || liveStatus === '4') {
+        dbg('延迟二次校验：标本已审核成功（wsData 状态）');
         return true;
       }
     }
@@ -8698,14 +8705,21 @@ window.addEventListener('keydown',function(e){
         advanceAbnormalFocusAfterSkip(startIndex);
         return;
       }
-      // 最终兜底：executeNativeAudit 可能因竞态误判失败，再等 2s 检查 wsData
+      // 最终兜底：executeNativeAudit 可能因竞态误判失败，再等 2s 多重校验
       if (!auditResult) {
         await sleep(2000);
-        const liveRow = wsData.find(r => String(r.ReportDR) === String(targetDR));
-        const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
-        if (liveStatus === '3' || liveStatus === '4') {
-          dbg('异常审核延迟确认成功（wsData 状态已更新）:', specimen.PatName);
+        iframeWin = getReportIframeWin() || iframeWin;
+        if (verifyAuditSucceededByReportDR(iframeWin, targetDR) ||
+            softAuditSuccessHint(iframeWin, targetDR)) {
+          dbg('异常审核延迟确认成功（原生状态）:', specimen.PatName);
           auditResult = true;
+        } else {
+          const liveRow = wsData.find(r => String(r.ReportDR) === String(targetDR));
+          const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
+          if (liveStatus === '3' || liveStatus === '4') {
+            dbg('异常审核延迟确认成功（wsData 状态）:', specimen.PatName);
+            auditResult = true;
+          }
         }
       }
       if (!auditResult) {
@@ -9812,26 +9826,33 @@ window.addEventListener('keydown',function(e){
       }
 
       _setDetailAuditBusy(true, '⏳ 提交审核…');
-      const auditResult = await executeNativeAudit(iframeWin, specimen, { keepWS: true, fast: true });
+      let auditResult = await executeNativeAudit(iframeWin, specimen, { keepWS: true, fast: true });
       if (auditResult === 'incomplete') {
         showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
         return;
       }
+      // 最终兜底：再等 2s 后多重校验（原生状态 + wsData + softHint）
       if (!auditResult) {
-        // 最终兜底：再等 2s 后检查 wsData（后台轮询可能已更新状态）
         await sleep(2000);
-        const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
-        const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
-        if (liveStatus === '3' || liveStatus === '4') {
-          dbg('详情审核延迟确认成功（wsData 状态已更新）:', specimen.PatName);
-          showToast(`已审核: ${specimen.PatName}`, 'success');
+        iframeWin = getReportIframeWin() || iframeWin;
+        if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
+            softAuditSuccessHint(iframeWin, reportDR)) {
+          dbg('详情审核延迟确认成功（原生状态）:', specimen.PatName);
+          auditResult = true;
         } else {
-          showToast('未确认审核成功，请核对原生列表状态', 'warning');
-          return;
+          const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
+          const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
+          if (liveStatus === '3' || liveStatus === '4') {
+            dbg('详情审核延迟确认成功（wsData 状态）:', specimen.PatName);
+            auditResult = true;
+          }
         }
-      } else {
-        showToast(`已审核: ${specimen.PatName}`, 'success');
       }
+      if (!auditResult) {
+        showToast('未确认审核成功，请核对原生列表状态', 'warning');
+        return;
+      }
+      showToast(`已审核: ${specimen.PatName}`, 'success');
       dbg('详情审核成功:', specimen.PatName, 'ReportDR:', reportDR);
 
       // 确保焦点在主页面（审核操作后焦点可能留在 iframe 中）
@@ -14804,11 +14825,22 @@ window.addEventListener('keydown',function(e){
     });
     if (!result) {
       await sleep(300);
-      result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR);
+      iframeWin = getReportIframeWin() || iframeWin;
+      result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
+              softAuditSuccessHint(iframeWin, item.reportDR);
     }
     if (!result) {
       await sleep(500);
-      result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR);
+      iframeWin = getReportIframeWin() || iframeWin;
+      result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
+              softAuditSuccessHint(iframeWin, item.reportDR);
+    }
+    // 最终延迟校验
+    if (!result) {
+      await sleep(1000);
+      iframeWin = getReportIframeWin() || iframeWin;
+      result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
+               softAuditSuccessHint(iframeWin, item.reportDR);
     }
     return { ok: !!result, iframeWin };
   }
@@ -15249,10 +15281,23 @@ window.addEventListener('keydown',function(e){
               dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
             }
           } else {
-            // 未确认成功：优先队尾重试，不要直接放弃（真漏审多由此产生）
-            if (!requeueAuditItem(queue, item, '审核未确认成功')) {
-              queue.failed.push({ ...item, reason: '审核未确认成功' });
-              failCount++;
+            // 延迟校验：原生状态回写可能有 1~2s 延迟
+            await sleep(1500);
+            iframeWin = getReportIframeWin() || iframeWin;
+            if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
+                softAuditSuccessHint(iframeWin, item.reportDR)) {
+              dbg('批审延迟校验成功:', item.reportDR);
+              auditResult = true;
+              queue.done.push(item);
+              successCount++;
+              batchCAReady = true;
+              queue.caReadyByWg[itemWg] = true;
+            } else {
+              // 未确认成功：优先队尾重试，不要直接放弃（真漏审多由此产生）
+              if (!requeueAuditItem(queue, item, '审核未确认成功')) {
+                queue.failed.push({ ...item, reason: '审核未确认成功' });
+                failCount++;
+              }
             }
           }
         } catch (e) {
