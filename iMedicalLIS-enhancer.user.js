@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.83.1
+// @version      7.83.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8555,6 +8555,16 @@ window.addEventListener('keydown',function(e){
       });
     }
     if (!result && verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
+    // 延迟二次校验：原生状态回写可能有 1~2s 延迟，避免「已成功但脚本误判失败」
+    if (!result && !abortCheck()) {
+      await sleep(1500);
+      iframeWin = getReportIframeWin() || iframeWin;
+      if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
+          softAuditSuccessHint(iframeWin, reportDR)) {
+        dbg('延迟二次校验：标本已审核成功');
+        return true;
+      }
+    }
     return result;
   }
 
@@ -8682,11 +8692,21 @@ window.addEventListener('keydown',function(e){
 
       if (ft) {ft.textContent = `异常审核：审核中 ${specimen.PatName || specimen.Labno || targetDR}`;}
       releaseNativeReportFocus();
-      const auditResult = await executeNativeAudit(iframeWin, specimen, { keepWS: true, fast: true });
+      let auditResult = await executeNativeAudit(iframeWin, specimen, { keepWS: true, fast: true });
       if (auditResult === 'incomplete') {
         showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
         advanceAbnormalFocusAfterSkip(startIndex);
         return;
+      }
+      // 最终兜底：executeNativeAudit 可能因竞态误判失败，再等 2s 检查 wsData
+      if (!auditResult) {
+        await sleep(2000);
+        const liveRow = wsData.find(r => String(r.ReportDR) === String(targetDR));
+        const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
+        if (liveStatus === '3' || liveStatus === '4') {
+          dbg('异常审核延迟确认成功（wsData 状态已更新）:', specimen.PatName);
+          auditResult = true;
+        }
       }
       if (!auditResult) {
         showToast('未确认审核成功，已跳到下一条', 'warning');
@@ -9798,10 +9818,20 @@ window.addEventListener('keydown',function(e){
         return;
       }
       if (!auditResult) {
-        showToast('未确认审核成功，请核对原生列表状态', 'warning');
-        return;
+        // 最终兜底：再等 2s 后检查 wsData（后台轮询可能已更新状态）
+        await sleep(2000);
+        const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
+        const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
+        if (liveStatus === '3' || liveStatus === '4') {
+          dbg('详情审核延迟确认成功（wsData 状态已更新）:', specimen.PatName);
+          showToast(`已审核: ${specimen.PatName}`, 'success');
+        } else {
+          showToast('未确认审核成功，请核对原生列表状态', 'warning');
+          return;
+        }
+      } else {
+        showToast(`已审核: ${specimen.PatName}`, 'success');
       }
-      showToast(`已审核: ${specimen.PatName}`, 'success');
       dbg('详情审核成功:', specimen.PatName, 'ReportDR:', reportDR);
 
       // 确保焦点在主页面（审核操作后焦点可能留在 iframe 中）
