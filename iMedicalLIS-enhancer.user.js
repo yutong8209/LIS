@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.82.0
+// @version      7.83.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8031,7 +8031,7 @@ window.addEventListener('keydown',function(e){
           st === 'ABNORMAL' &&
           isX8InfectionPanel(r) &&
           isInfectionSpecialItem(it.name) &&
-          isPositiveResult(it.result)
+          isPositiveResult(it.result, it.preResult || it)
         ) {
           cls = 'inf-special';
         }
@@ -10209,7 +10209,7 @@ window.addEventListener('keydown',function(e){
         isX8Inf &&
         itemInfo.some(r => {
           const res = r.TextRes && r.TextRes.trim() ? r.TextRes.trim() : r.Result || '';
-          return isInfectionSpecialItem(r.CName) && isPositiveResult(res);
+          return isInfectionSpecialItem(r.CName) && isPositiveResult(res, r);
         });
       if (hasInfSpecialPos) {
         const c = INFECTION_SPECIAL_STYLE;
@@ -10321,7 +10321,7 @@ window.addEventListener('keydown',function(e){
         else if (statusText.includes('低')) {statusClass = 'abnormal low';}
 
         // x8 传染病面板：梅毒/丙肝/HIV 阳性统一高亮（区别于乙肝两对半）
-        if (isX8Inf && !isCritical && isInfectionSpecialItem(r.CName) && isPositiveResult(result)) {
+        if (isX8Inf && !isCritical && isInfectionSpecialItem(r.CName) && isPositiveResult(result, r)) {
           statusClass = 'inf-special';
           rowStyle =
             'background:' +
@@ -13955,7 +13955,7 @@ window.addEventListener('keydown',function(e){
       const histResult = (lastHist.result || '').trim();
 
       // 判断历史是否阳性
-      const isHistPositive = isPositiveResult(histResult);
+      const isHistPositive = isPositiveResult(histResult, item);
       // 判断当前是否阴性
       const isCurrentNegative = isNegativeResult(item.result);
 
@@ -13969,15 +13969,27 @@ window.addEventListener('keydown',function(e){
   }
 
   // 判断是否阳性结果
-  function isPositiveResult(result) {
+  function isPositiveResult(result, item) {
     if (!result) {return false;}
     const r = result.toUpperCase().trim();
     // 阳性标记
     if (r === '+' || r === '阳性' || r === 'POSITIVE' || r === 'POS' || r === 'REACTIVE') {return true;}
     if (/^\+{1,4}$/.test(r) || r.includes('阳性') || r.includes('弱阳')) {return true;}
     // 数值 > 1（S/CO 值通常 >1 为阳性）
+    // 但如果提供了参考值范围，则按参考值判断
     const num = parseFloat(r);
-    if (!isNaN(num) && num > 1) {return true;}
+    if (!isNaN(num)) {
+      if (item) {
+        const range = getItemRangeValues(item);
+        const high = parseComparableNumber(range.high);
+        // 如果有上限参考值，且结果在参考值范围内，则不算阳性
+        if (high && !isNaN(high.value) && num <= high.value) {
+          return false;
+        }
+      }
+      // 没有参考值或超出参考值范围时，使用通用的 S/CO 逻辑
+      if (num > 1) {return true;}
+    }
     return false;
   }
 
