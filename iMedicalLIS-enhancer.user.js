@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.84.0
+// @version      7.84.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8569,10 +8569,42 @@ window.addEventListener('keydown',function(e){
       const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
       if (liveStatus === '3' || liveStatus === '4') {
         dbg('延迟二次校验：标本已审核成功（wsData 状态）');
+        closeNativeAuditSuccessMessage(iframeWin);
         return true;
       }
     }
+    // 最终返回前也关闭可能残留的原生弹窗
+    if (result) {closeNativeAuditSuccessMessage(iframeWin);}
     return result;
+  }
+
+  // 关闭原生 LIS 审核成功后的弹窗（避免用户切回时看到多个弹窗）
+  function closeNativeAuditSuccessMessage(iframeWin) {
+    try {
+      const win = iframeWin || getReportIframeWin();
+      if (!win) {return;}
+      const doc = win.document;
+      const jq = win.jQuery || win.$;
+      if (!doc || !jq) {return;}
+      const allWins = doc.querySelectorAll('.messager-window:not([style*="display: none"]), .window:not([style*="display: none"])');
+      for (const w of allWins) {
+        if (w.offsetParent === null) {continue;}
+        const body = w.querySelector('.messager-body, .panel-body');
+        if (!body) {continue;}
+        const text = (body.textContent || '').trim();
+        if (text.indexOf('成功') !== -1 || text.indexOf('审核') !== -1) {
+          const btns = w.querySelectorAll('a.l-btn, button');
+          for (const b of btns) {
+            const bText = (b.textContent || b.value || '').trim();
+            if (bText === '确定' || bText === 'OK' || bText === '关闭') {
+              try { jq(b).click(); } catch (e) { try { b.click(); } catch (e2) {} }
+              dbg('已关闭原生审核成功弹窗');
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {}
   }
 
   async function auditAbnormalSpecimen(specimen) {
@@ -8729,6 +8761,7 @@ window.addEventListener('keydown',function(e){
       }
       if (ft) {ft.textContent = `已审核: ${specimen.PatName || specimen.Labno || targetDR}`;}
       showToast(`已审核: ${specimen.PatName || specimen.Labno || ''}`, 'success');
+      closeNativeAuditSuccessMessage(iframeWin);
 
       delete wsClassifiedCache[specimen.ReportDR];
       wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
@@ -9853,6 +9886,7 @@ window.addEventListener('keydown',function(e){
         return;
       }
       showToast(`已审核: ${specimen.PatName}`, 'success');
+      closeNativeAuditSuccessMessage(iframeWin);
       dbg('详情审核成功:', specimen.PatName, 'ReportDR:', reportDR);
 
       // 确保焦点在主页面（审核操作后焦点可能留在 iframe 中）
