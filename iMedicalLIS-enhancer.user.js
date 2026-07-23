@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.84.1
+// @version      7.84.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8562,9 +8562,14 @@ window.addEventListener('keydown',function(e){
       if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
           softAuditSuccessHint(iframeWin, reportDR)) {
         dbg('延迟二次校验：标本已审核成功（原生状态）');
+        closeNativeAuditSuccessMessage(iframeWin);
         return true;
       }
-      // 再检查 wsData（后台轮询可能已更新状态）
+      // 刷新 wsData 后再检查状态（审核期间轮询可能已停止）
+      try {
+        const loadResult = await loadWSData({ force: false });
+        if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData');}
+      } catch (e) {}
       const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
       const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
       if (liveStatus === '3' || liveStatus === '4') {
@@ -8746,6 +8751,11 @@ window.addEventListener('keydown',function(e){
           dbg('异常审核延迟确认成功（原生状态）:', specimen.PatName);
           auditResult = true;
         } else {
+          // 刷新 wsData 后再检查状态（审核期间轮询已停止）
+          try {
+            const loadResult = await loadWSData({ force: false });
+            if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData');}
+          } catch (e) {}
           const liveRow = wsData.find(r => String(r.ReportDR) === String(targetDR));
           const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
           if (liveStatus === '3' || liveStatus === '4') {
@@ -9873,6 +9883,11 @@ window.addEventListener('keydown',function(e){
           dbg('详情审核延迟确认成功（原生状态）:', specimen.PatName);
           auditResult = true;
         } else {
+          // 刷新 wsData 后再检查状态（审核期间轮询已停止）
+          try {
+            const loadResult = await loadWSData({ force: false });
+            if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData');}
+          } catch (e) {}
           const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
           const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
           if (liveStatus === '3' || liveStatus === '4') {
