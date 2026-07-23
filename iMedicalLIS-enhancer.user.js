@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.84.2
+// @version      7.84.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14891,6 +14891,7 @@ window.addEventListener('keydown',function(e){
       result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
                softAuditSuccessHint(iframeWin, item.reportDR);
     }
+    if (result) {closeNativeAuditSuccessMessage(iframeWin);}
     return { ok: !!result, iframeWin };
   }
 
@@ -15321,6 +15322,7 @@ window.addEventListener('keydown',function(e){
             queue.skipped.push({ ...item, reason: '结果不完整' });
             skipCount++;
           } else if (auditResult) {
+            closeNativeAuditSuccessMessage(iframeWin);
             queue.done.push(item);
             successCount++;
             batchCAReady = true;
