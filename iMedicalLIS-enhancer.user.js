@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.84.3
+// @version      7.84.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8744,6 +8744,7 @@ window.addEventListener('keydown',function(e){
       }
       // 最终兜底：executeNativeAudit 可能因竞态误判失败，再等 2s 多重校验
       if (!auditResult) {
+        if (ft) {ft.textContent = `确认审核结果: ${specimen.PatName || specimen.Labno || targetDR}`;}
         await sleep(2000);
         iframeWin = getReportIframeWin() || iframeWin;
         if (verifyAuditSucceededByReportDR(iframeWin, targetDR) ||
@@ -8751,6 +8752,7 @@ window.addEventListener('keydown',function(e){
           dbg('异常审核延迟确认成功（原生状态）:', specimen.PatName);
           auditResult = true;
         } else {
+          if (ft) {ft.textContent = `刷新数据: ${specimen.PatName || specimen.Labno || targetDR}`;}
           // 刷新 wsData 后再检查状态（审核期间轮询已停止）
           try {
             const loadResult = await loadWSData({ force: false });
@@ -9876,6 +9878,7 @@ window.addEventListener('keydown',function(e){
       }
       // 最终兜底：再等 2s 后多重校验（原生状态 + wsData + softHint）
       if (!auditResult) {
+        _setDetailAuditBusy(true, '⏳ 确认审核结果…');
         await sleep(2000);
         iframeWin = getReportIframeWin() || iframeWin;
         if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
@@ -9883,6 +9886,7 @@ window.addEventListener('keydown',function(e){
           dbg('详情审核延迟确认成功（原生状态）:', specimen.PatName);
           auditResult = true;
         } else {
+          _setDetailAuditBusy(true, '⏳ 刷新数据…');
           // 刷新 wsData 后再检查状态（审核期间轮询已停止）
           try {
             const loadResult = await loadWSData({ force: false });
