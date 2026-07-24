@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.87.3
+// @version      7.88.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5948,10 +5948,13 @@
       const selected = getWSSelectedMachineSet(wsActiveWG);
       if (selected.size > 0) {return selected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));}
     } else {
-      // 全部工作组模式：检查是否有任意组选了仪器
-      const wgSelected = getWSSelectedMachineSet(row._wg || '');
-      if (wgSelected.size > 0) {return wgSelected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));}
-      // 该组没选仪器 = 该组全部仪器通过
+      // 全部工作组模式：只要有任何组勾选了仪器，就只显示被勾选的
+      const anySelected = WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
+      if (anySelected) {
+        const wgSelected = getWSSelectedMachineSet(row._wg || '');
+        return wgSelected.size > 0 && wgSelected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));
+      }
+      // 所有组都没勾选 = 全部仪器通过
     }
     if (wsActiveMachine) {return String(row._mdr || prWorkGroupMachineDR(row) || '') === String(wsActiveMachine);}
     return true;
