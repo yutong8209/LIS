@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.86.1
+// @version      7.87.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -596,7 +596,7 @@
 #lis-ws-body th::after{content:' ⇅';font-size:10px;opacity:.42}
 #lis-ws-body th.sort-asc::after{content:' ↑';opacity:1}
 #lis-ws-body th.sort-desc::after{content:' ↓';opacity:1}
-#lis-ws-body td{padding:6px 9px;border-bottom:1px solid #edf1f5;white-space:nowrap;transition:background .12s;vertical-align:middle}
+#lis-ws-body td{padding:4px 9px;border-bottom:1px solid var(--lis-border-light);white-space:nowrap;transition:background .12s;vertical-align:middle}
 #lis-ws-body tr{cursor:pointer;transition:background .12s}
 #lis-ws-body tbody tr:nth-child(even){background:#fbfcfd}
 #lis-ws-body tbody tr:nth-child(odd){background:#fff}
@@ -641,6 +641,10 @@
 .ws-mach-wrap{flex-wrap:wrap;gap:3px 4px}
 .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
 .ws-mach-group-label{font-size:10px;font-weight:700;padding:0 2px;white-space:nowrap;opacity:.8}
+/* Compact instrument grid when all workgroups shown */
+.ws-mach-row.all-wg{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:2px 6px;max-height:48px;overflow:hidden}
+.ws-mach-row.all-wg .ws-mach-group{display:contents}
+.ws-mach-row.all-wg .ws-mach-group-label{grid-column:1/-1;font-size:9px;color:var(--lis-text-muted);padding:1px 0;border-bottom:1px solid var(--lis-border-light);margin-top:2px}
 .ws-wg-tab.on .ws-tab-stat{color:rgba(255,255,255,.82)}
 
 /* --- 分类标签栏 --- */
@@ -6994,20 +6998,16 @@
     WG.forEach(w => {
       h += `<button class="ws-wg-tab" data-wg="${w.dr}">
                 <span class="ws-tab-name">${w.name}</span>
-                <span class="ws-tab-stat ws-stat-normal"></span>
-                <span class="ws-tab-stat ws-stat-abnormal"></span>
                 <span class="mach-cnt ws-cnt-total"></span>
             </button>`;
     });
     h += `<button class="ws-wg-tab" data-wg="">
             <span class="ws-tab-name">全部</span>
-            <span class="ws-tab-stat ws-stat-normal"></span>
-            <span class="ws-tab-stat ws-stat-abnormal"></span>
             <span class="mach-cnt ws-cnt-total"></span>
         </button>`;
     h += '</div>';
 
-    h += '<div class="ws-mach-row">';
+    h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}">`;
     if (wsActiveWG) {
       h += `<button class="ws-mach-tab ws-mach-all" data-action="all">
                 <span class="ws-tab-name">全部仪器</span>
@@ -7101,18 +7101,13 @@
       const wg = b.dataset.wg;
       const isOn = wg ? wsActiveWG === wg : !wsActiveWG;
       b.classList.toggle('on', isOn);
-      const c = wg ? wgCounts[wg] || { total: 0, normalReady: 0, abnormalReady: 0 } : null;
-      const nEl = b.querySelector('.ws-stat-normal');
-      const aEl = b.querySelector('.ws-stat-abnormal');
       const tEl = b.querySelector('.ws-cnt-total');
-      if (c) {
-        nEl.textContent = '正常' + (c.normalReady || 0);
-        aEl.textContent = '异常' + (c.abnormalReady || 0);
-        tEl.textContent = '总' + c.total;
+      if (wg) {
+        const c = wgCounts[wg] || { total: 0 };
+        if (tEl) {tEl.textContent = c.total;}
       } else {
-        nEl.textContent = '正常' + WG.reduce((s, w) => s + (wgCounts[w.dr]?.normalReady || 0), 0);
-        aEl.textContent = '异常' + WG.reduce((s, w) => s + (wgCounts[w.dr]?.abnormalReady || 0), 0);
-        tEl.textContent = '总' + WG.reduce((s, w) => s + (wgCounts[w.dr]?.total || 0), 0);
+        const totalAll = WG.reduce((s, w) => s + (wgCounts[w.dr]?.total || 0), 0);
+        if (tEl) {tEl.textContent = totalAll;}
       }
     });
     tabs.querySelectorAll('.ws-mach-tab').forEach(b => {
