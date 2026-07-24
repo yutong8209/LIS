@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.89.0
+// @version      7.90.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -623,7 +623,11 @@
 #lis-ws-tabs{background:var(--lis-surface);padding:4px 14px 3px;display:flex;flex-direction:column;gap:0;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
 #lis-ws-tabs::-webkit-scrollbar{display:none}
 .ws-ws-row1{display:flex;align-items:center;gap:8px;flex-shrink:0}
-.ws-wg-row{display:flex;align-items:center;gap:3px;flex-shrink:0}
+.ws-wg-row{display:none}
+.ws-wg-inline{display:flex;align-items:center;gap:3px;flex-shrink:0;margin-left:6px}
+.ws-wg-inline .ws-wg-tab{padding:3px 8px;border-radius:5px;font-size:11px;font-weight:600}
+.ws-wg-inline .ws-wg-tab .mach-cnt{font-size:9px;padding:0 4px;min-width:14px}
+.ws-ws-row1{display:none}
 .ws-cat-row-inline{display:flex;align-items:center;gap:3px;margin-left:auto;flex-shrink:0}
 .ws-mach-row{display:flex;align-items:center;gap:3px;overflow-x:auto;scrollbar-width:none;padding-top:3px;border-top:1px solid var(--lis-border-light)}
 .ws-mach-row::-webkit-scrollbar{display:none}
@@ -6927,11 +6931,17 @@
   function renderWSHeader() {
     const hd = $('#lis-ws-hd');
     hd.style.flexShrink = '0';
+    let wgHTML = '';
+    WG.forEach(w => {
+      wgHTML += `<button class="ws-wg-tab" data-wg="${w.dr}"><span class="ws-tab-name">${w.name}</span><span class="mach-cnt ws-cnt-total"></span></button>`;
+    });
+    wgHTML += `<button class="ws-wg-tab" data-wg=""><span class="ws-tab-name">全部</span><span class="mach-cnt ws-cnt-total"></span></button>`;
     hd.innerHTML = `
             <div class="ws-title"><span class="ws-title-dot"></span><h3>审核工作台</h3></div>
             <div class="ws-search-wrap">
                 <input type="text" class="ws-search" id="lis-ws-search" placeholder="姓名 / 检验号 / 流水号" />
             </div>
+            <div class="ws-wg-inline">${wgHTML}</div>
             <div class="ws-acts">
                 <button class="ws-icon-btn" id="lis-ws-refresh" title="强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）">↻</button>
                 <button class="ws-icon-btn" id="lis-ws-pwd" title="CA密码">钥</button>
@@ -6959,6 +6969,40 @@
       invalidateCaches();
       clearTimeout(_wsSearchTimer);
       _wsSearchTimer = setTimeout(() => renderWSTable(), 200);
+    });
+    // Header workgroup tab events
+    hd.querySelectorAll('.ws-wg-tab').forEach(b =>
+      b.addEventListener('click', () => {
+        invalidateCaches();
+        wsActiveWG = b.dataset.wg;
+        wsActiveMachine = '';
+        wsAbnormalIndex = -1;
+        wsChecked.clear();
+        saveWSState();
+        renderWSHeaderWGTabs();
+        renderWSTabs();
+        renderWSCategoryBar();
+        renderWSTable();
+      })
+    );
+  }
+
+  function renderWSHeaderWGTabs() {
+    const hd = $('#lis-ws-hd');
+    if (!hd) {return;}
+    const wgCounts = calcWSTabCounts();
+    hd.querySelectorAll('.ws-wg-tab').forEach(b => {
+      const wg = b.dataset.wg;
+      const isOn = wg ? wsActiveWG === wg : !wsActiveWG;
+      b.classList.toggle('on', isOn);
+      const tEl = b.querySelector('.ws-cnt-total');
+      if (wg) {
+        const c = wgCounts[wg] || { total: 0 };
+        if (tEl) {tEl.textContent = c.total;}
+      } else {
+        const totalAll = WG.reduce((s, w) => s + (wgCounts[w.dr]?.total || 0), 0);
+        if (tEl) {tEl.textContent = totalAll;}
+      }
     });
   }
 
@@ -7002,23 +7046,8 @@
   }
 
   function buildWSTabsDOM(tabs, wgCounts, mc) {
-    // Row 1: Workgroup tabs (left) — compact
-    let h = '<div class="ws-ws-row1">';
-    h += '<div class="ws-wg-row">';
-    WG.forEach(w => {
-      h += `<button class="ws-wg-tab" data-wg="${w.dr}">
-                <span class="ws-tab-name">${w.name}</span>
-                <span class="mach-cnt ws-cnt-total"></span>
-            </button>`;
-    });
-    h += `<button class="ws-wg-tab" data-wg="">
-            <span class="ws-tab-name">全部</span>
-            <span class="mach-cnt ws-cnt-total"></span>
-        </button>`;
-    h += '</div>';
-    // Row 1: Category tabs (right) — merged
-    h += '<div class="ws-cat-row-inline"></div>';
-    h += '</div>';
+    // Instrument row only (workgroup tabs are now in header)
+    let h = '';
 
     h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}">`;
     if (wsActiveWG) {
@@ -7055,7 +7084,6 @@
         h += '</div>';
       });
     }
-    h += '</div>';
     tabs.innerHTML = h;
 
     // 事件绑定（只绑一次）
@@ -7110,19 +7138,8 @@
 
   // 仅更新数字和选中态（不重建 DOM，不闪烁）
   function updateWSTabsState(tabs, wgCounts, mc) {
-    tabs.querySelectorAll('.ws-wg-tab').forEach(b => {
-      const wg = b.dataset.wg;
-      const isOn = wg ? wsActiveWG === wg : !wsActiveWG;
-      b.classList.toggle('on', isOn);
-      const tEl = b.querySelector('.ws-cnt-total');
-      if (wg) {
-        const c = wgCounts[wg] || { total: 0 };
-        if (tEl) {tEl.textContent = c.total;}
-      } else {
-        const totalAll = WG.reduce((s, w) => s + (wgCounts[w.dr]?.total || 0), 0);
-        if (tEl) {tEl.textContent = totalAll;}
-      }
-    });
+    // Workgroup tabs are in header — update via renderWSHeaderWGTabs
+    renderWSHeaderWGTabs();
     tabs.querySelectorAll('.ws-mach-tab').forEach(b => {
       if (b.classList.contains('ws-mach-all')) {
         const isOn = wsActiveWG
