@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.87.2
+// @version      7.87.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -642,12 +642,12 @@
 .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
 .ws-mach-group-label{font-size:10px;font-weight:700;padding:0 2px;white-space:nowrap;opacity:.8}
 /* Compact instrument layout when all workgroups shown */
-.ws-mach-row.all-wg{display:flex;flex-wrap:wrap;gap:3px 4px;max-height:52px;overflow:auto;align-items:center}
-.ws-mach-row.all-wg .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap}
-.ws-mach-row.all-wg .ws-mach-group-label{font-size:9px;font-weight:700;color:var(--lis-text-muted);white-space:nowrap;margin-right:2px}
-.ws-mach-row.all-wg .ws-mach-tab{padding:2px 6px;font-size:10px;border-radius:4px;white-space:nowrap}
+.ws-mach-row.all-wg{display:flex;flex-wrap:wrap;gap:2px 3px;max-height:52px;overflow:auto;align-items:center}
+.ws-mach-row.all-wg .ws-mach-group{display:inline-flex;align-items:center;gap:2px;flex-wrap:nowrap;margin-right:6px}
+.ws-mach-row.all-wg .ws-mach-group-label{font-size:9px;font-weight:700;color:var(--lis-text-muted);white-space:nowrap;margin-right:1px}
+.ws-mach-row.all-wg .ws-mach-tab{padding:2px 5px;font-size:10px;border-radius:4px;white-space:nowrap}
 .ws-mach-row.all-wg .ws-tab-name{max-width:110px;overflow:hidden;text-overflow:ellipsis}
-.ws-mach-row.all-wg .ws-mach-all{margin-right:4px}
+.ws-mach-row.all-wg .ws-mach-all{margin-right:6px}
 .ws-wg-tab.on .ws-tab-stat{color:rgba(255,255,255,.82)}
 
 /* --- 分类标签栏 --- */
