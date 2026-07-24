@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.94.0
+// @version      7.95.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -630,7 +630,7 @@
 .ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap;min-width:0;margin-left:auto}
 .ws-ws-row1{display:none}
 .ws-cat-row-inline{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0;flex-wrap:wrap;min-width:0}
-.ws-mach-row{display:flex;align-items:center;gap:3px;overflow-x:auto;scrollbar-width:none;padding-top:3px;border-top:1px solid var(--lis-border-light)}
+.ws-mach-row{display:flex;align-items:center;gap:3px;overflow-x:auto;scrollbar-width:none;padding-top:3px;border-top:1px solid var(--lis-border-light);width:fit-content}
 .ws-mach-row::-webkit-scrollbar{display:none}
 .ws-wg-tab,.ws-mach-tab{border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-text);cursor:pointer;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:6px;letter-spacing:0}
 .ws-wg-tab{padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600}
