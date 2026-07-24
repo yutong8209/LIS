@@ -67,3 +67,6 @@ Thumbs.db
 
 # Development scripts
 lint.sh
+format_diff.patch
+FORMAT_SUMMARY.md
+*.bak
