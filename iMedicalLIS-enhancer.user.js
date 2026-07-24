@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.86.0
+// @version      7.86.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -848,10 +848,10 @@
 #lis-detail-panel{position:fixed;top:0;right:0;width:65vw;max-width:900px;min-width:600px;height:100vh;z-index:100005;background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.2);transform:translateX(100%);transition:transform .3s ease;display:flex;flex-direction:column}
 #lis-detail-panel.show{transform:translateX(0)}
 #lis-detail-panel{overflow:hidden!important}
-#lis-detail-hd{background:var(--lis-bg);color:var(--lis-text);border-bottom:1px solid var(--lis-border);color:#fff;padding:12px 20px;display:flex;align-items:flex-start;justify-content:space-between;flex-shrink:0;line-height:1.4}
-#lis-detail-hd h4{margin:0;font-size:16px}
-#lis-detail-hd .detail-close{background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px;border-radius:4px;transition:background .2s}
-#lis-detail-hd .detail-close:hover{background:rgba(255,255,255,.2)}
+#lis-detail-hd{background:var(--lis-bg);color:var(--lis-text);border-bottom:1px solid var(--lis-border);padding:12px 20px;display:flex;align-items:flex-start;justify-content:space-between;flex-shrink:0;line-height:1.4}
+#lis-detail-hd h4{margin:0;font-size:16px;color:var(--lis-text)}
+#lis-detail-hd .detail-close{background:none;border:none;color:var(--lis-text-secondary);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:4px;transition:background .2s}
+#lis-detail-hd .detail-close:hover{background:var(--lis-primary-light);color:var(--lis-text)}
 #lis-detail-info{padding:0px 16px;background:transparent;border-bottom:none;flex-shrink:0;font-size:12px}
 
 
@@ -879,7 +879,7 @@
 .result-table .hist-date{font-size:9px;color:#999;display:block;margin-top:-1px}
 #lis-detail-footer{padding:12px 20px;background:#f8f9fa;border-top:1px solid #eee;display:flex;gap:10px;justify-content:flex-end;flex-shrink:0}
 #lis-detail-footer button{padding:8px 16px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:background .2s}
-#lis-detail-footer .btn-audit{background:var(--lis-primary);color:#fff;color:#fff}
+#lis-detail-footer .btn-audit{background:var(--lis-primary);color:#fff}
 #lis-detail-footer .btn-audit:hover{background:var(--lis-primary-hover)}
 #lis-detail-footer .btn-close{background:#95a5a6;color:#fff}
 #lis-detail-footer .btn-close:hover{background:#7f8c8d}
@@ -9450,8 +9450,8 @@ window.addEventListener('keydown',function(e){
             <div id="lis-detail-hd">
                 <div style="flex:1;min-width:0;padding-right:10px">
                     <h4 id="lis-detail-title" style="margin:0;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📋 标本详情</h4>
-                    <div id="lis-detail-subtitle" style="font-size:11px;color:rgba(255,255,255,.7);margin-top:3px"></div>
-                    <div id="lis-detail-extra" style="font-size:11px;color:rgba(255,255,255,.6);margin-top:2px"></div>
+                    <div id="lis-detail-subtitle" style="font-size:11px;color:var(--lis-text-secondary);margin-top:3px"></div>
+                    <div id="lis-detail-extra" style="font-size:11px;color:var(--lis-text-muted);margin-top:2px"></div>
                 </div>
                 <button class="detail-close" id="lis-detail-close">✕</button>
             </div>
