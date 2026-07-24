@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.95.0
+// @version      7.96.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -627,7 +627,8 @@
 .ws-wg-inline{display:flex;align-items:center;gap:3px;flex-shrink:0;margin-left:6px}
 .ws-wg-inline .ws-wg-tab{padding:3px 8px;border-radius:5px;font-size:11px;font-weight:600}
 .ws-wg-inline .ws-wg-tab .mach-cnt{font-size:9px;padding:0 4px;min-width:14px}
-.ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap;min-width:0;margin-left:auto}
+.ws-right-group{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0}
+.ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap;min-width:0}
 .ws-ws-row1{display:none}
 .ws-cat-row-inline{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0;flex-wrap:wrap;min-width:0}
 .ws-mach-row{display:flex;align-items:center;gap:3px;overflow-x:auto;scrollbar-width:none;padding-top:3px;border-top:1px solid var(--lis-border-light);width:fit-content}
@@ -920,6 +921,7 @@
   #lis-ws-hd .ws-title{min-width:0}
   #lis-ws-hd .ws-search-wrap{width:100%;min-width:0;flex:auto}
   #lis-ws-hd .ws-acts{margin-left:0}
+  .ws-right-group{margin-left:0;flex-wrap:wrap}
   .ws-cat-row-inline,.ws-cat-hd-inline{flex-wrap:wrap}
   #lis-ws-body{font-size:11px}
 }
@@ -6943,12 +6945,11 @@
                 <input type="text" class="ws-search" id="lis-ws-search" placeholder="姓名 / 检验号 / 流水号" />
             </div>
             <div class="ws-wg-inline">${wgHTML}</div>
-            <div class="ws-cat-hd-inline" data-ws-cat-tabs></div>
-            <div class="ws-acts">
+            <div class="ws-right-group"><div class="ws-cat-hd-inline" data-ws-cat-tabs></div><div class="ws-acts">
                 <button class="ws-icon-btn" id="lis-ws-refresh" title="强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）">↻</button>
                 <button class="ws-icon-btn" id="lis-ws-pwd" title="CA密码">钥</button>
                 <button class="ws-icon-btn danger" id="lis-ws-close" title="关闭">×</button>
-            </div>`;
+            </div></div>`;
 
     document.getElementById('lis-ws-refresh').addEventListener('click', () => {
       dbg('刷新按钮被点击');
