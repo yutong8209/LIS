@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.98.0
+// @version      7.99.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -620,7 +620,7 @@
 #lis-ws-ft{background:var(--lis-surface);padding:4px 14px;display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary);flex-shrink:0!important;border-top:1px solid var(--lis-border)}
 
 /* --- 仪器标签栏 --- */
-#lis-ws-tabs{background:var(--lis-surface);padding:4px 14px 3px;gap:0;flex-shrink:0!important;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
+#lis-ws-tabs{background:var(--lis-surface);padding:4px 14px 3px;display:inline-flex;flex-wrap:wrap;align-items:center;gap:0;flex-shrink:0!important;align-self:flex-start;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
 #lis-ws-tabs::-webkit-scrollbar{display:none}
 .ws-ws-row1{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .ws-wg-row{display:none}
@@ -7052,7 +7052,7 @@
     // One row: instruments left + category tabs right
     let h = '';
 
-    h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}" style="width:fit-content">`;
+    h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}">`;
     if (wsActiveWG) {
       h += `<button class="ws-mach-tab ws-mach-all" data-action="all">
                 <span class="ws-tab-name">全部仪器</span>
