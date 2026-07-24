@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.92.0
+// @version      7.93.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -627,6 +627,7 @@
 .ws-wg-inline{display:flex;align-items:center;gap:3px;flex-shrink:0;margin-left:6px}
 .ws-wg-inline .ws-wg-tab{padding:3px 8px;border-radius:5px;font-size:11px;font-weight:600}
 .ws-wg-inline .ws-wg-tab .mach-cnt{font-size:9px;padding:0 4px;min-width:14px}
+.ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap;min-width:0;margin-left:6px}
 .ws-ws-row1{display:none}
 .ws-cat-row-inline{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0;flex-wrap:wrap;min-width:0}
 .ws-mach-row{display:flex;align-items:center;gap:3px;overflow-x:auto;scrollbar-width:none;padding-top:3px;border-top:1px solid var(--lis-border-light)}
@@ -919,7 +920,7 @@
   #lis-ws-hd .ws-title{min-width:0}
   #lis-ws-hd .ws-search-wrap{width:100%;min-width:0;flex:auto}
   #lis-ws-hd .ws-acts{margin-left:0}
-  .ws-cat-row-inline{flex-wrap:wrap}
+  .ws-cat-row-inline,.ws-cat-hd-inline{flex-wrap:wrap}
   #lis-ws-body{font-size:11px}
 }
 /* --- 质控数据导出 --- */
@@ -6942,6 +6943,7 @@
                 <input type="text" class="ws-search" id="lis-ws-search" placeholder="姓名 / 检验号 / 流水号" />
             </div>
             <div class="ws-wg-inline">${wgHTML}</div>
+            <div class="ws-cat-hd-inline" data-ws-cat-tabs></div>
             <div class="ws-acts">
                 <button class="ws-icon-btn" id="lis-ws-refresh" title="强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）">↻</button>
                 <button class="ws-icon-btn" id="lis-ws-pwd" title="CA密码">钥</button>
@@ -7084,8 +7086,6 @@
         h += '</div>';
       });
     }
-    // Category tabs placeholder — filled by renderWSCategoryBar
-    h += '<div class="ws-cat-row-inline" data-ws-cat-tabs></div>';
     h += '</div>';
     tabs.innerHTML = h;
 
@@ -7234,7 +7234,7 @@
 
   // --- 渲染：分类标签栏 ---
   function renderWSCategoryBar() {
-    const bar = $('.ws-cat-row-inline') || $('#lis-ws-bar');
+    const bar = $('.ws-cat-hd-inline') || $('.ws-cat-row-inline') || $('#lis-ws-bar');
     if (!bar) {return;}
     bar.style.flexShrink = '0';
 
