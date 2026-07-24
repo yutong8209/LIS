@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      7.88.0
+// @version      7.89.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -620,10 +620,12 @@
 #lis-ws-ft{background:var(--lis-surface);padding:4px 14px;display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary);flex-shrink:0!important;border-top:1px solid var(--lis-border)}
 
 /* --- 仪器标签栏 --- */
-#lis-ws-tabs{background:var(--lis-surface);padding:5px 14px 4px;display:flex;flex-direction:column;gap:6px;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
+#lis-ws-tabs{background:var(--lis-surface);padding:4px 14px 3px;display:flex;flex-direction:column;gap:0;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
 #lis-ws-tabs::-webkit-scrollbar{display:none}
-.ws-wg-row,.ws-mach-row{display:flex;align-items:center;gap:4px;overflow-x:auto;scrollbar-width:none}
-.ws-wg-row{padding-bottom:4px;border-bottom:1px solid var(--lis-border-light)}
+.ws-ws-row1{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.ws-wg-row{display:flex;align-items:center;gap:3px;flex-shrink:0}
+.ws-cat-row-inline{display:flex;align-items:center;gap:3px;margin-left:auto;flex-shrink:0}
+.ws-mach-row{display:flex;align-items:center;gap:3px;overflow-x:auto;scrollbar-width:none;padding-top:3px;border-top:1px solid var(--lis-border-light)}
 .ws-mach-row::-webkit-scrollbar{display:none}
 .ws-wg-tab,.ws-mach-tab{border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-text);cursor:pointer;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:6px;letter-spacing:0}
 .ws-wg-tab{padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600}
@@ -651,11 +653,11 @@
 .ws-wg-tab.on .ws-tab-stat{color:rgba(255,255,255,.82)}
 
 /* --- 分类标签栏 --- */
-#lis-ws-bar{background:var(--lis-bg);padding:4px 14px;display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--lis-border);flex-shrink:0!important;font-size:12px;flex-wrap:wrap;position:relative;z-index:3}
-.cat-tab{padding:3px 9px;border-radius:6px;border:1px solid var(--lis-border);background:var(--lis-surface);cursor:pointer;font-size:11px;font-weight:700;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:6px;color:var(--lis-text)}
+#lis-ws-bar{display:none}
+.cat-tab{padding:2px 8px;border-radius:5px;border:1px solid var(--lis-border);background:var(--lis-surface);cursor:pointer;font-size:11px;font-weight:600;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:4px;color:var(--lis-text)}
 .cat-tab:hover{border-color:#7ebbb3;background:var(--lis-primary-lighter)}
 .cat-tab.on{border-color:transparent;background:var(--lis-primary);color:#fff}
-.cat-tab .cat-cnt{border-radius:10px;padding:0 7px;font-size:10px;min-width:16px;text-align:center;line-height:1.6;font-weight:800}
+.cat-tab .cat-cnt{border-radius:10px;padding:0 5px;font-size:10px;min-width:14px;text-align:center;line-height:1.5;font-weight:700}
 .cat-tab.on .cat-cnt{background:rgba(255,255,255,.22);color:#fff}
 .cat-tab:not(.on) .cat-cnt{background:var(--lis-primary-lighter);color:var(--lis-text-secondary)}
 .cat-tab.cat-normal:not(.on) .cat-cnt{background:var(--lis-primary-light);color:var(--lis-primary-hover)}
@@ -898,7 +900,7 @@
 @media(max-width:1200px){
   #lis-ws-hd{flex-wrap:wrap;padding:6px 12px;gap:6px}
   #lis-ws-hd .ws-search-wrap{flex:1 1 260px;min-width:180px}
-  #lis-ws-bar{padding:4px 12px}
+  /* responsive: cat tabs */
 }
 @media(max-width:900px){
   #lis-ws-hd h3{font-size:14px}
@@ -913,7 +915,7 @@
   #lis-ws-hd .ws-title{min-width:0}
   #lis-ws-hd .ws-search-wrap{width:100%;min-width:0;flex:auto}
   #lis-ws-hd .ws-acts{margin-left:0}
-  #lis-ws-bar{flex-wrap:wrap}
+  .ws-cat-row-inline{flex-wrap:wrap}
   #lis-ws-body{font-size:11px}
 }
 /* --- 质控数据导出 --- */
@@ -7000,7 +7002,9 @@
   }
 
   function buildWSTabsDOM(tabs, wgCounts, mc) {
-    let h = '<div class="ws-wg-row">';
+    // Row 1: Workgroup tabs (left) — compact
+    let h = '<div class="ws-ws-row1">';
+    h += '<div class="ws-wg-row">';
     WG.forEach(w => {
       h += `<button class="ws-wg-tab" data-wg="${w.dr}">
                 <span class="ws-tab-name">${w.name}</span>
@@ -7011,6 +7015,9 @@
             <span class="ws-tab-name">全部</span>
             <span class="mach-cnt ws-cnt-total"></span>
         </button>`;
+    h += '</div>';
+    // Row 1: Category tabs (right) — merged
+    h += '<div class="ws-cat-row-inline"></div>';
     h += '</div>';
 
     h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}">`;
@@ -7207,7 +7214,7 @@
 
   // --- 渲染：分类标签栏 ---
   function renderWSCategoryBar() {
-    const bar = $('#lis-ws-bar');
+    const bar = $('.ws-cat-row-inline') || $('#lis-ws-bar');
     if (!bar) {return;}
     bar.style.flexShrink = '0';
 
@@ -7231,25 +7238,25 @@
 
     let h = '';
 
-    // 左侧：一键批审按钮（放在最前面，避免被详情面板遮挡）
+    // 左侧：一键批审按钮
     if (wsCategory === 'normal' && normalCount > 0) {
-      h += `<button class="nb-btn" id="lis-ws-batch" style="padding:5px 16px;font-size:12px;margin-right:8px" title="F4 打开确认 · 再按 F4 确认批审">⚡ 一键批审 ${normalCount} · F4</button>`;
+      h += `<button class="nb-btn" id="lis-ws-batch" style="padding:4px 12px;font-size:11px;margin-right:6px" title="F4 打开确认 · 再按 F4 确认批审">⚡ ${normalCount} · F4</button>`;
     }
 
     h += `<button class="cat-tab cat-normal ${wsCategory === 'normal' ? 'on' : ''}" data-cat="normal">
-            ✅ 正常可审 <span class="cat-cnt">${normalCount}</span>
+            ✅正常 <span class="cat-cnt">${normalCount}</span>
         </button>`;
     h += `<button class="cat-tab cat-abnormal ${wsCategory === 'abnormal' ? 'on' : ''}" data-cat="abnormal">
-            ⚠️ 异常待审 <span class="cat-cnt">${abnormalCount}</span>
+            ⚠️异常 <span class="cat-cnt">${abnormalCount}</span>
         </button>`;
     h += `<button class="cat-tab cat-incomplete ${wsCategory === 'incomplete' ? 'on' : ''}" data-cat="incomplete">
-            📋 结果不完整 <span class="cat-cnt">${incompleteCount}</span>
+            📋不完整 <span class="cat-cnt">${incompleteCount}</span>
         </button>`;
     h += `<button class="cat-tab cat-pending ${wsCategory === 'pending' ? 'on' : ''}" data-cat="pending">
-            📝 待排样 <span class="cat-cnt">${pendingCount}</span>
+            📝待排 <span class="cat-cnt">${pendingCount}</span>
         </button>`;
     h += `<button class="cat-tab ${wsCategory === 'all' ? 'on' : ''}" data-cat="all">
-            📃 全部标本 <span class="cat-cnt">${totalCount}</span>
+            📃全部 <span class="cat-cnt">${totalCount}</span>
         </button>`;
 
     // 右侧：统计信息
