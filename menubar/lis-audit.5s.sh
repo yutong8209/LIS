@@ -43,6 +43,16 @@ AGE=$(( NOW - TS ))
 if [ "$AGE" -lt 0 ]; then AGE=0; fi
 if [ "$AGE" -lt 60 ]; then TIME_TXT="${AGE}秒前"; else TIME_TXT="$(( AGE / 60 ))分钟前"; fi
 
+# 工作台打开时每 30 秒会推送一次。超时说明浏览器/工作台已关闭，不能继续把旧计数当作实时数据。
+if [ "$AGE" -gt 90 ]; then
+  echo ":clock.badge.exclamationmark: | sfcolor=$C_GRAY"
+  echo "---"
+  echo "工作台数据已过期 | $H_FONT sfimage=exclamationmark.triangle sfcolor=$C_ORANGE"
+  echo "最后更新：$TIME_TXT；请打开审核工作台刷新数据 | $SUB_FONT"
+  echo "刷新 | refresh=true $SUB_FONT sfimage=arrow.clockwise"
+  exit 0
+fi
+
 # ── 菜单栏标题：单色 SF Symbols + 数字（异常>0 才显示告警圆点） ──
 if [ "$AR" -gt 0 ] 2>/dev/null; then
   echo ":checkmark.seal: $NR  :exclamationmark.circle.fill: $AR | size=14"

@@ -116,6 +116,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(str(e).encode())
 
     def do_POST(self):
+        global _stats_data, _cmd_data
         path = unquote(urlparse(self.path).path)
         if path == '/stats':
             try:
@@ -124,7 +125,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = json.loads(raw.decode('utf-8'))
                 data['ts'] = int(time.time())
                 data['ok'] = True
-                global _stats_data
                 with _stats_lock:
                     _stats_data = data
                     os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
@@ -149,7 +149,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     'cat': data.get('cat'),
                     'consumed': False,
                 }
-                global _cmd_data
                 with _cmd_lock:
                     _cmd_data = cmd
                     os.makedirs(os.path.dirname(CMD_FILE), exist_ok=True)
@@ -158,6 +157,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(204)
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+        elif path == '/cmd/claim':
+            # userscript 原子认领菜单栏指令，防止多个 LIS 标签重复执行，且重启后不再重放旧指令。
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                raw = self.rfile.read(length) if length else b'{}'
+                data = json.loads(raw.decode('utf-8'))
+                cmd_id = data.get('id')
+                claimed = False
+                with _cmd_lock:
+                    if _cmd_data.get('id') == cmd_id and not _cmd_data.get('consumed'):
+                        _cmd_data = {**_cmd_data, 'consumed': True}
+                        os.makedirs(os.path.dirname(CMD_FILE), exist_ok=True)
+                        with open(CMD_FILE, 'w', encoding='utf-8') as f:
+                            json.dump(_cmd_data, f, ensure_ascii=False)
+                        claimed = True
+                body = json.dumps({'claimed': claimed}, ensure_ascii=False).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(body)
             except Exception as e:
                 self.send_response(500)
                 self.end_headers()
