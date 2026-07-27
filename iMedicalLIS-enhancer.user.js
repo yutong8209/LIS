@@ -418,11 +418,6 @@
       }
       const r = await fetch(u, { credentials: 'same-origin', signal: ctrl.signal });
       if (!r.ok) {throw new Error('HTTP ' + r.status);}
-      const ct = r.headers.get('content-type') || '';
-      if (ct.includes('text/html')) {
-        dbg('服务端返回 HTML（可能是错误页）:', u, ct);
-        throw new Error('会话可能已过期，请刷新页面重新登录');
-      }
       const text = await r.text();
       const trimmed = text.trim().replace(/^\uFEFF/, '');
       if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) {
