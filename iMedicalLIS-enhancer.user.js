@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.0.6
+// @version      8.0.7
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -177,7 +177,8 @@
     if (_cryptoKey) {return _cryptoKey;}
     try {
       const enc = new TextEncoder();
-      const seed = enc.encode('lis-enhancer-v7.7.7-salt');
+      // salt 加入 uid() 使每个用户的密钥不同，避免同 origin 共享密钥
+      const seed = enc.encode('lis-enhancer-v8-salt-' + uid());
       const km = await crypto.subtle.importKey('raw', seed, 'PBKDF2', false, ['deriveKey']);
       _cryptoKey = await crypto.subtle.deriveKey(
         { name: 'PBKDF2', salt: enc.encode(location.origin), iterations: 100000, hash: 'SHA-256' },
@@ -205,7 +206,7 @@
   }
   async function encPwdV2(plain) {
     const key = await getCryptoKey();
-    if (!key) {return encPwd(plain);} // crypto 不可用，直接 base64
+    if (!key) {console.warn('[LIS] crypto.subtle 不可用，密码将以 base64 降级存储（非加密）');return encPwd(plain);} // crypto 不可用，直接 base64
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plain));
     return 'V2:' + toB64(iv) + ':' + toB64(ct);
@@ -322,11 +323,17 @@
       dbg('saveCAAuth 失败:', e.message);
     }
   };
+  const CA_AUTH_TTL = 8 * 60 * 60 * 1000; // CA 认证 8 小时过期
   const loadCAAuth = () => {
     try {
       const v = localStorage.getItem(K.caAuth);
       if (!v) {return null;}
       const o = JSON.parse(v);
+      if (o && o.time && Date.now() - o.time > CA_AUTH_TTL) {
+        dbg('CA 认证已过期（超过 8 小时），自动清除');
+        clearCAAuth();
+        return null;
+      }
       return o;
     } catch (e) {
       return null;
@@ -411,6 +418,11 @@
       }
       const r = await fetch(u, { credentials: 'same-origin', signal: ctrl.signal });
       if (!r.ok) {throw new Error('HTTP ' + r.status);}
+      const ct = r.headers.get('content-type') || '';
+      if (ct.includes('text/html')) {
+        dbg('服务端返回 HTML（可能是错误页）:', u, ct);
+        throw new Error('会话可能已过期，请刷新页面重新登录');
+      }
       const text = await r.text();
       const trimmed = text.trim().replace(/^\uFEFF/, '');
       if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) {
@@ -1169,6 +1181,8 @@
       }}
     });
     ob.observe(document.body, { childList: true, subtree: true });
+    // 120 秒后断开 observer，防止长期运行泄漏
+    setTimeout(() => ob.disconnect(), 120000);
     // 定期扫描
     _batchScanTimer = setInterval(() => {
       const f = document.getElementById('text_AuthUserLoginPasssword');
@@ -1236,6 +1250,7 @@
   let qcPanelClosed = false;
   let qcRefreshTimer = null;
   let qcProbeTimer = null;
+  let _qcObservers = null; // 存储 QC 模块 MutationObserver 引用，页面切换时清理
   let qcLastKey = '';
   const QC_POS_KEY = 'lis-qc-panel-pos';
 
@@ -1913,6 +1928,8 @@
       else {hideQCFab();}
     });
     fabObs.observe(panel, { attributes: true, attributeFilter: ['style'] });
+    if (!_qcObservers) {_qcObservers = [];}
+    _qcObservers.push(fabObs);
     // 拖拽移动面板
     const head = document.getElementById('lis-qc-head');
     const resize = document.getElementById('lis-qc-resize');
@@ -2069,6 +2086,9 @@
         qcScheduleRefresh(false, 300);
       });
       ob.observe(dataDiv, { childList: true, subtree: true, characterData: true });
+      // 保存引用以便后续清理
+      if (!_qcObservers) {_qcObservers = [];}
+      _qcObservers.push(ob);
     }
   }
 
@@ -2710,8 +2730,10 @@
     ];
     if (parts.some(Boolean)) {return parts.join('|');}
     try {
+      dbg('prWorkRowDedupeKey: 所有组合键字段为空，回退到 JSON 序列化', r);
       return JSON.stringify(r);
     } catch (e) {
+      dbg('prWorkRowDedupeKey: JSON 序列化失败，数据质量异常', e.message);
       return String(Math.random());
     }
   }
@@ -2951,12 +2973,19 @@
   }
 
   // 按 VisitNumber 缓存医嘱组合费用（FindVisitNumberTSList → TestSetFee）
+  const _PR_FEE_CACHE_MAX = 5000;
   const _prTestSetFeeCache = new Map();
   const _prTestSetFeeInflight = new Map();
   async function prFetchTestSetFees(visitNumberDR, signal) {
     const key = String(visitNumberDR || '');
     if (!key) {return [];}
-    if (_prTestSetFeeCache.has(key)) {return _prTestSetFeeCache.get(key);}
+    if (_prTestSetFeeCache.has(key)) {
+      // LRU：命中后移到最新位置
+      const val = _prTestSetFeeCache.get(key);
+      _prTestSetFeeCache.delete(key);
+      _prTestSetFeeCache.set(key, val);
+      return val;
+    }
     if (_prTestSetFeeInflight.has(key)) {return _prTestSetFeeInflight.get(key);}
     const promise = (async () => {
       try {
@@ -2972,6 +3001,10 @@
           }))
           .filter(x => x.desc || x.fee);
         _prTestSetFeeCache.set(key, list);
+        // LRU 淘汰
+        while (_prTestSetFeeCache.size > _PR_FEE_CACHE_MAX) {
+          _prTestSetFeeCache.delete(_prTestSetFeeCache.keys().next().value);
+        }
         return list;
       } catch (e) {
         if (e && e.name === 'AbortError') {throw e;}
@@ -3305,7 +3338,7 @@
       r.feeDetail || ''
     ]);
     const csv =
-      '\uFEFF' + headers.map(prCsvCell).join(',') + '\n' + rows.map(row => row.map(prCsvCell).join(',')).join('\n');
+      '\uFEFF' + headers.map(prCsvCell).join(',') + '\r\n' + rows.map(row => row.map(prCsvCell).join(',')).join('\r\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -6005,7 +6038,7 @@
           multiMdr: wsSelectedMachinesByWG
         })
       );
-    } catch (e) {}
+    } catch (e) { dbg('saveWSState 失败:', e.message); }
   }
 
   function loadWSState() {
@@ -6111,6 +6144,7 @@
     updateAbnormalEnterBridge();
     // 清理键盘监听器
     _removeAbnormalKeyHandler();
+    _removeF4BridgeHandler(); // 清理 F4 桥，防止事件监听器泄漏
     if (_normalKeyHandler) {
       document.removeEventListener('keydown', _normalKeyHandler);
       _normalKeyHandler = null;
@@ -6118,6 +6152,7 @@
     _removeDetailKeyHandler();
     clearTimeout(_abnormalPrewarmTimer);
     _abnormalPrewarmTimer = null;
+    clearMachineCache(); // 关闭工作台时清理仪器缓存，避免内存只增不减
     wsLoading = false; // 重置加载状态，防止下次 openWS 被阻塞
     _wsLoadSeq++; // 作废关闭时仍在飞行的 loadWSData
   }
@@ -6398,6 +6433,7 @@
     const alreadyEmpty = wsData.length === 0;
     wsLoading = false;
     wsClassifying = false;
+    _classifyRunSeq++; // 先递增序号，确保正在运行的分类任务感知到并中止
     wsClassifiedCache = {};
     _classifyVersion++;
     wsChecked.clear();
@@ -7743,6 +7779,16 @@ window.addEventListener('keydown',function(e){
         _f4BridgeTargets.push(iframeWin);
       } catch (e) {}
     }
+  }
+  function _removeF4BridgeHandler() {
+    if (!_f4BridgeHandler) {return;}
+    for (const target of _f4BridgeTargets) {
+      try {
+        target.removeEventListener('keydown', _f4BridgeHandler, true);
+      } catch (e) {}
+    }
+    _f4BridgeTargets.length = 0;
+    _f4BridgeHandler = null;
   }
 
   function _attachAbnormalKeyToIframe() {
@@ -10891,6 +10937,7 @@ window.addEventListener('keydown',function(e){
   // ============================================================
   const LOGIN_CREDS_KEY = 'LIS_LoginCreds';
   const LOGIN_WG_KEY = 'LIS_LastWorkGroup';
+  let _loginSubmitTimer = null; // fillNativeAndSubmit 的定时器，页面卸载时清理
 
   function initLoginPage() {
     dbg('检测到登录页面，启动登录优化');
@@ -11088,7 +11135,7 @@ window.addEventListener('keydown',function(e){
 
       // 4. 等待工作组列表加载完成后自动选择并提交
       let attempts = 0;
-      const timer = setInterval(() => {
+      _loginSubmitTimer = setInterval(() => {
         attempts++;
         const wgSelect = document.getElementById('cmbWorkGroup');
         let targetFound = false;
@@ -11105,7 +11152,7 @@ window.addEventListener('keydown',function(e){
         }
 
         if (targetFound) {
-          clearInterval(timer);
+          clearInterval(_loginSubmitTimer);
           wgSelect.value = wgDR;
           wgSelect.dispatchEvent(new Event('change', { bubbles: true }));
           setTimeout(() => {
@@ -11114,7 +11161,7 @@ window.addEventListener('keydown',function(e){
             else if (btn) {btn.click();}
           }, 300);
         } else if (hasOptions) {
-          clearInterval(timer);
+          clearInterval(_loginSubmitTimer);
           dbg('未找到工作组DR=' + wgDR + '，使用第一个');
           wgSelect.selectedIndex = 1;
           wgSelect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -11124,7 +11171,7 @@ window.addEventListener('keydown',function(e){
             else if (btn) {btn.click();}
           }, 300);
         } else if (attempts >= 20) {
-          clearInterval(timer);
+          clearInterval(_loginSubmitTimer);
           toast('工作组加载超时，请手动选择', 'w');
           const btn = document.getElementById('lis-lbtn');
           if (btn) {
@@ -11146,6 +11193,10 @@ window.addEventListener('keydown',function(e){
 
   //  模块 C2：报告处理页增强工具栏（审核流程优化核心）
   // ============================================================
+
+  // 分类结果（模块级，避免全局污染）
+  let _toolbarClassifiedRows = null;
+  let _toolbarClassifiedResults = null;
 
   // --- 样式注入 ---
   GM_addStyle(`
@@ -14291,8 +14342,8 @@ window.addEventListener('keydown',function(e){
         `;
 
     // 保存分类结果供后续使用（复用已获取的数据，不重复请求）
-    window._lisClassifiedRows = toCheck;
-    window._lisClassifiedResults = allResults;
+    _toolbarClassifiedRows = toCheck;
+    _toolbarClassifiedResults = allResults;
   }
 
   // --- 快速审核当前标本 ---
@@ -15779,6 +15830,39 @@ window.addEventListener('keydown',function(e){
     if (wsTimer) {
       clearInterval(wsTimer);
       wsTimer = null;
+    }
+    if (qcRefreshTimer) {
+      clearTimeout(qcRefreshTimer);
+      qcRefreshTimer = null;
+    }
+    if (_menubarCmdTimer) {
+      clearInterval(_menubarCmdTimer);
+      _menubarCmdTimer = null;
+    }
+    if (_menubarPushTimer) {
+      clearTimeout(_menubarPushTimer);
+      _menubarPushTimer = null;
+    }
+    if (_wsSearchTimer) {
+      clearTimeout(_wsSearchTimer);
+      _wsSearchTimer = null;
+    }
+    if (_nativeGuardTimer) {
+      clearTimeout(_nativeGuardTimer);
+      _nativeGuardTimer = null;
+    }
+    if (_abnormalPrewarmTimer) {
+      clearTimeout(_abnormalPrewarmTimer);
+      _abnormalPrewarmTimer = null;
+    }
+    // 清理 QC 模块 MutationObserver
+    if (_qcObservers) {
+      _qcObservers.forEach(ob => { try { ob.disconnect(); } catch (e) {} });
+      _qcObservers = null;
+    }
+    if (_loginSubmitTimer) {
+      clearInterval(_loginSubmitTimer);
+      _loginSubmitTimer = null;
     }
   });
 
