@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.0.3
+// @version      8.0.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -572,7 +572,7 @@
 /* --- 全屏工作台 --- */
 #lis-ws{position:fixed!important;inset:0!important;z-index:100000!important;background:var(--lis-bg);display:none;color:var(--lis-text);font-family:var(--lis-font)}
 #lis-ws.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
-#lis-ws-hd{background:var(--lis-surface);padding:6px 14px;display:flex;align-items:center;gap:12px;flex-shrink:0!important;border-bottom:1px solid var(--lis-border);box-shadow:0 1px 0 rgba(31,41,51,.04)}
+#lis-ws-hd{background:var(--lis-surface);padding:6px 14px;display:flex;align-items:center;gap:10px;flex-shrink:0!important;border-bottom:1px solid var(--lis-border);box-shadow:0 1px 0 rgba(31,41,51,.04)}
 #lis-ws-hd .ws-title{display:flex;align-items:center;gap:8px;min-width:128px}
 #lis-ws-hd .ws-title-dot{width:4px;height:20px;border-radius:2px;background:var(--lis-primary);display:inline-block}
 #lis-ws-hd h3{margin:0;font-size:15px;line-height:1;color:var(--lis-text);font-weight:700;white-space:nowrap;letter-spacing:0}
@@ -624,10 +624,10 @@
 #lis-ws-tabs::-webkit-scrollbar{display:none}
 .ws-ws-row1{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .ws-wg-row{display:none}
-.ws-wg-inline{display:flex;align-items:center;gap:3px;flex-shrink:0;margin-left:6px}
+.ws-wg-inline{display:flex;align-items:center;gap:3px;flex-shrink:0;margin-left:4px}
 .ws-wg-inline .ws-wg-tab{padding:4px 9px;border-radius:5px;font-size:12px;font-weight:600}
 .ws-wg-inline .ws-wg-tab .mach-cnt{font-size:10px;padding:0 5px;min-width:15px}
-.ws-right-group{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0}
+.ws-right-group{display:flex;align-items:center;gap:8px;margin-left:auto;padding-left:10px;border-left:1px solid var(--lis-border);flex-shrink:0}
 .ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap;min-width:0}
 .ws-ws-row1{display:none}
 .ws-cat-row-inline{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0;flex-wrap:wrap;min-width:0}
@@ -649,10 +649,11 @@
 .ws-mach-wrap{flex-wrap:wrap;gap:3px 4px}
 .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
 .ws-mach-group-label{font-size:10px;font-weight:700;padding:0 2px;white-space:nowrap;opacity:.8}
+.ws-mach-filter-label{align-self:center;color:var(--lis-text-secondary);font-size:11px;font-weight:700;white-space:nowrap;margin-right:2px}
 /* Compact instrument layout when all workgroups shown */
-.ws-mach-row.all-wg{display:flex!important;justify-content:flex-start!important;flex-wrap:wrap;gap:3px 4px;align-items:center}
-.ws-mach-row.all-wg .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap;margin-right:8px}
-.ws-mach-row.all-wg .ws-mach-group-label{font-size:11px;font-weight:700;color:var(--lis-text-muted);white-space:nowrap;margin-right:2px}
+.ws-mach-row.all-wg{display:flex!important;justify-content:flex-start!important;flex-wrap:wrap;gap:4px 6px;align-items:center}
+.ws-mach-row.all-wg .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap;margin-right:4px;padding-left:7px;border-left:1px solid var(--lis-border-light)}
+.ws-mach-row.all-wg .ws-mach-group-label{font-size:11px;font-weight:700;color:var(--lis-text-muted);white-space:nowrap;margin-right:3px}
 .ws-mach-row.all-wg .ws-mach-tab{padding:3px 7px;font-size:11px;border-radius:4px;white-space:nowrap}
 .ws-mach-row.all-wg .ws-tab-name{max-width:120px;overflow:hidden;text-overflow:ellipsis}
 .ws-mach-row .ws-mach-all{margin:0 8px 0 0!important}
@@ -7052,7 +7053,7 @@
     // One row: instruments left + category tabs right
     let h = '';
 
-    h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}">`;
+    h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}"><span class="ws-mach-filter-label">仪器</span>`;
     if (wsActiveWG) {
       h += `<button class="ws-mach-tab ws-mach-all" data-action="all">
                 <span class="ws-tab-name">全部仪器</span>
