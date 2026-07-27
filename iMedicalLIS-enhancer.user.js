@@ -638,7 +638,7 @@
 .ws-wg-tab:hover,.ws-mach-tab:hover{background:var(--lis-primary-lighter);border-color:var(--lis-primary-hover)}
 .ws-wg-tab.on{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff;border-radius:6px}
 .ws-mach-tab{padding:4px 9px;border-radius:5px;font-size:12px;font-weight:500}
-.ws-mach-tab.on{background:var(--lis-text-secondary);border-color:var(--lis-text-secondary);color:#fff}
+.ws-mach-tab.on{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff}
 .ws-mach-tab.ws-mach-multi{gap:5px}
 .ws-mach-check{width:14px;height:14px;border:1px solid var(--lis-border);border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;line-height:1;background:#fff;color:var(--lis-primary);flex:0 0 14px}
 .ws-mach-tab.ws-mach-multi.on .ws-mach-check{background:rgba(255,255,255,.22);border-color:rgba(255,255,255,.5);color:#fff}
@@ -883,7 +883,7 @@
 .result-table .abnormal.critical{color:#b71c1c;font-weight:700;font-size:15px;text-shadow:0 0 1px rgba(231,76,60,.3)}
 .result-table .abnormal.high{color:#e65100}
 .result-table .abnormal.low{color:#1565c0}
-.result-table .normal{color:#2e7d32}
+.result-table .normal{color:#43a047}
 .result-table .history{background:#f8f9fa}
 .result-table .hist-tag{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:3px;font-size:11px;white-space:nowrap;line-height:1.4}
 .result-table .hist-tag.normal{background:#e8f5e9;color:#2e7d32;border-left:3px solid #4caf50}
