@@ -72,13 +72,17 @@ pip3 install -r ~/脚本/requirements.txt
 - Userscript version is in the `@version` header. Bump on meaningful changes.
 - **审核热路径**（`continueAuditQueue` / `clickNativeAuditButton` / `executeNativeAudit` / F4）改动后必须按 `HANDTEST.md` 手测，不要只改本地不回归。
 
-## 发布流程（每次改完必做）
+## 发布流程（每次改完必做，缺一不可）
 
-1. **Bump** `@version`（有意义变更时）
-2. **手测**：至少 `HANDTEST.md` §1 批审 + §2 F4
-3. **Commit**：中文说明，写清改了什么、为什么
-4. **Push**：`git push` 到 `origin/main`（用户要求每次更新后自动推送，不要只改本地）
-5. **Diff 摘要**：回复里用 `git show --stat` 或 `git diff` 概括变更文件与要点，方便用户核对
+> ⚠️ **铁律：改完代码 → 改版本号 → commit → push，四步必须在同一轮完成，不要拆到下一次。**
+> Tampermonkey 靠 `@version` 检测更新，不改版本号用户端永远拉不到新代码。
+
+1. **Bump `@version`** — 任何对 `.user.js` 的修改都必须递增版本号（`8.0.8` → `8.0.9`），不管改动大小
+2. **Commit**：中文说明，写清改了什么、为什么
+3. **Push**：`git push` 到 `origin/main`（不要只改本地，必须推送）
+4. **验证**：`curl -s http://localhost:8765/iMedicalLIS-enhancer.user.js | head -4` 确认 serve 返回的是新版本号；如果不是，重启 serve.py
+5. **手测**：至少 `HANDTEST.md` §1 批审 + §2 F4
+6. **Diff 摘要**：回复里用 `git show --stat` 或 `git diff` 概括变更文件与要点，方便用户核对
 
 ## Gotchas
 
