@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.0.9
+// @version      8.1.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5001,7 +5001,7 @@
   // 从本机 serve 拉取 vendor 脚本并 eval（@require 失败时的兜底）
   async function qeLoadVendorScript(fileName, globalName) {
     if (qeGetGlobal(globalName)) {return true;}
-    const urls = [VENDOR_BASE + '/' + fileName, 'http://localhost:8765/vendor/' + fileName];
+    const urls = [VENDOR_BASE + '/' + fileName, 'http://127.0.0.1:8765/vendor/' + fileName];
     for (const url of urls) {
       try {
         const r = await fetch(url, { cache: 'no-cache', mode: 'cors' });
@@ -7231,13 +7231,13 @@
     if (_menubarCmdTimer) {return;}
     _menubarCmdTimer = setInterval(() => {
       try {
-        fetch('http://localhost:8765/cmd', { cache: 'no-store' })
+        fetch('http://127.0.0.1:8765/cmd', { cache: 'no-store' })
           .then(r => (r.ok ? r.json() : null))
           .then(cmd => {
             if (!cmd || cmd.consumed) {return;}
             if (cmd.id === _menubarCmdLastId) {return;}
             if (cmd.action === 'goto' && cmd.cat) {
-              fetch('http://localhost:8765/cmd/claim', {
+              fetch('http://127.0.0.1:8765/cmd/claim', {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain' },
                 body: JSON.stringify({ id: cmd.id })
@@ -7264,7 +7264,7 @@
     clearTimeout(_menubarPushTimer);
     _menubarPushTimer = setTimeout(() => {
       try {
-        fetch('http://localhost:8765/stats', {
+        fetch('http://127.0.0.1:8765/stats', {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' }, // text/plain 免 CORS 预检
           body: JSON.stringify(counts),

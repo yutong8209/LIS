@@ -5,7 +5,7 @@ CAT="$1"
 [ -z "$CAT" ] && exit 0
 
 # 1) 从本地桥读当前 LIS 工作台 URL（含 host，用于匹配标签）
-URL=$(curl -s --max-time 2 http://localhost:8765/stats | grep -o '"url"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*:[[:space:]]*//; s/"//g')
+URL=$(curl -s --max-time 2 http://127.0.0.1:8765/stats | grep -o '"url"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*:[[:space:]]*//; s/"//g')
 
 # 提取 host（用于 AppleScript 匹配 LIS 标签，兼容 10.0.29.100 / 192.168.31.111）
 HOST=""
@@ -47,7 +47,7 @@ end tell
 EOF
 
 # 3) 发指令给本地桥（userscript 轮询消费后切分类）
-curl -s -X POST http://localhost:8765/cmd -H 'Content-Type: text/plain' \
+curl -s -X POST http://127.0.0.1:8765/cmd -H 'Content-Type: text/plain' \
   -d "{\"action\":\"goto\",\"cat\":\"$CAT\"}" -o /dev/null 2>/dev/null
 
 exit 0
