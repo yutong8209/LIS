@@ -20,7 +20,7 @@ L_BLUE="#0A3D91"
 H_FONT="size=15 font=.AppleSystemUIFont semibold=true color=#000000"
 SUB_FONT="size=13 font=.AppleSystemUIFont color=#3A3A3C"
 
-J=$(curl -s --max-time 2 http://localhost:8765/stats)
+J=$(curl -s --max-time 2 http://127.0.0.1:8765/stats)
 if [ -z "$J" ] || [ "$(echo "$J" | jq -r '.ok // false')" != "true" ]; then
   echo ":antenna.radiowaves.left.and.right.slash: | sfcolor=$C_GRAY"
   echo "---"
