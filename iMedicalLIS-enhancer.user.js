@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.1.0
+// @version      8.1.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7260,8 +7260,10 @@
 
   // 把「当前筛选范围」计数推给本地菜单栏桥（localhost:8765）。失败静默，绝不影响审核。
   let _menubarPushTimer = null;
+  let _menubarLastStats = null; // 最后一次推送的 stats，用于 keep-alive
   function pushMenubarStats(counts) {
     clearTimeout(_menubarPushTimer);
+    _menubarLastStats = counts;
     _menubarPushTimer = setTimeout(() => {
       try {
         fetch('http://127.0.0.1:8765/stats', {
@@ -7272,6 +7274,22 @@
         }).catch(() => {});
       } catch (e) {}
     }, 300); // 去抖，避免频繁渲染刷爆
+  }
+  // keep-alive：每 30 秒重推最后已知 stats，防止菜单栏显示「已过期」
+  let _menubarKeepAliveTimer = null;
+  function startMenubarKeepAlive() {
+    if (_menubarKeepAliveTimer) {return;}
+    _menubarKeepAliveTimer = setInterval(() => {
+      if (!_menubarLastStats) {return;}
+      try {
+        fetch('http://127.0.0.1:8765/stats', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(_menubarLastStats),
+          keepalive: true
+        }).catch(() => {});
+      } catch (e) {}
+    }, 30000);
   }
 
   // 推导「当前筛选范围」的可读名称：全部 / 某工作组全部 / 某工作组选N台 / 具体仪器名
@@ -15853,6 +15871,7 @@ window.addEventListener('keydown',function(e){
     // 工作台内点刷新触发的整页重载后，自动重新打开工作台
     maybeReopenWSAfterReload();
     startMenubarCmdPoller(); // 菜单栏下拉点击 → 跨进程切分类
+    startMenubarKeepAlive(); // 菜单栏 keep-alive，防止离开工作台后显示过期
     dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
   }
 
@@ -15889,6 +15908,10 @@ window.addEventListener('keydown',function(e){
     if (_menubarPushTimer) {
       clearTimeout(_menubarPushTimer);
       _menubarPushTimer = null;
+    }
+    if (_menubarKeepAliveTimer) {
+      clearInterval(_menubarKeepAliveTimer);
+      _menubarKeepAliveTimer = null;
     }
     if (_wsSearchTimer) {
       clearTimeout(_wsSearchTimer);
