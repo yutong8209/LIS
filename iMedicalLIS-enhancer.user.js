@@ -834,7 +834,8 @@
     
 /* --- 登录页优化 --- */
 #lis-login-box{position:fixed;top:50%;right:40px;transform:translateY(-50%);z-index:99999;background:rgba(255,255,255,.97);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.15);padding:20px 24px;width:300px;font-family:var(--lis-font)}
-#lis-login-box h4{margin:0 0 14px;font-size:15px;color:#2c3e50;text-align:center}
+#lis-login-box.dragging{opacity:.96;transform:none}
+#lis-login-box h4{margin:0 0 14px;font-size:15px;color:#2c3e50;text-align:center;cursor:move;user-select:none;padding:2px 0}
 #lis-login-box .lis-lb-row{margin-bottom:10px}
 #lis-login-box .lis-lb-row label{display:block;font-size:12px;color:#666;margin-bottom:3px}
 #lis-login-box .lis-lb-row input{width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box}
@@ -11017,6 +11018,57 @@ window.addEventListener('keydown',function(e){
                 快捷键: Enter 直接登录
             </div>`;
     document.body.appendChild(box);
+
+    // 拖拽移动（标题栏作为拖拽手柄）
+    const dragHead = box.querySelector('h4');
+    let boxUserMoved = false;
+    dragHead.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      // 将 right/top+transform 定位转为 left/top 绝对定位
+      if (!boxUserMoved) {
+        box.style.left = box.offsetLeft + 'px';
+        box.style.top = box.offsetTop + 'px';
+        box.style.right = 'auto';
+        box.style.transform = 'none';
+      }
+      box.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      const startX = e.clientX, startY = e.clientY;
+      const startLeft = box.offsetLeft, startTop = box.offsetTop;
+      const w = box.offsetWidth, h = box.offsetHeight;
+      dragHead.setPointerCapture(e.pointerId);
+      const onMove = ev => {
+        const vw = window.innerWidth, vh = window.innerHeight;
+        box.style.left = Math.max(0, Math.min(startLeft + ev.clientX - startX, vw - w)) + 'px';
+        box.style.top = Math.max(0, Math.min(startTop + ev.clientY - startY, vh - h)) + 'px';
+      };
+      const onUp = ev => {
+        try { dragHead.releasePointerCapture(ev.pointerId); } catch (x) {}
+        dragHead.removeEventListener('pointermove', onMove);
+        dragHead.removeEventListener('pointerup', onUp);
+        dragHead.removeEventListener('pointercancel', onUp);
+        box.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        boxUserMoved = true;
+        // 保存位置
+        try {
+          localStorage.setItem('lis-login-pos', JSON.stringify({ left: box.style.left, top: box.style.top }));
+        } catch (x) {}
+      };
+      dragHead.addEventListener('pointermove', onMove);
+      dragHead.addEventListener('pointerup', onUp);
+      dragHead.addEventListener('pointercancel', onUp);
+    });
+    // 恢复上次拖拽位置
+    try {
+      const saved = JSON.parse(localStorage.getItem('lis-login-pos') || 'null');
+      if (saved && saved.left && saved.top) {
+        box.style.left = saved.left;
+        box.style.top = saved.top;
+        box.style.right = 'auto';
+        box.style.transform = 'none';
+      }
+    } catch (x) {}
 
     // 工作组选择
     let selectedWG = lastWG;
