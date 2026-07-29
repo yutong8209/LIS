@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.3.2
+// @version      8.4.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6138,6 +6138,7 @@
     wsEl.style.cssText = 'display:none!important';
     document.body.style.overflow = '';
     stopWSRefresh();
+    closeDetailPanel(true); // 关闭详情面板，避免工作台关闭后详情面板残留
     updateAbnormalEnterBridge();
     // 清理键盘监听器
     _removeAbnormalKeyHandler();
@@ -7005,7 +7006,7 @@
     document.getElementById('lis-ws-search').addEventListener('input', () => {
       invalidateCaches();
       clearTimeout(_wsSearchTimer);
-      _wsSearchTimer = setTimeout(() => renderWSTable(), 200);
+      _wsSearchTimer = setTimeout(() => { renderWSTable(); updateWSFooter(); }, 200);
     });
     // Header workgroup tab events
     hd.querySelectorAll('.ws-wg-tab').forEach(b =>
@@ -7990,6 +7991,21 @@ window.addEventListener('keydown',function(e){
     if (_normalKeyHandler) {
       document.removeEventListener('keydown', _normalKeyHandler);
       _normalKeyHandler = null;
+    }
+    // 移除旧视图的 click/change/delegate handler，防止切换分类时累积
+    if (body._delegatedHandler) {
+      body.removeEventListener('click', body._delegatedHandler.click);
+      body.removeEventListener('change', body._delegatedHandler.change);
+      body.removeEventListener('dblclick', body._delegatedHandler.dblclick);
+      body._delegatedHandler = null;
+    }
+    if (body._abnormalClickHandler) {
+      body.removeEventListener('click', body._abnormalClickHandler);
+      body._abnormalClickHandler = null;
+    }
+    if (body._incompleteClickHandler) {
+      body.removeEventListener('click', body._incompleteClickHandler);
+      body._incompleteClickHandler = null;
     }
 
     const data = filteredData();
@@ -9108,6 +9124,7 @@ window.addEventListener('keydown',function(e){
           if (e.target.checked) {wsChecked.add(c.dataset.rdr);}
           else {wsChecked.delete(c.dataset.rdr);}
           c.checked = e.target.checked;
+          c.closest('tr').classList.toggle('sel', e.target.checked);
         });
         return;
       }
@@ -10151,7 +10168,11 @@ window.addEventListener('keydown',function(e){
     triggerF4Audit();
   }
 
-  function closeDetailPanel() {
+  function closeDetailPanel(force) {
+    if (_detailAuditInProgress && !force) {
+      dbg('审核进行中，忽略关闭详情面板');
+      return;
+    }
     _removeDetailKeyHandler();
     if (detailPanel) {
       detailPanel.classList.remove('show');
