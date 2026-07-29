@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.3.0
+// @version      8.3.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6104,6 +6104,7 @@
     wsMachines = [];
     wsMachineCounts = {};
     _tabsBuilt = false;
+    _catBarBuilt = false;
     invalidateCaches({ detail: true, raw: true });
     wsEl.classList.add('show');
     // 强制 flex 布局（LIS 系统 CSS 会覆盖）
@@ -7309,6 +7310,8 @@
     return wgName ? `${wgName}(${sel.length}台)` : `${sel.length}台仪器`;
   }
 
+  let _catBarBuilt = false; // 分类标签栏是否已构建 DOM
+
   // --- 渲染：分类标签栏 ---
   function renderWSCategoryBar() {
     const bar = $('.ws-cat-hd-inline') || $('.ws-cat-row-inline') || $('#lis-ws-bar');
@@ -7332,42 +7335,15 @@
       else if (bucket === 'pending') {pendingCount++;}
     });
     const totalCount = filtered.length;
-
-    let h = '';
-
-    // 左侧：一键批审按钮
-    if (wsCategory === 'normal' && normalCount > 0) {
-      h += `<button class="nb-btn" id="lis-ws-batch" style="padding:4px 12px;font-size:11px;margin-right:6px" title="F4 打开确认 · 再按 F4 确认批审">⚡ ${normalCount} · F4</button>`;
-    }
-
-    h += `<button class="cat-tab cat-normal ${wsCategory === 'normal' ? 'on' : ''}" data-cat="normal">
-            ✅正常 <span class="cat-cnt">${normalCount}</span>
-        </button>`;
-    h += `<button class="cat-tab cat-abnormal ${wsCategory === 'abnormal' ? 'on' : ''}" data-cat="abnormal">
-            ⚠️异常 <span class="cat-cnt">${abnormalCount}</span>
-        </button>`;
-    h += `<button class="cat-tab cat-incomplete ${wsCategory === 'incomplete' ? 'on' : ''}" data-cat="incomplete">
-            📋不完整 <span class="cat-cnt">${incompleteCount}</span>
-        </button>`;
-    h += `<button class="cat-tab cat-pending ${wsCategory === 'pending' ? 'on' : ''}" data-cat="pending">
-            📝待排 <span class="cat-cnt">${pendingCount}</span>
-        </button>`;
-    h += `<button class="cat-tab ${wsCategory === 'all' ? 'on' : ''}" data-cat="all">
-            📃全部 <span class="cat-cnt">${totalCount}</span>
-        </button>`;
-
-    // 右侧：统计信息
-    h += '<div class="cat-right">';
-    if (wsCategory === 'abnormal' && abnormalCount > 0) {
-      h += '<span class="cat-stats"><kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 移动</span>';
-    } else if (wsCategory === 'normal' && normalCount > 0) {
-      h += '<span class="cat-stats"><kbd>F4</kbd> 一键批审 · 再按确认</span>';
-    }
     const fd = filteredData();
-    h += `<span class="cat-stats">${fd.length} / ${totalCount} 条</span>`;
-    h += '</div>';
 
-    bar.innerHTML = h;
+    // 首次或切换分类时重建 DOM，其余只更新计数和状态
+    if (!_catBarBuilt) {
+      _catBarBuilt = true;
+      _buildCategoryBarDOM(bar);
+    }
+    _updateCategoryBarState(bar, normalCount, abnormalCount, incompleteCount, pendingCount, totalCount, fd);
+
     updateWSFooter({
       visible: fd.length,
       total: totalCount,
@@ -7387,6 +7363,24 @@
       incomplete: incompleteCount,
       total: totalCount
     });
+  }
+
+  function _buildCategoryBarDOM(bar) {
+    let h = '';
+
+    // 左侧：一键批审按钮
+    h += '<button class="nb-btn" id="lis-ws-batch" style="padding:4px 12px;font-size:11px;margin-right:6px;display:none" title="F4 打开确认 · 再按 F4 确认批审"></button>';
+
+    h += '<button class="cat-tab cat-normal" data-cat="normal">\n            ✅正常 <span class="cat-cnt">0</span>\n        </button>';
+    h += '<button class="cat-tab cat-abnormal" data-cat="abnormal">\n            ⚠️异常 <span class="cat-cnt">0</span>\n        </button>';
+    h += '<button class="cat-tab cat-incomplete" data-cat="incomplete">\n            📋不完整 <span class="cat-cnt">0</span>\n        </button>';
+    h += '<button class="cat-tab cat-pending" data-cat="pending">\n            📝待排 <span class="cat-cnt">0</span>\n        </button>';
+    h += '<button class="cat-tab" data-cat="all">\n            📃全部 <span class="cat-cnt">0</span>\n        </button>';
+
+    // 右侧：统计信息
+    h += '<div class="cat-right"><span class="cat-stats cat-hint"></span><span class="cat-stats cat-counts"></span></div>';
+
+    bar.innerHTML = h;
 
     // 分类标签事件
     bar.querySelectorAll('.cat-tab').forEach(b =>
@@ -7404,6 +7398,42 @@
         openWorkbenchBatchAudit();
       };
     }
+  }
+
+  function _updateCategoryBarState(bar, normalCount, abnormalCount, incompleteCount, pendingCount, totalCount, fd) {
+    // 更新计数（不重建 DOM）
+    const cntMap = { normal: normalCount, abnormal: abnormalCount, incomplete: incompleteCount, pending: pendingCount, all: totalCount };
+    bar.querySelectorAll('.cat-tab').forEach(b => {
+      const cat = b.dataset.cat;
+      b.classList.toggle('on', cat === wsCategory);
+      const cnt = b.querySelector('.cat-cnt');
+      if (cnt) {cnt.textContent = cntMap[cat] || 0;}
+    });
+
+    // 更新一键批审按钮显隐
+    const batchBtn = document.getElementById('lis-ws-batch');
+    if (batchBtn) {
+      if (wsCategory === 'normal' && normalCount > 0) {
+        batchBtn.style.display = '';
+        batchBtn.textContent = `⚡ ${normalCount} · F4`;
+      } else {
+        batchBtn.style.display = 'none';
+      }
+    }
+
+    // 更新右侧提示文字
+    const hint = bar.querySelector('.cat-hint');
+    if (hint) {
+      if (wsCategory === 'abnormal' && abnormalCount > 0) {
+        hint.innerHTML = '<kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 移动';
+      } else if (wsCategory === 'normal' && normalCount > 0) {
+        hint.innerHTML = '<kbd>F4</kbd> 一键批审 · 再按确认';
+      } else {
+        hint.textContent = '';
+      }
+    }
+    const counts = bar.querySelector('.cat-counts');
+    if (counts) {counts.textContent = `${fd.length} / ${totalCount} 条`;}
   }
 
   // 工作台「正常可审」一键批审入口（按钮 / F4 共用）
