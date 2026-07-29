@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.0
+// @version      8.4.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8408,7 +8408,7 @@ window.addEventListener('keydown',function(e){
     // 批审 afterCA 确认必须短：首条 CA 后 FuncStr 往往已审完，长等只会卡在姓名上
     const confirmTimeout = batchMode ? (options.afterCA ? BATCH_CONFIRM_MS.afterCA : BATCH_CONFIRM_MS.normal) : 10000;
     const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, allowMissing, {
-      targetWasPresent: targetWasPresent || true,
+      targetWasPresent: targetWasPresent,
       missingStableMs: batchMode ? (options.afterCA ? 200 : 280) : 900,
       turbo: true,
       abortCheck: options.abortCheck,
@@ -8828,24 +8828,25 @@ window.addEventListener('keydown',function(e){
       showToast('没有可审核的异常标本', 'warning');
       return;
     }
-    _abnormalAuditInProgress = true;
-    _abnormalAuditQueued = false;
-    clearNativeUserSelectLock();
-    updateAbnormalEnterBridge();
-    keepWorkbenchOnTop('异常审核');
-    markAbnormalAuditUI(specimen, 'start');
-    // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
-    const _auditSafetyTimer = setTimeout(() => {
-      if (_abnormalAuditInProgress) {
-        dbg('异常审核安全超时：操作耗时超过 60 秒');
-        showToast('异常审核操作耗时较长，请耐心等待', 'warning');
-      }
-    }, 60000);
-    dbg('异常列表审核开始:', specimen.PatName);
+    let _auditSafetyTimer = null;
     const resumeWSRefresh = !!wsTimer;
-    stopWSRefresh();
 
     try {
+      _abnormalAuditInProgress = true;
+      _abnormalAuditQueued = false;
+      clearNativeUserSelectLock();
+      updateAbnormalEnterBridge();
+      keepWorkbenchOnTop('异常审核');
+      markAbnormalAuditUI(specimen, 'start');
+      // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
+      _auditSafetyTimer = setTimeout(() => {
+        if (_abnormalAuditInProgress) {
+          dbg('异常审核安全超时：操作耗时超过 60 秒');
+          showToast('异常审核操作耗时较长，请耐心等待', 'warning');
+        }
+      }, 60000);
+      dbg('异常列表审核开始:', specimen.PatName);
+      stopWSRefresh();
       const startIndex = Math.max(0, wsAbnormalIndex);
       const targetDR = String(specimen.ReportDR || '');
       const ft = document.getElementById('lis-ws-ft-stat');
@@ -8878,6 +8879,7 @@ window.addEventListener('keydown',function(e){
         const wgName = (WG_MAP[spDR] || {}).name || spDR;
         showToast(`切换到${wgName}继续审核`, 'warning');
         saveAbnormalTarget(specimen);
+        _abnormalAuditQueued = false; // 切组续跑由 saveAbnormalTarget 机制处理，不用旧索引
         safeSwitchWG(spDR);
         return;
       }
@@ -9537,8 +9539,21 @@ window.addEventListener('keydown',function(e){
 
   function runAuditQueueResume(delayMs) {
     setTimeout(() => {
+      // 审核进行中：延迟重试，不弹误导 toast
+      if (_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress) {
+        dbg('续跑批审: 审核进行中，延迟 3s 重试');
+        runAuditQueueResume(3000);
+        return;
+      }
       const freshQueue = loadAuditQueue();
       if (!freshQueue || !freshQueue.items || freshQueue.items.length - (freshQueue.current || 0) <= 0) {
+        const prog = document.getElementById('lis-audit-progress');
+        if (prog && prog.classList.contains('show')) {
+          const text = document.getElementById('lis-prog-text');
+          if (text) {text.textContent = '批审队列已过期或已完成，已自动清理';}
+          showToast('批审队列已过期或已完成', 'info');
+          setTimeout(() => prog.remove(), 2000);
+        }
         clearAuditQueue();
         return;
       }
@@ -9992,21 +10007,22 @@ window.addEventListener('keydown',function(e){
       showToast('正在审核异常标本中，请稍候', 'warning');
       return;
     }
-    _detailAuditInProgress = true;
-    _setDetailAuditBusy(true, '⏳ 审核中…');
-    // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
-    const _detailSafetyTimer = setTimeout(() => {
-      if (_detailAuditInProgress) {
-        dbg('详情审核安全超时：操作耗时超过 60 秒');
-        showToast('详情审核操作耗时较长，请耐心等待', 'warning');
-      }
-    }, 60000);
-    dbg('详情审核开始:', currentDetailSpecimen.PatName, 'source=', detailSource);
-    showToast(`正在审核: ${currentDetailSpecimen.PatName || ''}…`, 'info');
+    let _detailSafetyTimer = null;
     const resumeWSRefresh = !!wsTimer;
-    stopWSRefresh();
 
     try {
+      _detailAuditInProgress = true;
+      _setDetailAuditBusy(true, '⏳ 审核中…');
+      // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
+      _detailSafetyTimer = setTimeout(() => {
+        if (_detailAuditInProgress) {
+          dbg('详情审核安全超时：操作耗时超过 60 秒');
+          showToast('详情审核操作耗时较长，请耐心等待', 'warning');
+        }
+      }, 60000);
+      dbg('详情审核开始:', currentDetailSpecimen.PatName, 'source=', detailSource);
+      showToast(`正在审核: ${currentDetailSpecimen.PatName || ''}…`, 'info');
+      stopWSRefresh();
       const specimen = currentDetailSpecimen;
       const source = detailSource;
       const idx = detailSourceIndex;
@@ -11419,12 +11435,14 @@ window.addEventListener('keydown',function(e){
   let _auditAbortFlag = false;
   let _auditLockTs = 0;
   let _auditLockId = 0;
-  const AUDIT_LOCK_TIMEOUT = 45000; // 45秒超时警告（不自动释放）
+  const AUDIT_LOCK_TIMEOUT = 45000; // 45秒超时后强制释放，避免卡死无法恢复
   function acquireAuditLock(tag) {
     if (_auditInProgress && Date.now() - _auditLockTs > AUDIT_LOCK_TIMEOUT) {
-      dbg('审核锁持有超过', AUDIT_LOCK_TIMEOUT / 1000, '秒，可能存在卡死 (held by', tag, ')');
+      dbg('审核锁持有超过', AUDIT_LOCK_TIMEOUT / 1000, '秒，可能卡死，强制释放 (held by', tag, ')');
       _auditAbortFlag = true;
-      showToast('审核操作耗时较长，可能需要等待', 'warning');
+      _auditInProgress = false;
+      _auditLockTs = 0;
+      showToast('上次审核操作可能已卡死，已强制释放锁，可重新开始', 'warning');
     }
     if (_auditInProgress) {return false;}
     _auditInProgress = true;
@@ -15184,11 +15202,22 @@ window.addEventListener('keydown',function(e){
   async function continueAuditQueue(queue) {
     if (!queue || !queue.items || queue.items.length === 0) {return;}
     if (wsClassifying) {
-      showToast('标本正在分类中，稍候自动继续批审...', 'warning');
+      queue._classifyingRetries = (queue._classifyingRetries || 0) + 1;
+      if (queue._classifyingRetries > 30) {
+        dbg('批审等待分类超过 60 秒，放弃并保存队列');
+        showToast('分类长时间未完成，已保存批审队列，请刷新工作台后重试', 'error');
+        delete queue._classifyingRetries;
+        saveAuditQueueNow(queue);
+        return;
+      }
+      if (queue._classifyingRetries === 1) {
+        showToast('标本正在分类中，稍候自动继续批审...', 'warning');
+      }
       saveAuditQueueNow(queue);
       setTimeout(() => continueAuditQueue(queue).catch(e => dbg('批审等待分类失败:', e)), 2000);
       return;
     }
+    queue._classifyingRetries = 0;
     const auditLockId = acquireAuditLock('batchAudit');
     if (!auditLockId) {
       showToast('正在审核中，请稍候', 'warning');
