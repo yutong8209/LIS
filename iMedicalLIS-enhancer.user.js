@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.2.1
+// @version      8.3.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8199,21 +8199,25 @@ window.addEventListener('keydown',function(e){
     h += '</div>';
     body.innerHTML = h;
 
-    // 卡片点击 → 更新聚焦 + 打开详情
-    body.querySelectorAll('.ws-abnormal-card').forEach(card => {
-      card.addEventListener('click', () => {
-        const specimen = findWSSpecimenByReportDR(card.dataset.rdr);
-        if (!specimen) {return;}
-        _abnormalFocusDR = String(specimen.ReportDR || '');
-        const cards = document.querySelectorAll('.ws-abnormal-card');
-        cards.forEach(c => c.classList.remove('focused'));
-        card.classList.add('focused');
-        wsAbnormalIndex = Math.max(
-          0,
-          filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR))
-        );
-        openDetailPanel(specimen, 'abnormal', wsAbnormalIndex);
-      });
+    // 卡片点击 → 更新聚焦 + 打开详情；空白处点击 → 收回详情
+    body.addEventListener('click', e => {
+      const card = e.target.closest('.ws-abnormal-card');
+      if (!card) {
+        // 点击空白处，收回详情面板
+        if (isDetailPanelVisible()) {closeDetailPanel();}
+        return;
+      }
+      const specimen = findWSSpecimenByReportDR(card.dataset.rdr);
+      if (!specimen) {return;}
+      _abnormalFocusDR = String(specimen.ReportDR || '');
+      const cards = document.querySelectorAll('.ws-abnormal-card');
+      cards.forEach(c => c.classList.remove('focused'));
+      card.classList.add('focused');
+      wsAbnormalIndex = Math.max(
+        0,
+        filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR))
+      );
+      openDetailPanel(specimen, 'abnormal', wsAbnormalIndex);
     });
 
     // 键盘导航
@@ -8971,13 +8975,16 @@ window.addEventListener('keydown',function(e){
     h += '</tbody></table>';
     body.innerHTML = h;
 
-    // 行点击 → 详情
-    body.querySelectorAll('tr[data-rdr]').forEach(tr =>
-      tr.addEventListener('click', e => {
-        const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
-        if (specimen) {openDetailPanel(specimen);}
-      })
-    );
+    // 行点击 → 详情；空白处点击 → 收回详情
+    body.addEventListener('click', e => {
+      const tr = e.target.closest('tr[data-rdr]');
+      if (!tr) {
+        if (isDetailPanelVisible()) {closeDetailPanel();}
+        return;
+      }
+      const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
+      if (specimen) {openDetailPanel(specimen);}
+    });
   }
 
   // --- 全部标本视图 ---
@@ -9037,10 +9044,14 @@ window.addEventListener('keydown',function(e){
 
     const handlers = {};
 
-    // click 委托：行点击 → 详情
+    // click 委托：行点击 → 详情；空白处点击 → 收回详情
     handlers.click = e => {
       const tr = e.target.closest('tr[data-rdr]');
-      if (!tr) {return;}
+      if (!tr) {
+        // 点击空白处，收回详情面板
+        if (isDetailPanelVisible()) {closeDetailPanel();}
+        return;
+      }
       if (e.target.closest('input[type="checkbox"]')) {return;}
       body.querySelectorAll('tr.active-row').forEach(r => r.classList.remove('active-row'));
       tr.classList.add('active-row');
