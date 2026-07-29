@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.3.1
+// @version      8.3.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8230,7 +8230,11 @@ window.addEventListener('keydown',function(e){
     body.innerHTML = h;
 
     // 卡片点击 → 更新聚焦 + 打开详情；空白处点击 → 收回详情
-    body.addEventListener('click', e => {
+    // 移除旧委托，防止刷新累积多个处理器
+    if (body._abnormalClickHandler) {
+      body.removeEventListener('click', body._abnormalClickHandler);
+    }
+    body._abnormalClickHandler = e => {
       const card = e.target.closest('.ws-abnormal-card');
       if (!card) {
         // 点击空白处，收回详情面板
@@ -8248,7 +8252,8 @@ window.addEventListener('keydown',function(e){
         filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR))
       );
       openDetailPanel(specimen, 'abnormal', wsAbnormalIndex);
-    });
+    };
+    body.addEventListener('click', body._abnormalClickHandler);
 
     // 键盘导航
     _rebindAbnormalKeyHandler();
@@ -9006,7 +9011,11 @@ window.addEventListener('keydown',function(e){
     body.innerHTML = h;
 
     // 行点击 → 详情；空白处点击 → 收回详情
-    body.addEventListener('click', e => {
+    // 移除旧委托，防止刷新累积多个处理器
+    if (body._incompleteClickHandler) {
+      body.removeEventListener('click', body._incompleteClickHandler);
+    }
+    body._incompleteClickHandler = e => {
       const tr = e.target.closest('tr[data-rdr]');
       if (!tr) {
         if (isDetailPanelVisible()) {closeDetailPanel();}
@@ -9014,7 +9023,8 @@ window.addEventListener('keydown',function(e){
       }
       const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
       if (specimen) {openDetailPanel(specimen);}
-    });
+    };
+    body.addEventListener('click', body._incompleteClickHandler);
   }
 
   // --- 全部标本视图 ---
