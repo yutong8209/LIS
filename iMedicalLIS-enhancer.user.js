@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.1
+// @version      8.4.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10157,13 +10157,13 @@ window.addEventListener('keydown',function(e){
           });
           _switchDetailInPlace(nextSpecimen, source, nextIdx, { force: true });
         } else {
-          closeDetailPanel();
+          closeDetailPanel(true); // force: 审核已完成，绕过 _detailAuditInProgress 守卫
           if (source === 'abnormal') {wsCategory = 'normal';}
           renderWSCategoryBar();
           renderWSTable();
         }
       } else {
-        closeDetailPanel();
+        closeDetailPanel(true); // force: 审核已完成，绕过 _detailAuditInProgress 守卫
         renderWSCategoryBar();
         renderWSTable();
       }
