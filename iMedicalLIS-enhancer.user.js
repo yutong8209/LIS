@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.3
+// @version      8.4.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7772,6 +7772,7 @@ window.addEventListener('keydown',function(e){
   // 详情面板打开时异常视图处理器会被移除，故 F4 在面板内（焦点常在原生 iframe）必须由本桥捕获。
   let _f4BridgeHandler = null;
   const _f4BridgeTargets = [];
+  let _f4BridgeTimer = null;
   function _installF4Bridge() {
     if (_f4BridgeHandler) {
       _attachF4BridgeToIframe();
@@ -7807,6 +7808,31 @@ window.addEventListener('keydown',function(e){
     document.addEventListener('keydown', _f4BridgeHandler, true);
     _f4BridgeTargets.push(document);
     _attachF4BridgeToIframe();
+    // 定时巡检：报告 iframe 重载/重开后 document 会换新，桥必须跟上，否则 F4 静默失效；
+    // 同时清掉已 detached 的旧目标，避免 _f4BridgeTargets 只增不减挂住旧 document
+    if (!_f4BridgeTimer) {
+      _f4BridgeTimer = setInterval(() => {
+        try {
+          _pruneF4BridgeTargets();
+          _attachF4BridgeToIframe();
+        } catch (e) {}
+      }, 2000);
+    }
+  }
+  function _pruneF4BridgeTargets() {
+    for (let i = _f4BridgeTargets.length - 1; i >= 0; i--) {
+      const t = _f4BridgeTargets[i];
+      if (t === document || t === window) {continue;} // 主页面常驻，不清理
+      try {
+        const d = t.nodeType === 9 ? t : t.document; // document 或 iframe window
+        if (!d || !d.documentElement || !d.defaultView) {
+          try {t.removeEventListener('keydown', _f4BridgeHandler, true);} catch (e) {}
+          _f4BridgeTargets.splice(i, 1);
+        }
+      } catch (e) {
+        _f4BridgeTargets.splice(i, 1);
+      }
+    }
   }
   function _attachF4BridgeToIframe() {
     if (!_f4BridgeHandler) {return;}
@@ -7827,6 +7853,10 @@ window.addEventListener('keydown',function(e){
   }
   function _removeF4BridgeHandler() {
     if (!_f4BridgeHandler) {return;}
+    if (_f4BridgeTimer) {
+      clearInterval(_f4BridgeTimer);
+      _f4BridgeTimer = null;
+    }
     for (const target of _f4BridgeTargets) {
       try {
         target.removeEventListener('keydown', _f4BridgeHandler, true);
@@ -8990,10 +9020,15 @@ window.addEventListener('keydown',function(e){
       if (wsCategory === 'abnormal') {scheduleAbnormalFocusRecovery();}
       if (_abnormalAuditQueued) {
         _abnormalAuditQueued = false;
-        const data = filteredData();
-        if (data.length) {
-          const idx = Math.max(0, Math.min(wsAbnormalIndex, data.length - 1));
-          setTimeout(() => auditAbnormalSpecimen(data[idx]), 30);
+        // 用户在审核完成前切走了异常分类：不再续审（filteredData 已是别的分类）
+        if (wsCategory !== 'abnormal') {
+          dbg('F4 排队续审取消: 已离开异常分类');
+        } else {
+          const data = filteredData();
+          if (data.length) {
+            const idx = Math.max(0, Math.min(wsAbnormalIndex, data.length - 1));
+            setTimeout(() => auditAbnormalSpecimen(data[idx]), 30);
+          }
         }
       } else {
         prefetchAbnormalAuditContext();
@@ -9425,7 +9460,11 @@ window.addEventListener('keydown',function(e){
     try {
       const raw = localStorage.getItem(K.auditQueue);
       let base = raw ? JSON.parse(raw) : null;
-      if (!base || !base.items) {base = queue;}
+      // items 代际不一致（重试塞队尾导致变长）时合并写会让 current 指向错误位置，直接全量写
+      if (!base || !base.items || !Array.isArray(base.items) || base.items.length !== queue.items.length) {
+        _writeFullQueue(queue);
+        return;
+      }
       base.current = queue.current;
       base.time = Date.now();
       localStorage.setItem(K.auditQueue, JSON.stringify(base));
@@ -9541,6 +9580,13 @@ window.addEventListener('keydown',function(e){
     setTimeout(() => {
       // 审核进行中：延迟重试，不弹误导 toast
       if (_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress) {
+        // 队列已过期/完成就不再每 3s 空转（防止标志卡死时无限重调度）
+        const q = loadAuditQueue();
+        if (!q || !q.items || q.items.length - (q.current || 0) <= 0) {
+          dbg('续跑批审: 队列已过期或完成，停止重试');
+          clearAuditQueue();
+          return;
+        }
         dbg('续跑批审: 审核进行中，延迟 3s 重试');
         runAuditQueueResume(3000);
         return;
@@ -11435,11 +11481,14 @@ window.addEventListener('keydown',function(e){
   let _auditAbortFlag = false;
   let _auditLockTs = 0;
   let _auditLockId = 0;
+  let _auditAbortedLockId = 0; // 被强制释放的锁代际：持该 id 的旧操作应在下一检查点自行退出
   const AUDIT_LOCK_TIMEOUT = 45000; // 45秒超时后强制释放，避免卡死无法恢复
   function acquireAuditLock(tag) {
     if (_auditInProgress && Date.now() - _auditLockTs > AUDIT_LOCK_TIMEOUT) {
       dbg('审核锁持有超过', AUDIT_LOCK_TIMEOUT / 1000, '秒，可能卡死，强制释放 (held by', tag, ')');
-      _auditAbortFlag = true;
+      // 记录被中止的锁代际：旧操作通过 isAuditLockAborted(自己的id) 在下一检查点退出，
+      // 不再用全局 flag（全局 flag 会被本函数同步清掉，旧操作永远看不到，会并发双审）
+      _auditAbortedLockId = _auditLockId;
       _auditInProgress = false;
       _auditLockTs = 0;
       showToast('上次审核操作可能已卡死，已强制释放锁，可重新开始', 'warning');
@@ -11460,6 +11509,14 @@ window.addEventListener('keydown',function(e){
     _auditAbortFlag = false;
     _auditInProgress = false;
     _auditLockTs = 0;
+  }
+  // 锁心跳：长操作（整批审核可能跑数分钟）每条刷新一次，避免健康操作被误判卡死抢锁
+  function refreshAuditLock(lockId) {
+    if (lockId && lockId === _auditLockId) {_auditLockTs = Date.now();}
+  }
+  // 代际中止判定：本操作持有的锁是否已被强制释放
+  function isAuditLockAborted(lockId) {
+    return !!(lockId && _auditAbortedLockId === lockId) || _auditAbortFlag;
   }
 
   // --- 检测是否在报告处理页面 ---
@@ -11574,9 +11631,23 @@ window.addEventListener('keydown',function(e){
     // 优先：当前窗口就有 ReportSave（脚本运行在 iframe 内）
     if (typeof ReportSave === 'function') {return window;}
     // 优先搜索 iframe_1172（报告处理页面）— 确保返回 iframe 窗口（含 me 对象）
+    // 必须校验仍是报告页：iframe 被 LIS 复用/导航后 id 还在但内容已换，直接返回会把审核点击落到错误页面
     const iframe = document.getElementById('iframe_1172');
     if (iframe && iframe.contentWindow) {
-      return iframe.contentWindow;
+      try {
+        const cw = iframe.contentWindow;
+        const cdoc = cw.document;
+        if (
+          cdoc &&
+          (typeof cw.ReportSave === 'function' ||
+            cw.me ||
+            cdoc.getElementById('btn_ReportAuth') ||
+            cdoc.getElementById('btn_ReportSave'))
+        ) {
+          return cw;
+        }
+        dbg('iframe_1172 已不在报告页，回退全局扫描');
+      } catch (e) {}
     }
     // 搜索所有 iframe，找包含审核按钮的
     const iframes = document.querySelectorAll('iframe');
@@ -15203,15 +15274,20 @@ window.addEventListener('keydown',function(e){
     if (!queue || !queue.items || queue.items.length === 0) {return;}
     if (wsClassifying) {
       queue._classifyingRetries = (queue._classifyingRetries || 0) + 1;
-      if (queue._classifyingRetries > 30) {
-        dbg('批审等待分类超过 60 秒，放弃并保存队列');
+      // 上限 90 次×2s=3 分钟：首次打开工作台 + 大工作量时分类（8/轮 + 追加组重跑）很容易超 60s
+      if (queue._classifyingRetries > 90) {
+        dbg('批审等待分类超过 3 分钟，放弃并保存队列');
         showToast('分类长时间未完成，已保存批审队列，请刷新工作台后重试', 'error');
         delete queue._classifyingRetries;
         saveAuditQueueNow(queue);
         return;
       }
       if (queue._classifyingRetries === 1) {
-        showToast('标本正在分类中，稍候自动继续批审...', 'warning');
+        showToast('标本正在分类中，完成后自动继续批审...', 'warning');
+      } else if (queue._classifyingRetries === 30) {
+        showToast('分类仍在进行（已等待约 1 分钟），完成后自动批审...', 'info');
+      } else if (queue._classifyingRetries === 60) {
+        showToast('数据量较大，分类还需片刻（已等待约 2 分钟）...', 'info');
       }
       saveAuditQueueNow(queue);
       setTimeout(() => continueAuditQueue(queue).catch(e => dbg('批审等待分类失败:', e)), 2000);
@@ -15373,7 +15449,7 @@ window.addEventListener('keydown',function(e){
           saveAuditQueueNow(queue);
           break;
         }
-        if (_auditAbortFlag) {
+        if (isAuditLockAborted(auditLockId)) {
           dbg('批审因审核锁超时被中止');
           saveAuditQueueNow(queue);
           break;
@@ -15383,6 +15459,7 @@ window.addEventListener('keydown',function(e){
         if (!item) {break;}
 
         refreshQueueLock();
+        refreshAuditLock(auditLockId); // 心跳：健康长批审不被 45s 假死判定误抢
         const liveRow = resolveQueueItemRow(item);
         if (liveRow && String(liveRow.IsComplete || '') !== '1') {
           queue.skipped.push({ ...item, reason: '结果不完整' });
@@ -15456,7 +15533,7 @@ window.addEventListener('keydown',function(e){
         // 单条硬超时：避免一条标本拖死整批（表现为卡半天最后又成功）
         const itemDeadline =
           Date.now() + (batchCAReady ? BATCH_ITEM_DEADLINE_MS.caReady : BATCH_ITEM_DEADLINE_MS.needCA);
-        const itemAbort = () => _batchAbort || _auditAbortFlag || Date.now() > itemDeadline;
+        const itemAbort = () => _batchAbort || isAuditLockAborted(auditLockId) || Date.now() > itemDeadline;
         const progressPhase = (phase, elapsedMs) => {
           const wait = typeof elapsedMs === 'number' && elapsedMs > 0 ? ` ${Math.round(elapsedMs / 1000)}s` : '';
           updateBatchProgress(
@@ -15661,6 +15738,7 @@ window.addEventListener('keydown',function(e){
           queue.current++;
           saveAuditQueueTick(queue);
           refreshQueueLock();
+          refreshAuditLock(auditLockId);
           await sleep(0);
           try {
             iframeWin = getReportIframeWin();
@@ -15694,7 +15772,8 @@ window.addEventListener('keydown',function(e){
           dbg('批审补审轮次:', need.length);
           const stillFail = [];
           for (let i = 0; i < need.length; i++) {
-            if (_batchAbort) {break;}
+            if (_batchAbort || isAuditLockAborted(auditLockId)) {break;}
+            refreshAuditLock(auditLockId); // 补审轮也要心跳，多条补审同样可能超过 45s
             const it = need[i];
             updateBatchProgress(
               `补审 ${i + 1}/${need.length} - ${it.name || it.labno || it.reportDR}`,
