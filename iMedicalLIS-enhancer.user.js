@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.2
+// @version      8.4.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8828,6 +8828,27 @@ window.addEventListener('keydown',function(e){
       showToast('没有可审核的异常标本', 'warning');
       return;
     }
+
+    // 预校验：在标记 UI/设锁之前检查，避免"正在审核..."瞬间变"已审/不完整"的两个弹窗
+    const _preClassCheck = validateAuditClassification(specimen.ReportDR, 'abnormal');
+    if (!_preClassCheck.ok) {
+      showToast(_preClassCheck.msg, _preClassCheck.msg.indexOf('危急') !== -1 ? 'error' : 'warning');
+      advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
+      return;
+    }
+    const _preComplete = String(specimen.IsComplete || '');
+    if (_preComplete !== '1') {
+      showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
+      advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
+      return;
+    }
+    const _preStatus = String(specimen.Status || specimen.ReportStatus || '');
+    if (_preStatus === '3' || _preStatus === '4') {
+      showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
+      advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
+      return;
+    }
+
     let _auditSafetyTimer = null;
     const resumeWSRefresh = !!wsTimer;
 
@@ -8851,27 +8872,6 @@ window.addEventListener('keydown',function(e){
       const targetDR = String(specimen.ReportDR || '');
       const ft = document.getElementById('lis-ws-ft-stat');
       if (ft) {ft.textContent = `异常审核：${specimen.PatName || specimen.Labno || targetDR}`;}
-
-      const classCheck = validateAuditClassification(specimen.ReportDR, 'abnormal');
-      if (!classCheck.ok) {
-        showToast(classCheck.msg, classCheck.msg.indexOf('危急') !== -1 ? 'error' : 'warning');
-        advanceAbnormalFocusAfterSkip(startIndex);
-        return;
-      }
-
-      const complete = String(specimen.IsComplete || '');
-      if (complete !== '1') {
-        showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
-        advanceAbnormalFocusAfterSkip(startIndex);
-        return;
-      }
-
-      const status = String(specimen.Status || specimen.ReportStatus || '');
-      if (status === '3' || status === '4') {
-        showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
-        advanceAbnormalFocusAfterSkip(startIndex);
-        return;
-      }
 
       const curDR = resolveCurrentWG();
       const spDR = specimen._wg || '';
