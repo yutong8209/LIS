@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.4
+// @version      8.4.5
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10067,7 +10067,7 @@ window.addEventListener('keydown',function(e){
         }
       }, 60000);
       dbg('详情审核开始:', currentDetailSpecimen.PatName, 'source=', detailSource);
-      showToast(`正在审核: ${currentDetailSpecimen.PatName || ''}…`, 'info');
+      // 不弹「正在审核」toast：按钮已显示 ⏳ 审核中…，结束后只弹 审核成功/审核失败 一个窗，避免双窗叠加
       stopWSRefresh();
       const specimen = currentDetailSpecimen;
       const source = detailSource;
@@ -10170,10 +10170,10 @@ window.addEventListener('keydown',function(e){
         }
       }
       if (!auditResult) {
-        showToast('未确认审核成功，请核对原生列表状态', 'warning');
+        showToast(`审核失败: ${specimen.PatName || ''}，未能确认审核结果，请核对原生列表状态`, 'error');
         return;
       }
-      showToast(`已审核: ${specimen.PatName}`, 'success');
+      showToast(`审核成功: ${specimen.PatName}`, 'success');
       closeNativeAuditSuccessMessage(iframeWin);
       dbg('详情审核成功:', specimen.PatName, 'ReportDR:', reportDR);
 
