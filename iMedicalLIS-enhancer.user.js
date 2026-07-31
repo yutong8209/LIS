@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.7
+// @version      8.4.8
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6822,7 +6822,12 @@
     // 2. LIS 页面全局变量
     const dr = wgDR();
     if (dr) {return dr;}
-    // 3. 从 wsData 推断：有标本的工作组中最常见的
+    // 3. 父框架工作组下拉框（切组后页面重载，全局变量可能尚未就绪，但下拉框已更新）
+    try {
+      const sel = window.top.document.getElementById('sl_changeworkgroup');
+      if (sel && sel.value) {return String(sel.value);}
+    } catch (e) {}
+    // 4. 从 wsData 推断：有标本的工作组中最常见的
     const counts = {};
     wsData.forEach(r => {
       const w = r._wg;
@@ -9627,11 +9632,25 @@ window.addEventListener('keydown',function(e){
     const curDR = String(resolveCurrentWG());
     const itemWg = String(item.wg || '');
     if (!itemWg || itemWg === curDR) {return true;}
+    // curDR 为空时（页面刚重载，全局变量和下拉框都还没就绪），不盲目切组
+    // 让 runAuditQueueResume 延迟重试，等页面完全加载后再判断
+    if (!curDR) {
+      queue.pausedForSwitch = true;
+      saveAuditQueueNow(queue);
+      runAuditQueueResume(2500);
+      return false;
+    }
     queue.pausedForSwitch = true;
     saveAuditQueueNow(queue);
     const wgName = (WG_MAP[itemWg] || {}).name || itemWg;
     showToast('切换到' + wgName + '继续审核...', 'warning');
-    safeSwitchWG(item.wg);
+    const switched = safeSwitchWG(item.wg);
+    // safeSwitchWG 返回 true 且未触发重载（已在目标组）→ 直接继续，不用等
+    if (switched && String(resolveCurrentWG()) === itemWg) {
+      delete queue.pausedForSwitch;
+      saveAuditQueueNow(queue);
+      return true;
+    }
     runAuditQueueResume(2500);
     return false;
   }
@@ -14102,17 +14121,27 @@ window.addEventListener('keydown',function(e){
     ]
       .map(v => String(v || ''))
       .join(' ');
-    return text.indexOf('危急') !== -1 || text.indexOf('危急值') !== -1;
+    if (!text) {return false;}
+    // 排除否定语境：「无危急」「非危急」不算危急值
+    if (text.indexOf('无危急') !== -1 || text.indexOf('非危急') !== -1) {return false;}
+    return text.indexOf('危急') !== -1;
   }
 
   function isCriticalSpecimenRow(row) {
     if (!row) {return false;}
     if (String(row.IsPanic || row.Panic || '').trim() === '1') {return true;}
-    if (row.PanicReportDR) {return true;}
-    const text = [row.PanicFlag, row.PanicDesc, row.PanicText, row.Alert, row.Tips, row.FlagStr]
+    // PanicReportDR: 排除 '0'（LIS 中 '0' 表示无记录，但 JS 中 '0' 为 truthy）
+    const prd = String(row.PanicReportDR || '').trim();
+    if (prd && prd !== '0') {return true;}
+    // 仅检查专用危急值字段（PanicFlag/PanicDesc/PanicText/FlagStr），
+    // 不检查通用 Alert/Tips 字段——它们可能含「无危急值」「非危急」等否定语境
+    const text = [row.PanicFlag, row.PanicDesc, row.PanicText, row.FlagStr]
       .map(v => String(v || ''))
       .join(' ');
-    return text.indexOf('危急') !== -1 || text.indexOf('危急值') !== -1;
+    if (!text) {return false;}
+    // 排除否定语境：「无危急」「非危急」不算危急值
+    if (text.indexOf('无危急') !== -1 || text.indexOf('非危急') !== -1) {return false;}
+    return text.indexOf('危急') !== -1;
   }
 
   function classifyStatusText(status) {
@@ -15412,6 +15441,26 @@ window.addEventListener('keydown',function(e){
         progress.remove();
         return;
       } /* ensureAuditQueueWorkGroup 内已 schedule 续跑 */
+
+      // 跨组续跑后页面重载，wsData 可能为空——等待工作台数据加载完成
+      // 否则 resolveQueueItemRow 找不到标本行，全部被跳过为「分类缓存缺失」
+      if (!wsData.length) {
+        updateBatchProgress('正在加载工作台数据...', 0);
+        let _wsWaited = 0;
+        while (!wsData.length && _wsWaited < 30) {
+          await new Promise(r => setTimeout(r, 1000));
+          _wsWaited++;
+        }
+        // keepWorkbenchOnTop 未调用或 loadWSData 失败时，主动加载
+        if (!wsData.length) {
+          try { await loadWSData(); } catch (e) { dbg('批审前加载工作台数据失败:', e); }
+        }
+        if (!wsData.length) {
+          showToast('工作台数据加载失败，请刷新工作台后重试', 'error');
+          progress.remove();
+          return;
+        }
+      }
 
       let iframeWin = getReportIframeWin();
       if (!iframeWin) {
