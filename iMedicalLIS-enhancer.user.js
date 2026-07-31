@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.5
+// @version      8.4.6
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4285,35 +4285,64 @@
   }
 
   function qeMatchProject(group, proj, tc, machineName) {
-    if (!qeMachineMatchesGroup(group, machineName)) {return false;}
+    return qeMatchScore(group, proj, tc, machineName) >= 0;
+  }
+
+  // 匹配评分：返回 -1（不匹配）或 ≥0 的分数（越大越优先）。
+  // 关键设计：精确匹配（相等）远优先于子串模糊匹配；模糊匹配时按匹配串长度
+  // 细分——越长（越具体）分越高。这样"游离三碘甲状原氨酸"(FT3,精确别名) 会赢过
+  // "三碘甲状原氨酸"(TT3别名,子串命中)，修复 FT3/TT3、FT4/TT4、F-PSA/PSA 成对项目
+  // 被同一数据抢占导致导出结果相同的问题。
+  function qeMatchScore(group, proj, tc, machineName) {
+    if (!qeMachineMatchesGroup(group, machineName)) {return -1;}
     const code = qeNormName(tc.Code);
     const synonym = qeNormName(tc.Synonym);
     const cname = qeNormName(tc.CName);
     if (proj.lisName) {
-      return cname === proj.lisName || qeLooseMatch(cname, proj.lisName);
+      if (cname === proj.lisName) {return 1000;}
+      if (qeLooseMatch(cname, proj.lisName)) {return 100 + Math.max(cname.length, proj.lisName.length);}
+      return -1;
     }
-    if (!qeMaterialMatchesGroup(group, tc, proj, machineName)) {return false;}
+    if (!qeMaterialMatchesGroup(group, tc, proj, machineName)) {return -1;}
     const matName = qeNormName(tc.MaterialName);
-    if (qeAbbrHit(group, proj, tc)) {return true;}
-    if (code && proj.name && code.toLowerCase() === proj.name.toLowerCase()) {return true;}
-    if (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase()) {return true;}
-    if (code === proj.code) {return true;}
-    const cnameMatch = cname === proj.name || qeLooseMatch(cname, proj.name);
-    const matMatch = matName === proj.name || qeLooseMatch(matName, proj.name);
-    const abbrMatch =
-      (matName && proj.name && matName.toLowerCase() === proj.name.toLowerCase()) ||
-      (cname && proj.name && cname.toLowerCase() === proj.name.toLowerCase()) ||
-      (synonym && proj.name && synonym.toLowerCase() === proj.name.toLowerCase());
+    const cnL = cname.toLowerCase();
+    const mnL = matName.toLowerCase();
+    const cdL = code.toLowerCase();
+    const syL = synonym.toLowerCase();
+    const pnL = proj.name ? proj.name.toLowerCase() : '';
+    // 精确类（高分，远优先于模糊）
+    if (qeAbbrHit(group, proj, tc)) {return 900;}
+    if (code && proj.name && cdL === pnL) {return 890;}
+    if (synonym && proj.name && syL === pnL) {return 880;}
+    if (code === proj.code) {return 870;}
+    if (cname === proj.name) {return 860;}
+    if (matName === proj.name) {return 850;}
     const aliases = QE_ALIASES[proj.name] || [];
-    const aliasMatch = aliases.some(alias => {
-      const a = alias.toLowerCase();
-      const cn = cname.toLowerCase();
-      const mn = matName.toLowerCase();
-      const cd = code.toLowerCase();
-      const sy = synonym.toLowerCase();
-      return cn === a || qeLooseMatch(cn, a) || mn === a || qeLooseMatch(mn, a) || cd === a || sy === a;
-    });
-    return cnameMatch || matMatch || abbrMatch || aliasMatch;
+    let bestAliasExact = 0;
+    for (const alias of aliases) {
+      const aL = alias.toLowerCase();
+      if (cnL === aL || mnL === aL || cdL === aL || syL === aL) {
+        if (alias.length > bestAliasExact) {bestAliasExact = alias.length;}
+      }
+    }
+    if (bestAliasExact) {return 800 + bestAliasExact;}
+    // 模糊类（低分）：按匹配串长度细分，越长（越具体）分越高
+    let bestLoose = 0;
+    if (proj.name && qeLooseMatch(cnL, pnL) && proj.name.length > bestLoose) {bestLoose = proj.name.length;}
+    if (proj.name && qeLooseMatch(mnL, pnL) && proj.name.length > bestLoose) {bestLoose = proj.name.length;}
+    for (const alias of aliases) {
+      const aL = alias.toLowerCase();
+      if (qeLooseMatch(cnL, aL) && alias.length > bestLoose) {bestLoose = alias.length;}
+      if (qeLooseMatch(mnL, aL) && alias.length > bestLoose) {bestLoose = alias.length;}
+    }
+    if (bestLoose) {return 100 + bestLoose;}
+    // abbrMatch 兜底（大小写不敏感精确，理论上已被上面精确类覆盖，保留以防遗漏）
+    const abbrMatch =
+      (matName && proj.name && mnL === pnL) ||
+      (cname && proj.name && cnL === pnL) ||
+      (synonym && proj.name && syL === pnL);
+    if (abbrMatch) {return 840;}
+    return -1;
   }
 
   // 项目名称别名映射（模板名 → LIS CName）
@@ -4766,14 +4795,20 @@
         const rowID = String(tc.RowID || '');
         const mat = String(tc.MatDR || matDR || '');
         const cname = qeNormName(tc.CName);
+        // 与主循环一致：每个 tc 只分配给匹配分最高的 proj
+        let bestProj = null, bestScore = -1;
         for (const proj of coagGroup.projects) {
           if (mappings[proj.code]) {continue;}
-          if (!qeMatchProject(coagGroup, proj, tc, coagMach.text)) {continue;}
-          mappings[proj.code] = {
+          const score = qeMatchScore(coagGroup, proj, tc, coagMach.text);
+          if (score < 0) {continue;}
+          if (score > bestScore) {bestScore = score; bestProj = proj;}
+        }
+        if (bestProj) {
+          mappings[bestProj.code] = {
             machineDR: coagMach.id,
             machineName: coagMach.text,
             testCodeDR: rowID,
-            testName: cname || proj.name,
+            testName: cname || bestProj.name,
             matDR: mat,
             matLotDR: String(tc.MatLotRowID || ''),
             wgDR: coagMach.wgDR,
@@ -4852,23 +4887,32 @@
         const matDR = String(tc.MatDR || '');
         const matLotDR = String(tc.MatLotRowID || '');
         const cname = qeNormName(tc.CName);
+        // 每个 tc 只分配给匹配分最高的 proj，避免成对项目(FT3/TT3 等)
+        // 因子串别名被同一数据抢占、导致导出结果相同
+        let bestProj = null, bestGroup = null, bestScore = -1;
         for (const group of QE_GROUPS) {
           for (const proj of group.projects) {
             if (mappings[proj.code]) {continue;}
-            if (!qeMatchProject(group, proj, tc, mach.text)) {continue;}
-            mappings[proj.code] = {
-              machineDR: mach.id,
-              machineName: mach.text,
-              testCodeDR: rowID,
-              testName: cname || proj.name,
-              matDR: matDR,
-              matLotDR: matLotDR,
-              materialName: String(tc.MaterialName || ''),
-              wgDR: mach.wgDR,
-              wgName: mach.wgName,
-              groupId: group.id
-            };
+            const score = qeMatchScore(group, proj, tc, mach.text);
+            if (score < 0) {continue;}
+            if (score > bestScore) {
+              bestScore = score; bestProj = proj; bestGroup = group;
+            }
           }
+        }
+        if (bestProj) {
+          mappings[bestProj.code] = {
+            machineDR: mach.id,
+            machineName: mach.text,
+            testCodeDR: rowID,
+            testName: cname || bestProj.name,
+            matDR: matDR,
+            matLotDR: matLotDR,
+            materialName: String(tc.MaterialName || ''),
+            wgDR: mach.wgDR,
+            wgName: mach.wgName,
+            groupId: bestGroup.id
+          };
         }
       }
     }
