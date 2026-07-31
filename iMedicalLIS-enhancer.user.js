@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.6
+// @version      8.4.7
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4919,7 +4919,7 @@
 
     await qeCoagFallbackMappings(mappings, machines, startDate, endDate, statusCb);
 
-    mappings._meta = { year: year, month: month, at: Date.now() };
+    mappings._meta = { year: year, month: month, at: Date.now(), logicVersion: QE_MAP_LOGIC_VERSION };
     const found = qeMappingCount(mappings);
     const total = QE_GROUPS.reduce((s, g) => s + g.projects.length, 0);
     if (statusCb)
@@ -4931,7 +4931,10 @@
   }
 
   // 从 localStorage 加载或保存映射
-  const QE_MAP_KEY = 'lis-qe-mappings-v8';
+  const QE_MAP_KEY = 'lis-qe-mappings-v9';
+  // 映射逻辑版本：qeMatchScore 最佳匹配 = 2。版本不符时导出前自动重新检测，
+  // 防止旧缓存(如 v8 子串抢占导致的错误 testCodeDR)被复用、使脚本修复不生效
+  const QE_MAP_LOGIC_VERSION = 2;
   function qeLoadMappings() {
     try {
       return JSON.parse(localStorage.getItem(QE_MAP_KEY) || '{}');
@@ -5751,10 +5754,23 @@
     // 保存配置
     qeSaveConfig(cfg);
 
-    const mappings = qeLoadMappings();
-    if (!qeMappingCount(mappings)) {
-      qeSetStatus('请先点击"检测映射"来识别质控项目。', 'error');
-      return;
+    let mappings = qeLoadMappings();
+    // 映射逻辑版本不符(或缓存为空)时自动重新检测，确保用最新的 qeMatchScore 匹配，
+    // 避免旧缓存里错误的 testCodeDR(如 FT3/TT3 指向同一条)被复用导致导出数据错乱
+    if (!qeMappingCount(mappings) || !mappings._meta || mappings._meta.logicVersion !== QE_MAP_LOGIC_VERSION) {
+      qeSetStatus('质控项目映射已更新，正在重新检测（仅需一次）...', 'info');
+      try {
+        mappings = await qeDetectMappings(qeSetStatus);
+        qeSaveMappings(mappings);
+        qeShowMappingInfo(mappings);
+      } catch (e) {
+        qeSetStatus('重新检测映射失败: ' + e.message + '（可手动点"检测映射"）', 'error');
+        return;
+      }
+      if (!qeMappingCount(mappings)) {
+        qeSetStatus('未检测到任何质控项目映射，请检查仪器配置后点"检测映射"。', 'error');
+        return;
+      }
     }
     const mapMeta = mappings._meta;
     if (mapMeta && cfg._year && cfg._month && (mapMeta.year !== cfg._year || mapMeta.month !== cfg._month)) {
