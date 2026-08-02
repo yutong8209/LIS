@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.9
+// @version      8.4.10
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4962,7 +4962,15 @@
     return mappings;
   }
 
-  // 从 localStorage 加载或保存映射
+  // ============================================================
+  // ⚠️ 映射缓存版本（8.4.7 事故教训：改匹配逻辑忘 bump，旧缓存让修复不生效）
+  // 改以下任意匹配逻辑，必须同步：QE_MAP_KEY 的 v9 升 v10，且 QE_MAP_LOGIC_VERSION +1：
+  //   - QE_ALIASES 别名表 / QE_LIS_ABBR 缩写表
+  //   - qeMatchScore / qeAbbrHit / qeDetectMappings / qeCoagFallbackMappings
+  //   - QE_GROUPS 的机器正则 / materialHint / lisName / 硬编码 DR
+  // 导出前会校验 logicVersion，不符自动重新检测并保存；key 升版是双保险（旧缓存物理不可达）。
+  // 只改数据获取 / Excel 生成等非匹配逻辑时无需 bump，但建议顺手 bump。
+  // ============================================================
   const QE_MAP_KEY = 'lis-qe-mappings-v9';
   // 映射逻辑版本：qeMatchScore 最佳匹配 = 2。版本不符时导出前自动重新检测，
   // 防止旧缓存(如 v8 子串抢占导致的错误 testCodeDR)被复用、使脚本修复不生效
