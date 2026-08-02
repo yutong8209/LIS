@@ -217,6 +217,65 @@ def _items_match(tp_name: str, lis_item: str, lis_set: str) -> bool:
     return match_score(tp_name, lis_item, lis_set) >= 70
 
 
+def _dedup_fee_rows(df: pd.DataFrame, keys, fee_col: str) -> pd.DataFrame:
+    """按 keys 去重，优先保留 fee_col 非空且非 0 的行。
+
+    旧逻辑 drop_duplicates(keys) 保留每组首行：若首行费用为空/0 而后续行有值，
+    整个检验号会被记成 0，直接造成对账金额少算。同组费用理论上应一致，
+    因此优先取有值的行是安全的。
+    """
+    if df.empty:
+        return df
+    sub = df.copy()
+    fee = pd.to_numeric(sub[fee_col], errors="coerce")
+    sub["_has_fee"] = fee.notna() & fee.ne(0)
+    sub["_row"] = range(len(sub))
+    sub = sub.sort_values(["_has_fee", "_row"], ascending=[False, True])
+    return sub.drop_duplicates(list(keys), keep="first").drop(columns=["_has_fee", "_row"])
+
+
+def _parse_dates(s: pd.Series, col_name: str = "日期") -> pd.Series:
+    """解析日期列，兼容 datetime/ISO/中文日期/Excel 序列号。
+
+    - Excel 序列号（5 位纯数字，1900 日期系：1899-12-30 + N 天）
+    - 中文日期（2025年1月5日）
+    - 其余交给 pandas format='mixed'（ISO/斜杠/带时间均兼容）
+    - 不用 dayfirst：pandas 2.x 会把 '2025-01-05' 解析成 2025-05-01
+    - '1/5/2025' 这类 M/D/YYYY 歧义值按美式解析并打印提示，请人工确认
+    """
+    raw = s.astype(str).str.strip().replace({"nan": "", "NaT": "", "None": "", "<NA>": ""})
+    out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
+    mask = raw.ne("")
+    if not mask.any():
+        return out
+    vals = raw[mask]
+
+    # Excel 序列号（5 位纯数字，1900 日期系：1899-12-30 + N 天）
+    serial = vals.str.fullmatch(r"\d{5}").fillna(False)
+    if serial.any():
+        nums = pd.to_numeric(vals[serial], errors="coerce")
+        out.loc[serial[serial].index] = pd.Timestamp("1899-12-30") + pd.to_timedelta(nums, unit="D")
+
+    # 中文日期：2025年1月5日 / 2025年01月05日
+    zh = vals.str.fullmatch(r"\d{4}年\d{1,2}月\d{1,2}日").fillna(False)
+    if zh.any():
+        parsed = pd.to_datetime(vals[zh], format="%Y年%m月%d日", errors="coerce")
+        out.loc[zh[zh].index] = parsed
+
+    # 斜杠式歧义日期：1/5/2025（月/日/年 vs 日/月/年 无法自动判断）→ 单独提示
+    slash = vals.str.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}").fillna(False)
+    if slash.any():
+        print(f"[提示] {col_name} 含 {int(slash.sum())} 个 'M/D/YYYY' 格式值（如 {vals[slash].iloc[0]}），"
+              f"已按 月/日/年 解析；若导出实际是 日/月/年 请统一为 YYYY-MM-DD 后重跑")
+
+    # 其余交给 pandas format='mixed'
+    rest_sel = ~serial & ~zh
+    if rest_sel.any():
+        parsed = pd.to_datetime(vals[rest_sel], errors="coerce", format="mixed")
+        out.loc[rest_sel[rest_sel].index] = parsed
+    return out
+
+
 def _read_tp(path: Path) -> pd.DataFrame:
     df = pd.read_excel(path, dtype=str)
     # 兼容首行即表头 / 无表头
@@ -246,10 +305,13 @@ def _read_tp(path: Path) -> pd.DataFrame:
     df["条码号"] = (
         df["条码号"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip().replace({"nan": ""})
     )
-    df["日期"] = pd.to_datetime(df["送检日期"], errors="coerce").dt.normalize()
+    df["日期"] = _parse_dates(df["送检日期"], "送检日期").dt.normalize()
     df["标准物价"] = pd.to_numeric(df["标准物价"], errors="coerce").fillna(0.0)
     df["结算金额"] = pd.to_numeric(df["结算金额"], errors="coerce").fillna(0.0)
+    n_bad_date = int(df["日期"].isna().sum())
     df = df[df["患者"].ne("") & df["日期"].notna()].copy()
+    if n_bad_date:
+        print(f"[警告] 机构表 {n_bad_date} 行日期无法解析（Excel 序列号/中文日期等），已被剔除，请检查导出格式")
     df["来源"] = "机构"
     df["nk"] = df["单项名称"].map(_norm_name)
     return df.reset_index(drop=True)
@@ -269,7 +331,7 @@ def _read_lis(path: Path) -> pd.DataFrame:
 
     # 仅外送（若有工作组列）
     if "工作组" in df.columns:
-        wg = df["工作组"].astype(str)
+        wg = df["工作组"].astype(str).str.strip()
         if (wg == "外送").any():
             df = df[wg == "外送"].copy()
 
@@ -291,10 +353,13 @@ def _read_lis(path: Path) -> pd.DataFrame:
     df["项目"] = df["项目"].astype(str).str.strip().replace({"nan": ""})
     df["组合"] = df["组合"].astype(str).str.strip().replace({"nan": ""})
     df["检验号"] = df["检验号"].astype(str).str.strip().replace({"nan": ""})
-    df["日期"] = pd.to_datetime(df["核收时间"], errors="coerce").dt.normalize()
+    df["日期"] = _parse_dates(df["核收时间"], "核收时间").dt.normalize()
     df["报告费用"] = pd.to_numeric(df["报告费用"], errors="coerce").fillna(0.0)
     df["医嘱费用"] = pd.to_numeric(df["医嘱费用"], errors="coerce").fillna(0.0)
+    n_bad_date = int(df["日期"].isna().sum())
     df = df[df["姓名"].ne("") & df["日期"].notna()].copy()
+    if n_bad_date:
+        print(f"[警告] LIS CSV {n_bad_date} 行核收时间无法解析，已被剔除，请检查导出格式")
     df["来源"] = "医院LIS"
     df["nk"] = df["项目"].map(_norm_name)
     df["nk_set"] = df["组合"].map(_norm_name)
@@ -318,8 +383,8 @@ def _patient_day_agg_tp(tp: pd.DataFrame) -> pd.DataFrame:
 
 def _patient_day_agg_lis(lis: pd.DataFrame) -> pd.DataFrame:
     # 报告费用按检验号去重；医嘱费用按 检验号+组合 去重后再按患者日汇总
-    by_lab = lis.drop_duplicates("检验号")[["姓名", "日期", "检验号", "报告费用"]].copy()
-    by_ts = lis.drop_duplicates(["检验号", "组合"])[["姓名", "日期", "检验号", "组合", "医嘱费用"]].copy()
+    by_lab = _dedup_fee_rows(lis, ["检验号"], "报告费用")[["姓名", "日期", "检验号", "报告费用"]].copy()
+    by_ts = _dedup_fee_rows(lis, ["检验号", "组合"], "医嘱费用")[["姓名", "日期", "检验号", "组合", "医嘱费用"]].copy()
     g1 = by_lab.groupby(["姓名", "日期"], as_index=False).agg(
         医院报告费用=("报告费用", "sum"),
         医院标本数=("检验号", "nunique"),
@@ -360,6 +425,8 @@ def compare(tp: pd.DataFrame, lis: pd.DataFrame, day_slack: int = 0) -> dict[str
             ]
             if cands.empty:
                 continue
+            # 候选按 |日差| 升序取最近者，避免 ±N 日内多条记录时配错日子
+            cands = cands.assign(_diff=(cands["日期"] - r["日期"]).abs()).sort_values("_diff")
             j = cands.iloc[0].name
             if j in used_lis:
                 continue
@@ -472,8 +539,8 @@ def compare(tp: pd.DataFrame, lis: pd.DataFrame, day_slack: int = 0) -> dict[str
             {"指标": "医院明细行数", "数值": len(lis)},
             {"指标": "医院检验号数", "数值": lis["检验号"].nunique()},
             {"指标": "医院患者日数", "数值": len(lis_day)},
-            {"指标": "医院报告费用合计(按检验号去重)", "数值": round(lis.drop_duplicates("检验号")["报告费用"].sum(), 2)},
-            {"指标": "医院医嘱费用合计(按检验号+组合去重)", "数值": round(lis.drop_duplicates(["检验号", "组合"])["医嘱费用"].sum(), 2)},
+            {"指标": "医院报告费用合计(按检验号去重)", "数值": round(_dedup_fee_rows(lis, ["检验号"], "报告费用")["报告费用"].sum(), 2)},
+            {"指标": "医院医嘱费用合计(按检验号+组合去重)", "数值": round(_dedup_fee_rows(lis, ["检验号", "组合"], "医嘱费用")["医嘱费用"].sum(), 2)},
             {"指标": "患者日双方都有", "数值": len(both)},
             {"指标": "患者日仅机构有", "数值": len(only_tp)},
             {"指标": "患者日仅医院有", "数值": len(only_lis)},
@@ -690,6 +757,8 @@ def _merge_patient_days_with_slack(
             ]
             if cands.empty:
                 continue
+            # 候选按 |日差| 升序取最近者，避免 ±N 日内多条记录时配错日子
+            cands = cands.assign(_diff=(cands["日期"] - r["日期"]).abs()).sort_values("_diff")
             j = cands.iloc[0].name
             if j in used_lis:
                 continue
@@ -767,7 +836,7 @@ def _presence_details(
         if not names:
             return pd.DataFrame(columns=["姓名", "医院标本数", "报告费用合计", "检验号示例", "项目汇总", "日期范围"])
         sub = lis[lis["姓名"].isin(names)]
-        by_lab = sub.drop_duplicates("检验号")
+        by_lab = _dedup_fee_rows(sub, ["检验号"], "报告费用")
         g1 = by_lab.groupby("姓名", as_index=False).agg(
             医院标本数=("检验号", "nunique"),
             报告费用合计=("报告费用", "sum"),
@@ -967,7 +1036,7 @@ def write_clean_report(
 
     tp_std = float(tp["标准物价"].sum())
     tp_settle = float(tp["结算金额"].sum())
-    lis_fee = float(lis.drop_duplicates("检验号")["报告费用"].sum())
+    lis_fee = float(_dedup_fee_rows(lis, ["检验号"], "报告费用")["报告费用"].sum())
     delta = tp_std - lis_fee
 
     n_both = len(both)

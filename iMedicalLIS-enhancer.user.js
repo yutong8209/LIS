@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.8
+// @version      8.4.9
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -2893,16 +2893,45 @@
       );
     }
     const n = parsed.value;
+    const op = parsed.op || ''; // '' 精确 | '<' | '<=' | '>' | '>='
+    // 带操作符的结果（如 <0.5、>1000）不能当作精确值参与比较：
+    // 只在操作符方向能确定判定时通过，无法确定的保守剔除（与 compareResultToRange 口径一致）
     if (filters.resultOp && !Number.isNaN(filters.resultValue)) {
       const v = filters.resultValue;
-      if (filters.resultOp === 'gt' && !(n > v)) {return false;}
-      if (filters.resultOp === 'gte' && !(n >= v)) {return false;}
-      if (filters.resultOp === 'lt' && !(n < v)) {return false;}
-      if (filters.resultOp === 'lte' && !(n <= v)) {return false;}
-      if (filters.resultOp === 'eq' && !(Math.abs(n - v) < 1e-9)) {return false;}
+      let certain = false;
+      if (op === '') {
+        if (filters.resultOp === 'gt') {certain = n > v;}
+        else if (filters.resultOp === 'gte') {certain = n >= v;}
+        else if (filters.resultOp === 'lt') {certain = n < v;}
+        else if (filters.resultOp === 'lte') {certain = n <= v;}
+        else if (filters.resultOp === 'eq') {certain = Math.abs(n - v) < 1e-9;}
+      } else if (op === '<' || op === '<=') {
+        // 实际值 ≤/ < n：只能确定「上界」类比较
+        if (filters.resultOp === 'lt') {certain = op === '<' ? n <= v : n < v;}
+        else if (filters.resultOp === 'lte') {certain = n <= v;}
+      } else if (op === '>' || op === '>=') {
+        // 实际值 ≥/ > n：只能确定「下界」类比较
+        if (filters.resultOp === 'gt') {certain = op === '>' ? n >= v : n > v;}
+        else if (filters.resultOp === 'gte') {certain = n >= v;}
+      }
+      if (!certain) {return false;}
     }
-    if (!Number.isNaN(filters.resultMin) && n < filters.resultMin) {return false;}
-    if (!Number.isNaN(filters.resultMax) && n > filters.resultMax) {return false;}
+    if (!Number.isNaN(filters.resultMin)) {
+      // 需要 实际值 ≥ min
+      let ok = false;
+      if (op === '') {ok = n >= filters.resultMin;}
+      else if (op === '>' || op === '>=') {ok = n >= filters.resultMin;} // 实际值 ≥ n ≥ min
+      // '<'/'<=' 是上界，无法确认 ≥ min → 剔除
+      if (!ok) {return false;}
+    }
+    if (!Number.isNaN(filters.resultMax)) {
+      // 需要 实际值 ≤ max
+      let ok = false;
+      if (op === '') {ok = n <= filters.resultMax;}
+      else if (op === '<' || op === '<=') {ok = n <= filters.resultMax;} // 实际值 ≤ n ≤ max
+      // '>'/'>=' 是下界，无法确认 ≤ max → 剔除
+      if (!ok) {return false;}
+    }
     return true;
   }
 
@@ -2950,7 +2979,7 @@
     if (!ref) {return '';}
     ref = ref
       .replace(/\d{4}-\d{2}-\d{2}/g, '')
-      .replace(/\d{2}-\d{2}/g, '')
+      // 注意：不能加 \d{2}-\d{2} 规则——会误删合法参考区间（如 110-160 → 10、100-200 → 10）
       .replace(/\d{4}\/\d{2}\/\d{2}/g, '');
     ref = ref
       .replace(/\s+/g, ' ')
@@ -4252,10 +4281,12 @@
 
     if (group.id === 'coag') {
       if (proj && proj.isDDimer) {
-        return qeTcKeys(tc).some(k => k === 'DD') || /D-二聚体/i.test(text);
+        // 与别名表一致：D-二聚体 / D二聚体 / D-Dimer / DD 均算命中（大小写不敏感），
+        // 旧逻辑只认连字符写法，D二聚体 / D-Dimer 会静默匹配失败
+        return qeTcKeys(tc).some(k => k === 'DD') || /D\s*[-－]?\s*(?:二聚体|Dimer)/i.test(text);
       }
       if (machineOk && qeAbbrHit(group, proj, tc)) {return true;}
-      return /凝血/i.test(text) && !/D-二聚体/i.test(text);
+      return /凝血/i.test(text) && !/D\s*[-－]?\s*(?:二聚体|Dimer)/i.test(text);
     }
     if (group.id === 'infection' && proj && proj.lisName) {
       return cname === proj.lisName || cname.includes(proj.lisName) || proj.lisName.includes(cname);
@@ -4543,8 +4574,9 @@
           const key = date + '|' + levelNo + '|' + (r.TestCodeDR || testCodeDR) + '|' + seq;
           if (seen.has(key)) {return;}
           seen.add(key);
-          // 不修改原 API 响应对象，避免副作用
-          const row = seq ? r : { ...r, LevelNo: levelNo };
+          // 不修改原 API 响应对象，避免副作用；LevelNo 无条件补全：
+          // 若 API 行带 SeqNo 但缺 LevelNo，旧逻辑不补全，下游会把所有水平归到 Level 1
+          const row = r.LevelNo != null ? r : { ...r, LevelNo: levelNo };
           if (date || row.Result1 != null || row.DayAve != null || row.Result != null) {allRows.push(row);}
         });
       } catch (e) {
