@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.4
+// @version      8.5.5
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -724,6 +724,10 @@
 .ws-audit-sep{color:var(--lis-border);margin:0 6px;font-weight:400}
 .ws-audit-critical{color:#c62828;font-weight:700}
 .ab-card-badge{font-size:14px;flex:0 0 auto}
+.ab-card-admtype{font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;flex:0 0 auto;line-height:1.5;white-space:nowrap;vertical-align:middle}
+.ab-card-admtype.outpatient{background:#e6f1fb;color:#185fa5;border:0.5px solid #85b7eb}
+.ab-card-admtype.inpatient{background:#f1efe8;color:#5f5e5a}
+.ab-card-admtype.healthcheck{background:#faeeda;color:#854f0b}
 .ws-abnormal-card.is-normal{border-left-color:#2e7d32;background:#f4fbf6}
 .ws-abnormal-card.is-normal:hover{background:#e9f7ee}
 .ws-abnormal-card.is-normal.focused{border-left-color:#2f6fb3;background:#eef6ff;box-shadow:0 0 0 1px rgba(47,111,179,.12)}
@@ -8293,6 +8297,18 @@ window.addEventListener('keydown',function(e){
     return data[wsAbnormalIndex] || null;
   }
 
+  // 就诊类型徽章：门诊/住院/体检，门诊蓝色醒目一眼可辨
+  function admTypeBadgeHTML(r) {
+    const t = String((r && r.AdmType) || '').trim();
+    if (!t) {return '';}
+    let cls = '', label = '';
+    if (t.indexOf('门诊') !== -1) {cls = 'outpatient'; label = '门';}
+    else if (t.indexOf('住院') !== -1 || t.indexOf('入院') !== -1) {cls = 'inpatient'; label = '住';}
+    else if (t.indexOf('体检') !== -1) {cls = 'healthcheck'; label = '体';}
+    else {return '';}
+    return `<span class="ab-card-admtype ${cls}" title="${escAttr(t)}">${label}</span>`;
+  }
+
   // --- 待审视图（融合正常 + 异常，单队列审核）---
   function renderAuditView(data, body) {
     if (_abnormalFocusDR) {
@@ -8347,6 +8363,7 @@ window.addEventListener('keydown',function(e){
         h += `<div class="ws-abnormal-card is-normal${focused}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
         h += '<span class="ab-card-badge ok">✅</span>';
         h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
+        h += admTypeBadgeHTML(r);
         h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
         h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || '', wsSearchQuery)}</span>`;
         h += `<span class="ab-card-time">${esc(r.AcceptDT || '')}</span>`;
@@ -8365,6 +8382,7 @@ window.addEventListener('keydown',function(e){
       h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += hasCritical ? '<span class="ab-card-badge critical">🚨</span>' : '<span class="ab-card-badge warn">⚠️</span>';
       h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
+      h += admTypeBadgeHTML(r);
       h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
       h += `<span class="ab-card-test">${highlightText(r._mn || '', wsSearchQuery)}</span>`;
       h += '<div class="ab-card-items">';
@@ -9230,7 +9248,7 @@ window.addEventListener('keydown',function(e){
 
       h += `<tr data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
-      h += `<td>${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
+      h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
       h += `<td><b>${highlightText(r.Labno || '', wsSearchQuery)}</b></td>`;
       h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
       h += `<td>${icHTML}</td>`;
@@ -9290,7 +9308,7 @@ window.addEventListener('keydown',function(e){
       else {icHTML = '<span style="color:#999">-</span>';}
       h += `<td>${icHTML}</td>`;
       h += `<td><b>${highlightText(r.EpisodeNo || '', wsSearchQuery)}</b></td>`;
-      h += `<td>${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
+      h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(r.Labno || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
       h += `<td>${esc(r.AcceptDT || '')}</td>`;
