@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.11
+// @version      8.4.12
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6743,6 +6743,11 @@
     const tgt = loadAbnormalTarget();
     if (!tgt) {return;}
     // 不立即清空，找到标本后再清（防止页面重载导致丢失）
+    // 跨组切组后页面已重载、工作台处于关闭状态：
+    // 1) 先打开工作台（openWS 会从 localStorage 恢复上次的工作组 + 跨组仪器多选），
+    //    并触发 loadWSData，否则 wsData 永远为空、找不到目标标本、工作台也不会自动打开；
+    // 2) 恢复后再 saveWSState()，避免把空的多选状态覆盖回 localStorage 丢掉跨组勾选。
+    if (!isWSVisible()) {openWS();}
     if (wsCategory !== 'abnormal') {
       wsCategory = 'abnormal';
       saveWSState();
@@ -6761,7 +6766,11 @@
           return;
         }
       }
-      if (attempts > 0) {setTimeout(() => tryFind(attempts - 1), 1000);}
+      if (attempts > 0) {
+        // init 阶段会话可能未就绪、首次加载失败时，主动补一次强制加载
+        if (attempts === 10 && !wsData.length) {loadWSData({ force: true }).catch(() => {});}
+        setTimeout(() => tryFind(attempts - 1), 1000);
+      }
       else {
         clearAbnormalTarget();
         showToast(`未找到标本 ${tgt.name || tgt.labno}，可能已审核`, 'warning');
