@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.2
+// @version      8.5.3
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8688,8 +8688,6 @@ window.addEventListener('keydown',function(e){
       if (!data.length) {return;}
       if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {wsAbnormalIndex = 0;}
       const sp = data[wsAbnormalIndex];
-      // 正常行无需预热原生定位：F4 批审链路自带 ensureReportPageLoaded，单审时临时定位
-      if (sp && getWSAuditBucket(sp) === 'normal') {return;}
       prewarmAbnormalAuditNative(sp).catch(() => {});
     }, delay);
   }
@@ -8700,9 +8698,7 @@ window.addEventListener('keydown',function(e){
   }
 
   async function prewarmAbnormalAuditNative(specimen) {
-    if (!specimen || _abnormalAuditInProgress || !isWSVisible()) {return;}
-    // 正常行不需要原生定位预热（F4 批审链路自行加载报告页，单审时临时定位）
-    if (getWSAuditBucket(specimen) === 'normal') {return;}
+    if (!specimen || _abnormalAuditInProgress || _auditInProgress || !isWSVisible()) {return;}
     const reportDR = String(specimen.ReportDR || '');
     if (isAbnormalSpecimenReady(reportDR)) {
       _abnormalNativeReadyDR = reportDR;
@@ -10056,6 +10052,7 @@ window.addEventListener('keydown',function(e){
     // 确保 F4 桥在原生 iframe 上挂着（面板打开时异常处理器已被移除，Enter 靠桥捕获）
     _attachF4BridgeToIframe();
     refocusDetailPanel();
+    scheduleDetailPrewarm(specimen, 120);
   }
 
   function _removeDetailKeyHandler() {
@@ -10220,6 +10217,7 @@ window.addEventListener('keydown',function(e){
     document.addEventListener('keydown', _detailKeyHandler, true);
     _attachF4BridgeToIframe();
     refocusDetailPanel();
+    scheduleDetailPrewarm(specimen, 120);
   }
 
   // 焦点放回详情面板自身：确保 Enter 由 _detailKeyHandler 直接捕获（不依赖 iframe 桥），
@@ -10232,6 +10230,23 @@ window.addEventListener('keydown',function(e){
         dEl.focus({ preventScroll: true });
       }
     } catch (e) {}
+  }
+
+  // 详情面板当前标本后台预热：定位原生页并加载详情，保证 Enter 审核秒审（needPrep=false 跳过定位）
+  // 审核成功跳下一条后也会触发，连续 Enter 全程不卡
+  let _detailPrewarmTimer = null;
+  function scheduleDetailPrewarm(specimen, delayMs) {
+    if (!specimen || !isWSVisible()) {return;}
+    clearTimeout(_detailPrewarmTimer);
+    const delay = typeof delayMs === 'number' ? delayMs : 250;
+    _detailPrewarmTimer = setTimeout(() => {
+      // 审核进行中不抢原生页（详情审完由 finally 里的 scheduleDetailPrewarm 补触发）；
+      // 标本已切走则放弃本次预热
+      if (_detailAuditInProgress || _auditInProgress) {return;}
+      if (!isDetailPanelVisible() || !currentDetailSpecimen) {return;}
+      if (String(currentDetailSpecimen.ReportDR) !== String(specimen.ReportDR)) {return;}
+      prewarmAbnormalAuditNative(specimen).catch(() => {});
+    }, delay);
   }
 
   let _detailAuditInProgress = false;
@@ -10324,6 +10339,12 @@ window.addEventListener('keydown',function(e){
         saveAbnormalTarget(specimen);
         safeSwitchWG(spDR);
         return;
+      }
+
+      // 若后台预热正针对本标本进行，等它完成再现场判定（避免双线程同时驱动原生页竞态）
+      if (_abnormalPrewarmPromise && String(_abnormalPrewarmDR || '') === String(reportDR)) {
+        try { await _abnormalPrewarmPromise; } catch (e) {}
+        iframeWin = getReportIframeWin() || iframeWin;
       }
 
       let needPrep = true;
@@ -10425,6 +10446,10 @@ window.addEventListener('keydown',function(e){
       _detailAuditInProgress = false;
       _setDetailAuditBusy(false);
       if (resumeWSRefresh && isWSVisible()) {startWSRefresh();}
+      // 详情审核结束：后台预热当前（下一条）标本，保证连续 Enter 秒审
+      if (isDetailPanelVisible() && currentDetailSpecimen) {
+        scheduleDetailPrewarm(currentDetailSpecimen, 50);
+      }
       dbg('详情审核结束, inProgress 重置为 false');
     }
   }
