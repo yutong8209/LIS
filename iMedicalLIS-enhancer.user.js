@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.7
+// @version      8.5.8
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6736,7 +6736,78 @@
 
   // --- 异常审核跨组跳转：保存/恢复目标标本 ---
   const K_ABN_TGT = 'LIS_AbnormalAuditTarget';
-  function saveAbnormalTarget(specimen) {
+  // 跨组审核的起始工作组 + 本次跨组来源（8.5.8）：
+  // - wg：首次跨组时的工作组（审完全部自动切回这里）
+  // - source：'detail'（详情面板跨组，审完目标条自动重开详情面板续审）/ 'list'（列表逐条）
+  // - ts：时间戳，30 分钟内有效，避免陈旧 origin 误切回
+  const K_AUDIT_ORIGIN = 'LIS_AuditOrigin';
+  function saveAuditOrigin(source) {
+    try {
+      const old = JSON.parse(localStorage.getItem(K_AUDIT_ORIGIN) || '{}');
+      const fresh = Date.now() - (old.ts || 0) < 30 * 60 * 1000;
+      const origin = fresh && old.wg ? old.wg : resolveCurrentWG();
+      localStorage.setItem(
+        K_AUDIT_ORIGIN,
+        JSON.stringify({ wg: origin, source: source || 'list', ts: Date.now() })
+      );
+    } catch (e) {}
+  }
+  function loadAuditOrigin() {
+    try {
+      const o = JSON.parse(localStorage.getItem(K_AUDIT_ORIGIN) || '{}');
+      if (!o || !o.wg || Date.now() - (o.ts || 0) > 30 * 60 * 1000) {
+        localStorage.removeItem(K_AUDIT_ORIGIN);
+        return null;
+      }
+      return o;
+    } catch (e) {
+      return null;
+    }
+  }
+  function clearAuditOrigin() {
+    try {
+      localStorage.removeItem(K_AUDIT_ORIGIN);
+    } catch (e) {}
+  }
+  // 跨组审核全部审完：切回起始工作组，并保证切回后工作台自动打开
+  function switchBackToOriginWG(wgDR) {
+    try {
+      sessionStorage.setItem(WS_REOPEN_KEY, '1');
+      saveWSState();
+    } catch (e) {}
+    safeSwitchWG(wgDR);
+  }
+  // 8.5.8: 审空自动切回起始组 —— 分类进行中（可能有尚未分类、即将进入待审的标本）或
+  // 搜索框过滤时不算「审完」，延迟重试；确认待审视图真空才切回，避免提前切回遗留标本
+  let _switchBackRetry = 0;
+  function trySwitchBackToOrigin() {
+    try {
+      const origin = loadAuditOrigin();
+      if (!origin || String(origin.wg) === String(resolveCurrentWG())) {
+        _switchBackRetry = 0;
+        return;
+      }
+      const searchQ = (($('#lis-ws-search') || {}).value || '').trim();
+      if (wsClassifying || searchQ) {
+        if (_switchBackRetry < 10) {
+          _switchBackRetry++;
+          setTimeout(() => {
+            _switchBackRetry = 0;
+            trySwitchBackToOrigin();
+          }, 3000);
+        } else {
+          _switchBackRetry = 0;
+        }
+        return;
+      }
+      if (filteredData().length === 0) {
+        clearAuditOrigin();
+        showToast(`已审完，切回${(WG_MAP[origin.wg] || {}).name || origin.wg}`, 'success');
+        switchBackToOriginWG(origin.wg);
+      }
+    } catch (e) {}
+  }
+  function saveAbnormalTarget(specimen, extra) {
     try {
       // 读取已有 cycle 计数，累加防循环
       let cycle = 0;
@@ -6755,6 +6826,8 @@
           cycle
         })
       );
+      // 记录跨组起始工作组（审完自动切回）+ 来源（详情续审用）
+      saveAuditOrigin((extra && extra.source) || 'list');
     } catch (e) {}
   }
   function loadAbnormalTarget() {
@@ -6824,6 +6897,9 @@
           if (idx < 0) {idx = data.length ? 0 : -1;} // 同桶必在列表，兜底取首条
           if (idx >= 0) {
             clearAbnormalTarget();
+            // 8.5.8: 详情面板跨组审核时，审完目标条自动重开详情面板续审（连续审核跨组不断）
+            const _origin = loadAuditOrigin();
+            _resumeDetailAfterAudit = !!( _origin && _origin.source === 'detail');
             wsAbnormalIndex = idx;
             showToast(`继续审核: ${tgt.name || tgt.labno}`, 'warning');
             setTimeout(() => auditAbnormalSpecimen(found), 500);
@@ -7050,8 +7126,15 @@
     // 排序：批审/异常待审按仪器分组，同仪器内再按原排序字段
     const { field, asc } = wsSort;
     if (wsCategory === 'audit') {
-      // 待审视图：按仪器分组，组内 危急→异常→正常（正常放后面，供 F4 一键批审）
+      // 待审视图：当前登录工作组优先（减少跨组审核时的切组次数，先审完本组），
+      // 组内按仪器分组，危急→异常→正常（正常放后面，供 F4 一键批审）
+      const _curWGForSort = resolveCurrentWG();
       d.sort((a, b) => {
+        const wgA = String(a._wg || '');
+        const wgB = String(b._wg || '');
+        const aCur = wgA === _curWGForSort ? 0 : 1;
+        const bCur = wgB === _curWGForSort ? 0 : 1;
+        if (aCur !== bCur) {return aCur - bCur;}
         const g = compareSpecimensByMachineGroup(a, b);
         if (g) {return g;}
         const rank = r => {
@@ -8097,13 +8180,15 @@ window.addEventListener('keydown',function(e){
   }
 
   function scheduleAbnormalFocusRecovery() {
+    // 详情面板打开时不恢复列表焦点：避免跨组续审重开详情后焦点被抢回列表卡片
+    if (isDetailPanelVisible()) {return;}
     updateAbnormalEnterBridge();
     releaseNativeReportFocus();
     refocusAbnormalWorkbench();
     installAbnormalResultGridEnterHijack();
     [80, 200, 450, 900, 1800].forEach(ms => {
       setTimeout(() => {
-        if (wsCategory !== 'audit' || _abnormalAuditInProgress) {return;}
+        if (wsCategory !== 'audit' || _abnormalAuditInProgress || isDetailPanelVisible()) {return;}
         updateAbnormalEnterBridge();
         releaseNativeReportFocus();
         refocusAbnormalWorkbench();
@@ -8656,6 +8741,7 @@ window.addEventListener('keydown',function(e){
   let _abnormalPrewarmTimer = null;
   let _abnormalPrewarmDR = '';
   let _abnormalPrewarmPromise = null;
+  let _resumeDetailAfterAudit = false; // 8.5.8: 跨组恢复后审完目标条自动重开详情面板续审
   let _reportPageLoadPromise = null;
   let _nativeUserSelectDR = '';
   let _nativeUserSelectAt = 0;
@@ -8711,7 +8797,7 @@ window.addEventListener('keydown',function(e){
     const delay = typeof delayMs === 'number' ? delayMs : 0;
     _abnormalPrewarmTimer = setTimeout(() => {
       // 详情面板/审核进行中不抢原生页（prewarm 内部有同款守卫，这里提前跳过避免白跑）
-      if (_detailAuditInProgress || _abnormalAuditInProgress || _auditInProgress) {return;}
+      if (isDetailPanelVisible() || _detailAuditInProgress || _abnormalAuditInProgress || _auditInProgress) {return;}
       const data = filteredData();
       if (!data.length) {return;}
       if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {wsAbnormalIndex = 0;}
@@ -9034,6 +9120,9 @@ window.addEventListener('keydown',function(e){
   }
 
   async function auditAbnormalSpecimen(specimen) {
+    // 8.5.8: 消费一次跨组详情续审标记（无论成功失败都只触发一次，避免失败后残留误开详情）
+    const _resumeDetail = _resumeDetailAfterAudit;
+    _resumeDetailAfterAudit = false;
     if (_abnormalAuditInProgress) {
       _abnormalAuditQueued = true;
       const ft = document.getElementById('lis-ws-ft-stat');
@@ -9216,6 +9305,25 @@ window.addEventListener('keydown',function(e){
       calcMachineCounts();
       noteAbnormalNativeReadyAfterAudit(iframeWin, targetDR);
       removeAuditedAbnormalCard(targetDR, startIndex);
+
+      // 8.5.8: 跨组审核续跑 ——
+      // 1) 详情来源（详情面板跨组切组恢复）：审完目标条自动重开详情面板，连续审核跨组不断
+      // 2) 待审队列全部审空：自动切回起始工作组（不用手动回 LIS 切组再回工作台）
+      if (_resumeDetail) {
+        _resumeDetailAfterAudit = false;
+        try {
+          const after = filteredData();
+          if (after.length) {
+            const idx = Math.max(0, Math.min(wsAbnormalIndex, after.length - 1));
+            const nxt = after[idx];
+            if (nxt && String(nxt.ReportDR) !== targetDR) {
+              openDetailPanel(nxt, getWSAuditBucket(nxt) === 'normal' ? 'normal' : 'abnormal', idx);
+            }
+          }
+        } catch (e) {}
+      }
+      // 审空（跨组待审队列已清）→ 自动切回起始工作组（分类中/搜索中会自动延迟重试）
+      trySwitchBackToOrigin();
     } catch (e) {
       dbg('审核失败:', e);
       showToast('审核失败: ' + e.message, 'error');
@@ -9757,7 +9865,17 @@ window.addEventListener('keydown',function(e){
       });
     });
     items.sort(compareAuditQueueItems);
-    return { mode: mode || 'batch', items, done: [], failed: [], skipped: [], current: 0, keepWS: isWSVisible() };
+    // 8.5.8: 记录批审起始工作组，审完全部自动切回（跨组批审不用手动回 LIS 切组）
+    return {
+      mode: mode || 'batch',
+      items,
+      done: [],
+      failed: [],
+      skipped: [],
+      current: 0,
+      keepWS: isWSVisible(),
+      originWG: resolveCurrentWG()
+    };
   }
 
   function currentQueueItem(queue) {
@@ -10383,7 +10501,7 @@ window.addEventListener('keydown',function(e){
       if (spDR && curDR && spDR !== curDR) {
         const wgName = (WG_MAP[spDR] || {}).name || spDR;
         showToast(`切换到${wgName}继续审核`, 'warning');
-        saveAbnormalTarget(specimen);
+        saveAbnormalTarget(specimen, { source: 'detail' }); // 8.5.8: 标记详情来源，跨组恢复后重开详情面板续审
         safeSwitchWG(spDR);
         return;
       }
@@ -10492,6 +10610,8 @@ window.addEventListener('keydown',function(e){
         closeDetailPanel(true); // force: 审核已完成，绕过 _detailAuditInProgress 守卫
         renderWSCategoryBar();
         renderWSTable();
+        // 8.5.8: 详情连续审核审完最后一条（跨组单向推进到达队尾）→ 自动切回起始工作组
+        trySwitchBackToOrigin();
       }
     } catch (e) {
       dbg('详情面板审核失败:', e);
@@ -16139,10 +16259,23 @@ window.addEventListener('keydown',function(e){
         showToast('❌ 审核全部失败', 'error');
       }
 
+      const _originWG = String(queue.originWG || '');
       setTimeout(() => {
         if (queue.keepWS) {keepWorkbenchOnTop('批审完成');}
         progress.remove();
-        loadWSData();
+        // 8.5.8: 跨组批审全部完成后，自动切回起始工作组（切回后工作台自动重开）；
+        // 有失败/跳过条时留在当前组供核对，不切回
+        if (_originWG && _originWG !== String(resolveCurrentWG())) {
+          if (failCount === 0 && skipCount === 0) {
+            showToast(`批审完成，切回${(WG_MAP[_originWG] || {}).name || _originWG}`, 'success');
+            switchBackToOriginWG(_originWG);
+          } else {
+            showToast(`批审完成，但仍有 ${failCount} 失败 / ${skipCount} 跳过，留在当前组核对`, 'warning');
+            loadWSData();
+          }
+        } else {
+          loadWSData();
+        }
       }, 2000);
     } catch (e) {
       dbg('批量审核失败:', e);
