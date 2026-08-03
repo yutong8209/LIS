@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.3
+// @version      8.5.4
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6359,6 +6359,12 @@
   async function loadWSData(options = {}) {
     const force = !!(options && options.force);
     if (wsLoading && !force) {return { skipped: true };}
+    // 分类进行中时跳过自动刷新（force 仍可强制），避免 30s 刷新打断分类、
+    // 整组重分类永远追不上刷新拖死批审（6456 行注释已意识的同类问题）
+    if (wsClassifying && !force) {
+      dbg('分类进行中，跳过自动刷新');
+      return { skipped: true };
+    }
     const seq = ++_wsLoadSeq;
     if (force) {
       wsLoading = false;
@@ -6787,9 +6793,11 @@
       const found = wsData.find(r => String(r.ReportDR) === tgt.reportDR);
       if (found) {
         // 直接按桶判断（不依赖分类队列整体进度），否则大工作组的分类批次可能跑不完，
-        // 轮询窗口内目标标本一直进不了异常视图 → 误报「未找到标本」
-        let isAbnormal = getWSAuditBucket(found) === 'abnormal';
-        if (!isAbnormal && !classifiedOnce) {
+        // 轮询窗口内目标标本一直进不了待审视图 → 误报「未找到标本」
+        // 合并视图：正常/异常均可审，两个分支都恢复定位+审核（否则跨组审 normal 会漏审）
+        const _bucket = getWSAuditBucket(found);
+        const isAuditable = _bucket === 'normal' || _bucket === 'abnormal';
+        if (!isAuditable && !classifiedOnce) {
           classifiedOnce = true;
           fetchAndClassifySpecimen(found)
             .then(live => {
@@ -6802,7 +6810,7 @@
             })
             .catch(() => {});
           // 本轮先不成功，等下一次轮询（已提交主动分类）
-        } else if (isAbnormal) {
+        } else if (isAuditable) {
           const data = filteredData();
           let idx = data.indexOf(found);
           if (idx < 0) {idx = data.length ? 0 : -1;} // 同桶必在列表，兜底取首条
@@ -8641,7 +8649,7 @@ window.addEventListener('keydown',function(e){
     const ft = document.getElementById('lis-ws-ft-stat');
     const name = specimen.PatName || specimen.Labno || targetDR;
     const card = [...document.querySelectorAll('.ws-abnormal-card[data-rdr]')].find(c => c.dataset.rdr === targetDR);
-    if (phase === 'start' && ft) {ft.textContent = `异常审核：准备 ${name}`;}
+    if (phase === 'start' && ft) {ft.textContent = `审核：准备 ${name}`;}
     if (card && phase === 'start') {
       card.classList.add('auditing');
       card.setAttribute('aria-busy', 'true');
@@ -9022,7 +9030,7 @@ window.addEventListener('keydown',function(e){
       }
     }
     if (!specimen) {
-      showToast('没有可审核的异常标本', 'warning');
+      showToast('没有可审核的待审标本', 'warning');
       return;
     }
 
@@ -9056,13 +9064,13 @@ window.addEventListener('keydown',function(e){
       _abnormalAuditQueued = false;
       clearNativeUserSelectLock();
       updateAbnormalEnterBridge();
-      keepWorkbenchOnTop('异常审核');
+      keepWorkbenchOnTop('审核');
       markAbnormalAuditUI(specimen, 'start');
       // 安全超时：60 秒后显示警告，但不释放锁（finally 块负责释放）
       _auditSafetyTimer = setTimeout(() => {
         if (_abnormalAuditInProgress) {
           dbg('异常审核安全超时：操作耗时超过 60 秒');
-          showToast('异常审核操作耗时较长，请耐心等待', 'warning');
+          showToast('审核操作耗时较长，请耐心等待', 'warning');
         }
       }, 60000);
       dbg('异常列表审核开始:', specimen.PatName);
@@ -9070,7 +9078,7 @@ window.addEventListener('keydown',function(e){
       const startIndex = Math.max(0, wsAbnormalIndex);
       const targetDR = String(specimen.ReportDR || '');
       const ft = document.getElementById('lis-ws-ft-stat');
-      if (ft) {ft.textContent = `异常审核：${specimen.PatName || specimen.Labno || targetDR}`;}
+      if (ft) {ft.textContent = `审核：${specimen.PatName || specimen.Labno || targetDR}`;}
 
       const curDR = resolveCurrentWG();
       const spDR = specimen._wg || '';
@@ -9083,13 +9091,13 @@ window.addEventListener('keydown',function(e){
         return;
       }
 
-      if (ft) {ft.textContent = `异常审核：准备原生页面 ${specimen.PatName || specimen.Labno || targetDR}`;}
+      if (ft) {ft.textContent = `审核：准备原生页面 ${specimen.PatName || specimen.Labno || targetDR}`;}
       releaseNativeReportFocus(); // 先 blur 原生编辑焦点，避免审核按钮/回车被结果格吃掉
       await awaitAbnormalPrewarm(specimen);
 
       let iframeWin = getReportIframeWin();
       if (!iframeWin) {
-        if (ft) {ft.textContent = '异常审核：加载报告页...';}
+        if (ft) {ft.textContent = '审核：加载报告页...';}
         iframeWin = await ensureReportPageLoaded({ keepWS: true, fast: true });
       }
       if (!iframeWin) {
@@ -9105,8 +9113,8 @@ window.addEventListener('keydown',function(e){
       const detailReady = isReportDetailLoaded(iframeWin, targetDR);
       if (ft)
       {ft.textContent = detailReady
-        ? `异常审核：审核中 ${specimen.PatName || specimen.Labno || targetDR}`
-        : `异常审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;}
+        ? `审核：审核中 ${specimen.PatName || specimen.Labno || targetDR}`
+        : `审核：选中 ${specimen.PatName || specimen.Labno || targetDR}`;}
       const skipSelect = _abnormalNativeReadyDR === targetDR;
       let prep = { ok: false, iframeWin, lastMdr: _abnormalLastMdr };
       if (detailReady && skipSelect) {
@@ -9129,7 +9137,7 @@ window.addEventListener('keydown',function(e){
         return;
       }
 
-      if (ft) {ft.textContent = `异常审核：审核中 ${specimen.PatName || specimen.Labno || targetDR}`;}
+      if (ft) {ft.textContent = `审核：审核中 ${specimen.PatName || specimen.Labno || targetDR}`;}
       releaseNativeReportFocus();
       let auditResult = await executeNativeAudit(iframeWin, specimen, { keepWS: true, fast: true });
       if (auditResult === 'incomplete') {
