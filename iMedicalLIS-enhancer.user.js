@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.12
+// @version      8.4.13
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6162,9 +6162,14 @@
     }
   }
 
-  function normalizeWSMachineSelection() {
+  function normalizeWSMachineSelection(loadedWGs) {
     const byWG = {};
     Object.keys(wsSelectedMachinesByWG || {}).forEach(wg => {
+      // 该组机器列表没成功加载（网络瞬断返回空）时不清理，保留原勾选等下一轮再验
+      if (loadedWGs && loadedWGs.size && !loadedWGs.has(String(wg))) {
+        byWG[wg] = wsSelectedMachinesByWG[wg];
+        return;
+      }
       const valid = new Set(wsMachines.filter(m => String(m._wg || '') === String(wg)).map(m => String(m.RowID || '')));
       const selected = (wsSelectedMachinesByWG[wg] || []).map(String).filter(mdr => valid.has(mdr));
       if (selected.length) {byWG[wg] = [...new Set(selected)];}
@@ -6407,15 +6412,18 @@
           wgData.push(...mr.rows, ...mr.pending);
           wgMachines.push({ ...m, _wg: w.dr, _wgn: w.name, _wgc: w.color, _wgi: w.icon });
         }
-        return { data: wgData, machines: wgMachines };
+        // machinesOk：机器列表是否成功加载（瞬断返回空时不清理该组勾选，等下一轮再验）
+        return { data: wgData, machines: wgMachines, wg: w.dr, machinesOk: machines.length > 0 };
       }
 
       function applyResults(results, partial) {
         const allData = [];
         const allMachines = [];
+        const loadedWGs = new Set();
         for (const r of results) {
           allData.push(...r.data);
           allMachines.push(...r.machines);
+          if (r.machinesOk && r.wg) {loadedWGs.add(String(r.wg));}
         }
         if (allData.length === 0 && wsData.length > 0 && !partial) {
           dbg('刷新返回空数据，保留原有', wsData.length, '条');
@@ -6428,8 +6436,12 @@
         if (wsData.length > 0) {_lastWSNonEmptyAt = Date.now();}
         // 阶段1（partial）只加载了当前工作组，机器列表不全：此时清理勾选会把其他工作组的
         // 多选仪器删掉（全部仪器跨组勾选在自动刷新后只剩一台的 bug）。等全部工作组加载完再清理。
-        if (!partial) {normalizeWSMachineSelection();}
-        pruneStaleClassificationCache(wsData);
+        // 同理 pruneStaleClassificationCache 也不能在 partial 阶段跑：会把其他工作组的分类缓存
+        // 当「已消失」删掉，每 30s 刷新就整组重分类，数据量大时分类永远追不上刷新（拖死批审）。
+        if (!partial) {
+          normalizeWSMachineSelection(loadedWGs);
+          pruneStaleClassificationCache(wsData);
+        }
         calcMachineCounts();
         const label = partial ? '优先' : '';
         if (qi) {qi.textContent = `${wsData.length} 条${label} | ${new Date().toLocaleTimeString()}`;}
@@ -6754,16 +6766,37 @@
       renderWSCategoryBar();
       renderWSTable();
     }
+    let classifiedOnce = false; // 只主动补分类一次，避免每条轮询都发请求
     const tryFind = attempts => {
       const found = wsData.find(r => String(r.ReportDR) === tgt.reportDR);
       if (found) {
-        const idx = filteredData().indexOf(found);
-        if (idx >= 0) {
-          clearAbnormalTarget();
-          wsAbnormalIndex = idx;
-          showToast(`继续审核: ${tgt.name || tgt.labno}`, 'warning');
-          setTimeout(() => auditAbnormalSpecimen(found), 500);
-          return;
+        // 直接按桶判断（不依赖分类队列整体进度），否则大工作组的分类批次可能跑不完，
+        // 轮询窗口内目标标本一直进不了异常视图 → 误报「未找到标本」
+        let isAbnormal = getWSAuditBucket(found) === 'abnormal';
+        if (!isAbnormal && !classifiedOnce) {
+          classifiedOnce = true;
+          fetchAndClassifySpecimen(found)
+            .then(live => {
+              if (live && live.reportDR) {
+                attachClassificationMeta(live, found);
+                wsClassifiedCache[live.reportDR] = live;
+                _classifyVersion++;
+                invalidateCaches();
+              }
+            })
+            .catch(() => {});
+          // 本轮先不成功，等下一次轮询（已提交主动分类）
+        } else if (isAbnormal) {
+          const data = filteredData();
+          let idx = data.indexOf(found);
+          if (idx < 0) {idx = data.length ? 0 : -1;} // 同桶必在列表，兜底取首条
+          if (idx >= 0) {
+            clearAbnormalTarget();
+            wsAbnormalIndex = idx;
+            showToast(`继续审核: ${tgt.name || tgt.labno}`, 'warning');
+            setTimeout(() => auditAbnormalSpecimen(found), 500);
+            return;
+          }
         }
       }
       if (attempts > 0) {
@@ -6866,18 +6899,21 @@
     return String(a.Labno || '').localeCompare(String(b.Labno || ''), 'zh');
   }
 
-  // 确定用户实际所在工作组（多层回退）
+  // 确定用户实际登录工作组（多层回退）
   function resolveCurrentWG() {
-    // 1. 工作台选中的工作组（最可靠）
-    if (wsActiveWG) {return wsActiveWG;}
-    // 2. LIS 页面全局变量
-    const dr = wgDR();
-    if (dr) {return dr;}
-    // 3. 父框架工作组下拉框（切组后页面重载，全局变量可能尚未就绪，但下拉框已更新）
+    // 注意：跨组判定必须以「实际登录工作组」为准，不能用工作台视图过滤器 wsActiveWG——
+    // 用户可能看的是临检 tab 而实际登录在生化；且切组重载后 wsActiveWG 是从 localStorage 恢复的
+    // 旧视图组，若优先返回它会导致批审死循环 / F4 跨组静默不审。
+    // 1. 父框架工作组下拉框（切组后页面重载，全局变量可能尚未就绪，但下拉框已更新）
     try {
       const sel = window.top.document.getElementById('sl_changeworkgroup');
       if (sel && sel.value) {return String(sel.value);}
     } catch (e) {}
+    // 2. LIS 页面全局变量
+    const dr = wgDR();
+    if (dr) {return dr;}
+    // 3. 工作台选中的工作组（仅视图过滤，不代表登录组；无登录组信息时才退回）
+    if (wsActiveWG) {return wsActiveWG;}
     // 4. 从 wsData 推断：有标本的工作组中最常见的
     const counts = {};
     wsData.forEach(r => {
@@ -7333,10 +7369,17 @@
   function gotoWSCategoryFromMenubar(cat) {
     if (!cat) {return;}
     if (!isWSVisible()) {
+      // 必须先 openWS()：它会 applyWSState(loadWSState()) 恢复跨组仪器多选。
+      // 若先 set+saveWSState()（此时内存 multiMdr 还是空 {}），会把 localStorage
+      // 里的跨组勾选覆盖清空（与 checkAbnormalTarget 同类 bug）。
+      openWS();
       wsCategory = cat;
       wsAbnormalIndex = -1;
       saveWSState();
-      openWS();
+      renderWSCategoryBar();
+      renderWSTable();
+      updateAbnormalEnterBridge();
+      if (wsCategory === 'abnormal') {prefetchAbnormalAuditContext();}
       return;
     }
     switchWSCategory(cat);
