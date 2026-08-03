@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.5
+// @version      8.5.6
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -724,7 +724,7 @@
 .ws-audit-sep{color:var(--lis-border);margin:0 6px;font-weight:400}
 .ws-audit-critical{color:#c62828;font-weight:700}
 .ab-card-badge{font-size:14px;flex:0 0 auto}
-.ab-card-admtype{font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;flex:0 0 auto;line-height:1.5;white-space:nowrap;vertical-align:middle}
+.ab-card-admtype{font-size:12px;font-weight:600;padding:2px 7px;border-radius:3px;flex:0 0 auto;line-height:1.4;white-space:nowrap;vertical-align:middle}
 .ab-card-admtype.outpatient{background:#e6f1fb;color:#185fa5;border:0.5px solid #85b7eb}
 .ab-card-admtype.inpatient{background:#f1efe8;color:#5f5e5a}
 .ab-card-admtype.healthcheck{background:#faeeda;color:#854f0b}
