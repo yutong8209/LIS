@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.0
+// @version      8.5.1
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7921,11 +7921,6 @@ window.addEventListener('keydown',function(e){
       // 确认框已打开则不再落到其它 F4 语义
       return;
     }
-    if (isDetailPanelVisible() && currentDetailSpecimen) {
-      void _auditFromDetailPanel();
-      return;
-    }
-    // 待审列表：F4 = 打开一键批审确认（批审全部正常标本）
     if (isWSVisible() && wsCategory === 'audit') {
       openWorkbenchBatchAudit();
       return;
@@ -7933,8 +7928,8 @@ window.addEventListener('keydown',function(e){
     return;
   }
 
-  // 常驻 F4 桥：挂到报告页 iframe，不被 openDetailPanel 的 _removeAbnormalKeyHandler 影响。
-  // 详情面板打开时异常视图处理器会被移除，故 F4 在面板内（焦点常在原生 iframe）必须由本桥捕获。
+  // 常驻 Enter 桥：挂到报告页 iframe，不被 openDetailPanel 的 _removeAbnormalKeyHandler 影响。
+  // 详情面板打开时异常视图处理器会被移除，故 Enter 在面板内（焦点常在原生 iframe）必须由本桥捕获。
   let _f4BridgeHandler = null;
   const _f4BridgeTargets = [];
   let _f4BridgeTimer = null;
@@ -7947,12 +7942,13 @@ window.addEventListener('keydown',function(e){
       // 批审确认框：任意分类下 F4/Enter 均可确认
       if (tryConfirmBatchDialogByHotkey(e)) {return;}
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
-      // 详情面板打开时：F4 / Enter 均审当前详情（焦点常在原生 iframe，Enter 必须靠桥捕获）
+      // 详情面板打开时：Enter 审当前详情（焦点常在原生 iframe，Enter 必须靠桥捕获）；
+      // F4 在详情面板内已取消（8.5.1），只保留 Enter + 面板「审核」按钮
       if (isDetailPanelVisible() && currentDetailSpecimen) {
-        if (e.key === 'F4' || (e.key === 'Enter' && !e.shiftKey)) {
+        if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           e.stopImmediatePropagation();
-          triggerF4Audit();
+          void _auditFromDetailPanel();
         }
         return;
       }
@@ -8117,6 +8113,7 @@ window.addEventListener('keydown',function(e){
       if (e.key === 'F4') {
         e.preventDefault();
         e.stopImmediatePropagation();
+        if (isDetailPanelVisible()) {return;} // 详情面板内 F4 已取消（8.5.1），防重装后误触发
         triggerF4Audit();
         return;
       }
@@ -9898,7 +9895,7 @@ window.addEventListener('keydown',function(e){
             </div>
             <div id="lis-detail-footer">
                 <span style="font-size:11px;color:#999;margin-right:auto">↑↓ 切换 | Enter 审核 | Esc 关闭</span>
-                <button class="btn-audit" id="lis-detail-audit" title="与 F4 / Enter 相同：审核当前详情标本">✅ 审核 · F4</button>
+                <button class="btn-audit" id="lis-detail-audit" title="Enter 或点击：审核当前详情标本，成功后自动跳下一条">✅ 审核</button>
                 <button class="btn-close" id="lis-detail-close-btn">关闭</button>
             </div>
         `;
@@ -9911,7 +9908,7 @@ window.addEventListener('keydown',function(e){
       'position:fixed;top:0;left:0;width:35vw;height:100vh;z-index:100004;display:none;pointer-events:none';
     document.body.appendChild(overlay);
 
-    // 事件绑定（审核钮与 F4 共用 _auditFromDetailPanel，非互斥）
+    // 事件绑定（审核钮与 Enter 共用 _auditFromDetailPanel，非互斥）
     document.getElementById('lis-detail-close').addEventListener('click', closeDetailPanel);
     document.getElementById('lis-detail-close-btn').addEventListener('click', closeDetailPanel);
     _bindDetailAuditButton();
@@ -9919,7 +9916,7 @@ window.addEventListener('keydown',function(e){
     return detailPanel;
   }
 
-  // 详情「审核」按钮：每次打开/切换时重绑，避免监听丢失；与 F4 同一入口
+  // 详情「审核」按钮：每次打开/切换时重绑，避免监听丢失；与 Enter 同一入口
   function _bindDetailAuditButton() {
     const btn = document.getElementById('lis-detail-audit');
     if (!btn) {return;}
@@ -9946,7 +9943,7 @@ window.addEventListener('keydown',function(e){
     if (!btn) {return;}
     btn.disabled = !!busy;
     btn.classList.toggle('busy', !!busy);
-    btn.textContent = text || (busy ? '⏳ 审核中…' : '✅ 审核 · F4');
+    btn.textContent = text || (busy ? '⏳ 审核中…' : '✅ 审核');
   }
 
   function openDetailPanel(specimen, source, sourceIndex) {
@@ -10025,7 +10022,7 @@ window.addEventListener('keydown',function(e){
     _bindDetailAuditButton();
     _setDetailAuditBusy(false);
 
-    // 注册详情面板键盘监听（Enter 与审核钮 / F4 同一路径）
+    // 注册详情面板键盘监听（Enter 与审核钮同一路径）
     _removeDetailKeyHandler();
     _detailKeyHandler = e => {
       if (isPatientResultPanelEvent(e)) {return;}
@@ -10055,8 +10052,9 @@ window.addEventListener('keydown',function(e){
     };
     document.addEventListener('keydown', _detailKeyHandler, true);
     dbg('详情面板键盘监听已注册, specimen:', specimen.PatName);
-    // 确保 F4 桥在原生 iframe 上挂着（面板打开时异常处理器已被移除，F4 靠桥捕获）
+    // 确保 F4 桥在原生 iframe 上挂着（面板打开时异常处理器已被移除，Enter 靠桥捕获）
     _attachF4BridgeToIframe();
+    refocusDetailPanel();
   }
 
   function _removeDetailKeyHandler() {
@@ -10218,12 +10216,25 @@ window.addEventListener('keydown',function(e){
     };
     document.addEventListener('keydown', _detailKeyHandler, true);
     _attachF4BridgeToIframe();
+    refocusDetailPanel();
+  }
+
+  // 焦点放回详情面板自身：确保 Enter 由 _detailKeyHandler 直接捕获（不依赖 iframe 桥），
+  // 避免焦点滞留在原生 iframe 内导致 Enter 被原生 datagrid 吃掉（用户历史痛点）
+  function refocusDetailPanel() {
+    try {
+      const dEl = document.getElementById('lis-detail-panel');
+      if (dEl) {
+        if (!dEl.hasAttribute('tabindex')) {dEl.setAttribute('tabindex', '-1');}
+        dEl.focus({ preventScroll: true });
+      }
+    } catch (e) {}
   }
 
   let _detailAuditInProgress = false;
 
   // 从详情面板审核当前标本并自动跳转下一个
-  // 入口：详情「审核」按钮 / F4 / Enter —— 三者同一函数，可同时保留
+  // 入口：详情「审核」按钮 / Enter —— 同一函数，可同时保留（F4 在详情内已取消，8.5.1）
   async function _auditFromDetailPanel() {
     if (!currentDetailSpecimen) {
       dbg('详情审核跳过: 无当前标本');
