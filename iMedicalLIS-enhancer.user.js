@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.6
+// @version      8.5.7
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6275,6 +6275,10 @@
     _removeDetailKeyHandler();
     clearTimeout(_abnormalPrewarmTimer);
     _abnormalPrewarmTimer = null;
+    if (_detailPrewarmTimer) {
+      clearTimeout(_detailPrewarmTimer);
+      _detailPrewarmTimer = null;
+    }
     clearMachineCache(); // 关闭工作台时清理仪器缓存，避免内存只增不减
     wsLoading = false; // 重置加载状态，防止下次 openWS 被阻塞
     _wsLoadSeq++; // 作废关闭时仍在飞行的 loadWSData
@@ -7662,15 +7666,10 @@
       } else {
         sourceData = currentFiltered;
       }
+      // 与视图口径统一：用 getWSAuditBucket 判定（含 Status!=0 待排过滤），
+      // 避免「全部视图勾选的待排标本」被批审而待审视图不显示（8.5.x 批审数与显示数不一致）
       const normalData = sourceData
-        .filter(r => {
-          const status = String(r.Status || r.ReportStatus || '');
-          if (status === '3' || status === '4') {return false;}
-          const complete = String(r.IsComplete || '');
-          if (complete !== '1') {return false;}
-          const cached = wsClassifiedCache[r.ReportDR];
-          return cached && cached.status === 'NORMAL' && !isClassificationStale(r);
-        })
+        .filter(r => getWSAuditBucket(r) === 'normal')
         .map(r => {
           const cached = wsClassifiedCache[r.ReportDR];
           return {
@@ -7835,7 +7834,6 @@ window.__lisEnhancerReleaseReportFocus=function(){
 };
 window.addEventListener('keydown',function(e){
   if(e.key!=='Enter'||e.shiftKey)return;
-  var active=false;
   var active=false,token='',origin='';
   try{
     active=!!(window.parent&&window.parent.__lisAbnormalEnterActive);
@@ -7912,9 +7910,8 @@ window.addEventListener('keydown',function(e){
 
   // F4 统一入口优先级：
   // 1) 批审确认框 → 确认批审
-  // 2) 详情面板 → 审当前条
-  // 3) 异常待审列表 → 审焦点条
-  // 4) 正常可审列表 → 弹出一键批审确认（再按一次 F4 确认）
+  // 2) 待审视图（正常+异常已合并 8.5.0）→ 弹出批审确认（批审全部正常，再按一次 F4 确认）
+  // 注：详情面板内 F4 已取消（8.5.1），由 _f4BridgeHandler 直接吞掉
   function triggerF4Audit() {
     // 批审确认对话框（含一键批审详细信息页）
     const dialog = document.getElementById('lis-audit-confirm');
@@ -7958,6 +7955,9 @@ window.addEventListener('keydown',function(e){
       // F4 在详情面板内已取消（8.5.1），只保留 Enter + 面板「审核」按钮
       if (isDetailPanelVisible() && currentDetailSpecimen) {
         if (e.key === 'Enter' && !e.shiftKey) {
+          // 焦点在详情面板内的按钮上时，放行按钮默认行为（Enter=点「关闭」/「审核」），不抢为审核
+          const inPanelBtn = e.target && e.target.closest ? e.target.closest('#lis-detail-panel button') : null;
+          if (inPanelBtn) {return;}
           e.preventDefault();
           e.stopImmediatePropagation();
           void _auditFromDetailPanel();
@@ -8492,8 +8492,8 @@ window.addEventListener('keydown',function(e){
     };
     body.addEventListener('click', body._abnormalClickHandler);
 
-    // 键盘导航
-    _rebindAbnormalKeyHandler();
+    // 键盘导航（详情面板打开时不重绑列表 handler，避免与详情 Enter/F4 双重注册）
+    if (!isDetailPanelVisible()) {_rebindAbnormalKeyHandler();}
 
     // 滚动到聚焦卡片
     _scrollAbnormalFocus();
@@ -8710,6 +8710,8 @@ window.addEventListener('keydown',function(e){
     clearTimeout(_abnormalPrewarmTimer);
     const delay = typeof delayMs === 'number' ? delayMs : 0;
     _abnormalPrewarmTimer = setTimeout(() => {
+      // 详情面板/审核进行中不抢原生页（prewarm 内部有同款守卫，这里提前跳过避免白跑）
+      if (_detailAuditInProgress || _abnormalAuditInProgress || _auditInProgress) {return;}
       const data = filteredData();
       if (!data.length) {return;}
       if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {wsAbnormalIndex = 0;}
@@ -8724,7 +8726,9 @@ window.addEventListener('keydown',function(e){
   }
 
   async function prewarmAbnormalAuditNative(specimen) {
-    if (!specimen || _abnormalAuditInProgress || _auditInProgress || !isWSVisible()) {return;}
+    // 详情审核进行中也不预热：避免列表焦点标本（详情内 ↑↓ 切换后可能与详情标本不一致）
+    // 的预热与详情审核双线程驱动同一原生页（8.5.4+ 修复，详见 M1 竞态）
+    if (!specimen || _abnormalAuditInProgress || _auditInProgress || _detailAuditInProgress || !isWSVisible()) {return;}
     const reportDR = String(specimen.ReportDR || '');
     if (isAbnormalSpecimenReady(reportDR)) {
       _abnormalNativeReadyDR = reportDR;
@@ -9109,6 +9113,11 @@ window.addEventListener('keydown',function(e){
         return;
       }
 
+      // 若后台预热正针对本标本进行（8.5.3 后正常行也预热），等它完成再定位，
+      // 避免列表审核与预热双线程驱动同一原生页（awaitAbnormalPrewarm 此时因锁直接返回，不等待）
+      if (_abnormalPrewarmPromise && String(_abnormalPrewarmDR || '') === String(targetDR)) {
+        try { await _abnormalPrewarmPromise; } catch (e) {}
+      }
       if (ft) {ft.textContent = `审核：准备原生页面 ${specimen.PatName || specimen.Labno || targetDR}`;}
       releaseNativeReportFocus(); // 先 blur 原生编辑焦点，避免审核按钮/回车被结果格吃掉
       await awaitAbnormalPrewarm(specimen);
@@ -9174,10 +9183,15 @@ window.addEventListener('keydown',function(e){
           auditResult = true;
         } else {
           if (ft) {ft.textContent = `刷新数据: ${specimen.PatName || specimen.Labno || targetDR}`;}
-          // 刷新 wsData 后再检查状态（审核期间轮询已停止）
+          // 刷新 wsData 后再检查状态（审核期间轮询已停止）。
+          // 分类进行中 force:false 会被跳过（8.5.4），重试几次等分类完成，
+          // 避免读到审核前旧状态把已成功误报为失败。
           try {
-            const loadResult = await loadWSData({ force: false });
-            if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData');}
+            for (let _rt = 0; _rt < 4; _rt++) {
+              const loadResult = await loadWSData({ force: false });
+              if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData'); break;}
+              await sleep(2000);
+            }
           } catch (e) {}
           const liveRow = wsData.find(r => String(r.ReportDR) === String(targetDR));
           const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
@@ -9973,6 +9987,9 @@ window.addEventListener('keydown',function(e){
     createDetailPanel();
     // 清理异常视图键盘监听，防止与详情面板冲突
     _removeAbnormalKeyHandler();
+    // 详情打开后 iframe 内 Enter 不再走列表审核桥：立即置桥 inactive，
+    // 否则第一个 Enter（焦点在原生 iframe 内）会被旧 active 劫持吞掉（8.5.1 主推 Enter 驱动后更明显）
+    updateAbnormalEnterBridge();
 
     // 面板已打开时直接换内容，避免点击其它样本时先收回再二次点击。
     if (detailPanel.classList.contains('show')) {
@@ -10050,6 +10067,8 @@ window.addEventListener('keydown',function(e){
     _detailKeyHandler = e => {
       if (isPatientResultPanelEvent(e)) {return;}
       if (!detailPanel || !detailPanel.classList.contains('show')) {return;}
+      // 焦点在搜索框/面板内输入框时 Enter 不触发审核（与 _f4BridgeHandler 的 shouldIgnore 对齐）
+      if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -10219,6 +10238,8 @@ window.addEventListener('keydown',function(e){
     _detailKeyHandler = e => {
       if (isPatientResultPanelEvent(e)) {return;}
       if (!detailPanel || !detailPanel.classList.contains('show')) {return;}
+      // 焦点在搜索框/面板内输入框时 Enter 不触发审核（与 _f4BridgeHandler 的 shouldIgnore 对齐）
+      if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -10267,8 +10288,8 @@ window.addEventListener('keydown',function(e){
     const delay = typeof delayMs === 'number' ? delayMs : 250;
     _detailPrewarmTimer = setTimeout(() => {
       // 审核进行中不抢原生页（详情审完由 finally 里的 scheduleDetailPrewarm 补触发）；
-      // 标本已切走则放弃本次预热
-      if (_detailAuditInProgress || _auditInProgress) {return;}
+      // 列表审核（auditAbnormalSpecimen）进行中同样不抢；标本已切走则放弃本次预热
+      if (_detailAuditInProgress || _auditInProgress || _abnormalAuditInProgress) {return;}
       if (!isDetailPanelVisible() || !currentDetailSpecimen) {return;}
       if (String(currentDetailSpecimen.ReportDR) !== String(specimen.ReportDR)) {return;}
       prewarmAbnormalAuditNative(specimen).catch(() => {});
@@ -10367,10 +10388,13 @@ window.addEventListener('keydown',function(e){
         return;
       }
 
-      // 若后台预热正针对本标本进行，等它完成再现场判定（避免双线程同时驱动原生页竞态）
-      if (_abnormalPrewarmPromise && String(_abnormalPrewarmDR || '') === String(reportDR)) {
+      // 若后台预热正在运行，等它结束再现场判定（避免双线程同时驱动原生页竞态）。
+      // 预热针对本标本时原生页已定位（needPrep 可直接跳过）；针对其他标本
+      // （详情内 ↑↓ 切换后列表焦点未同步）也等它结束，防止并发 select 同一 iframe。
+      if (_abnormalPrewarmPromise) {
+        const prewarmDR = String(_abnormalPrewarmDR || '');
         try { await _abnormalPrewarmPromise; } catch (e) {}
-        iframeWin = getReportIframeWin() || iframeWin;
+        if (prewarmDR === String(reportDR)) {iframeWin = getReportIframeWin() || iframeWin;}
       }
 
       let needPrep = true;
@@ -10407,10 +10431,15 @@ window.addEventListener('keydown',function(e){
           auditResult = true;
         } else {
           _setDetailAuditBusy(true, '⏳ 刷新数据…');
-          // 刷新 wsData 后再检查状态（审核期间轮询已停止）
+          // 刷新 wsData 后再检查状态（审核期间轮询已停止）。
+          // 分类进行中 force:false 会被跳过（8.5.4），重试几次等分类完成，
+          // 避免读到审核前旧状态把已成功误报为失败。
           try {
-            const loadResult = await loadWSData({ force: false });
-            if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData');}
+            for (let _rt = 0; _rt < 4; _rt++) {
+              const loadResult = await loadWSData({ force: false });
+              if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData'); break;}
+              await sleep(2000);
+            }
           } catch (e) {}
           const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
           const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
@@ -10500,6 +10529,8 @@ window.addEventListener('keydown',function(e){
     // 隐藏遮罩层
     const overlay = document.getElementById('lis-detail-overlay');
     if (overlay) {overlay.style.display = 'none';}
+    // 详情已关闭：恢复 iframe Enter 桥（若在待审视图则重新激活，否则置 inactive）
+    updateAbnormalEnterBridge();
     // 如果当前是待审视图，恢复键盘监听
     if (wsCategory === 'audit') {
       _rebindAbnormalKeyHandler();
@@ -14355,7 +14386,7 @@ window.addEventListener('keydown',function(e){
     }
     if (context === 'abnormal') {
       if (live.status === 'NORMAL') {
-        return { ok: false, msg: '该标本已分类为正常，请到正常可审视图批审' };
+        return { ok: false, msg: '该标本已分类为正常，请在待审视图用 Enter/F4 审核' };
       }
       if (live.status === 'UNCERTAIN') {
         return { ok: false, msg: '结果待定，需人工确认后再审核' };
