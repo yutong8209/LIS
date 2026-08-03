@@ -70,3 +70,7 @@ lint.sh
 format_diff.patch
 FORMAT_SUMMARY.md
 *.bak
+
+# Agent 临时产物（勿提交）
+.pi-subagents/
+.workbuddy/
