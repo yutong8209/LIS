@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.13
+// @version      8.5.0
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -717,6 +717,17 @@
 .ws-abnormal-machine{position:sticky;top:0;z-index:2;background:var(--lis-primary-lighter);border:1px solid var(--lis-border);border-radius:5px;padding:4px 10px;margin:8px 0 2px;font-size:11px;font-weight:600;color:#475569;letter-spacing:.02em}
 .ws-abnormal-hint{background:var(--lis-surface);border:1px solid var(--lis-border);border-left:4px solid var(--lis-info);border-radius:6px;padding:7px 10px;margin:10px 0 0;font-size:12px;color:#334155;display:flex;align-items:center;gap:6px}
 .ws-abnormal-hint kbd{background:#f7f9fb;border:1px solid #cbd5df;border-radius:3px;padding:1px 5px;font-size:11px;font-family:monospace}
+
+/* --- 待审视图（融合正常 + 异常，单队列审核）--- */
+.ws-audit-banner{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid var(--lis-primary);border-radius:8px;padding:8px 12px;margin:8px 0 0;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.ws-audit-summary{font-size:13px;font-weight:600;color:var(--lis-text);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws-audit-sep{color:var(--lis-border);margin:0 6px;font-weight:400}
+.ws-audit-critical{color:#c62828;font-weight:700}
+.ab-card-badge{font-size:14px;flex:0 0 auto}
+.ws-abnormal-card.is-normal{border-left-color:#2e7d32;background:#f4fbf6}
+.ws-abnormal-card.is-normal:hover{background:#e9f7ee}
+.ws-abnormal-card.is-normal.focused{border-left-color:#2f6fb3;background:#eef6ff;box-shadow:0 0 0 1px rgba(47,111,179,.12)}
+.ab-card-time{font-size:11px;color:#999;white-space:nowrap}
 
 /* --- 不完整提示 --- */
 .ws-incomplete-banner{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid var(--lis-warning);border-radius:6px;padding:8px 12px;margin:10px 0;font-size:13px;color:#8a5600;font-weight:700}
@@ -5956,7 +5967,7 @@
   let wsActiveMachine = ''; // 当前选中的仪器 DR, ''=全部
   let wsActiveWG = ''; // 当前选中的工作组 DR, ''=全部工作组
   let wsSelectedMachinesByWG = {}; // {工作组DR: [仪器DR]}，空数组/无记录=该工作组全部仪器
-  let wsCategory = 'normal'; // 当前分类: 'normal'/'abnormal'/'incomplete'/'all'
+  let wsCategory = 'audit'; // 当前分类: 'audit'(待审,融合正常+异常)/'incomplete'/'pending'/'all'
   let wsClassifiedCache = {}; // 分类缓存 {[reportDR]: {status, items, row, reportDR}}
   const _CLASSIFIED_CACHE_MAX = 1000;
   let wsClassifying = false; // 分类进行中标记
@@ -6121,7 +6132,7 @@
     _detailLRU.set(key, val);
   }
 
-  const WS_CATEGORIES = ['normal', 'abnormal', 'incomplete', 'pending', 'all'];
+  const WS_CATEGORIES = ['audit', 'incomplete', 'pending', 'all'];
 
   function saveWSState() {
     try {
@@ -6138,11 +6149,16 @@
   }
 
   function loadWSState() {
-    const fallback = { wg: wgDR() || '', cat: 'normal', mdr: '' };
+    const fallback = { wg: wgDR() || '', cat: 'audit', mdr: '' };
     try {
       const saved = JSON.parse(localStorage.getItem(K.wsState) || '{}');
       const wg = Object.prototype.hasOwnProperty.call(saved, 'wg') ? String(saved.wg) : fallback.wg;
-      const cat = WS_CATEGORIES.includes(saved.cat) ? saved.cat : fallback.cat;
+      // 旧版 normal/abnormal 分类已合并为 audit（待审），老状态自动归一
+      const cat = WS_CATEGORIES.includes(saved.cat)
+        ? saved.cat
+        : saved.cat === 'normal' || saved.cat === 'abnormal'
+          ? 'audit'
+          : fallback.cat;
       const mdr = Object.prototype.hasOwnProperty.call(saved, 'mdr') ? String(saved.mdr) : fallback.mdr;
       const multiMdr = saved.multiMdr && typeof saved.multiMdr === 'object' ? saved.multiMdr : {};
       return { wg, cat, mdr, multiMdr };
@@ -6223,10 +6239,10 @@
     updateWSFooter();
     _installF4Bridge(); // 常驻 F4 桥，独立于异常视图处理器生命周期
     loadWSData().then(() => {
-      if (wsCategory === 'abnormal') {prefetchAbnormalAuditContext();}
+      if (wsCategory === 'audit') {prefetchAbnormalAuditContext();}
     });
     startWSRefresh();
-    if (wsCategory === 'abnormal') {prefetchReportPageForWS();}
+    if (wsCategory === 'audit') {prefetchReportPageForWS();}
   }
 
   function closeWS() {
@@ -6481,7 +6497,7 @@
         classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
       }
 
-      if (wsCategory === 'abnormal') {prefetchAbnormalAuditContext();}
+      if (wsCategory === 'audit') {prefetchAbnormalAuditContext();}
       return { ok: true, count: wsData.length, empty: wsData.length === 0 };
     } catch (e) {
       dbg('loadWSData 异常:', e);
@@ -6760,8 +6776,8 @@
     //    并触发 loadWSData，否则 wsData 永远为空、找不到目标标本、工作台也不会自动打开；
     // 2) 恢复后再 saveWSState()，避免把空的多选状态覆盖回 localStorage 丢掉跨组勾选。
     if (!isWSVisible()) {openWS();}
-    if (wsCategory !== 'abnormal') {
-      wsCategory = 'abnormal';
+    if (wsCategory !== 'audit') {
+      wsCategory = 'audit';
       saveWSState();
       renderWSCategoryBar();
       renderWSTable();
@@ -6987,13 +7003,10 @@
     if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
     {d = d.filter(rowPassWSMachineFilter);}
     // 分类过滤
-    if (wsCategory === 'normal') {
+    if (wsCategory === 'audit') {
       d = d.filter(r => {
-        return getWSAuditBucket(r) === 'normal';
-      });
-    } else if (wsCategory === 'abnormal') {
-      d = d.filter(r => {
-        return getWSAuditBucket(r) === 'abnormal';
+        const b = getWSAuditBucket(r);
+        return b === 'normal' || b === 'abnormal';
       });
     } else if (wsCategory === 'incomplete') {
       d = d.filter(r => {
@@ -7020,10 +7033,20 @@
     wsSearchQuery = _q; // 保存搜索词用于高亮
     // 排序：批审/异常待审按仪器分组，同仪器内再按原排序字段
     const { field, asc } = wsSort;
-    if (wsCategory === 'abnormal' || wsCategory === 'normal') {
+    if (wsCategory === 'audit') {
+      // 待审视图：按仪器分组，组内 危急→异常→正常（正常放后面，供 F4 一键批审）
       d.sort((a, b) => {
         const g = compareSpecimensByMachineGroup(a, b);
         if (g) {return g;}
+        const rank = r => {
+          const b = getWSAuditBucket(r);
+          if (b === 'normal') {return 2;}
+          const cached = wsClassifiedCache[r.ReportDR];
+          return cached && cached.status === 'CRITICAL' ? 0 : 1;
+        };
+        const ra = rank(a);
+        const rb = rank(b);
+        if (ra !== rb) {return ra - rb;}
         const va = (a[field] || '').toString();
         const vb = (b[field] || '').toString();
         return asc ? va.localeCompare(vb, 'zh') : vb.localeCompare(va, 'zh');
@@ -7355,6 +7378,8 @@
   // 切换工作台分类（与点击分类标签行为一致：保留勾选、刷新渲染）
   function switchWSCategory(cat) {
     if (!cat) {return;}
+    // 旧版 normal/abnormal 已合并为 audit（待审）
+    if (cat === 'normal' || cat === 'abnormal') {cat = 'audit';}
     invalidateCaches();
     wsCategory = cat;
     wsAbnormalIndex = -1;
@@ -7362,12 +7387,13 @@
     renderWSCategoryBar();
     renderWSTable();
     updateAbnormalEnterBridge();
-    if (wsCategory === 'abnormal') {prefetchAbnormalAuditContext();}
+    if (wsCategory === 'audit') {prefetchAbnormalAuditContext();}
   }
 
   // 菜单栏跳转：工作台关闭时先打开，再显示目标分类。
   function gotoWSCategoryFromMenubar(cat) {
     if (!cat) {return;}
+    if (cat === 'normal' || cat === 'abnormal') {cat = 'audit';} // 旧入口统一归入待审
     if (!isWSVisible()) {
       // 必须先 openWS()：它会 applyWSState(loadWSState()) 恢复跨组仪器多选。
       // 若先 set+saveWSState()（此时内存 multiMdr 还是空 {}），会把 localStorage
@@ -7379,7 +7405,7 @@
       renderWSCategoryBar();
       renderWSTable();
       updateAbnormalEnterBridge();
-      if (wsCategory === 'abnormal') {prefetchAbnormalAuditContext();}
+      if (wsCategory === 'audit') {prefetchAbnormalAuditContext();}
       return;
     }
     switchWSCategory(cat);
@@ -7519,6 +7545,7 @@
       url: location.href,
       normalReady: normalCount,
       abnormalReady: abnormalCount,
+      auditReady: normalCount + abnormalCount,
       pending: pendingCount,
       incomplete: incompleteCount,
       total: totalCount
@@ -7531,8 +7558,7 @@
     // 左侧：一键批审按钮
     h += '<button class="nb-btn" id="lis-ws-batch" style="padding:4px 12px;font-size:11px;margin-right:6px;display:none" title="F4 打开确认 · 再按 F4 确认批审"></button>';
 
-    h += '<button class="cat-tab cat-normal" data-cat="normal">\n            ✅正常 <span class="cat-cnt">0</span>\n        </button>';
-    h += '<button class="cat-tab cat-abnormal" data-cat="abnormal">\n            ⚠️异常 <span class="cat-cnt">0</span>\n        </button>';
+    h += '<button class="cat-tab cat-audit" data-cat="audit">\n            🔍待审 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-incomplete" data-cat="incomplete">\n            📋不完整 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-pending" data-cat="pending">\n            📝待排 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab" data-cat="all">\n            📃全部 <span class="cat-cnt">0</span>\n        </button>';
@@ -7562,7 +7588,7 @@
 
   function _updateCategoryBarState(bar, normalCount, abnormalCount, incompleteCount, pendingCount, totalCount, fd) {
     // 更新计数（不重建 DOM）
-    const cntMap = { normal: normalCount, abnormal: abnormalCount, incomplete: incompleteCount, pending: pendingCount, all: totalCount };
+    const cntMap = { audit: normalCount + abnormalCount, incomplete: incompleteCount, pending: pendingCount, all: totalCount };
     bar.querySelectorAll('.cat-tab').forEach(b => {
       const cat = b.dataset.cat;
       b.classList.toggle('on', cat === wsCategory);
@@ -7573,9 +7599,9 @@
     // 更新一键批审按钮显隐
     const batchBtn = document.getElementById('lis-ws-batch');
     if (batchBtn) {
-      if (wsCategory === 'normal' && normalCount > 0) {
+      if (wsCategory === 'audit' && normalCount > 0) {
         batchBtn.style.display = '';
-        batchBtn.textContent = `⚡ ${normalCount} · F4`;
+        batchBtn.textContent = `⚡ 批审正常 ${normalCount} · F4`;
       } else {
         batchBtn.style.display = 'none';
       }
@@ -7584,10 +7610,16 @@
     // 更新右侧提示文字
     const hint = bar.querySelector('.cat-hint');
     if (hint) {
-      if (wsCategory === 'abnormal' && abnormalCount > 0) {
-        hint.innerHTML = '<kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 移动';
-      } else if (wsCategory === 'normal' && normalCount > 0) {
-        hint.innerHTML = '<kbd>F4</kbd> 一键批审 · 再按确认';
+      if (wsCategory === 'audit') {
+        if (normalCount > 0 && abnormalCount > 0) {
+          hint.innerHTML = '<kbd>Enter</kbd> 逐条审核 · <kbd>F4</kbd> 批审正常 · <kbd>↑↓</kbd> 移动';
+        } else if (normalCount > 0) {
+          hint.innerHTML = '<kbd>F4</kbd> 一键批审 · 再按确认';
+        } else if (abnormalCount > 0) {
+          hint.innerHTML = '<kbd>Enter</kbd> 审核 <kbd>↑↓</kbd> 移动';
+        } else {
+          hint.textContent = '';
+        }
       } else {
         hint.textContent = '';
       }
@@ -7672,7 +7704,7 @@
   }
 
   function updateAbnormalEnterBridge() {
-    const active = wsCategory === 'abnormal' && isWSVisible() && !isDetailPanelVisible();
+    const active = wsCategory === 'audit' && isWSVisible() && !isDetailPanelVisible();
     try {
       window.__lisAbnormalEnterActive = active;
       window.__lisAbnormalEnterToken = active
@@ -7730,7 +7762,7 @@
 
   function triggerAbnormalEnterAudit() {
     updateAbnormalEnterBridge();
-    if (wsCategory !== 'abnormal' || !isWSVisible() || isDetailPanelVisible()) {return false;}
+    if (wsCategory !== 'audit' || !isWSVisible() || isDetailPanelVisible()) {return false;}
     const now = Date.now();
     if (now - _abnormalEnterLastAt < 250) {return true;}
     _abnormalEnterLastAt = now;
@@ -7754,7 +7786,7 @@
   }
 
   function handleAbnormalEnterAudit(e) {
-    if (wsCategory !== 'abnormal' || isDetailPanelVisible()) {return false;}
+    if (wsCategory !== 'audit' || isDetailPanelVisible()) {return false;}
     if (!e || e.key !== 'Enter' || e.shiftKey) {return false;}
     if (shouldIgnoreAbnormalKeyEvent(e)) {return false;}
     e.preventDefault();
@@ -7893,38 +7925,12 @@ window.addEventListener('keydown',function(e){
       void _auditFromDetailPanel();
       return;
     }
-    // 正常可审列表：F4 = 打开一键批审确认
-    if (isWSVisible() && wsCategory === 'normal') {
+    // 待审列表：F4 = 打开一键批审确认（批审全部正常标本）
+    if (isWSVisible() && wsCategory === 'audit') {
       openWorkbenchBatchAudit();
       return;
     }
-    if (wsCategory !== 'abnormal' || !isWSVisible()) {return;}
-    if (_abnormalAuditInProgress) {
-      if (!_abnormalAuditQueued) {
-        _abnormalAuditQueued = true;
-        const ft = document.getElementById('lis-ws-ft-stat');
-        if (ft) {ft.textContent = '⏳ 当前条审完后自动审下一条（F4 已排队）';}
-        showToast('下一条已排队，当前条完成后自动继续', 'info');
-      }
-      return;
-    }
-    if (_auditInProgress || _detailAuditInProgress) {
-      showToast('正在批量/详情审核中，请稍候', 'warning');
-      return;
-    }
-    const data = filteredData();
-    if (!data.length) {
-      showToast('没有可审核的异常标本', 'warning');
-      return;
-    }
-    if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {wsAbnormalIndex = 0;}
-    const sp = getAbnormalFocusSpecimen(data);
-    if (!sp) {
-      showToast('没有可审核的异常标本', 'warning');
-      return;
-    }
-    markAbnormalAuditUI(sp, 'start');
-    void auditAbnormalSpecimen(sp);
+    return;
   }
 
   // 常驻 F4 桥：挂到报告页 iframe，不被 openDetailPanel 的 _removeAbnormalKeyHandler 影响。
@@ -7951,18 +7957,14 @@ window.addEventListener('keydown',function(e){
         return;
       }
       if (e.key !== 'F4') {return;}
-      // 正常可审列表：F4 打开一键批审确认（再按 F4 确认）
-      if (isWSVisible() && wsCategory === 'normal') {
+      // 待审列表：F4 打开一键批审确认（再按 F4 确认）
+      if (isWSVisible() && wsCategory === 'audit') {
         e.preventDefault();
         e.stopImmediatePropagation();
         triggerF4Audit();
         return;
       }
-      if (wsCategory !== 'abnormal') {return;}
-      if (!isDetailPanelVisible()) {return;} // 列表视图下由 _abnormalKeyHandler 处理，避免双重触发
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      triggerF4Audit();
+      return;
     };
     document.addEventListener('keydown', _f4BridgeHandler, true);
     _f4BridgeTargets.push(document);
@@ -8093,7 +8095,7 @@ window.addEventListener('keydown',function(e){
     installAbnormalResultGridEnterHijack();
     [80, 200, 450, 900, 1800].forEach(ms => {
       setTimeout(() => {
-        if (wsCategory !== 'abnormal' || _abnormalAuditInProgress) {return;}
+        if (wsCategory !== 'audit' || _abnormalAuditInProgress) {return;}
         updateAbnormalEnterBridge();
         releaseNativeReportFocus();
         refocusAbnormalWorkbench();
@@ -8109,8 +8111,8 @@ window.addEventListener('keydown',function(e){
     }
     _abnormalKeyHandler = e => {
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
-      if (wsCategory !== 'abnormal') {return;}
-      // F4：无论面板是否打开都处理（异常视图处理器已挂到 iframe，可捕获原生页焦点下的按键）
+      if (wsCategory !== 'audit') {return;}
+      // F4：无论面板是否打开都处理（待审视图处理器已挂到 iframe，可捕获原生页焦点下的按键）
       // 面板打开时用 currentDetailSpecimen 调面板同款审核；面板未开时用列表焦点标本。
       if (e.key === 'F4') {
         e.preventDefault();
@@ -8141,11 +8143,9 @@ window.addEventListener('keydown',function(e){
         const sp = getAbnormalFocusSpecimen(curData);
         if (sp) {openDetailPanel(sp, 'abnormal', wsAbnormalIndex);}
       } else if (e.key === 'Escape') {
-        wsCategory = 'normal';
-        updateAbnormalEnterBridge();
-        saveWSState();
-        renderWSCategoryBar();
-        renderWSTable();
+        // 待审视图 Esc = 关闭工作台（与其它查看视图一致）
+        e.preventDefault();
+        closeWS();
       }
     };
     _abnormalKeyTargets = [document];
@@ -8204,11 +8204,8 @@ window.addEventListener('keydown',function(e){
     }
 
     switch (wsCategory) {
-    case 'normal':
-      renderNormalView(data, body);
-      break;
-    case 'abnormal':
-      renderAbnormalView(data, body);
+    case 'audit':
+      renderAuditView(data, body);
       break;
     case 'incomplete':
       renderIncompleteView(data, body);
@@ -8218,13 +8215,13 @@ window.addEventListener('keydown',function(e){
       break;
     }
 
-    // 安全网：异常视图下确保键盘 handler 存在
+    // 安全网：待审视图下确保键盘 handler 存在
     // 详情面板打开时不要重绑列表 handler，避免与详情 F4/Enter 双重触发
-    if (wsCategory === 'abnormal' && !isDetailPanelVisible()) {
+    if (wsCategory === 'audit' && !isDetailPanelVisible()) {
       if (!_abnormalKeyHandler) {_rebindAbnormalKeyHandler();}
     }
-    // 正常/全部/不完整视图：Escape 关闭工作台（详情打开时 Esc 由详情 handler 负责）
-    if (wsCategory !== 'abnormal' && !isDetailPanelVisible()) {
+    // 其余查看视图：Escape 关闭工作台（详情打开时 Esc 由详情 handler 负责）
+    if (wsCategory !== 'audit' && !isDetailPanelVisible()) {
       _normalKeyHandler = e => {
         if (isPatientResultPanelEvent(e)) {return;}
         if (e.key === 'Escape') {
@@ -8273,43 +8270,7 @@ window.addEventListener('keydown',function(e){
     ft.textContent = parts.join(' · ');
   }
 
-  // --- 正常可审视图 ---
-  function renderNormalView(data, body) {
-    let h = `<div class="ws-normal-banner">
-            <span class="nb-text">✅ ${data.length} 个标本结果正常，可一键审核 · <kbd style="background:#e8f5e9;padding:1px 6px;border-radius:3px">F4</kbd> 打开确认，再按确认批审</span>
-            <button class="nb-btn" id="lis-norm-batch" title="F4 打开确认 · 再按 F4 确认批审">⚡ 一键批审 ${data.length} · F4</button>
-        </div>`;
-
-    h += '<table><thead><tr>';
-    h += '<th style="width:30px"><input type="checkbox" id="lis-ws-chka" /></th>';
-    h += '<th>仪器</th><th>姓名</th><th>检验号</th><th>医嘱</th><th>核收时间</th>';
-    h += '</tr></thead><tbody>';
-
-    data.forEach((r, i) => {
-      const ck = wsChecked.has(r.ReportDR) ? 'checked' : '';
-      h += `<tr class="${wsChecked.has(r.ReportDR) ? 'sel' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
-      h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${escAttr(r.ReportDR || '')}" ${ck} /></td>`;
-      h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
-      h += `<td>${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
-      h += `<td><b>${highlightText(r.Labno || '', wsSearchQuery)}</b></td>`;
-      h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
-      h += `<td>${esc(r.AcceptDT || '')}</td>`;
-      h += '</tr>';
-    });
-    h += '</tbody></table>';
-    body.innerHTML = h;
-
-    // 一键批审按钮（与顶栏 / F4 共用 openWorkbenchBatchAudit）
-    const batchBtn = document.getElementById('lis-norm-batch');
-    if (batchBtn) {
-      batchBtn.addEventListener('click', () => {
-        openWorkbenchBatchAudit();
-      });
-    }
-
-    _bindTableEvents(body, data, 'normal');
-  }
-
+  // --- 正常可审视图已并入 renderAuditView（待审）---
   function getAbnormalFocusSpecimen(data) {
     data = data || filteredData();
     if (!data.length) {return null;}
@@ -8327,8 +8288,8 @@ window.addEventListener('keydown',function(e){
     return data[wsAbnormalIndex] || null;
   }
 
-  // --- 异常待审视图（卡片式）---
-  function renderAbnormalView(data, body) {
+  // --- 待审视图（融合正常 + 异常，单队列审核）---
+  function renderAuditView(data, body) {
     if (_abnormalFocusDR) {
       const idx = data.findIndex(r => String(r.ReportDR) === String(_abnormalFocusDR));
       wsAbnormalIndex = idx >= 0 ? idx : data.length ? 0 : -1;
@@ -8336,8 +8297,32 @@ window.addEventListener('keydown',function(e){
       wsAbnormalIndex = data.length ? 0 : -1;
     }
 
-    let h = `<div class="ws-abnormal-hint">
-            <kbd>Enter</kbd> 审核 <kbd>F4</kbd> 稳审(同详情按钮) <kbd>↑↓</kbd> 切换 <kbd>点击</kbd> 详情 · 按仪器分组，审完一台再换下一台
+    // 分类汇总（基于当前视图数据）
+    let nNormal = 0,
+      nAbnormal = 0,
+      nCritical = 0;
+    data.forEach(r => {
+      const b = getWSAuditBucket(r);
+      if (b === 'normal') {nNormal++;}
+      else {
+        const cached = wsClassifiedCache[r.ReportDR];
+        if (cached && cached.status === 'CRITICAL') {nCritical++;}
+        else {nAbnormal++;}
+      }
+    });
+
+    let h = `<div class="ws-audit-banner">
+            <span class="ws-audit-summary">
+                ✅ 正常 <b>${nNormal}</b>
+                <span class="ws-audit-sep">·</span>
+                ⚠️ 异常 <b>${nAbnormal}</b>
+                ${nCritical ? `<span class="ws-audit-sep">·</span><span class="ws-audit-critical">🚨 危急 <b>${nCritical}</b></span>` : ''}
+            </span>
+            ${nNormal > 0 ? `<button class="nb-btn" id="lis-audit-batch" title="F4 打开确认 · 再按 F4 确认批审">⚡ 一键批审正常 ${nNormal} · F4</button>` : ''}
+        </div>`;
+
+    h += `<div class="ws-abnormal-hint">
+            <kbd>Enter</kbd> 审核当前条 <kbd>F4</kbd> 批审正常 <kbd>↑↓</kbd> 切换 <kbd>点击</kbd> 详情 · 按仪器分组，审完一台再换下一台
         </div>`;
     h += '<div class="ws-abnormal-list">';
 
@@ -8350,6 +8335,21 @@ window.addEventListener('keydown',function(e){
         lastMachineKey = machineKey;
       }
       const cached = wsClassifiedCache[r.ReportDR];
+      const bucket = getWSAuditBucket(r);
+      if (bucket === 'normal') {
+        // --- 正常行：信任分类结果，Enter 直接单条审核；F4 整批 ---
+        const focused = i === wsAbnormalIndex ? ' focused' : '';
+        h += `<div class="ws-abnormal-card is-normal${focused}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+        h += '<span class="ab-card-badge ok">✅</span>';
+        h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
+        h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
+        h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || '', wsSearchQuery)}</span>`;
+        h += `<span class="ab-card-time">${esc(r.AcceptDT || '')}</span>`;
+        h += '<span class="ab-card-hint">Enter=审核</span>';
+        h += '</div>';
+        return;
+      }
+
       const items = cached ? cached.items : [];
       const abnormalItems = items.filter(it => it.status !== 'NORMAL');
       const hasCritical =
@@ -8358,6 +8358,7 @@ window.addEventListener('keydown',function(e){
       const focused = i === wsAbnormalIndex ? ' focused' : '';
 
       h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      h += hasCritical ? '<span class="ab-card-badge critical">🚨</span>' : '<span class="ab-card-badge warn">⚠️</span>';
       h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
       h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
       h += `<span class="ab-card-test">${highlightText(r._mn || '', wsSearchQuery)}</span>`;
@@ -8434,6 +8435,14 @@ window.addEventListener('keydown',function(e){
     h += '</div>';
     body.innerHTML = h;
 
+    // 横幅一键批审按钮（与顶栏 / F4 共用 openWorkbenchBatchAudit）
+    const auditBatchBtn = document.getElementById('lis-audit-batch');
+    if (auditBatchBtn) {
+      auditBatchBtn.addEventListener('click', () => {
+        openWorkbenchBatchAudit();
+      });
+    }
+
     // 卡片点击 → 更新聚焦 + 打开详情；空白处点击 → 收回详情
     // 移除旧委托，防止刷新累积多个处理器
     if (body._abnormalClickHandler) {
@@ -8456,7 +8465,7 @@ window.addEventListener('keydown',function(e){
         0,
         filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR))
       );
-      openDetailPanel(specimen, 'abnormal', wsAbnormalIndex);
+      openDetailPanel(specimen, getWSAuditBucket(specimen) === 'normal' ? 'normal' : 'abnormal', wsAbnormalIndex);
     };
     body.addEventListener('click', body._abnormalClickHandler);
 
@@ -8669,19 +8678,22 @@ window.addEventListener('keydown',function(e){
   }
 
   function prefetchAbnormalAuditContext() {
-    if (wsCategory !== 'abnormal' || _abnormalAuditInProgress) {return;}
+    if (wsCategory !== 'audit' || _abnormalAuditInProgress) {return;}
     scheduleAbnormalAuditPrewarm(0);
   }
 
   function scheduleAbnormalAuditPrewarm(delayMs) {
-    if (wsCategory !== 'abnormal' || _abnormalAuditInProgress || !isWSVisible()) {return;}
+    if (wsCategory !== 'audit' || _abnormalAuditInProgress || !isWSVisible()) {return;}
     clearTimeout(_abnormalPrewarmTimer);
     const delay = typeof delayMs === 'number' ? delayMs : 0;
     _abnormalPrewarmTimer = setTimeout(() => {
       const data = filteredData();
       if (!data.length) {return;}
       if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {wsAbnormalIndex = 0;}
-      prewarmAbnormalAuditNative(data[wsAbnormalIndex]).catch(() => {});
+      const sp = data[wsAbnormalIndex];
+      // 正常行无需预热原生定位：F4 批审链路自带 ensureReportPageLoaded，单审时临时定位
+      if (sp && getWSAuditBucket(sp) === 'normal') {return;}
+      prewarmAbnormalAuditNative(sp).catch(() => {});
     }, delay);
   }
 
@@ -8692,6 +8704,8 @@ window.addEventListener('keydown',function(e){
 
   async function prewarmAbnormalAuditNative(specimen) {
     if (!specimen || _abnormalAuditInProgress || !isWSVisible()) {return;}
+    // 正常行不需要原生定位预热（F4 批审链路自行加载报告页，单审时临时定位）
+    if (getWSAuditBucket(specimen) === 'normal') {return;}
     const reportDR = String(specimen.ReportDR || '');
     if (isAbnormalSpecimenReady(reportDR)) {
       _abnormalNativeReadyDR = reportDR;
@@ -8858,8 +8872,9 @@ window.addEventListener('keydown',function(e){
 
     const newData = filteredData();
     if (newData.length === 0) {
-      wsCategory = 'normal';
+      // 待审队列审空：保持待审视图，显示空态（不再自动切回正常分类）
       wsAbnormalIndex = -1;
+      _abnormalFocusDR = '';
       renderWSCategoryBar();
       renderWSTable();
       return;
@@ -9019,7 +9034,9 @@ window.addEventListener('keydown',function(e){
     }
 
     // 预校验：在标记 UI/设锁之前检查，避免"正在审核..."瞬间变"已审/不完整"的两个弹窗
-    const _preClassCheck = validateAuditClassification(specimen.ReportDR, 'abnormal');
+    // 待审视图：正常行走 normal 上下文（NORMAL 才放行），异常/危急行走 abnormal 上下文（危急仍拦截）
+    const _bucket = getWSAuditBucket(specimen);
+    const _preClassCheck = validateAuditClassification(specimen.ReportDR, _bucket === 'normal' ? 'normal' : 'abnormal');
     if (!_preClassCheck.ok) {
       showToast(_preClassCheck.msg, _preClassCheck.msg.indexOf('危急') !== -1 ? 'error' : 'warning');
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
@@ -9176,12 +9193,12 @@ window.addEventListener('keydown',function(e){
       if (resumeWSRefresh && isWSVisible()) {startWSRefresh();}
       updateWSFooter();
       dbg('异常列表审核结束');
-      if (wsCategory === 'abnormal') {scheduleAbnormalFocusRecovery();}
+      if (wsCategory === 'audit') {scheduleAbnormalFocusRecovery();}
       if (_abnormalAuditQueued) {
         _abnormalAuditQueued = false;
-        // 用户在审核完成前切走了异常分类：不再续审（filteredData 已是别的分类）
-        if (wsCategory !== 'abnormal') {
-          dbg('F4 排队续审取消: 已离开异常分类');
+        // 用户在审核完成前切走了待审分类：不再续审（filteredData 已是别的分类）
+        if (wsCategory !== 'audit') {
+          dbg('F4 排队续审取消: 已离开待审分类');
         } else {
           const data = filteredData();
           if (data.length) {
@@ -10377,7 +10394,7 @@ window.addEventListener('keydown',function(e){
           _switchDetailInPlace(nextSpecimen, source, nextIdx, { force: true });
         } else {
           closeDetailPanel(true); // force: 审核已完成，绕过 _detailAuditInProgress 守卫
-          if (source === 'abnormal') {wsCategory = 'normal';}
+          // 待审视图详情审核完成：保持当前视图（正常/异常已合并，无需再切分类）
           renderWSCategoryBar();
           renderWSTable();
         }
@@ -10418,8 +10435,8 @@ window.addEventListener('keydown',function(e){
     // 隐藏遮罩层
     const overlay = document.getElementById('lis-detail-overlay');
     if (overlay) {overlay.style.display = 'none';}
-    // 如果当前是异常视图，恢复键盘监听
-    if (wsCategory === 'abnormal') {
+    // 如果当前是待审视图，恢复键盘监听
+    if (wsCategory === 'audit') {
       _rebindAbnormalKeyHandler();
     }
   }
@@ -11960,8 +11977,8 @@ window.addEventListener('keydown',function(e){
 
   function canScriptSelectNativeRow(iframeWin, reportDR) {
     if (isScriptOwnedNativeSelection()) {return true;}
-    // 异常工作台驱动审核时，原生自动跳下一条不算用户手动选行
-    if (wsCategory === 'abnormal' && isWSVisible()) {return true;}
+    // 待审工作台驱动审核时，原生自动跳下一条不算用户手动选行
+    if (wsCategory === 'audit' && isWSVisible()) {return true;}
     const target = String(reportDR || '');
     if (!target) {return false;}
     const selDR = getNativeWorkListSelectedDR(iframeWin);
@@ -12008,7 +12025,7 @@ window.addEventListener('keydown',function(e){
               return;
             }
             const ret = origSuccess ? origSuccess.apply(this, arguments) : undefined;
-            if (wsCategory === 'abnormal') {
+            if (wsCategory === 'audit') {
               setTimeout(() => scheduleAbnormalFocusRecovery(), 30);
             }
             return ret;
@@ -14356,7 +14373,7 @@ window.addEventListener('keydown',function(e){
         return;
       }
 
-      if (wsCategory === 'abnormal' || wsCategory === 'normal') {
+      if (wsCategory === 'audit') {
         const selectedMachineSet = wsMachineFilterSetForActiveWG();
         toClassify.sort((a, b) => {
           const score = r => {
@@ -14401,7 +14418,7 @@ window.addEventListener('keydown',function(e){
           });
         }
         invalidateCaches();
-        if (wsCategory === 'abnormal') {prefetchAbnormalAuditContext();}
+        if (wsCategory === 'audit') {prefetchAbnormalAuditContext();}
         await new Promise(r => setTimeout(r, 0)); // 仅 yield，不加额外延迟
       }
 

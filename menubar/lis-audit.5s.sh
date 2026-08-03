@@ -31,8 +31,9 @@ if [ -z "$J" ] || [ "$(echo "$J" | jq -r '.ok // false')" != "true" ]; then
 fi
 
 M=$(echo "$J" | jq -r '.scope // "全部仪器"')
+# 待审总数（正常+异常已合并）；兼容旧 serve 无 auditReady 字段时回退为两者之和
+AR=$(echo "$J" | jq -r '.auditReady // ((.normalReady // 0) + (.abnormalReady // 0))')
 NR=$(echo "$J" | jq -r '.normalReady // 0')
-AR=$(echo "$J" | jq -r '.abnormalReady // 0')
 PD=$(echo "$J" | jq -r '.pending // 0')
 IC=$(echo "$J" | jq -r '.incomplete // 0')
 TO=$(echo "$J" | jq -r '.total // 0')
@@ -53,11 +54,11 @@ if [ "$AGE" -gt 90 ]; then
   exit 0
 fi
 
-# ── 菜单栏标题：单色 SF Symbols + 数字（异常>0 才显示告警圆点） ──
+# ── 菜单栏标题：待审总数（正常+异常合并），有异常才显示告警圆点 ──
 if [ "$AR" -gt 0 ] 2>/dev/null; then
-  echo ":checkmark.seal: $NR  :exclamationmark.circle.fill: $AR | size=14"
+  echo ":checkmark.seal: $AR | size=14"
 else
-  echo ":checkmark.seal: $NR | size=14"
+  echo ":checkmark.seal: 0 | size=14"
 fi
 
 # ── 下拉：分类行（图标 + 标签 + 大号彩色数字，数字右对齐成列） ──
@@ -74,8 +75,7 @@ row() {
       '{ printf "%s | %s bash=%s param1=%s terminal=false\n", $0, f, j, cat }'
 }
 
-row ":checkmark.circle.fill:" "可批审" "$NR" "$L_GREEN" "normal"
-row ":exclamationmark.triangle.fill:" "异常待审" "$AR" "$L_ORANGE" "abnormal"
+row ":checkmark.seal.fill:" "待审" "$AR" "$L_GREEN" "audit"
 row ":tray.fill:" "待排样" "$PD" "$L_INDIGO" "pending"
 row ":doc.fill:" "不完整" "$IC" "$L_TEAL" "incomplete"
 row ":number.circle.fill:" "标本总数" "$TO" "$L_BLUE" "all"
