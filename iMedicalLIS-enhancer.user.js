@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.8
+// @version      8.5.9
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6779,27 +6779,38 @@
   }
   // 8.5.8: 审空自动切回起始组 —— 分类进行中（可能有尚未分类、即将进入待审的标本）或
   // 搜索框过滤时不算「审完」，延迟重试；确认待审视图真空才切回，避免提前切回遗留标本
+  // 8.5.9: 用单 timer 管理重试 —— 原实现在分类中/搜索中每次调用都启 setTimeout，
+  //   连续审核多条时多个并行 setTimeout 互相重置 _switchBackRetry=0，上限 10 永远到不了。
+  //   改为：已有 timer 在跑则直接 return，不再重复启动；计数器在 timer 触发链路里递增。
   let _switchBackRetry = 0;
+  let _switchBackTimer = null;
   function trySwitchBackToOrigin() {
     try {
       const origin = loadAuditOrigin();
       if (!origin || String(origin.wg) === String(resolveCurrentWG())) {
         _switchBackRetry = 0;
+        if (_switchBackTimer) {clearTimeout(_switchBackTimer); _switchBackTimer = null;}
         return;
       }
       const searchQ = (($('#lis-ws-search') || {}).value || '').trim();
       if (wsClassifying || searchQ) {
+        // 已有重试 timer 在跑则不重复启动（避免并行 setTimeout 互相重置计数器导致上限失效）
+        if (_switchBackTimer) {return;}
         if (_switchBackRetry < 10) {
           _switchBackRetry++;
-          setTimeout(() => {
-            _switchBackRetry = 0;
+          _switchBackTimer = setTimeout(() => {
+            _switchBackTimer = null;
             trySwitchBackToOrigin();
           }, 3000);
         } else {
+          // 重试 10 次（约 30s）仍未分类完成，放弃切回避免无限重试；用户可手动切组
           _switchBackRetry = 0;
         }
         return;
       }
+      // 分类完成、无搜索过滤：清掉待重试 timer + 计数器，落定切回判定
+      if (_switchBackTimer) {clearTimeout(_switchBackTimer); _switchBackTimer = null;}
+      _switchBackRetry = 0;
       if (filteredData().length === 0) {
         clearAuditOrigin();
         showToast(`已审完，切回${(WG_MAP[origin.wg] || {}).name || origin.wg}`, 'success');
