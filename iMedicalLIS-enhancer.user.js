@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.1
+// @version      8.5.2
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9959,7 +9959,8 @@ window.addEventListener('keydown',function(e){
     }
 
     currentDetailSpecimen = specimen;
-    detailSource = source || null;
+    // 按标本实时分类桶校准 source：异常从「全部/不完整」视图打开详情也能审（原为 null→normal 会被拦）
+    detailSource = specimen && getWSAuditBucket(specimen) === 'normal' ? 'normal' : 'abnormal';
     detailSourceIndex = sourceIndex !== undefined ? sourceIndex : -1;
 
     // 更新标题
@@ -10139,7 +10140,9 @@ window.addEventListener('keydown',function(e){
       return;
     }
     currentDetailSpecimen = specimen;
-    detailSource = source || null;
+    // 始终按标本实时分类桶校准 source，避免详情内自动跳转/方向键切换后沿用旧桶
+    // （8.5.1 误拦正常标本的根因：跳转后 detailSource 仍是异常的）
+    detailSource = getWSAuditBucket(specimen) === 'normal' ? 'normal' : 'abnormal';
     detailSourceIndex = sourceIndex !== undefined ? sourceIndex : -1;
     // 切换时清危急标记，避免沿用上一条 dataset 误拦/误放
     try {
@@ -10288,9 +10291,9 @@ window.addEventListener('keydown',function(e){
       }
 
       const reportDR = specimen.ReportDR;
-      // 详情里人工点审：异常视图允许异常/待定；正常视图要求 NORMAL
-      // 危急值一律拦截（与按钮/F4 一致）
-      const classCtx = detailSource === 'abnormal' ? 'abnormal' : 'normal';
+      // 详情里人工点审：按当前标本实时分类桶选上下文（不能依赖 detailSource——
+      // 详情内自动跳转后 source 仍是旧标本的，会误拦正常标本为「已分类为正常」）
+      const classCtx = specimen && getWSAuditBucket(specimen) === 'normal' ? 'normal' : 'abnormal';
       const classCheck = validateAuditClassification(reportDR, classCtx);
       if (!classCheck.ok) {
         showToast(classCheck.msg || '当前标本不可审核', classCtx === 'abnormal' ? 'warning' : 'error');
