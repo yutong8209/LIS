@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.4.10
+// @version      8.4.11
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6426,7 +6426,9 @@
         wsData = allData;
         wsMachines = allMachines;
         if (wsData.length > 0) {_lastWSNonEmptyAt = Date.now();}
-        normalizeWSMachineSelection();
+        // 阶段1（partial）只加载了当前工作组，机器列表不全：此时清理勾选会把其他工作组的
+        // 多选仪器删掉（全部仪器跨组勾选在自动刷新后只剩一台的 bug）。等全部工作组加载完再清理。
+        if (!partial) {normalizeWSMachineSelection();}
         pruneStaleClassificationCache(wsData);
         calcMachineCounts();
         const label = partial ? '优先' : '';
