@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.20
+// @version      8.5.21
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -902,10 +902,11 @@
 .result-table th{background:var(--lis-bg);color:var(--lis-text-secondary);font-weight:600;padding:5px 8px;text-align:left;font-weight:600;white-space:nowrap;font-size:11px}
 .result-table td{padding:4px 8px;border-bottom:1px solid #eee;overflow:hidden;text-overflow:ellipsis}
 /* 8.5.19: 双栏紧凑行高——项目多时进一步压缩，减少滚动 */
-.result-table.compact th{padding:3px 6px;font-size:10.5px}
-.result-table.compact td{padding:2px 6px;font-size:11px}
-.result-table.compact td:nth-child(3){font-size:12px}
-.result-table.compact .hist-tag{padding:1px 4px;font-size:10px;margin:0 1px}
+/* 8.5.21: 双栏紧凑行高（padding 压缩保留），字号恢复原水平（8.5.19 改小后 1080p 费眼） */
+.result-table.compact th{padding:3px 6px;font-size:11px}
+.result-table.compact td{padding:2px 6px;font-size:12px}
+.result-table.compact td:nth-child(3){font-size:13px}
+.result-table.compact .hist-tag{padding:1px 4px;font-size:11px;margin:0 1px}
 .result-table.compact tr:last-child td{border-bottom:none}
 .result-table tr:hover{background:#f5f5f5}
 .result-table .abnormal{color:#e74c3c;font-weight:600}
