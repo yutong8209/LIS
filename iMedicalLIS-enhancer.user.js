@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.15
+// @version      8.5.16
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -16509,10 +16509,69 @@ window.addEventListener('keydown',function(e){
   //  初始化
   // ============================================================
   let _inited = false;
+  // ===== 阻止 Chrome 对 LIS 密码框弹「保存/更新密码」提示（8.5.16） =====
+  // 触发场景：切换工作组时 LIS 弹 CA 审核登录窗口，脚本自动填入 CA 密码，
+  // Chrome 检测到密码字段变化就弹「是否更新密码」——用户不想关全局密码功能，
+  // 只想 LIS 不记录。原理：Chrome 对 autocomplete="new-password" 的密码框不弹保存/更新提示，
+  // 这是注册表单标准做法，仅作用于 LIS 页面匹配的 input，不影响其他网站。
+  function setupChromePwdNoSave() {
+    const apply = doc => {
+      if (!doc || !doc.body) {return;}
+      try {
+        doc.querySelectorAll('input[type="password"]').forEach(inp => {
+          if (inp.getAttribute('autocomplete') !== 'new-password') {
+            inp.setAttribute('autocomplete', 'new-password');
+          }
+        });
+      } catch (e) {}
+    };
+    const mark = el => {
+      if (el.getAttribute && el.getAttribute('autocomplete') !== 'new-password') {
+        try {el.setAttribute('autocomplete', 'new-password');} catch (e) {}
+      }
+    };
+    apply(document);
+    const ob = new MutationObserver(muts => {
+      for (const m of muts) {
+        for (const n of m.addedNodes) {
+          if (n.nodeType !== 1) {continue;}
+          if (n.tagName === 'IFRAME') {
+            try {
+              n.addEventListener('load', () => setTimeout(() => apply(n.contentDocument), 60));
+            } catch (e) {}
+            continue;
+          }
+          if (n.matches && n.matches('input[type="password"]')) {mark(n);}
+          else if (n.querySelectorAll) {
+            try {
+              n.querySelectorAll('input[type="password"]').forEach(mark);
+            } catch (e) {}
+          }
+        }
+      }
+    });
+    ob.observe(document, { childList: true, subtree: true });
+    // iframe 延迟加载补扫（个别框架 onload 前密码框已就位）
+    const ifrTimer = setInterval(() => {
+      try {
+        document.querySelectorAll('iframe').forEach(f => {
+          if (f.contentDocument) {apply(f.contentDocument);}
+        });
+      } catch (e) {}
+    }, 3000);
+    window.addEventListener('pagehide', () => {
+      try {ob.disconnect();} catch (e) {}
+      clearInterval(ifrTimer);
+    });
+  }
+
   function init() {
     if (_inited) {return;}
     _inited = true;
     if (!location.href.includes('iMedicalLIS')) {return;}
+
+    // 全局：阻止 Chrome 对 LIS 密码框弹保存/更新密码（在 _isMain / 页面类型判断之前）
+    setupChromePwdNoSave();
 
     dbg('========================================');
     dbg('iMedicalLIS 增强助手 v' + SCRIPT_VERSION);
