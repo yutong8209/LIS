@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.13
+// @version      8.5.14
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14470,15 +14470,14 @@ window.addEventListener('keydown',function(e){
     const result = item.TextRes && String(item.TextRes).trim() ? item.TextRes : item.Result;
     const panicStatus = compareResultToPanicRange(result, item);
     if (panicStatus === 'HIGH' || panicStatus === 'LOW') {return true;}
+    // 仅检查危急专用描述字段（AbFlagDesc/CriticalFlagDesc/CrisisFlagDesc/DangerFlagDesc/StatusDesc）。
+    // 8.5.14: 与 8.4.8 标本级 isCriticalSpecimenRow 保持一致——移除 ResultPrompt/Prompt/Alert/Tips
+    // 这些通用提示字段（可能含「无危急值」「非危急」「注意危急范围」等否定/误导语境，造成项目级误判危急）。
     const text = [
       item.AbFlagDesc,
       item.CriticalFlagDesc,
       item.CrisisFlagDesc,
       item.DangerFlagDesc,
-      item.ResultPrompt,
-      item.Prompt,
-      item.Alert,
-      item.Tips,
       item.StatusDesc
     ]
       .map(v => String(v || ''))
@@ -14580,6 +14579,20 @@ window.addEventListener('keydown',function(e){
     const qualitativeStatus = compareQualitativeToReference(result, item);
     if (qualitativeStatus) {return qualitativeStatus;}
     if (isDashValidNegativeResult(item, result)) {return 'NORMAL';}
+
+    // 8.5.14: 定性参考范围 + 数值结果（S/CO 型免疫/传染病项目，如参考「阴性」、结果 3.2）。
+    // compareQualitativeToReference 只认「阳性/阴性」文本，数值结果会漏判为 NORMAL（可被自动审核放行），
+    // 而 detail 高亮 isPositiveResult 有 S/CO>1 兜底——二者不一致。这里补上同一规则：
+    // 参考「阴性」时 数值>1 判阳性异常；参考「阳性」时 数值<=1 判阴性异常。
+    const _refText = item.RefRanges || item.RefRange || item.ReferenceRange || '';
+    const _refNeg = isNegativeReferenceText(_refText);
+    const _refPos = isPositiveReferenceText(_refText);
+    if ((_refNeg || _refPos) && parseComparableNumber(result)) {
+      const _num = parseComparableNumber(result).value;
+      const _isPos = _num > 1;
+      if (_refNeg) {return _isPos ? 'ABNORMAL' : 'NORMAL';}
+      if (_refPos) {return _isPos ? 'NORMAL' : 'ABNORMAL';}
+    }
 
     // 回退：数值比较
     const range = getItemRangeValues(item);
@@ -14752,21 +14765,11 @@ window.addEventListener('keydown',function(e){
         preResult: item
       }));
 
-      // 传染病历史结果比对（x8 仪器）
-      const isInfectionPanel = checkInfectionPanel(row, classifications);
-      if (isInfectionPanel) {
-        return attachClassificationMeta(
-          {
-            status: 'ABNORMAL',
-            items: classifications,
-            labInfo: labInfo[0] || {},
-            row,
-            reportDR,
-            infectionWarning: isInfectionPanel
-          },
-          row
-        );
-      }
+      // 传染病历史结果比对（x8 仪器）：历史阳性→现阴性 = 与历史不符 → 异常
+      // 8.5.14: 不再直接 return ABNORMAL——那样会跳过后续 hasCritical 判定，
+      // 若同时有真危急值（如血钾1）会被标成 ABNORMAL 而非 CRITICAL，危急值红线被绕过。
+      // 改为：infectionWarning 参与整体状态，危急值仍然优先。
+      const infectionWarning = checkInfectionPanel(row, classifications);
 
       // 关键安全检查：无结果 → UNCERTAIN，绝不自动审核
       if (itemInfo.length === 0) {
@@ -14788,7 +14791,7 @@ window.addEventListener('keydown',function(e){
 
       let overallStatus = 'NORMAL';
       if (hasCritical) {overallStatus = 'CRITICAL';}
-      else if (hasAbnormal) {overallStatus = 'ABNORMAL';}
+      else if (hasAbnormal || infectionWarning) {overallStatus = 'ABNORMAL';}
       else if (hasUncertain || !hasComplete || hasEmptyResults) {overallStatus = 'UNCERTAIN';}
 
       return attachClassificationMeta(
@@ -14797,7 +14800,8 @@ window.addEventListener('keydown',function(e){
           items: classifications,
           labInfo: labInfo[0] || {},
           row,
-          reportDR
+          reportDR,
+          infectionWarning: infectionWarning || undefined
         },
         row
       );
@@ -14832,9 +14836,17 @@ window.addEventListener('keydown',function(e){
   ];
 
   function checkInfectionPanel(row, classifications) {
-    // 只检查 x8 仪器
+    // 前置门槛：仅免疫组相关仪器（x8 / 含「传染病」字样 / 免疫化学发光，如 dxi800）。
+    // 8.5.14: 放宽到免疫组化学发光仪（dxi800 也测传染病项目），避免历史比对漏掉。
+    // 真正的面板判定靠下面「传染病项目 >=5 项」兜底，不是仅靠仪器名。
     const machineName = (row._mn || '').toLowerCase();
-    if (!machineName.includes('x8') && !machineName.includes('传染病')) {
+    const isImmunoMachine =
+      machineName.includes('x8') ||
+      machineName.includes('传染病') ||
+      machineName.includes('化学发光') ||
+      /dxi/i.test(machineName) ||
+      /发光/i.test(machineName);
+    if (!isImmunoMachine) {
       return null;
     }
 
@@ -14867,8 +14879,8 @@ window.addEventListener('keydown',function(e){
 
       // 判断历史是否阳性
       const isHistPositive = isPositiveResult(histResult, item);
-      // 判断当前是否阴性
-      const isCurrentNegative = isNegativeResult(item.result);
+      // 判断当前是否阴性（8.5.14：传 item，按参考范围判断，与 isPositiveResult 对称）
+      const isCurrentNegative = isNegativeResult(item.result, item);
 
       // 历史阳性 → 现在阴性 = 异常
       if (isHistPositive && isCurrentNegative) {
@@ -14906,16 +14918,30 @@ window.addEventListener('keydown',function(e){
     return false;
   }
 
-  // 判断是否阴性结果
-  function isNegativeResult(result) {
+  // 判断是否阴性结果（8.5.14：与 isPositiveResult 对称——有参考范围时按参考范围判断，
+  // 避免灰区值（如参考 0-0.9、结果 0.95）被 isPositiveResult 判阳又被本函数判阴，
+  // 导致历史比对误报「历史阳性→现阴性」）
+  function isNegativeResult(result, item) {
     if (!result) {return false;}
     const r = result.toUpperCase().trim();
     if (r === '-' || r === '阴性' || r === 'NEGATIVE' || r === 'NEG' || r === 'NON-REACTIVE') {return true;}
     if (r.includes('阴性') || r.includes('阴')) {return true;}
-    // 数值 < 1（S/CO 值通常 <1 为阴性）
     const num = parseFloat(r);
-    if (!isNaN(num) && num < 1) {return true;}
-    return false;
+    if (isNaN(num)) {return false;}
+    // 有参考范围：按参考范围判断（与 isPositiveResult 一致）
+    if (item) {
+      const range = getItemRangeValues(item);
+      const low = parseComparableNumber(range.low);
+      const high = parseComparableNumber(range.high);
+      if ((low && !isNaN(low.value)) || (high && !isNaN(high.value))) {
+        // 在参考范围内 = 阴性（正常）；超出 = 阳性（异常）
+        const inLow = !low || isNaN(low.value) || num >= low.value;
+        const inHigh = !high || isNaN(high.value) || num <= high.value;
+        return inLow && inHigh;
+      }
+    }
+    // 无参考范围：S/CO 值 <1 为阴性
+    return num < 1;
   }
 
   // ==================== x8 传染病：梅毒/丙肝/HIV 阳性专用高亮 ====================
