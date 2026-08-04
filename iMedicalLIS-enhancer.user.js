@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.9
+// @version      8.5.10
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6769,6 +6769,16 @@
       localStorage.removeItem(K_AUDIT_ORIGIN);
     } catch (e) {}
   }
+  // 8.5.10: 不切组直接审跨组标本时，强制把 origin 记录为当前组——保证审完
+  // trySwitchBackToOrigin 因 origin===当前组 直接 no-op，不会被陈旧 origin 误切回。
+  function saveAuditOriginCurrent(source) {
+    try {
+      const cur = resolveCurrentWG();
+      if (cur) {
+        localStorage.setItem(K_AUDIT_ORIGIN, JSON.stringify({ wg: cur, source: source || 'list', ts: Date.now() }));
+      }
+    } catch (e) {}
+  }
   // 跨组审核全部审完：切回起始工作组，并保证切回后工作台自动打开
   function switchBackToOriginWG(wgDR) {
     try {
@@ -9204,14 +9214,12 @@ window.addEventListener('keydown',function(e){
 
       const curDR = resolveCurrentWG();
       const spDR = specimen._wg || '';
-      if (spDR && curDR && spDR !== curDR) {
-        const wgName = (WG_MAP[spDR] || {}).name || spDR;
-        showToast(`切换到${wgName}继续审核`, 'warning');
-        saveAbnormalTarget(specimen);
-        _abnormalAuditQueued = false; // 切组续跑由 saveAbnormalTarget 机制处理，不用旧索引
-        safeSwitchWG(spDR);
-        return;
-      }
+      // 8.5.10: 跨组先试不切组——原生报告页可按 WorkGroupMachineDR 直接跨组加载并审核
+      // （实测：临检组下免疫组x8 标本可直接审），不再立即切组；仅当原生列表选不到标本
+      // （prep.reason='select'）时才回退 safeSwitchWG 切组重试（见 prep 失败分支）。
+      const _wsCrossGroupTry = !!(spDR && curDR && spDR !== curDR);
+      // 不切组直接审：先把 origin 钉在当前组，避免审完被陈旧 origin 误切回
+      if (_wsCrossGroupTry) {saveAuditOriginCurrent('list');}
 
       // 若后台预热正针对本标本进行（8.5.3 后正常行也预热），等它完成再定位，
       // 避免列表审核与预热双线程驱动同一原生页（awaitAbnormalPrewarm 此时因锁直接返回，不等待）
@@ -9258,6 +9266,21 @@ window.addEventListener('keydown',function(e){
       iframeWin = prep.iframeWin || iframeWin;
       if (prep.lastMdr) {_abnormalLastMdr = prep.lastMdr;}
       if (!prep.ok) {
+        // 8.5.10: 跨组先试不切组失败（原生列表选不到 / 详情加载不出）→ 回退切组重试
+        if (
+          _wsCrossGroupTry &&
+          (prep.reason === 'select' || prep.reason === 'detail') &&
+          spDR &&
+          resolveCurrentWG() &&
+          spDR !== resolveCurrentWG()
+        ) {
+          const wgName = (WG_MAP[spDR] || {}).name || spDR;
+          showToast(`未找到标本/详情未加载，切换到${wgName}重试`, 'warning');
+          saveAbnormalTarget(specimen);
+          _abnormalAuditQueued = false; // 切组续跑由 saveAbnormalTarget 机制处理，不用旧索引
+          safeSwitchWG(spDR);
+          return;
+        }
         const msg = prep.reason === 'detail' ? '报告详情未加载完成' : '未在原生列表中找到该标本';
         showToast(msg, prep.reason === 'detail' ? 'warning' : 'error');
         advanceAbnormalFocusAfterSkip(startIndex);
@@ -9913,19 +9936,9 @@ window.addEventListener('keydown',function(e){
       runAuditQueueResume(2500);
       return false;
     }
-    queue.pausedForSwitch = true;
-    saveAuditQueueNow(queue);
-    const wgName = (WG_MAP[itemWg] || {}).name || itemWg;
-    showToast('切换到' + wgName + '继续审核...', 'warning');
-    const switched = safeSwitchWG(item.wg);
-    // safeSwitchWG 返回 true 且未触发重载（已在目标组）→ 直接继续，不用等
-    if (switched && String(resolveCurrentWG()) === itemWg) {
-      delete queue.pausedForSwitch;
-      saveAuditQueueNow(queue);
-      return true;
-    }
-    runAuditQueueResume(2500);
-    return false;
+    // 8.5.10: 跨组先试不切组——原生列表可按 WorkGroupMachineDR 跨组加载（用户实测可行），
+    // 不再预先切组；主循环内选不到标本时才回退切组（见 continueAuditQueue 的 !selectedOk 分支）。
+    return true;
   }
 
   function runAuditQueueResume(delayMs) {
@@ -10509,13 +10522,10 @@ window.addEventListener('keydown',function(e){
 
       const curDR = resolveCurrentWG();
       const spDR = specimen._wg || '';
-      if (spDR && curDR && spDR !== curDR) {
-        const wgName = (WG_MAP[spDR] || {}).name || spDR;
-        showToast(`切换到${wgName}继续审核`, 'warning');
-        saveAbnormalTarget(specimen, { source: 'detail' }); // 8.5.8: 标记详情来源，跨组恢复后重开详情面板续审
-        safeSwitchWG(spDR);
-        return;
-      }
+      // 8.5.10: 跨组先试不切组（同列表路径）；原生列表选不到时才回退切组重试
+      const _wsCrossGroupTry = !!(spDR && curDR && spDR !== curDR);
+      // 不切组直接审：先把 origin 钉在当前组，避免审完被陈旧 origin 误切回
+      if (_wsCrossGroupTry) {saveAuditOriginCurrent('detail');}
 
       // 若后台预热正在运行，等它结束再现场判定（避免双线程同时驱动原生页竞态）。
       // 预热针对本标本时原生页已定位（needPrep 可直接跳过）；针对其他标本
@@ -10537,6 +10547,20 @@ window.addEventListener('keydown',function(e){
         iframeWin = prep.iframeWin || iframeWin;
         if (prep.lastMdr) {_abnormalLastMdr = prep.lastMdr;}
         if (!prep.ok) {
+          // 8.5.10: 跨组先试不切组失败（原生列表选不到 / 详情加载不出）→ 回退切组重试
+          if (
+            _wsCrossGroupTry &&
+            (prep.reason === 'select' || prep.reason === 'detail') &&
+            spDR &&
+            resolveCurrentWG() &&
+            spDR !== resolveCurrentWG()
+          ) {
+            const wgName = (WG_MAP[spDR] || {}).name || spDR;
+            showToast(`未找到标本/详情未加载，切换到${wgName}重试`, 'warning');
+            saveAbnormalTarget(specimen, { source: 'detail' }); // 8.5.8: 标记详情来源，跨组恢复后重开详情面板续审
+            safeSwitchWG(spDR);
+            return;
+          }
           const msg = prep.reason === 'detail' ? '报告详情未加载完成' : '未在原生列表中找到该标本';
           showToast(msg, prep.reason === 'detail' ? 'warning' : 'error');
           return;
@@ -15944,18 +15968,9 @@ window.addEventListener('keydown',function(e){
           continue;
         }
 
-        if (item.wg && item.wg !== resolveCurrentWG()) {
-          if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
-          queue.pausedForSwitch = true;
-          saveAuditQueueNow(queue);
-          const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
-          const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
-          showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
-          queuePausedForSwitch = true;
-          safeSwitchWG(item.wg);
-          runAuditQueueResume(2500);
-          break;
-        }
+        // 8.5.10: 跨组先试不切组——refreshNativeWorkListForItem 会按 WorkGroupMachineDR 直接
+        // 跨组加载原生列表（实测：临检组下免疫组x8 标本可直接审）；选不到标本才回退切组（见 !selectedOk）。
+        const _batchCrossGroup = !!(item.wg && resolveCurrentWG() && item.wg !== resolveCurrentWG());
 
         const itemWg = item.wg || resolveCurrentWG();
         // 每条开始时以真实 Ukey 为准（不要被过期缓存拖回慢路径）
@@ -16041,6 +16056,19 @@ window.addEventListener('keydown',function(e){
             }
           }
           if (!selectedOk) {
+            // 8.5.10: 跨组标本原生列表选不到 → 回退切组续跑（原 8.5.8 机制）
+            if (_batchCrossGroup) {
+              if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
+              queue.pausedForSwitch = true;
+              saveAuditQueueNow(queue);
+              const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
+              const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
+              showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
+              queuePausedForSwitch = true;
+              safeSwitchWG(item.wg);
+              runAuditQueueResume(2500);
+              break;
+            }
             if (!requeueAuditItem(queue, item, '原生列表未找到')) {skipCount++;}
             continue;
           }
