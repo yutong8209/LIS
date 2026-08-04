@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.14
+// @version      8.5.15
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14836,17 +14836,9 @@ window.addEventListener('keydown',function(e){
   ];
 
   function checkInfectionPanel(row, classifications) {
-    // 前置门槛：仅免疫组相关仪器（x8 / 含「传染病」字样 / 免疫化学发光，如 dxi800）。
-    // 8.5.14: 放宽到免疫组化学发光仪（dxi800 也测传染病项目），避免历史比对漏掉。
-    // 真正的面板判定靠下面「传染病项目 >=5 项」兜底，不是仅靠仪器名。
+    // 传染病历史比对仅 x8 仪器（用户确认：传染病只在 x8 做，dxi800 等免疫发光仪不做）。
     const machineName = (row._mn || '').toLowerCase();
-    const isImmunoMachine =
-      machineName.includes('x8') ||
-      machineName.includes('传染病') ||
-      machineName.includes('化学发光') ||
-      /dxi/i.test(machineName) ||
-      /发光/i.test(machineName);
-    if (!isImmunoMachine) {
+    if (!machineName.includes('x8') && !machineName.includes('传染病')) {
       return null;
     }
 
