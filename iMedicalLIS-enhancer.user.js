@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.17
+// @version      8.5.18
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -884,7 +884,7 @@
 .complete-partial{color:#ff9800;font-size:12px}
 
 /* --- 标本详情面板 --- */
-#lis-detail-panel{position:fixed;top:0;right:0;width:65vw;max-width:900px;min-width:600px;height:100vh;z-index:100005;background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.2);transform:translateX(100%);transition:transform .3s ease;display:flex;flex-direction:column}
+#lis-detail-panel{position:fixed;top:0;right:0;width:72vw;max-width:1100px;min-width:660px;height:100vh;z-index:100005;background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.2);transform:translateX(100%);transition:transform .3s ease;display:flex;flex-direction:column}
 #lis-detail-panel.show{transform:translateX(0)}
 #lis-detail-panel{overflow:hidden!important}
 #lis-detail-hd{background:var(--lis-bg);color:var(--lis-text);border-bottom:1px solid var(--lis-border);padding:12px 20px;display:flex;align-items:flex-start;justify-content:space-between;flex-shrink:0;line-height:1.4}
@@ -11079,7 +11079,7 @@ window.addEventListener('keydown',function(e){
         const _colItems = itemInfo.slice(_ci * _detailColSize, Math.min((_ci + 1) * _detailColSize, itemInfo.length));
         html += '<table class="result-table" style="font-size:12px;flex:1;min-width:0">';
 
-      html += `<thead><tr><th style='width:20px'>QC</th><th>项目</th><th>结果</th><th>参考范围</th><th>状态</th>${thDates}</tr></thead>`;
+      html += `<thead><tr><th style='width:20px'>QC</th><th>项目${_detailCols > 1 ? ' / 参考' : ''}</th><th>结果</th>${_detailCols > 1 ? '' : '<th>参考范围</th>'}<th>状态</th>${thDates}</tr></thead>`;
       html += '<tbody>';
 
       _colItems.forEach(r => {
@@ -11195,9 +11195,9 @@ window.addEventListener('keydown',function(e){
 
         html += `<tr style="${rowStyle}">
                     <td style="text-align:center">${qcHtml}</td>
-                    <td style="font-weight:500;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.CName || '')}">${esc(r.CName || '-')}</td>
+                    <td style="font-weight:500;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.CName || '')}">${esc(r.CName || '-')}${_detailCols > 1 ? '<div style="font-size:10px;color:#888;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(refWithUnit) + '</div>' : ''}</td>
                     <td class="${statusClass}" style="font-weight:700;font-size:13px;white-space:nowrap">${esc(result)}${unit ? ' <span style="font-size:10px;color:#999;font-weight:400">' + esc(unit) + '</span>' : ''}</td>
-                    <td style="color:#888;font-size:11px;white-space:nowrap">${esc(refWithUnit)}</td>
+                    ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:11px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
                     <td class="${statusClass}" style="white-space:nowrap;font-size:11px">${isCritical ? '<span style="color:#e74c3c;font-weight:700">' + statusText + '</span>' : statusText}</td>
                     <td style="font-size:11px">${hist.cells[0]}</td>
                     <td style="font-size:11px">${hist.cells[1]}</td>
