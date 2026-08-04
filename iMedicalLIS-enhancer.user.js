@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.11
+// @version      8.5.12
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14498,7 +14498,17 @@ window.addEventListener('keydown',function(e){
     // PanicReportDR: 排除 '0'（LIS 中 '0' 表示无记录，但 JS 中 '0' 为 truthy）
     const prd = String(row.PanicReportDR || '').trim();
     if (prd && prd !== '0') {
-      console.log('[LIS-危急诊断] PanicReportDR=' + prd + ' → 判危急:', row.Labno, row.PatName);
+      console.log('[LIS-危急诊断] PanicReportDR=' + prd + ' → 判危急:', row.Labno, row.PatName, {
+        IsPanic: row.IsPanic,
+        Panic: row.Panic,
+        PanicFlag: row.PanicFlag,
+        PanicDesc: row.PanicDesc,
+        PanicText: row.PanicText,
+        FlagStr: row.FlagStr,
+        ReportDR: row.ReportDR,
+        MachineParameterDR: row.MachineParameterDR,
+        WorkGroupMachineDR: row.WorkGroupMachineDR
+      });
       return true;
     }
     // 仅检查专用危急值字段（PanicFlag/PanicDesc/PanicText/FlagStr），
