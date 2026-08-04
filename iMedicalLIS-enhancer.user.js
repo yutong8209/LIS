@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.16
+// @version      8.5.17
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11039,9 +11039,13 @@ window.addEventListener('keydown',function(e){
       }
 
       // 结果表格（紧凑布局）
-      html += '<table class="result-table" style="font-size:12px">';
+      // 8.5.17: 项目多时分栏（2 栏并排）——生化几十项一屏看全，历史日期列完整保留，
+      // 避免单列长表必须滚动才能看完所有项目。
+      const _detailCols = itemInfo.length > 16 ? 2 : 1;
+      const _detailColSize = Math.ceil(itemInfo.length / _detailCols);
+      html += '<div style="display:flex;gap:14px;align-items:flex-start">';
 
-      // 收集历史日期
+      // 收集历史日期（基于全量项目，仅算一次）
       const allDates = [[], [], []];
       itemInfo.forEach(r => {
         const hi = parsePreResult(r);
@@ -11071,10 +11075,14 @@ window.addEventListener('keydown',function(e){
         .map(d => (d ? `<th style="font-size:11px">${esc(d)}</th>` : '<th style="font-size:11px">-</th>'))
         .join('');
 
+      for (let _ci = 0; _ci < _detailCols; _ci++) {
+        const _colItems = itemInfo.slice(_ci * _detailColSize, Math.min((_ci + 1) * _detailColSize, itemInfo.length));
+        html += '<table class="result-table" style="font-size:12px;flex:1;min-width:0">';
+
       html += `<thead><tr><th style='width:20px'>QC</th><th>项目</th><th>结果</th><th>参考范围</th><th>状态</th>${thDates}</tr></thead>`;
       html += '<tbody>';
 
-      itemInfo.forEach(r => {
+      _colItems.forEach(r => {
         const result = r.TextRes && r.TextRes.trim() ? r.TextRes.trim() : r.Result || '-';
         const unit = r.Unit || r.Units || '';
         const refRange = r.RefRanges || '-';
@@ -11197,7 +11205,9 @@ window.addEventListener('keydown',function(e){
                 </tr>`;
       });
 
-      html += '</tbody></table>';
+        html += '</tbody></table>';
+      }
+      html += '</div>';
 
       // 患者信息（可折叠）
       if (labInfo.length > 0) {
