@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.12
+// @version      8.5.13
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14491,26 +14491,10 @@ window.addEventListener('keydown',function(e){
 
   function isCriticalSpecimenRow(row) {
     if (!row) {return false;}
-    if (String(row.IsPanic || row.Panic || '').trim() === '1') {
-      console.log('[LIS-危急诊断] IsPanic=1 → 判危急:', row.Labno, row.PatName);
-      return true;
-    }
-    // PanicReportDR: 排除 '0'（LIS 中 '0' 表示无记录，但 JS 中 '0' 为 truthy）
-    const prd = String(row.PanicReportDR || '').trim();
-    if (prd && prd !== '0') {
-      console.log('[LIS-危急诊断] PanicReportDR=' + prd + ' → 判危急:', row.Labno, row.PatName, {
-        IsPanic: row.IsPanic,
-        Panic: row.Panic,
-        PanicFlag: row.PanicFlag,
-        PanicDesc: row.PanicDesc,
-        PanicText: row.PanicText,
-        FlagStr: row.FlagStr,
-        ReportDR: row.ReportDR,
-        MachineParameterDR: row.MachineParameterDR,
-        WorkGroupMachineDR: row.WorkGroupMachineDR
-      });
-      return true;
-    }
+    if (String(row.IsPanic || row.Panic || '').trim() === '1') {return true;}
+    // 8.5.13: 不再用 PanicReportDR 单独判危急——实测生化工作列表该字段恒有非0值
+    // （如 3475），导致非危急标本误报危急（王冰彬）。真危急靠 IsPanic='1' +
+    // 危急文本 + 项目级 isCriticalResultItem 兜住，PanicReportDR 只是报告DR类字段。
     // 仅检查专用危急值字段（PanicFlag/PanicDesc/PanicText/FlagStr），
     // 不检查通用 Alert/Tips 字段——它们可能含「无危急值」「非危急」等否定语境
     const text = [row.PanicFlag, row.PanicDesc, row.PanicText, row.FlagStr]
@@ -14519,16 +14503,7 @@ window.addEventListener('keydown',function(e){
     if (!text) {return false;}
     // 排除否定语境：「无危急」「非危急」不算危急值
     if (text.indexOf('无危急') !== -1 || text.indexOf('非危急') !== -1) {return false;}
-    const hit = text.indexOf('危急') !== -1;
-    if (hit) {
-      console.log('[LIS-危急诊断] 文本含「危急」→ 判危急:', row.Labno, row.PatName, {
-        PanicFlag: row.PanicFlag,
-        PanicDesc: row.PanicDesc,
-        PanicText: row.PanicText,
-        FlagStr: row.FlagStr
-      });
-    }
-    return hit;
+    return text.indexOf('危急') !== -1;
   }
 
   function classifyStatusText(status) {
