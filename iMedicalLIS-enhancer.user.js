@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.23
+// @version      8.5.24
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11658,9 +11658,12 @@ window.addEventListener('keydown',function(e){
     const pushWG = dr => {
       if (dr) { cand.push(buildSS(String(dr))); }
     };
-    pushWG(report && report.WorkGroupDR);
-    pushWG(histCurrentSpecimen && histCurrentSpecimen._wg);
+    pushWG(report && report.WorkGroupDR); // 若报告行带 WorkGroupDR 优先
+    pushWG(histCurrentSpecimen && histCurrentSpecimen._wg); // 当前标本工作组
     pushWG(wgDR());
+    // 跨组报告的 ss 常与当前组不同（QueryReportList 行一般不带 WorkGroupDR），
+    // 所以依次把全部工作组都试一遍，取到非空即停
+    WG.forEach(w => pushWG(w.dr));
     return [...new Set(cand)];
   }
 
@@ -11823,6 +11826,8 @@ window.addEventListener('keydown',function(e){
     histSetStatus('正在加载历次报告…', 'info');
     const bodyEl = document.getElementById('lis-hist-body');
     if (bodyEl) {
+      bodyEl.style.cssText =
+        'flex:1 1 auto!important;overflow-y:auto!important;overflow-x:hidden!important;min-height:0!important;position:relative';
       bodyEl.innerHTML = '<div class="hist-empty"><div class="spinner" style="margin:0 auto 12px"></div><p>正在加载该病人历史结果…</p></div>';
     }
 
@@ -11920,6 +11925,9 @@ window.addEventListener('keydown',function(e){
 
     const body = document.getElementById('lis-hist-body');
     if (!body) { return; }
+    // 强制滚动（LIS 全局 CSS 会覆盖 overflow/flex，与工作台 body 同样处理）
+    body.style.cssText =
+      'flex:1 1 auto!important;overflow-y:auto!important;overflow-x:hidden!important;min-height:0!important;position:relative';
     if (!histAgg.length) {
       const hasRegNo = !!(sp && sp.RegNo);
       body.innerHTML =
@@ -12088,7 +12096,8 @@ window.addEventListener('keydown',function(e){
 
   GM_addStyle(`
 #lis-hist-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(.96);width:860px;max-width:94vw;height:82vh;max-height:82vh;background:#fff;border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.32);z-index:100020;display:none;flex-direction:column;overflow:hidden;border:1px solid #e3e9ef}
-#lis-hist-panel.show{display:flex;transform:translate(-50%,-50%) scale(1);transition:transform .16s ease}
+#lis-hist-panel.show{display:flex!important;transform:translate(-50%,-50%) scale(1);transition:transform .16s ease}
+#lis-hist-panel, #lis-hist-panel.show{flex-direction:column!important;height:82vh!important;max-height:82vh!important;overflow:hidden!important}
 #lis-hist-hd{background:linear-gradient(135deg,#0d6655,#0f766e);color:#fff;padding:12px 18px;display:flex;align-items:flex-start;justify-content:space-between;flex-shrink:0}
 #lis-hist-hd h4{margin:0;font-size:16px}
 #lis-hist-hd #lis-hist-close{background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:2px 8px;border-radius:4px}
@@ -12101,7 +12110,7 @@ window.addEventListener('keydown',function(e){
 .hist-chip{font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #cfd8e0;color:#334155;cursor:pointer;user-select:none;background:#fff}
 .hist-chip:hover{border-color:#0f766e;color:#0f766e}
 .hist-chip.on{background:#0f766e;color:#fff;border-color:#0f766e}
-#lis-hist-body{flex:1;overflow-y:auto;padding:10px 16px;min-height:0}
+#lis-hist-body{flex:1 1 auto!important;overflow-y:auto!important;overflow-x:hidden!important;min-height:0!important;padding:10px 16px;position:relative}
 .hist-empty .spinner{display:inline-block;width:26px;height:26px;border:3px solid #dbe4ea;border-top-color:#0f766e;border-radius:50%;animation:spin 1s linear infinite}
 .hist-empty{text-align:center;padding:48px 20px;color:#7b8b96;font-size:13px}
 .hist-banner{margin:0 0 10px;padding:6px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:11px;color:#92400e}
