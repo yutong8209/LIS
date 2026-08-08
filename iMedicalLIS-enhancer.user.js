@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.22
-// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 热键（纯本地运行，无任何上传）
+// @version      8.5.23
+// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -891,6 +891,8 @@
 #lis-detail-hd h4{margin:0;font-size:16px;color:var(--lis-text)}
 #lis-detail-hd .detail-close{background:none;border:none;color:var(--lis-text-secondary);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:4px;transition:background .2s}
 #lis-detail-hd .detail-close:hover{background:var(--lis-primary-light);color:var(--lis-text)}
+#lis-detail-hd .detail-hist{background:var(--lis-primary);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;padding:6px 12px;transition:background .2s}
+#lis-detail-hd .detail-hist:hover{background:var(--lis-primary-hover)}
 #lis-detail-info{padding:0px 16px;background:transparent;border-bottom:none;flex-shrink:0;font-size:12px}
 
 
@@ -10069,7 +10071,10 @@ window.addEventListener('keydown',function(e){
                     <div id="lis-detail-subtitle" style="font-size:11px;color:var(--lis-text-secondary);margin-top:3px"></div>
                     <div id="lis-detail-extra" style="font-size:11px;color:var(--lis-text-muted);margin-top:2px"></div>
                 </div>
-                <button class="detail-close" id="lis-detail-close">✕</button>
+                <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+                    <button class="detail-hist" id="lis-detail-hist" title="H 键：查看该病人历史结果（跨组/跨仪器，审核辅助）">🔎 历史</button>
+                    <button class="detail-close" id="lis-detail-close">✕</button>
+                </div>
             </div>
             <div id="lis-detail-info"></div>
             <div id="lis-detail-body" style="flex:1;overflow-y:scroll;overflow-x:hidden;padding:16px 20px;min-height:0;max-height:calc(100vh - 120px)">
@@ -10097,6 +10102,14 @@ window.addEventListener('keydown',function(e){
     document.getElementById('lis-detail-close').addEventListener('click', closeDetailPanel);
     document.getElementById('lis-detail-close-btn').addEventListener('click', closeDetailPanel);
     _bindDetailAuditButton();
+    const histBtn = document.getElementById('lis-detail-hist');
+    if (histBtn) {
+      histBtn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        histToggle();
+      });
+    }
 
     return detailPanel;
   }
@@ -10218,6 +10231,14 @@ window.addEventListener('keydown',function(e){
       if (!detailPanel || !detailPanel.classList.contains('show')) {return;}
       // 焦点在搜索框/面板内输入框时 Enter 不触发审核（与 _f4BridgeHandler 的 shouldIgnore 对齐）
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
+      // 历史浮层打开时：详情键全部让位（避免 Enter 误审），Esc 由历史层处理
+      if (histIsOpen()) {return;}
+      if (e.key === 'H' || e.key === 'h') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        histOpen();
+        return;
+      }
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -10389,6 +10410,14 @@ window.addEventListener('keydown',function(e){
       if (!detailPanel || !detailPanel.classList.contains('show')) {return;}
       // 焦点在搜索框/面板内输入框时 Enter 不触发审核（与 _f4BridgeHandler 的 shouldIgnore 对齐）
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
+      // 历史浮层打开时：详情键全部让位（避免 Enter 误审），Esc 由历史层处理
+      if (histIsOpen()) {return;}
+      if (e.key === 'H' || e.key === 'h') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        histOpen();
+        return;
+      }
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -11537,6 +11566,576 @@ window.addEventListener('keydown',function(e){
     const o = document.getElementById('lis-pwdo');
     if (o) {o.classList.remove('show');}
   }
+
+  // ============================================================
+  //  模块 DH：患者历史浮层（跨组/跨仪器历史结果，审核辅助）
+  //  数据源：QueryReportList&RegNo= 列该病人历次报告 → GetReportInfoAll 逐份取项目
+  //  验证状态：手工/无档案病人 RegNo 为空 → 只显示本次；真实病人等周一在 LIS 上实测
+  // ============================================================
+  let histPanel = null;
+  let histBusy = false;
+  let histLoadSeq = 0;
+  let histAbortCtrl = null;
+  let histCurrentSpecimen = null;
+  let histCurrentRDR = '';
+  let histReports = []; // 历次报告列表（QueryReportList rows）
+  const histReportCache = {}; // ReportDR -> { items, lab } 原始缓存
+  const _HIST_CACHE_MAX = 40;
+  const histReportListCache = {}; // RegNo -> 历次报告列表缓存
+  let histAgg = []; // 聚合分组 [{key,name,syn,unit,ref,tier,rows}]
+  let histDebug = null; // 调试信息（供真实病人实测排障）
+  let histDebugVisible = false;
+  const histFilter = { q: '', days: 180, relatedOnly: false };
+
+  // 关联项目映射：当前报告项目名命中 triggers 时，把 related 里的项目标为「关联」
+  const HIST_RELATED_MAP = [
+    { key: '糖化/血糖', triggers: [/糖化血红/i, /HbA1c/i, /GHb/i], related: [/血糖/i, /葡萄糖/i, /\bGLU\b/i, /果糖胺/i, /糖化白蛋白/i, /尿糖/i] },
+    { key: '梅毒', triggers: [/梅毒/i, /TPPA/i, /\bTP-?Ab\b/i, /TRUST/i, /RPR/i], related: [/TRUST/i, /RPR/i, /TPPA/i, /\bTP-?Ab\b/i, /梅毒/i] },
+    { key: '心肌', triggers: [/肌酸激酶/i, /CK-?MB/i, /\bCK\b/i, /肌钙/i, /cTn/i, /肌红蛋白/i, /MYO/i], related: [/肌酸激酶/i, /CK-?MB/i, /\bCK\b/i, /肌钙/i, /cTn/i, /肌红蛋白/i, /MYO/i] },
+    { key: '甲功', triggers: [/促甲状腺/i, /TSH/i, /FT3/i, /FT4/i, /\bT3\b/i, /\bT4\b/i, /甲状腺/i], related: [/促甲状腺/i, /TSH/i, /FT3/i, /FT4/i, /\bT3\b/i, /\bT4\b/i, /甲状腺/i] },
+    { key: '肾功', triggers: [/肌酐/i, /尿素/i, /尿酸/i, /\bCr\b/i, /\bUrea\b/i, /\bUA\b/i, /胱抑素/i, /eGFR/i], related: [/肌酐/i, /尿素/i, /尿酸/i, /\bCr\b/i, /\bUrea\b/i, /\bUA\b/i, /胱抑素/i, /eGFR/i] },
+    { key: '电解质', triggers: [/钾/i, /钠/i, /氯/i, /钙/i, /镁/i, /磷/i, /\bK\b/i, /\bNa\b/i, /\bCl\b/i, /\bCa\b/i, /\bMg\b/i], related: [/钾/i, /钠/i, /氯/i, /钙/i, /镁/i, /磷/i, /\bK\b/i, /\bNa\b/i, /\bCl\b/i, /\bCa\b/i, /\bMg\b/i] },
+    { key: '血脂', triggers: [/胆固醇/i, /甘油三酯/i, /HDL/i, /LDL/i, /低密度/i, /高密度/i], related: [/胆固醇/i, /甘油三酯/i, /HDL/i, /LDL/i, /低密度/i, /高密度/i] },
+    { key: '感染', triggers: [/CRP/i, /降钙素/i, /PCT/i, /白细胞/i, /\bWBC\b/i, /中性粒/i, /\bNEUT\b/i, /IL-6/i, /SAA/i], related: [/CRP/i, /降钙素/i, /PCT/i, /白细胞/i, /\bWBC\b/i, /中性粒/i, /\bNEUT\b/i, /IL-6/i, /SAA/i] },
+    { key: '贫血', triggers: [/血红/i, /\bHb\b/i, /红细胞/i, /\bRBC\b/i, /血球压积/i, /HCT/i, /平均红细胞/i, /\bMCV\b/i, /\bMCH\b/i, /\bMCHC\b/i, /铁蛋白/i, /血清铁/i, /B12/i, /叶酸/i], related: [/血红/i, /\bHb\b/i, /红细胞/i, /\bRBC\b/i, /血球压积/i, /HCT/i, /平均红细胞/i, /\bMCV\b/i, /\bMCH\b/i, /\bMCHC\b/i, /铁蛋白/i, /血清铁/i, /B12/i, /叶酸/i] },
+    { key: '肝炎', triggers: [/乙肝/i, /HBs/i, /HBe/i, /HBc/i, /丙肝/i, /HCV/i, /丁肝/i, /戊肝/i, /甲肝/i, /HAV/i, /转氨酶/i, /ALT/i, /AST/i], related: [/乙肝/i, /HBs/i, /HBe/i, /HBc/i, /丙肝/i, /HCV/i, /丁肝/i, /戊肝/i, /甲肝/i, /HAV/i, /转氨酶/i, /ALT/i, /AST/i] },
+    { key: '凝血', triggers: [/凝血/i, /\bPT\b/i, /APTT/i, /纤维蛋白/i, /FIB/i, /D-二聚/i, /D二聚/i, /\bDD\b/i, /INR/i], related: [/凝血/i, /\bPT\b/i, /APTT/i, /纤维蛋白/i, /FIB/i, /D-二聚/i, /D二聚/i, /\bDD\b/i, /INR/i] }
+  ];
+
+  function histIsOpen() {
+    return !!(histPanel && histPanel.classList.contains('show'));
+  }
+
+  function histOpen() {
+    const sp = currentDetailSpecimen;
+    if (!sp) { toast('请先打开一条标本详情', 'w'); return; }
+    histCurrentSpecimen = sp;
+    histCurrentRDR = String(sp.ReportDR || '');
+    if (!histPanel) { histBuildPanel(); }
+    histPanel.classList.add('show');
+    histResetForNewSpecimen();
+    histLoad();
+  }
+
+  function histToggle() {
+    if (histIsOpen()) { histClose(); } else { histOpen(); }
+  }
+
+  function histClose() {
+    if (histAbortCtrl) { try { histAbortCtrl.abort(); } catch (e) {} histAbortCtrl = null; }
+    histLoadSeq++;
+    if (histPanel) { histPanel.classList.remove('show'); }
+  }
+
+  function histResetForNewSpecimen() {
+    histReports = [];
+    histAgg = [];
+    histDebug = null;
+    histDebugVisible = false;
+    histFilter.q = '';
+    histFilter.days = 180;
+    histFilter.relatedOnly = false;
+    const search = document.getElementById('lis-hist-search');
+    if (search) { search.value = ''; }
+    const rel = document.getElementById('lis-hist-relonly');
+    if (rel) { rel.checked = false; }
+    const days = document.getElementById('lis-hist-days');
+    if (days) { days.value = '180'; }
+    histRender();
+  }
+
+  function _histCacheGet(rdr) { return histReportCache[rdr] || null; }
+  function _histCacheSet(rdr, val) {
+    histReportCache[rdr] = val;
+    const keys = Object.keys(histReportCache);
+    if (keys.length > _HIST_CACHE_MAX) {
+      for (let i = 0; i < keys.length - _HIST_CACHE_MAX; i++) { delete histReportCache[keys[i]]; }
+    }
+  }
+
+  function histCandidateSS(report) {
+    const cand = [];
+    const pushWG = dr => {
+      if (dr) { cand.push(buildSS(String(dr))); }
+    };
+    pushWG(report && report.WorkGroupDR);
+    pushWG(histCurrentSpecimen && histCurrentSpecimen._wg);
+    pushWG(wgDR());
+    return [...new Set(cand)];
+  }
+
+  async function histFetchReportItems(report) {
+    const rdr = String(report.ReportDR || '');
+    if (!rdr) { return { items: [], lab: {} }; }
+    const cached = _histCacheGet(rdr);
+    if (cached) { return cached; }
+    const ssList = histCandidateSS(report);
+    const sig = histAbortCtrl && histAbortCtrl.signal;
+    let data = null;
+    for (const ss of ssList) {
+      const p = new URLSearchParams();
+      p.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
+      p.set('QueryName', 'GetReportInfoAll');
+      p.set('FunModul', 'MTHD');
+      p.set('P0', rdr);
+      p.set('P1', report.MachineParameterDR || '');
+      p.set('P2', report.WorkGroupMachineDR || '');
+      p.set('P3', report.Status || report.ReportStatus || '');
+      p.set('P4', report.EpisodeNo || '');
+      p.set('P5', report.TransmitDate || '');
+      p.set('P14', ss);
+      try {
+        data = await fetchJ(CSP + '?' + p.toString(), 20000, sig);
+        let items = Array.isArray(data && data.ItemInfo) ? data.ItemInfo : [];
+        if (!items.length && (report.Status || report.ReportStatus)) {
+          p.set('P3', '');
+          data = await fetchJ(CSP + '?' + p.toString(), 20000, sig);
+          items = Array.isArray(data && data.ItemInfo) ? data.ItemInfo : [];
+        }
+        if (items.length) {
+          const lab = (data && data.LabInfo && data.LabInfo[0]) || {};
+          const val = { items, lab };
+          _histCacheSet(rdr, val);
+          return val;
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') { throw e; }
+        dbg('患者历史 GetReportInfoAll 失败:', rdr, e.message);
+      }
+    }
+    const val = { items: [], lab: {} };
+    _histCacheSet(rdr, val);
+    return val;
+  }
+
+  function _histItemKey(it) { return String(it.TestCodeDR || it.TCCode || it.CName || ''); }
+  function _histItemName(it) { return String(it.CName || ''); }
+  function _histItemSyn(it) { return String(it.Synonym || it.Code || ''); }
+  function _histItemValue(it) {
+    const v = it.TextRes || it.Result;
+    return v === null || v === undefined ? '' : String(v).trim();
+  }
+  function _histItemUnit(it) { return String(it.Units || ''); }
+  function _histItemRef(it) {
+    const r = String(it.RefRanges || '');
+    if (r) { return r; }
+    const lo = it.ValueLow;
+    const hi = it.ValueHigh;
+    if (lo !== undefined && hi !== undefined && lo !== '' && hi !== '') { return String(lo) + '-' + String(hi); }
+    return '';
+  }
+  function _histItemFlag(it) { return String(it.AbFlag || '').toUpperCase(); }
+  function _histReportDate(report) {
+    const d = report.AcceptDate || report.CollectDate || report.ReceiveDate || report.AuthDate || '';
+    const t = report.AcceptTime || report.CollectTime || '';
+    return (String(d || '').trim() + (t ? ' ' + String(t).trim() : '')).trim();
+  }
+  function histDateCutoff(days) {
+    if (!days || days <= 0) { return ''; }
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  async function histPool(items, limit, fn) {
+    const results = new Array(items.length);
+    let idx = 0;
+    const worker = async () => {
+      while (idx < items.length) {
+        const i = idx++;
+        try { results[i] = await fn(items[i], i); } catch (e) { results[i] = null; }
+      }
+    };
+    const n = Math.max(1, Math.min(limit, items.length));
+    await Promise.all(Array.from({ length: n }, worker));
+    return results;
+  }
+
+  function histBuildAggregate(results, currentReport) {
+    const groups = new Map(); // key -> group
+    (results || []).forEach(({ report, items }) => {
+      const isCurrent = String(report.ReportDR || '') === histCurrentRDR;
+      const date = isCurrent
+        ? histCurrentSpecimen.AcceptDT || histCurrentSpecimen.TransmitDate || '本次'
+        : _histReportDate(report);
+      const meta = {
+        isCurrent,
+        reportDR: String(report.ReportDR || ''),
+        labno: report.Labno || (isCurrent ? histCurrentSpecimen.Labno : ''),
+        testSetDesc: report.TestSetDesc || (isCurrent ? histCurrentSpecimen.TestSetDesc : ''),
+        wgName: report.WorkGroupMachine || ''
+      };
+      (Array.isArray(items) ? items : []).forEach(it => {
+        const key = _histItemKey(it) || '__' + _histItemName(it);
+        if (!key) { return; }
+        if (!groups.has(key)) {
+          groups.set(key, {
+            key,
+            name: _histItemName(it) || key,
+            syn: _histItemSyn(it),
+            unit: _histItemUnit(it),
+            ref: _histItemRef(it),
+            rows: [],
+            tier: 2
+          });
+        }
+        const g = groups.get(key);
+        const value = _histItemValue(it);
+        if (value === '') { return; }
+        g.rows.push({ date, value, flag: _histItemFlag(it), meta });
+      });
+    });
+
+    const arr = [...groups.values()];
+    // 当前报告内项目 → tier0；据此算关联 → tier1
+    const curKeys = new Set();
+    arr.forEach(grp => { if (grp.rows.some(r => r.meta.isCurrent)) { curKeys.add(grp.key); } });
+    const curText = arr
+      .filter(grp => curKeys.has(grp.key))
+      .map(grp => grp.name + ' ' + grp.syn)
+      .join(' ');
+    const relatedSet = new Set();
+    HIST_RELATED_MAP.forEach(m => {
+      if (m.triggers.some(re => re.test(curText))) { m.related.forEach(re => relatedSet.add(re)); }
+    });
+    arr.forEach(grp => {
+      const isCur = curKeys.has(grp.key);
+      const isRel = [...relatedSet].some(re => re.test(grp.name) || re.test(grp.syn));
+      grp.tier = isCur ? 0 : isRel ? 1 : 2;
+      grp.rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    });
+    arr.sort((a, b) => {
+      if (a.tier !== b.tier) { return a.tier - b.tier; }
+      return a.name.localeCompare(b.name, 'zh');
+    });
+    return arr;
+  }
+
+  async function histLoad() {
+    const sp = histCurrentSpecimen;
+    if (!sp) { return; }
+    histLoadSeq++;
+    const seq = histLoadSeq;
+    if (histAbortCtrl) { try { histAbortCtrl.abort(); } catch (e) {} }
+    histAbortCtrl = new AbortController();
+    histBusy = true;
+    histDebug = { seq, list: '', listRows: 0, regNo: String(sp.RegNo || ''), perReport: [] };
+    histSetStatus('正在加载历次报告…', 'info');
+    const bodyEl = document.getElementById('lis-hist-body');
+    if (bodyEl) {
+      bodyEl.innerHTML = '<div class="hist-empty"><div class="spinner" style="margin:0 auto 12px"></div><p>正在加载该病人历史结果…</p></div>';
+    }
+
+    try {
+      const regNo = String(sp.RegNo || '');
+      let reports = [];
+      if (regNo) {
+        if (histReportListCache[regNo]) {
+          reports = histReportListCache[regNo];
+        } else {
+          try {
+            const url =
+              '/iMedicalLIS/lis/ashx/ashReportQuery.ashx?Method=QueryReportList&RegNo=' + encodeURIComponent(regNo);
+            const raw = await fetchJ(url, 15000, histAbortCtrl.signal);
+            reports = Array.isArray(raw) ? raw : (raw && raw.rows) || [];
+            histReportListCache[regNo] = reports;
+          } catch (e) {
+            if (e && e.name === 'AbortError') { return; }
+            histDebug.list = 'QueryReportList 失败: ' + e.message;
+          }
+        }
+      } else {
+        histDebug.list = 'RegNo 为空（手工录入/未建档），跳过历次报告查询';
+      }
+      histDebug.listRows = reports.length;
+      histReports = reports;
+      if (seq !== histLoadSeq) { return; }
+
+      const cutoff = histDateCutoff(histFilter.days);
+      const inRange = reports.filter(r => {
+        if (String(r.ReportDR || '') === histCurrentRDR) { return false; } // 当前报告单独取，作为「本次」锚点
+        const d = _histReportDate(r).split(' ')[0];
+        return d && (!cutoff || d >= cutoff);
+      });
+
+      const currentReport = {
+        ReportDR: histCurrentRDR,
+        Status: sp.Status || sp.ReportStatus || '',
+        EpisodeNo: sp.EpisodeNo || '',
+        WorkGroupMachineDR: sp._mdr || '',
+        MachineParameterDR: sp.MachineParameterDR || '',
+        TransmitDate: sp.TransmitDate || ''
+      };
+      const targets = [currentReport, ...inRange];
+
+      const results = await histPool(targets, 4, async rep => {
+        const rdr = String(rep.ReportDR || '');
+        try {
+          const val = await histFetchReportItems(rep);
+          histDebug.perReport.push({ rdr, items: val.items.length, ok: true });
+          return { report: rep, ...val };
+        } catch (e) {
+          if (e && e.name === 'AbortError') { throw e; }
+          histDebug.perReport.push({ rdr, items: -1, ok: false, err: e.message });
+          return { report: rep, items: [], lab: {} };
+        }
+      });
+
+      if (seq !== histLoadSeq) { return; }
+      histAgg = histBuildAggregate(results, currentReport);
+      histRender();
+    } catch (e) {
+      if (e && e.name === 'AbortError') { return; }
+      histSetStatus('加载失败: ' + e.message, 'error');
+      dbg('患者历史加载失败:', e);
+    } finally {
+      if (seq === histLoadSeq) { histBusy = false; }
+    }
+  }
+
+  function histRowHTML(g, r) {
+    const f = r.flag;
+    const flagCls = f === 'H' || f === 'HH' || f === 'PH' || f === 'UH' ? 'H' : f === 'L' || f === 'LL' || f === 'PL' || f === 'UL' ? 'L' : f === 'A' ? 'A' : '';
+    const flagText =
+      f === 'HH' || f === 'PH' || f === 'UH' ? '↑↑' : f === 'LL' || f === 'PL' || f === 'UL' ? '↓↓' : f === 'H' ? '↑' : f === 'L' ? '↓' : f === 'A' ? '⚠' : '';
+    const rowCls = r.meta.isCurrent ? 'hist-row-cur' : '';
+    return `<tr class="${rowCls}">
+      <td class="hist-date">${esc(r.date)}${r.meta.isCurrent ? '<span class="hist-now">本次</span>' : ''}</td>
+      <td class="hist-val ${flagCls}">${esc(r.value)}${g.unit ? ' <span class="hist-unit">' + esc(g.unit) + '</span>' : ''}</td>
+      <td class="hist-flag ${flagCls}">${flagText}</td>
+      <td class="hist-src">${esc(r.meta.testSetDesc || '')}${r.meta.labno ? ' · ' + esc(r.meta.labno) : ''}${r.meta.wgName ? ' · ' + esc(r.meta.wgName) : ''}</td>
+    </tr>`;
+  }
+
+  function histRender() {
+    if (!histPanel || !histPanel.classList.contains('show')) { return; }
+    const sp = histCurrentSpecimen;
+    const sub = document.getElementById('lis-hist-sub');
+    if (sub) {
+      sub.textContent =
+        (sp && sp.PatName || '') + ' · 检验号 ' + (sp && sp.Labno || '-') + ' · 流水号 ' + (sp && sp.EpisodeNo || '-') +
+        (histReports.length ? ' · 历次报告 ' + histReports.length + ' 份' : '');
+    }
+    histRenderChips();
+
+    const body = document.getElementById('lis-hist-body');
+    if (!body) { return; }
+    if (!histAgg.length) {
+      const hasRegNo = !!(sp && sp.RegNo);
+      body.innerHTML =
+        '<div class="hist-empty"><p>' +
+        (hasRegNo ? '📭 未找到该病人的历史结果（可能无历次报告或项目为空）' : '📭 该病人无登记号（手工录入/未建档），无法查询历次报告') +
+        '</p><p style="font-size:11px;color:#9aa5b1">详情面板内的历史列即为本报告自身的历史结果</p></div>';
+      histSetStatus(hasRegNo ? '0 条历史结果' : 'RegNo 为空', 'info');
+      return;
+    }
+    const q = (histFilter.q || '').trim().toLowerCase();
+    const relOnly = histFilter.relatedOnly;
+    const groups = histAgg.filter(grp => {
+      if (relOnly && grp.tier > 1) { return false; }
+      if (q) {
+        const hay = (grp.name + ' ' + grp.syn + ' ' + grp.unit).toLowerCase();
+        if (!hay.includes(q)) { return false; }
+      }
+      return true;
+    });
+    const totalRows = groups.reduce((s, g) => s + g.rows.length, 0);
+    histSetStatus('共 ' + histAgg.length + ' 个项目 · ' + totalRows + ' 条历史' + (relOnly ? '（仅关联/本次）' : ''), 'info');
+    if (!groups.length) {
+      body.innerHTML = '<div class="hist-empty"><p>没有符合筛选的结果</p></div>';
+      return;
+    }
+    let html = '';
+    if (histReports.length === 0) {
+      html += '<div class="hist-banner">ℹ️ 未找到该病人的历次报告（可能为手工录入/未建档，或确实无历史）——下方仅列出本次报告项目</div>';
+    }
+    groups.forEach(grp => {
+      const badge =
+        grp.tier === 0 ? '<span class="hist-badge cur">本次</span>' : grp.tier === 1 ? '<span class="hist-badge rel">关联</span>' : '';
+      html +=
+        '<div class="hist-group"><div class="hist-group-hd"><span class="hist-gname">' + esc(grp.name) + '</span>' +
+        badge +
+        (grp.syn ? '<span class="hist-gsyn">' + esc(grp.syn) + '</span>' : '') +
+        '<span class="hist-gmeta">' + esc(grp.unit || '') + (grp.ref ? ' 参考 ' + esc(grp.ref) : '') + ' · ' + grp.rows.length + '次</span></div>' +
+        '<table class="hist-gtable"><thead><tr><th>日期</th><th>结果</th><th>标志</th><th>来源</th></tr></thead>' +
+        '<tbody>' + grp.rows.map(r => histRowHTML(grp, r)).join('') + '</tbody></table></div>';
+    });
+    body.innerHTML = html;
+  }
+
+  function histRenderChips() {
+    const box = document.getElementById('lis-hist-chips');
+    if (!box) { return; }
+    const chips = [];
+    histAgg.forEach(grp => { if (grp.tier <= 1) { chips.push(grp.name); } });
+    const uniq = [...new Set(chips)].slice(0, 30);
+    let html =
+      '<span class="hist-chip' + (histFilter.q === '' ? ' on' : '') + '" data-k="__all__">全部</span>' +
+      uniq.map(n => '<span class="hist-chip" data-k="' + esc(n) + '">' + esc(n) + '</span>').join('');
+    box.innerHTML = html;
+    box.querySelectorAll('.hist-chip').forEach(ch => {
+      ch.addEventListener('click', () => {
+        const k = ch.getAttribute('data-k');
+        const search = document.getElementById('lis-hist-search');
+        if (k === '__all__') {
+          histFilter.q = '';
+          histFilter.relatedOnly = false;
+          if (search) { search.value = ''; }
+          const rel = document.getElementById('lis-hist-relonly');
+          if (rel) { rel.checked = false; }
+        } else {
+          histFilter.q = k;
+          histFilter.relatedOnly = false;
+          if (search) { search.value = k; }
+        }
+        histRender();
+      });
+    });
+  }
+
+  function histSetStatus(msg, type) {
+    const el = document.getElementById('lis-hist-status');
+    if (!el) { return; }
+    el.textContent = msg || '';
+    el.className = 'hist-status ' + (type === 'error' ? 'err' : type === 'info' ? 'info' : '');
+  }
+
+  function histRenderDebug() {
+    const pre = document.getElementById('lis-hist-debug');
+    if (!pre) { return; }
+    if (!histDebugVisible) { pre.style.display = 'none'; return; }
+    const listRows = (histReports || []).map(r => ({
+      rdr: r.ReportDR,
+      labno: r.Labno,
+      testSetDesc: r.TestSetDesc,
+      wg: r.WorkGroupMachine,
+      date: _histReportDate(r)
+    }));
+    pre.textContent =
+      JSON.stringify(histDebug || {}, null, 2) + '\n\n[历次报告清单]\n' + JSON.stringify(listRows, null, 2);
+    pre.style.display = 'block';
+  }
+
+  function histBuildPanel() {
+    if (histPanel) { return histPanel; }
+    histPanel = document.createElement('div');
+    histPanel.id = 'lis-hist-panel';
+    histPanel.innerHTML = `
+      <div id="lis-hist-hd">
+        <div style="flex:1;min-width:0;padding-right:10px">
+          <h4 style="margin:0;font-size:15px">🔎 患者历史结果</h4>
+          <div id="lis-hist-sub" style="font-size:11px;color:#6b7785;margin-top:2px"></div>
+        </div>
+        <button id="lis-hist-close" title="关闭">✕</button>
+      </div>
+      <div id="lis-hist-tools">
+        <input id="lis-hist-search" placeholder="筛选项目名 / 缩写，如 血糖、GLU、TRUST" />
+        <select id="lis-hist-days">
+          <option value="30">近30天</option>
+          <option value="90">近90天</option>
+          <option value="180" selected>近180天</option>
+          <option value="365">近1年</option>
+          <option value="0">全部</option>
+        </select>
+        <label id="lis-hist-rellabel" title="只显示本次报告的项目及其关联项目"><input type="checkbox" id="lis-hist-relonly" /> 仅看本次/关联</label>
+      </div>
+      <div id="lis-hist-chips"></div>
+      <div id="lis-hist-body"></div>
+      <pre id="lis-hist-debug" style="display:none"></pre>
+      <div id="lis-hist-ft">
+        <span id="lis-hist-status" class="hist-status"></span>
+        <button id="lis-hist-debug-btn">🔍 调试</button>
+        <button id="lis-hist-close-btn">关闭 (Esc)</button>
+      </div>
+    `;
+    document.body.appendChild(histPanel);
+
+    document.getElementById('lis-hist-close').addEventListener('click', histClose);
+    document.getElementById('lis-hist-close-btn').addEventListener('click', histClose);
+    document.getElementById('lis-hist-search').addEventListener('input', e => {
+      histFilter.q = e.target.value;
+      histRender();
+    });
+    document.getElementById('lis-hist-days').addEventListener('change', e => {
+      histFilter.days = parseInt(e.target.value, 10) || 0;
+      histLoad();
+    });
+    document.getElementById('lis-hist-relonly').addEventListener('change', e => {
+      histFilter.relatedOnly = !!e.target.checked;
+      histRender();
+    });
+    document.getElementById('lis-hist-debug-btn').addEventListener('click', () => {
+      histDebugVisible = !histDebugVisible;
+      histRenderDebug();
+    });
+    histPanel.addEventListener('click', e => {
+      if (e.target === histPanel) { histClose(); }
+    });
+
+    // 历史浮层自身的键盘处理（仅 Esc 关闭；其余键不动，避免误触审核/切换）
+    document.addEventListener('keydown', _histKeyHandler, true);
+    return histPanel;
+  }
+
+  function _histKeyHandler(e) {
+    if (!histIsOpen()) { return; }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      histClose();
+    }
+  }
+
+  GM_addStyle(`
+#lis-hist-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(.96);width:860px;max-width:94vw;height:82vh;max-height:82vh;background:#fff;border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.32);z-index:100020;display:none;flex-direction:column;overflow:hidden;border:1px solid #e3e9ef}
+#lis-hist-panel.show{display:flex;transform:translate(-50%,-50%) scale(1);transition:transform .16s ease}
+#lis-hist-hd{background:linear-gradient(135deg,#0d6655,#0f766e);color:#fff;padding:12px 18px;display:flex;align-items:flex-start;justify-content:space-between;flex-shrink:0}
+#lis-hist-hd h4{margin:0;font-size:16px}
+#lis-hist-hd #lis-hist-close{background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:2px 8px;border-radius:4px}
+#lis-hist-hd #lis-hist-close:hover{background:rgba(255,255,255,.18)}
+#lis-hist-tools{display:flex;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid #eef2f6;flex-shrink:0;flex-wrap:wrap}
+#lis-hist-tools input[type=text],#lis-hist-search{flex:1;min-width:200px;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 10px;font-size:12px;outline:none}
+#lis-hist-tools select{height:28px;border:1px solid #cfd8e0;border-radius:5px;font-size:12px;background:#fff}
+#lis-hist-rellabel{font-size:11px;color:#475569;display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none}
+#lis-hist-chips{display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid #f0f3f7;flex-shrink:0;max-height:64px;overflow-y:auto}
+.hist-chip{font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid #cfd8e0;color:#334155;cursor:pointer;user-select:none;background:#fff}
+.hist-chip:hover{border-color:#0f766e;color:#0f766e}
+.hist-chip.on{background:#0f766e;color:#fff;border-color:#0f766e}
+#lis-hist-body{flex:1;overflow-y:auto;padding:10px 16px;min-height:0}
+.hist-empty .spinner{display:inline-block;width:26px;height:26px;border:3px solid #dbe4ea;border-top-color:#0f766e;border-radius:50%;animation:spin 1s linear infinite}
+.hist-empty{text-align:center;padding:48px 20px;color:#7b8b96;font-size:13px}
+.hist-banner{margin:0 0 10px;padding:6px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:11px;color:#92400e}
+.hist-group{border:1px solid #e6ebf1;border-radius:8px;margin-bottom:10px;overflow:hidden}
+.hist-group-hd{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#f7fafc;border-bottom:1px solid #e6ebf1;flex-wrap:wrap}
+.hist-gname{font-weight:800;font-size:13px;color:#0f3d36}
+.hist-gsyn{font-size:10px;color:#94a3b8;background:#eef2f6;padding:1px 6px;border-radius:4px}
+.hist-gmeta{font-size:11px;color:#64748b;margin-left:auto}
+.hist-badge{font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700}
+.hist-badge.cur{background:#0f766e;color:#fff}
+.hist-badge.rel{background:#f59e0b;color:#fff}
+.hist-gtable{width:100%;border-collapse:collapse;font-size:12px}
+.hist-gtable th{background:#f1f5f9;color:#475569;font-size:11px;padding:4px 8px;text-align:left;font-weight:600}
+.hist-gtable td{padding:4px 8px;border-top:1px solid #f1f5f9;vertical-align:top}
+.hist-gtable tr.hist-row-cur td{background:#ecfdf5}
+.hist-val{font-weight:700;color:#0f3d36;white-space:nowrap}
+.hist-val.H{color:#dc2626}
+.hist-val.L{color:#2563eb}
+.hist-val.A{color:#d97706}
+.hist-flag.H{color:#dc2626;font-weight:800}
+.hist-flag.L{color:#2563eb;font-weight:800}
+.hist-flag.A{color:#d97706;font-weight:800}
+.hist-unit{font-size:10px;color:#94a3b8;font-weight:400}
+.hist-date{color:#334155;white-space:nowrap}
+.hist-now{font-size:10px;color:#0f766e;border:1px solid #0f766e;border-radius:4px;padding:0 4px;margin-left:4px;font-weight:700}
+.hist-src{color:#64748b;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#lis-hist-ft{display:flex;gap:8px;align-items:center;padding:8px 16px;border-top:1px solid #eef2f6;background:#fafbfc;flex-shrink:0}
+#lis-hist-ft .hist-status{flex:1;font-size:11px;color:#64748b}
+#lis-hist-ft .hist-status.info{color:#0f766e}
+#lis-hist-ft .hist-status.err{color:#dc2626}
+#lis-hist-ft button{height:28px;border:1px solid #cfd8e0;background:#fff;color:#334155;border-radius:5px;padding:0 12px;font-size:11px;font-weight:600;cursor:pointer}
+#lis-hist-ft button:hover{border-color:#0f766e;color:#0f766e}
+#lis-hist-debug{margin:0;padding:10px 14px;background:#0f172a;color:#a5f3fc;font-size:11px;line-height:1.5;max-height:200px;overflow:auto;flex-shrink:0;white-space:pre-wrap;word-break:break-all}
+`);
 
   // ============================================================
   //  模块 E：登录页优化
