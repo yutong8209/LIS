@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.24
+// @version      8.5.25
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11658,11 +11658,11 @@ window.addEventListener('keydown',function(e){
     const pushWG = dr => {
       if (dr) { cand.push(buildSS(String(dr))); }
     };
-    pushWG(report && report.WorkGroupDR); // 若报告行带 WorkGroupDR 优先
-    pushWG(histCurrentSpecimen && histCurrentSpecimen._wg); // 当前标本工作组
+    pushWG(report && report._histWG); // 按组查询时打上的工作组 → 优先用对的 ss
+    pushWG(report && report.WorkGroupDR);
+    pushWG(histCurrentSpecimen && histCurrentSpecimen._wg);
     pushWG(wgDR());
-    // 跨组报告的 ss 常与当前组不同（QueryReportList 行一般不带 WorkGroupDR），
-    // 所以依次把全部工作组都试一遍，取到非空即停
+    // 兜底：依次把全部工作组都试一遍，取到非空即停
     WG.forEach(w => pushWG(w.dr));
     return [...new Set(cand)];
   }
@@ -11822,7 +11822,7 @@ window.addEventListener('keydown',function(e){
     if (histAbortCtrl) { try { histAbortCtrl.abort(); } catch (e) {} }
     histAbortCtrl = new AbortController();
     histBusy = true;
-    histDebug = { seq, list: '', listRows: 0, regNo: String(sp.RegNo || ''), perReport: [] };
+    histDebug = { seq, list: '', listRows: 0, regNo: String(sp.RegNo || ''), perReport: [], perWg: null };
     histSetStatus('正在加载历次报告…', 'info');
     const bodyEl = document.getElementById('lis-hist-body');
     if (bodyEl) {
@@ -11838,16 +11838,37 @@ window.addEventListener('keydown',function(e){
         if (histReportListCache[regNo]) {
           reports = histReportListCache[regNo];
         } else {
-          try {
-            const url =
-              '/iMedicalLIS/lis/ashx/ashReportQuery.ashx?Method=QueryReportList&RegNo=' + encodeURIComponent(regNo);
-            const raw = await fetchJ(url, 15000, histAbortCtrl.signal);
-            reports = Array.isArray(raw) ? raw : (raw && raw.rows) || [];
-            histReportListCache[regNo] = reports;
-          } catch (e) {
-            if (e && e.name === 'AbortError') { return; }
-            histDebug.list = 'QueryReportList 失败: ' + e.message;
+          // QueryReportList 不带 WorkGroupDR 时实测只返回当前登录工作组的历史，
+          // 所以按每个工作组分别查一次再合并去重（同时诊断该病人是否真的无别组历史）
+          const perWg = [];
+          for (const w of WG) {
+            try {
+              const url =
+                '/iMedicalLIS/lis/ashx/ashReportQuery.ashx?Method=QueryReportList&RegNo=' +
+                encodeURIComponent(regNo) +
+                '&WorkGroupDR=' +
+                encodeURIComponent(w.dr);
+              const raw = await fetchJ(url, 15000, histAbortCtrl.signal);
+              const rows = Array.isArray(raw) ? raw : (raw && raw.rows) || [];
+              rows.forEach(r => { r._histWG = w.dr; });
+              perWg.push({ wg: w.name, dr: w.dr, count: rows.length });
+              reports = reports.concat(rows);
+            } catch (e) {
+              if (e && e.name === 'AbortError') { return; }
+              perWg.push({ wg: w.name, dr: w.dr, count: -1, err: e.message });
+            }
           }
+          histDebug.perWg = perWg;
+          // 去重（同 ReportDR），并按日期倒序
+          const seen = new Set();
+          reports = reports.filter(r => {
+            const k = String(r.ReportDR || '');
+            if (!k || seen.has(k)) { return false; }
+            seen.add(k);
+            return true;
+          });
+          reports.sort((a, b) => String(_histReportDate(b)).localeCompare(String(_histReportDate(a))));
+          histReportListCache[regNo] = reports;
         }
       } else {
         histDebug.list = 'RegNo 为空（手工录入/未建档），跳过历次报告查询';
