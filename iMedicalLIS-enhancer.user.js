@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.27
+// @version      8.5.28
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -891,8 +891,6 @@
 #lis-detail-hd h4{margin:0;font-size:16px;color:var(--lis-text)}
 #lis-detail-hd .detail-close{background:none;border:none;color:var(--lis-text-secondary);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:4px;transition:background .2s}
 #lis-detail-hd .detail-close:hover{background:var(--lis-primary-light);color:var(--lis-text)}
-#lis-detail-hd .detail-hist{background:var(--lis-primary);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;padding:6px 12px;transition:background .2s}
-#lis-detail-hd .detail-hist:hover{background:var(--lis-primary-hover)}
 #lis-detail-info{padding:0px 16px;background:transparent;border-bottom:none;flex-shrink:0;font-size:12px}
 
 
@@ -10083,10 +10081,7 @@ window.addEventListener('keydown',function(e){
                     <div id="lis-detail-subtitle" style="font-size:11px;color:var(--lis-text-secondary);margin-top:3px"></div>
                     <div id="lis-detail-extra" style="font-size:11px;color:var(--lis-text-muted);margin-top:2px"></div>
                 </div>
-                <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-                    <button class="detail-hist" id="lis-detail-hist" title="H 键：查看该病人历史结果（跨组/跨仪器，审核辅助）">🔎 历史</button>
-                    <button class="detail-close" id="lis-detail-close">✕</button>
-                </div>
+                <button class="detail-close" id="lis-detail-close">✕</button>
             </div>
             <div id="lis-detail-info"></div>
             <div id="lis-detail-body" style="flex:1;overflow-y:scroll;overflow-x:hidden;padding:16px 20px;min-height:0;max-height:calc(100vh - 120px)">
@@ -10114,14 +10109,6 @@ window.addEventListener('keydown',function(e){
     document.getElementById('lis-detail-close').addEventListener('click', closeDetailPanel);
     document.getElementById('lis-detail-close-btn').addEventListener('click', closeDetailPanel);
     _bindDetailAuditButton();
-    const histBtn = document.getElementById('lis-detail-hist');
-    if (histBtn) {
-      histBtn.addEventListener('click', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        histToggle();
-      });
-    }
     // 详情结果表每行「🔎」：打开单项目历史（事件委托，兼容 LRU 缓存 HTML）
     const dBody = document.getElementById('lis-detail-body');
     if (dBody) {
@@ -11652,7 +11639,7 @@ window.addEventListener('keydown',function(e){
     { key: '肾功', members: ['肌酐', '尿素', '尿酸', '胱抑素', 'eGFR', 'β2-微球蛋白', 'β2微球蛋白', '尿微量白蛋白', '微量白蛋白', '尿蛋白', '尿肌酐'], triggerExcludes: [], excludes: [] },
     { key: '电解质', members: ['钾', '钠', '氯', '钙', '镁', '磷', '二氧化碳', 'CO2'], triggerExcludes: [], excludes: ['碱性磷酸酶', '磷酸肌酸', '脑钠肽', '利钠肽', '碳酸'] },
     { key: '血脂', members: ['胆固醇', '甘油三酯', 'HDL', 'LDL', '低密度', '高密度', '载脂蛋白', '脂蛋白(a)', 'Lp(a)', '游离脂肪酸', 'Apo'], triggerExcludes: [], excludes: [] },
-    { key: '感染', members: ['白细胞', 'WBC', '中性粒', 'NEUT', '淋巴细胞', 'CRP', '降钙素原', 'PCT', 'SAA', 'IL-6', '白介素', '超敏C反应', 'C反应蛋白'], triggerExcludes: [], excludes: ['碱性磷酸酶'] },
+    { key: '炎症/感染', members: ['白细胞', 'WBC', '中性粒', 'NEUT', '淋巴细胞', 'LYMPH', '单核细胞', 'MONO', '嗜酸性', '嗜碱性', 'EO', 'BASO', 'C反应蛋白', 'CRP', '超敏C反应', 'hs-CRP', '降钙素原', 'PCT', '血清淀粉样蛋白', 'SAA', '白细胞介素', 'IL-6', 'IL6', '白介素', '肿瘤坏死因子', 'TNF', '红细胞沉降率', '血沉', 'ESR'], triggerExcludes: [], excludes: ['碱性磷酸酶'] },
     { key: '贫血/铁代谢', members: ['血红蛋白', '红细胞', '血细胞比容', '红细胞压积', 'HCT', '平均红细胞', 'MCV', 'MCH', 'MCHC', '铁蛋白', '血清铁', '转铁蛋白', '总铁结合力', 'TIBC', '叶酸', '维生素B12', 'B12', '网织红'], triggerExcludes: ['糖化', 'HbA1c'], excludes: ['糖化血红蛋白', '糖化', '尿血红蛋白', '隐血'] },
     { key: '凝血', members: ['凝血酶原', 'PT', '活化部分凝血活酶', 'APTT', '纤维蛋白原', 'FIB', 'D-二聚体', 'D二聚体', 'D-Dimer', '纤维蛋白降解产物', 'FDP', 'INR'], triggerExcludes: [], excludes: ['PTH', '甲状旁腺'] },
     { key: '乙肝', members: ['乙肝', '乙型肝炎', 'HBs', 'HBc', 'HBe', 'HBV'], triggerExcludes: [], excludes: ['丙肝', '丙型肝炎', 'HCV'] },
@@ -11660,10 +11647,11 @@ window.addEventListener('keydown',function(e){
     { key: 'PSA', members: ['前列腺特异抗原', 'PSA', 'fPSA', 'F-PSA', '游离PSA', '总PSA'], triggerExcludes: [], excludes: [] }
   ];
 
-  // 子串匹配（忽略大小写）
+  // 子串匹配（忽略大小写 + 归一化：去掉空格/连字符/下划线/括号，使 C-反应蛋白、白细胞计数(WBC) 等能对上）
   function histTextMatch(text, patterns) {
-    const t = String(text || '').toLowerCase();
-    return patterns.some(p => t.includes(String(p).toLowerCase()));
+    const norm = s => String(s || '').toLowerCase().replace(/[\s\-_·•/\\|()（）]/g, '');
+    const t = norm(text);
+    return patterns.some(p => t.includes(norm(p)));
   }
 
   function histIsOpen() {
