@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.26
+// @version      8.5.27
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3262,7 +3262,7 @@
                 <td>${esc(r.machine)}</td>
                 <td>${esc(r.specimen)}</td>
                 <td>${esc(r.testSet)}</td>
-                <td>${esc(r.itemName)}</td>
+                <td>${esc(r.itemName)}${r.regNo ? '<button class="pr-hist-btn" data-i="' + pageRows.indexOf(r) + '" title="查看该项目历史（跨组）">🔎</button>' : ''}</td>
                 <td class="${cls}">${esc(r.result)}${r.unit ? ' ' + esc(r.unit) : ''}</td>
                 <td>${esc(r.refRange)}</td>
                 <td>${esc(r.reportPrice || '')}</td>
@@ -3283,6 +3283,18 @@
         </div>`;
 
     body.innerHTML = h;
+
+    /* 绑定单项目历史按钮 */
+    body.querySelectorAll('.pr-hist-btn').forEach(btn => {
+      const idx = parseInt(btn.getAttribute('data-i'), 10);
+      const r = pageRows[idx];
+      if (!r) { return; }
+      btn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        histOpenForTest(histCtxFromPRRow(r), { key: '', name: r.itemName || '', syn: r.itemSynonym || '' });
+      });
+    });
 
     /* 绑定分页事件 */
     const prevBtn = document.getElementById('lis-pr-pg-prev');
@@ -10110,6 +10122,39 @@ window.addEventListener('keydown',function(e){
         histToggle();
       });
     }
+    // 详情结果表每行「🔎」：打开单项目历史（事件委托，兼容 LRU 缓存 HTML）
+    const dBody = document.getElementById('lis-detail-body');
+    if (dBody) {
+      dBody.addEventListener('click', e => {
+        const btn = e.target && e.target.closest ? e.target.closest('.detail-hist-item') : null;
+        if (!btn) { return; }
+        e.preventDefault();
+        e.stopPropagation();
+        const sp = currentDetailSpecimen;
+        if (!sp) { toast('当前没有打开的标本详情', 'warning'); return; }
+        histOpenForTest(
+          {
+            RegNo: sp.RegNo || '',
+            PatName: sp.PatName || '',
+            Labno: sp.Labno || '',
+            EpisodeNo: sp.EpisodeNo || '',
+            _wg: sp._wg || '',
+            _mdr: sp._mdr || '',
+            ReportDR: sp.ReportDR || '',
+            Status: sp.Status || sp.ReportStatus || '',
+            AcceptDT: sp.AcceptDT || '',
+            TransmitDate: sp.TransmitDate || '',
+            MachineParameterDR: sp.MachineParameterDR || '',
+            TestSetDesc: sp.TestSetDesc || ''
+          },
+          {
+            key: btn.getAttribute('data-key') || '',
+            name: btn.getAttribute('data-name') || '',
+            syn: btn.getAttribute('data-syn') || ''
+          }
+        );
+      });
+    }
 
     return detailPanel;
   }
@@ -11115,7 +11160,7 @@ window.addEventListener('keydown',function(e){
         const _colItems = itemInfo.slice(_ci * _detailColSize, Math.min((_ci + 1) * _detailColSize, itemInfo.length));
         html += `<table class="result-table${_detailCols > 1 ? ' compact' : ''}" style="font-size:12px;flex:1;min-width:0">`;
 
-      html += `<thead><tr><th style='width:20px'>QC</th><th>项目${_detailCols > 1 ? ' / 参考' : ''}</th><th>结果</th>${_detailCols > 1 ? '' : '<th>参考范围</th>'}<th>状态</th>${thDates}</tr></thead>`;
+      html += `<thead><tr><th style='width:20px'>QC</th><th>项目${_detailCols > 1 ? ' / 参考' : ''}</th><th>结果</th>${_detailCols > 1 ? '' : '<th>参考范围</th>'}<th>状态</th>${thDates}<th style="width:34px" title="查看该项目历史（跨组）">🔎</th></tr></thead>`;
       html += '<tbody>';
 
       _colItems.forEach(r => {
@@ -11238,6 +11283,7 @@ window.addEventListener('keydown',function(e){
                     <td style="font-size:11px">${hist.cells[0]}</td>
                     <td style="font-size:11px">${hist.cells[1]}</td>
                     <td style="font-size:11px">${hist.cells[2]}</td>
+                    <td style="text-align:center"><button class="detail-hist-item" data-key="${esc(r.TestCodeDR || r.TCCode || '')}" data-name="${esc(r.CName || '')}" data-syn="${esc(r.Synonym || r.Code || '')}" title="查看该项目历史（跨组）">🔎</button></td>
                 </tr>`;
       });
 
@@ -11578,6 +11624,7 @@ window.addEventListener('keydown',function(e){
   let histAbortCtrl = null;
   let histCurrentSpecimen = null;
   let histCurrentRDR = '';
+  let histFocus = null; // 单项目历史模式：{ key, name, syn }；null=整报告模式
   let histReports = []; // 历次报告列表（QueryReportList rows）
   const histReportCache = {}; // ReportDR -> { items, lab } 原始缓存
   const _HIST_CACHE_MAX = 40;
@@ -11628,10 +11675,50 @@ window.addEventListener('keydown',function(e){
     if (!sp) { toast('请先打开一条标本详情', 'w'); return; }
     histCurrentSpecimen = sp;
     histCurrentRDR = String(sp.ReportDR || '');
+    histFocus = null; // 整报告模式
     if (!histPanel) { histBuildPanel(); }
     histPanel.classList.add('show');
     histResetForNewSpecimen();
     histLoad();
+  }
+
+  // 单项目历史：从结果列表的某一行打开，只显示该项目 + 它的关联家族
+  function histOpenForTest(ctx, focus) {
+    if (!ctx) { toast('缺少病人信息', 'w'); return; }
+    if (!ctx.RegNo) { toast('该病人无登记号（手工录入/未建档），无法查询历史', 'w'); return; }
+    if (!focus || !focus.name) { toast('缺少项目信息', 'w'); return; }
+    histCurrentSpecimen = ctx;
+    histCurrentRDR = String(ctx.ReportDR || '');
+    histFocus = { key: focus.key || '__' + focus.name, name: focus.name, syn: focus.syn || '' };
+    if (!histPanel) { histBuildPanel(); }
+    histPanel.classList.add('show');
+    histResetForNewSpecimen();
+    histLoad();
+  }
+
+  // 从 PR 病人结果导出面板的行构造病人上下文（无当前报告锚点）
+  function histCtxFromPRRow(r) {
+    return {
+      RegNo: r.regNo || '',
+      PatName: r.patient || '',
+      Labno: r.labno || '',
+      EpisodeNo: r.episodeNo || '',
+      _wg: '',
+      _mdr: '',
+      ReportDR: '',
+      Status: '',
+      AcceptDT: r.acceptDT || '',
+      TransmitDate: '',
+      MachineParameterDR: '',
+      TestSetDesc: r.testSet || ''
+    };
+  }
+
+  function histExitFocus() {
+    histFocus = null;
+    const badge = document.getElementById('lis-hist-focusbadge');
+    if (badge) { badge.style.display = 'none'; }
+    histRender();
   }
 
   function histToggle() {
@@ -11914,15 +12001,17 @@ window.addEventListener('keydown',function(e){
         return d && (!cutoff || d >= cutoff);
       });
 
-      const currentReport = {
-        ReportDR: histCurrentRDR,
-        Status: sp.Status || sp.ReportStatus || '',
-        EpisodeNo: sp.EpisodeNo || '',
-        WorkGroupMachineDR: sp._mdr || '',
-        MachineParameterDR: sp.MachineParameterDR || '',
-        TransmitDate: sp.TransmitDate || ''
-      };
-      const targets = [currentReport, ...inRange];
+      const currentReport = histCurrentRDR
+        ? {
+            ReportDR: histCurrentRDR,
+            Status: sp.Status || sp.ReportStatus || '',
+            EpisodeNo: sp.EpisodeNo || '',
+            WorkGroupMachineDR: sp._mdr || '',
+            MachineParameterDR: sp.MachineParameterDR || '',
+            TransmitDate: sp.TransmitDate || ''
+          }
+        : null; // 无当前报告锚点（从 PR 结果列表打开单项目历史）
+      const targets = currentReport ? [currentReport, ...inRange] : inRange;
 
       const results = await histPool(targets, 4, async rep => {
         const rdr = String(rep.ReportDR || '');
@@ -11972,7 +12061,18 @@ window.addEventListener('keydown',function(e){
         (sp && sp.PatName || '') + ' · 检验号 ' + (sp && sp.Labno || '-') + ' · 流水号 ' + (sp && sp.EpisodeNo || '-') +
         (histReports.length ? ' · 历次报告 ' + histReports.length + ' 份' : '');
     }
-    histRenderChips();
+    // 焦点徽章（单项目历史模式）
+    const fbadge = document.getElementById('lis-hist-focusbadge');
+    if (fbadge) {
+      if (histFocus) {
+        fbadge.style.display = '';
+        fbadge.title = '点击退出单项目模式';
+        fbadge.innerHTML = '🔎 单项目：' + esc(histFocus.name) + ' <span class="hist-focus-x">✕</span>';
+      } else {
+        fbadge.style.display = 'none';
+        fbadge.innerHTML = '';
+      }
+    }
 
     const body = document.getElementById('lis-hist-body');
     if (!body) { return; }
@@ -11989,36 +12089,52 @@ window.addEventListener('keydown',function(e){
       return;
     }
     const q = (histFilter.q || '').trim().toLowerCase();
-    const relOnly = histFilter.relatedOnly;
-    const groups = histAgg.filter(grp => {
-      // 搜索时临时全库搜索（能搜到非关联项目）；无搜索时按 relOnly 收窄
-      if (q) {
-        const hay = (grp.name + ' ' + grp.syn + ' ' + grp.unit).toLowerCase();
-        return hay.includes(q);
-      }
-      if (relOnly && grp.tier > 1) { return false; }
-      return true;
-    });
+    const noAnchor = !histCurrentRDR; // 无当前报告锚点（从 PR 打开单项目历史）
+    let groups;
+    if (q) {
+      // 搜索：全库搜索（能搜到非关联/非焦点项目）
+      groups = histAgg.filter(grp => (grp.name + ' ' + grp.syn + ' ' + grp.unit).toLowerCase().includes(q));
+    } else if (histFocus) {
+      // 单项目模式：只显示焦点项目 + 其关联家族
+      groups = histFocusGroups();
+    } else {
+      // 整报告模式：默认只显示 本次+关联（无锚点时 relOnly 无意义 → 全显示）
+      const relOnly = histFilter.relatedOnly && !noAnchor;
+      groups = histAgg.filter(grp => (relOnly && grp.tier > 1 ? false : true));
+    }
     const totalRows = groups.reduce((s, g) => s + g.rows.length, 0);
-    histSetStatus(
-      q
-        ? '搜索「' + (histFilter.q || '').trim() + '」：' + groups.length + ' 个项目 · ' + totalRows + ' 条'
-        : relOnly
-          ? '本次+关联 ' + groups.length + ' 个项目 · ' + totalRows + ' 条（输入搜索词可查全部）'
-          : '全部 ' + groups.length + ' 个项目 · ' + totalRows + ' 条',
-      'info'
-    );
+    if (histFocus && !q) {
+      histSetStatus('焦点「' + histFocus.name + '」+ 关联 · ' + groups.length + ' 项 · ' + totalRows + ' 条（输入搜索词可查全部）', 'info');
+    } else if (q) {
+      histSetStatus('搜索「' + histFilter.q.trim() + '」：' + groups.length + ' 个项目 · ' + totalRows + ' 条', 'info');
+    } else if (!noAnchor && histFilter.relatedOnly) {
+      histSetStatus('本次+关联 ' + groups.length + ' 个项目 · ' + totalRows + ' 条（输入搜索词可查全部）', 'info');
+    } else {
+      histSetStatus('全部 ' + groups.length + ' 个项目 · ' + totalRows + ' 条', 'info');
+    }
+    histRenderChips(groups);
     if (!groups.length) {
-      body.innerHTML = '<div class="hist-empty"><p>没有符合筛选的结果</p></div>';
+      body.innerHTML =
+        '<div class="hist-empty"><p>' +
+        (histFocus && !q
+          ? '📭 未找到该项目「' + esc(histFocus.name) + '」的历次结果（该病人可能从没做过，或不在日期范围内）'
+          : '没有符合筛选的结果') +
+        '</p></div>';
       return;
     }
     let html = '';
     if (histReports.length === 0) {
-      html += '<div class="hist-banner">ℹ️ 未找到该病人的历次报告（可能为手工录入/未建档，或确实无历史）——下方仅列出本次报告项目</div>';
+      html += '<div class="hist-banner">ℹ️ 未找到该病人的历次报告（可能为手工录入/未建档，或确实无历史）——下方仅列出当前可见项目</div>';
     }
     groups.forEach(grp => {
-      const badge =
-        grp.tier === 0 ? '<span class="hist-badge cur">本次</span>' : grp.tier === 1 ? '<span class="hist-badge rel">关联</span>' : '';
+      const isFocus = histFocus && grp.key === histFocus.key;
+      const badge = isFocus
+        ? '<span class="hist-badge cur">焦点</span>'
+        : grp.tier === 0
+          ? '<span class="hist-badge cur">本次</span>'
+          : grp.tier === 1
+            ? '<span class="hist-badge rel">关联</span>'
+            : '';
       html +=
         '<div class="hist-group"><div class="hist-group-hd"><span class="hist-gname">' + esc(grp.name) + '</span>' +
         badge +
@@ -12030,14 +12146,34 @@ window.addEventListener('keydown',function(e){
     body.innerHTML = html;
   }
 
-  function histRenderChips() {
+  // 单项目模式：焦点项目 + 其关联家族
+  function histFocusGroups() {
+    if (!histFocus) { return []; }
+    const focusTxt = (histFocus.name || '') + ' ' + (histFocus.syn || '');
+    const fams = HIST_FAMILIES.filter(f => {
+      const hit = histTextMatch(focusTxt, f.members);
+      const blocked = histTextMatch(focusTxt, f.triggerExcludes || []);
+      return hit && !blocked;
+    });
+    const pats = [];
+    const exc = [];
+    fams.forEach(f => {
+      f.members.forEach(p => { if (!pats.includes(p)) { pats.push(p); } });
+      (f.excludes || []).forEach(p => { if (!exc.includes(p)) { exc.push(p); } });
+    });
+    return histAgg.filter(grp => {
+      if (grp.key === histFocus.key || grp.name === histFocus.name) { return true; } // 焦点项目本身（key 或名称匹配）
+      const txt = grp.name + ' ' + grp.syn;
+      return histTextMatch(txt, pats) && !histTextMatch(txt, exc);
+    });
+  }
+
+  function histRenderChips(groups) {
     const box = document.getElementById('lis-hist-chips');
     if (!box) { return; }
-    const chips = [];
-    histAgg.forEach(grp => { if (grp.tier <= 1) { chips.push(grp.name); } });
-    const uniq = [...new Set(chips)].slice(0, 30);
+    const uniq = [...new Set((groups || []).map(g => g.name))].slice(0, 30);
     let html =
-      '<span class="hist-chip' + (histFilter.q === '' ? ' on' : '') + '" data-k="__all__">全部</span>' +
+      '<span class="hist-chip' + (histFilter.q === '' && !histFocus ? ' on' : '') + '" data-k="__all__">全部</span>' +
       uniq.map(n => '<span class="hist-chip" data-k="' + esc(n) + '">' + esc(n) + '</span>').join('');
     box.innerHTML = html;
     box.querySelectorAll('.hist-chip').forEach(ch => {
@@ -12045,8 +12181,10 @@ window.addEventListener('keydown',function(e){
         const k = ch.getAttribute('data-k');
         const search = document.getElementById('lis-hist-search');
         if (k === '__all__') {
+          // 全部：退出单项目模式 + 清搜索 + 复位默认（只显示本次+关联；无锚点时全显示）
+          histExitFocus();
           histFilter.q = '';
-          histFilter.relatedOnly = true; // 复位为默认：只显示本次+关联
+          histFilter.relatedOnly = true;
           if (search) { search.value = ''; }
           const rel = document.getElementById('lis-hist-relonly');
           if (rel) { rel.checked = true; }
@@ -12089,7 +12227,7 @@ window.addEventListener('keydown',function(e){
     histPanel.innerHTML = `
       <div id="lis-hist-hd">
         <div style="flex:1;min-width:0;padding-right:10px">
-          <h4 style="margin:0;font-size:15px">🔎 患者历史结果</h4>
+          <h4 style="margin:0;font-size:15px">🔎 患者历史结果 <span id="lis-hist-focusbadge" style="display:none;font-size:12px;font-weight:700;background:rgba(255,255,255,.16);padding:1px 8px;border-radius:4px;cursor:pointer;vertical-align:middle"></span></h4>
           <div id="lis-hist-sub" style="font-size:11px;color:#6b7785;margin-top:2px"></div>
         </div>
         <button id="lis-hist-close" title="关闭">✕</button>
@@ -12118,6 +12256,8 @@ window.addEventListener('keydown',function(e){
 
     document.getElementById('lis-hist-close').addEventListener('click', histClose);
     document.getElementById('lis-hist-close-btn').addEventListener('click', histClose);
+    const fbadge = document.getElementById('lis-hist-focusbadge');
+    if (fbadge) { fbadge.addEventListener('click', histExitFocus); }
     document.getElementById('lis-hist-search').addEventListener('input', e => {
       histFilter.q = e.target.value;
       histRender();
@@ -12202,6 +12342,9 @@ window.addEventListener('keydown',function(e){
 #lis-hist-ft button{height:28px;border:1px solid #cfd8e0;background:#fff;color:#334155;border-radius:5px;padding:0 12px;font-size:11px;font-weight:600;cursor:pointer}
 #lis-hist-ft button:hover{border-color:#0f766e;color:#0f766e}
 #lis-hist-debug{margin:0;padding:10px 14px;background:#0f172a;color:#a5f3fc;font-size:11px;line-height:1.5;max-height:200px;overflow:auto;flex-shrink:0;white-space:pre-wrap;word-break:break-all}
+.hist-focus-x{font-weight:900;margin-left:2px}
+.pr-hist-btn,.detail-hist-item{background:none;border:none;cursor:pointer;font-size:11px;padding:0 2px;margin-left:3px;vertical-align:middle;opacity:.75;line-height:1}
+.pr-hist-btn:hover,.detail-hist-item:hover{opacity:1;transform:scale(1.15)}
 `);
 
   // ============================================================
