@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.28
+// @version      8.5.29
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -3122,6 +3122,7 @@
         reportStatus: prStatusText(specimen.Status || specimen.ReportStatus || labInfo.Status),
         itemName: item.CName || item.Name || '',
         itemSynonym: item.Synonym || item.Code || '',
+        testCodeDR: item.TestCodeDR || item.TCCode || '',
         result,
         unit: item.Unit || item.Units || '',
         refRange: cleanRefRange(item.RefRanges || item.RefRange || item.ReferenceRange || ''),
@@ -3290,7 +3291,7 @@
       btn.addEventListener('click', e => {
         e.preventDefault();
         e.stopPropagation();
-        histOpenForTest(histCtxFromPRRow(r), { key: '', name: r.itemName || '', syn: r.itemSynonym || '' });
+        histOpenForTest(histCtxFromPRRow(r), { key: r.testCodeDR || '', name: r.itemName || '', syn: r.itemSynonym || '' });
       });
     });
 
@@ -8071,6 +8072,7 @@ window.addEventListener('keydown',function(e){
       return;
     }
     _f4BridgeHandler = e => {
+      if (histIsOpen()) {return;} // 历史浮层打开时 F4/Enter 全部让位（避免隔层误审）
       // 批审确认框：任意分类下 F4/Enter 均可确认
       if (tryConfirmBatchDialogByHotkey(e)) {return;}
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
@@ -8244,6 +8246,7 @@ window.addEventListener('keydown',function(e){
     }
     _abnormalKeyHandler = e => {
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
+      if (histIsOpen()) {return;} // 历史浮层打开时工作台按键全部让位
       if (wsCategory !== 'audit') {return;}
       // F4：无论面板是否打开都处理（待审视图处理器已挂到 iframe，可捕获原生页焦点下的按键）
       // 面板打开时用 currentDetailSpecimen 调面板同款审核；面板未开时用列表焦点标本。
@@ -11707,10 +11710,6 @@ window.addEventListener('keydown',function(e){
     const badge = document.getElementById('lis-hist-focusbadge');
     if (badge) { badge.style.display = 'none'; }
     histRender();
-  }
-
-  function histToggle() {
-    if (histIsOpen()) { histClose(); } else { histOpen(); }
   }
 
   function histClose() {
