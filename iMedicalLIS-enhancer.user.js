@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.25
+// @version      8.5.26
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11585,22 +11585,39 @@ window.addEventListener('keydown',function(e){
   let histAgg = []; // 聚合分组 [{key,name,syn,unit,ref,tier,rows}]
   let histDebug = null; // 调试信息（供真实病人实测排障）
   let histDebugVisible = false;
-  const histFilter = { q: '', days: 180, relatedOnly: false };
+  const histFilter = { q: '', days: 180, relatedOnly: true };
 
-  // 关联项目映射：当前报告项目名命中 triggers 时，把 related 里的项目标为「关联」
-  const HIST_RELATED_MAP = [
-    { key: '糖化/血糖', triggers: [/糖化血红/i, /HbA1c/i, /GHb/i], related: [/血糖/i, /葡萄糖/i, /\bGLU\b/i, /果糖胺/i, /糖化白蛋白/i, /尿糖/i] },
-    { key: '梅毒', triggers: [/梅毒/i, /TPPA/i, /\bTP-?Ab\b/i, /TRUST/i, /RPR/i], related: [/TRUST/i, /RPR/i, /TPPA/i, /\bTP-?Ab\b/i, /梅毒/i] },
-    { key: '心肌', triggers: [/肌酸激酶/i, /CK-?MB/i, /\bCK\b/i, /肌钙/i, /cTn/i, /肌红蛋白/i, /MYO/i], related: [/肌酸激酶/i, /CK-?MB/i, /\bCK\b/i, /肌钙/i, /cTn/i, /肌红蛋白/i, /MYO/i] },
-    { key: '甲功', triggers: [/促甲状腺/i, /TSH/i, /FT3/i, /FT4/i, /\bT3\b/i, /\bT4\b/i, /甲状腺/i], related: [/促甲状腺/i, /TSH/i, /FT3/i, /FT4/i, /\bT3\b/i, /\bT4\b/i, /甲状腺/i] },
-    { key: '肾功', triggers: [/肌酐/i, /尿素/i, /尿酸/i, /\bCr\b/i, /\bUrea\b/i, /\bUA\b/i, /胱抑素/i, /eGFR/i], related: [/肌酐/i, /尿素/i, /尿酸/i, /\bCr\b/i, /\bUrea\b/i, /\bUA\b/i, /胱抑素/i, /eGFR/i] },
-    { key: '电解质', triggers: [/钾/i, /钠/i, /氯/i, /钙/i, /镁/i, /磷/i, /\bK\b/i, /\bNa\b/i, /\bCl\b/i, /\bCa\b/i, /\bMg\b/i], related: [/钾/i, /钠/i, /氯/i, /钙/i, /镁/i, /磷/i, /\bK\b/i, /\bNa\b/i, /\bCl\b/i, /\bCa\b/i, /\bMg\b/i] },
-    { key: '血脂', triggers: [/胆固醇/i, /甘油三酯/i, /HDL/i, /LDL/i, /低密度/i, /高密度/i], related: [/胆固醇/i, /甘油三酯/i, /HDL/i, /LDL/i, /低密度/i, /高密度/i] },
-    { key: '感染', triggers: [/CRP/i, /降钙素/i, /PCT/i, /白细胞/i, /\bWBC\b/i, /中性粒/i, /\bNEUT\b/i, /IL-6/i, /SAA/i], related: [/CRP/i, /降钙素/i, /PCT/i, /白细胞/i, /\bWBC\b/i, /中性粒/i, /\bNEUT\b/i, /IL-6/i, /SAA/i] },
-    { key: '贫血', triggers: [/血红/i, /\bHb\b/i, /红细胞/i, /\bRBC\b/i, /血球压积/i, /HCT/i, /平均红细胞/i, /\bMCV\b/i, /\bMCH\b/i, /\bMCHC\b/i, /铁蛋白/i, /血清铁/i, /B12/i, /叶酸/i], related: [/血红/i, /\bHb\b/i, /红细胞/i, /\bRBC\b/i, /血球压积/i, /HCT/i, /平均红细胞/i, /\bMCV\b/i, /\bMCH\b/i, /\bMCHC\b/i, /铁蛋白/i, /血清铁/i, /B12/i, /叶酸/i] },
-    { key: '肝炎', triggers: [/乙肝/i, /HBs/i, /HBe/i, /HBc/i, /丙肝/i, /HCV/i, /丁肝/i, /戊肝/i, /甲肝/i, /HAV/i, /转氨酶/i, /ALT/i, /AST/i], related: [/乙肝/i, /HBs/i, /HBe/i, /HBc/i, /丙肝/i, /HCV/i, /丁肝/i, /戊肝/i, /甲肝/i, /HAV/i, /转氨酶/i, /ALT/i, /AST/i] },
-    { key: '凝血', triggers: [/凝血/i, /\bPT\b/i, /APTT/i, /纤维蛋白/i, /FIB/i, /D-二聚/i, /D二聚/i, /\bDD\b/i, /INR/i], related: [/凝血/i, /\bPT\b/i, /APTT/i, /纤维蛋白/i, /FIB/i, /D-二聚/i, /D二聚/i, /\bDD\b/i, /INR/i] }
+  // ============================================================
+  //  关联项目家族表（可自行增改）：
+  //  - members:        该家族成员（名称/缩写，子串匹配，忽略大小写）。当前报告命中任一成员即触发该家族，
+  //                    且历史项目命中成员即算「关联」。
+  //  - triggerExcludes: 当前报告某项命中成员但含此词（如「糖化」）→ 不触发该家族（防子串误吞，如
+  //                    糖化血红蛋白 里的「血红」不应触发 贫血）。
+  //  - excludes:        历史项目命中成员但含此词 → 不算关联（如 尿血红蛋白 不算 贫血）。
+  //  改这里不需要动代码逻辑；匹配基于 CName+Synonym。
+  // ============================================================
+  const HIST_FAMILIES = [
+    { key: '糖代谢', members: ['糖化血红', '糖化', 'HbA1c', 'GHb', '血糖', '葡萄糖', 'GLU', '果糖胺', '糖化白蛋白', '糖化血清蛋白', '胰岛素', 'C肽', 'C-Peptide', 'OGTT', '糖耐量', '尿糖', '尿葡萄糖'], triggerExcludes: [], excludes: ['隐血'] },
+    { key: '梅毒', members: ['梅毒', 'TPPA', 'TP-Ab', 'TRUST', 'RPR', '甲苯胺红'], triggerExcludes: [], excludes: [] },
+    { key: '心肌', members: ['肌酸激酶', 'CK', '肌钙蛋白', 'cTn', '肌红蛋白', 'MYO', '乳酸脱氢酶', 'LDH', '羟丁酸', 'HBDH'], triggerExcludes: [], excludes: ['磷酸肌酸'] },
+    { key: '甲功', members: ['促甲状腺', 'TSH', '游离T3', '游离T4', '总T3', '总T4', 'FT3', 'FT4', '甲状腺过氧化物酶', 'TPO', '甲状腺球蛋白抗体', 'TG-Ab', '甲状腺', 'T3', 'T4'], triggerExcludes: [], excludes: ['甲状旁腺', '降钙素', 'PTH'] },
+    { key: '肝功', members: ['谷丙', '谷草', '转氨酶', 'ALT', 'AST', '碱性磷酸酶', 'ALP', '转肽酶', 'GGT', '胆红素', '白蛋白', '球蛋白', '白球比', '总蛋白', '前白蛋白', '胆汁酸'], triggerExcludes: [], excludes: ['糖化白蛋白', '微量白蛋白', '尿白蛋白', '白蛋白(尿', '白蛋白（尿'] },
+    { key: '肾功', members: ['肌酐', '尿素', '尿酸', '胱抑素', 'eGFR', 'β2-微球蛋白', 'β2微球蛋白', '尿微量白蛋白', '微量白蛋白', '尿蛋白', '尿肌酐'], triggerExcludes: [], excludes: [] },
+    { key: '电解质', members: ['钾', '钠', '氯', '钙', '镁', '磷', '二氧化碳', 'CO2'], triggerExcludes: [], excludes: ['碱性磷酸酶', '磷酸肌酸', '脑钠肽', '利钠肽', '碳酸'] },
+    { key: '血脂', members: ['胆固醇', '甘油三酯', 'HDL', 'LDL', '低密度', '高密度', '载脂蛋白', '脂蛋白(a)', 'Lp(a)', '游离脂肪酸', 'Apo'], triggerExcludes: [], excludes: [] },
+    { key: '感染', members: ['白细胞', 'WBC', '中性粒', 'NEUT', '淋巴细胞', 'CRP', '降钙素原', 'PCT', 'SAA', 'IL-6', '白介素', '超敏C反应', 'C反应蛋白'], triggerExcludes: [], excludes: ['碱性磷酸酶'] },
+    { key: '贫血/铁代谢', members: ['血红蛋白', '红细胞', '血细胞比容', '红细胞压积', 'HCT', '平均红细胞', 'MCV', 'MCH', 'MCHC', '铁蛋白', '血清铁', '转铁蛋白', '总铁结合力', 'TIBC', '叶酸', '维生素B12', 'B12', '网织红'], triggerExcludes: ['糖化', 'HbA1c'], excludes: ['糖化血红蛋白', '糖化', '尿血红蛋白', '隐血'] },
+    { key: '凝血', members: ['凝血酶原', 'PT', '活化部分凝血活酶', 'APTT', '纤维蛋白原', 'FIB', 'D-二聚体', 'D二聚体', 'D-Dimer', '纤维蛋白降解产物', 'FDP', 'INR'], triggerExcludes: [], excludes: ['PTH', '甲状旁腺'] },
+    { key: '乙肝', members: ['乙肝', '乙型肝炎', 'HBs', 'HBc', 'HBe', 'HBV'], triggerExcludes: [], excludes: ['丙肝', '丙型肝炎', 'HCV'] },
+    { key: '丙肝', members: ['丙肝', '丙型肝炎', 'HCV'], triggerExcludes: [], excludes: ['乙肝', 'HBV'] },
+    { key: 'PSA', members: ['前列腺特异抗原', 'PSA', 'fPSA', 'F-PSA', '游离PSA', '总PSA'], triggerExcludes: [], excludes: [] }
   ];
+
+  // 子串匹配（忽略大小写）
+  function histTextMatch(text, patterns) {
+    const t = String(text || '').toLowerCase();
+    return patterns.some(p => t.includes(String(p).toLowerCase()));
+  }
 
   function histIsOpen() {
     return !!(histPanel && histPanel.classList.contains('show'));
@@ -11634,11 +11651,11 @@ window.addEventListener('keydown',function(e){
     histDebugVisible = false;
     histFilter.q = '';
     histFilter.days = 180;
-    histFilter.relatedOnly = false;
+    histFilter.relatedOnly = true; // 默认只显示 本次+关联
     const search = document.getElementById('lis-hist-search');
     if (search) { search.value = ''; }
     const rel = document.getElementById('lis-hist-relonly');
-    if (rel) { rel.checked = false; }
+    if (rel) { rel.checked = true; }
     const days = document.getElementById('lis-hist-days');
     if (days) { days.value = '180'; }
     histRender();
@@ -11790,20 +11807,33 @@ window.addEventListener('keydown',function(e){
     });
 
     const arr = [...groups.values()];
-    // 当前报告内项目 → tier0；据此算关联 → tier1
+    // 当前报告内项目 → tier0；据此算关联 → tier1（家族模型）
     const curKeys = new Set();
     arr.forEach(grp => { if (grp.rows.some(r => r.meta.isCurrent)) { curKeys.add(grp.key); } });
-    const curText = arr
-      .filter(grp => curKeys.has(grp.key))
-      .map(grp => grp.name + ' ' + grp.syn)
-      .join(' ');
-    const relatedSet = new Set();
-    HIST_RELATED_MAP.forEach(m => {
-      if (m.triggers.some(re => re.test(curText))) { m.related.forEach(re => relatedSet.add(re)); }
+    // 逐条判断当前报告项目命中哪些家族（triggerExcludes 防子串误吞）
+    const firedKeys = new Set();
+    arr.forEach(grp => {
+      if (!curKeys.has(grp.key)) { return; }
+      const txt = grp.name + ' ' + grp.syn;
+      HIST_FAMILIES.forEach(f => {
+        const hit = histTextMatch(txt, f.members);
+        const blocked = histTextMatch(txt, f.triggerExcludes || []);
+        if (hit && !blocked) { firedKeys.add(f.key); }
+      });
+    });
+    // 命中的家族 → 收集关联匹配模式 与 排除模式
+    const relatedPats = [];
+    const relatedExcludes = [];
+    firedKeys.forEach(k => {
+      const f = HIST_FAMILIES.find(x => x.key === k);
+      if (!f) { return; }
+      f.members.forEach(p => { if (!relatedPats.includes(p)) { relatedPats.push(p); } });
+      (f.excludes || []).forEach(p => { if (!relatedExcludes.includes(p)) { relatedExcludes.push(p); } });
     });
     arr.forEach(grp => {
       const isCur = curKeys.has(grp.key);
-      const isRel = [...relatedSet].some(re => re.test(grp.name) || re.test(grp.syn));
+      const txt = grp.name + ' ' + grp.syn;
+      const isRel = histTextMatch(txt, relatedPats) && !histTextMatch(txt, relatedExcludes);
       grp.tier = isCur ? 0 : isRel ? 1 : 2;
       grp.rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
     });
@@ -11961,15 +11991,23 @@ window.addEventListener('keydown',function(e){
     const q = (histFilter.q || '').trim().toLowerCase();
     const relOnly = histFilter.relatedOnly;
     const groups = histAgg.filter(grp => {
-      if (relOnly && grp.tier > 1) { return false; }
+      // 搜索时临时全库搜索（能搜到非关联项目）；无搜索时按 relOnly 收窄
       if (q) {
         const hay = (grp.name + ' ' + grp.syn + ' ' + grp.unit).toLowerCase();
-        if (!hay.includes(q)) { return false; }
+        return hay.includes(q);
       }
+      if (relOnly && grp.tier > 1) { return false; }
       return true;
     });
     const totalRows = groups.reduce((s, g) => s + g.rows.length, 0);
-    histSetStatus('共 ' + histAgg.length + ' 个项目 · ' + totalRows + ' 条历史' + (relOnly ? '（仅关联/本次）' : ''), 'info');
+    histSetStatus(
+      q
+        ? '搜索「' + (histFilter.q || '').trim() + '」：' + groups.length + ' 个项目 · ' + totalRows + ' 条'
+        : relOnly
+          ? '本次+关联 ' + groups.length + ' 个项目 · ' + totalRows + ' 条（输入搜索词可查全部）'
+          : '全部 ' + groups.length + ' 个项目 · ' + totalRows + ' 条',
+      'info'
+    );
     if (!groups.length) {
       body.innerHTML = '<div class="hist-empty"><p>没有符合筛选的结果</p></div>';
       return;
@@ -12008,13 +12046,12 @@ window.addEventListener('keydown',function(e){
         const search = document.getElementById('lis-hist-search');
         if (k === '__all__') {
           histFilter.q = '';
-          histFilter.relatedOnly = false;
+          histFilter.relatedOnly = true; // 复位为默认：只显示本次+关联
           if (search) { search.value = ''; }
           const rel = document.getElementById('lis-hist-relonly');
-          if (rel) { rel.checked = false; }
+          if (rel) { rel.checked = true; }
         } else {
           histFilter.q = k;
-          histFilter.relatedOnly = false;
           if (search) { search.value = k; }
         }
         histRender();
