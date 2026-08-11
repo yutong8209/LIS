@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.29
+// @version      8.5.30
 // @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -376,6 +376,17 @@
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new Event('blur', { bubbles: true }));
+  }
+
+  // 阻止 Chrome 对本密码框弹「保存/更新密码」：填值前先标 autocomplete="new-password"
+  // （注册表单标准做法）。比靠 MutationObserver/定时补扫更可靠——填的那一刻就保证标记在位。
+  function fillPwdNoSave(el, value) {
+    try {
+      if (el && el.setAttribute && el.getAttribute('autocomplete') !== 'new-password') {
+        el.setAttribute('autocomplete', 'new-password');
+      }
+    } catch (e) {}
+    setNativeInputValue(el, value);
   }
 
   // ==================== 调试日志 ====================
@@ -1151,7 +1162,7 @@
       const inputs = document.querySelectorAll('input[type="password"], input[onfocus*="password"]');
       for (const inp of inputs) {
         if (!inp.value) {
-          setNativeInputValue(inp, pwd);
+          fillPwdNoSave(inp, pwd);
           inp.type = 'password';
         }
         if (!inp._lisListen) {
@@ -1213,7 +1224,7 @@
     if (!pwd) {return;}
     const f = document.getElementById('text_AuthUserLoginPasssword');
     if (f && !f.value && f.offsetParent !== null) {
-      setNativeInputValue(f, pwd);
+      fillPwdNoSave(f, pwd);
       f.type = 'password';
       f._lisFilled = true;
     }
@@ -1236,7 +1247,7 @@
       if (!pwd) {return;}
       doc.querySelectorAll('input[type="password"], input[onfocus*="password"]').forEach(inp => {
         if (!inp.value) {
-          setNativeInputValue(inp, pwd);
+          fillPwdNoSave(inp, pwd);
           inp.type = 'password';
         }
         if (!inp._lisListen) {
@@ -12573,7 +12584,7 @@ window.addEventListener('keydown',function(e){
 
       // 2. 填充密码
       if (pwdField) {
-        pwdField.value = pwd;
+        fillPwdNoSave(pwdField, pwd);
         pwdField.type = 'password';
         pwdField.dispatchEvent(new Event('input', { bubbles: true }));
       }
@@ -13860,7 +13871,7 @@ window.addEventListener('keydown',function(e){
         }
 
         if (userInput && caUser) {setNativeInputValue(userInput, caUser);}
-        setNativeInputValue(pwdInput, caPwd);
+        fillPwdNoSave(pwdInput, caPwd);
         await sleep(200);
 
         let loginBtn =
@@ -14601,7 +14612,7 @@ window.addEventListener('keydown',function(e){
         loginDoc.querySelector('input[id*="UserCode"]') ||
         loginDoc.querySelector('input[type="text"]');
       if (acctInput && uname()) {setNativeInputValue(acctInput, uname());}
-      setNativeInputValue(pwdInput, pwd);
+      fillPwdNoSave(pwdInput, pwd);
       await sleep(150);
 
       let okBtn = null;
@@ -14934,7 +14945,7 @@ window.addEventListener('keydown',function(e){
       }
 
       // 填写密码
-      setNativeInputValue(pwdInput, pwd);
+      fillPwdNoSave(pwdInput, pwd);
       dbg('已自动填写审核密码');
       await sleep(300);
 
@@ -17335,6 +17346,12 @@ window.addEventListener('keydown',function(e){
           if (inp.getAttribute('autocomplete') !== 'new-password') {
             inp.setAttribute('autocomplete', 'new-password');
           }
+        });
+        // 递归处理同源嵌套 iframe（CA 认证窗是 报告页iframe 里的嵌套 iframe，querySelectorAll 不跨 iframe）
+        doc.querySelectorAll('iframe').forEach(f => {
+          try {
+            if (f.contentDocument) {apply(f.contentDocument);}
+          } catch (e) {}
         });
       } catch (e) {}
     };
