@@ -76,8 +76,8 @@ row() {
 }
 
 row ":checkmark.seal.fill:" "待审" "$AR" "$L_GREEN" "audit"
-row ":tray.fill:" "待排样" "$PD" "$L_INDIGO" "pending"
 row ":doc.fill:" "不完整" "$IC" "$L_TEAL" "incomplete"
+row ":tray.fill:" "待排样" "$PD" "$L_INDIGO" "pending"
 row ":number.circle.fill:" "标本总数" "$TO" "$L_BLUE" "all"
 
 echo "---"
