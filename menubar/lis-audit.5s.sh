@@ -1,6 +1,6 @@
 #!/bin/bash
 # <bitbar.title>LIS 待审</bitbar.title>
-# <bitbar.version>4.2</bitbar.version>
+# <bitbar.version>4.3</bitbar.version>
 # <bitbar.author>LIS-Enhancer</bitbar.author>
 # <bitbar.desc>菜单栏两排显示 待审/不完整/待排/采集 四个状态数字（每排两个），下拉分类对齐可点击跳转</bitbar.desc>
 # <bitbar.dependencies>curl,jq</bitbar.dependencies>
@@ -57,16 +57,15 @@ if [ "$AGE" -gt 90 ]; then
   exit 0
 fi
 
-# ── 菜单栏标题：两排显示四个状态数字（每排两个），随时盯数无需点开 ──
-# SwiftBar 会把每个非分隔行都渲染到状态栏 → 正好两排，每排两个状态。
-# emoji 彩色图标区分四类（菜单栏文本颜色跟随系统深浅外观，无需手动指定）。
-# 有异常待审时给第一行加红点强调；无异常保持常显 0。
+# ── 菜单栏标题：单行稳定显示四个状态数字，绝不轮播 ──
+# 教训：SwiftBar 把每个非分隔行都当作一个标题 item，多个标题会在状态栏循环切换（cycled）——
+# 上一版两行标题就是「先显示前两个、过几秒换后两个」的轮播效果。菜单栏物理上只有一行，
+# 无法真正两排；故合并为单行一个 item：✅待审 📋不完整 📝待排 🩸采集 同时可见、固定不闪动。
 if [ "$AR" -gt 0 ] 2>/dev/null; then
-  echo "🔴 ✅$AR 📋$IC | size=13"
+  echo "🔴✅$AR 📋$IC 📝$PD 🩸$CL | size=12"
 else
-  echo "✅$AR 📋$IC | size=13"
+  echo "✅$AR 📋$IC 📝$PD 🩸$CL | size=12"
 fi
-echo "📝$PD 🩸$CL | size=13"
 
 # ── 下拉：分类行（图标 + 标签 + 大号彩色数字，数字右对齐成列） ──
 echo "---"
