@@ -1,8 +1,8 @@
 #!/bin/bash
 # <bitbar.title>LIS 待审</bitbar.title>
-# <bitbar.version>4.0</bitbar.version>
+# <bitbar.version>4.1</bitbar.version>
 # <bitbar.author>LIS-Enhancer</bitbar.author>
-# <bitbar.desc>当前筛选范围待审标本（Apple 风格 SF Symbols，下拉分类对齐）</bitbar.desc>
+# <bitbar.desc>当前筛选范围待审/不完整/待排/采集/标本总数（Apple 风格 SF Symbols，下拉分类对齐）</bitbar.desc>
 # <bitbar.dependencies>curl,jq</bitbar.dependencies>
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
@@ -11,12 +11,14 @@ C_ORANGE="#FF7A00,#FF9F0A"
 C_GRAY="#636366,#8E8E93"
 C_INDIGO="#5E5CE6,#5E5CE6"
 C_BLUE="#007AFF,#0A84FF"
+C_PINK="#FF3B82,#FF2D55" # 8.5.31: 病房采集（红/粉色，对应 workbench 的 🩸采集）
 # 深色菜单栏：弹窗背景在浅灰/蓝玻璃间波动，用更深饱和色（绝不用纯灰）
 L_GREEN="#15602B"
 L_ORANGE="#9B1C1C"
 L_INDIGO="#2E2E9E"
 L_TEAL="#075E78"
 L_BLUE="#0A3D91"
+L_PINK="#9B1C46" # 8.5.31: 采集中
 H_FONT="size=15 font=.AppleSystemUIFont semibold=true color=#000000"
 SUB_FONT="size=13 font=.AppleSystemUIFont color=#3A3A3C"
 
@@ -35,6 +37,7 @@ M=$(echo "$J" | jq -r '.scope // "全部仪器"')
 AR=$(echo "$J" | jq -r '.auditReady // ((.normalReady // 0) + (.abnormalReady // 0))')
 NR=$(echo "$J" | jq -r '.normalReady // 0')
 PD=$(echo "$J" | jq -r '.pending // 0')
+CL=$(echo "$J" | jq -r '.collected // 0') # 8.5.31: 病房采集中、未送到科室
 IC=$(echo "$J" | jq -r '.incomplete // 0')
 TO=$(echo "$J" | jq -r '.total // 0')
 TS=$(echo "$J" | jq -r '.ts // 0')
@@ -78,6 +81,7 @@ row() {
 row ":checkmark.seal.fill:" "待审" "$AR" "$L_GREEN" "audit"
 row ":doc.fill:" "不完整" "$IC" "$L_TEAL" "incomplete"
 row ":tray.fill:" "待排样" "$PD" "$L_INDIGO" "pending"
+row ":drop.fill:" "采集中" "$CL" "$L_PINK" "collected" # 8.5.31: 病房采集中、未送到科室
 row ":number.circle.fill:" "标本总数" "$TO" "$L_BLUE" "all"
 
 echo "---"

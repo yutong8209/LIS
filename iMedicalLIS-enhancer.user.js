@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.30
-// @description  报告审核增强 — 批量审核 + 审核工作台 + 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
+// @version      8.5.31
+// @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -689,6 +689,7 @@
 .cat-tab.cat-abnormal:not(.on) .cat-cnt{background:#fde8e8;color:var(--lis-error)}
 .cat-tab.cat-incomplete:not(.on) .cat-cnt{background:#fff2d7;color:#9a5b00}
 .cat-tab.cat-pending:not(.on) .cat-cnt{background:#e7f0fb;color:var(--lis-info)}
+.cat-tab.cat-collected:not(.on) .cat-cnt{background:#fce4ec;color:#a8326a} /* 8.5.31: 血袋红/紫 */
 .cat-sep{width:1px;height:24px;background:#dee2e6;margin:0 4px}
 .cat-right{margin-left:auto;display:flex;align-items:center;gap:8px}
 .cat-stats{color:var(--lis-text-secondary);font-size:11px}
@@ -746,6 +747,7 @@
 
 /* --- 不完整提示 --- */
 .ws-incomplete-banner{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid var(--lis-warning);border-radius:6px;padding:8px 12px;margin:10px 0;font-size:13px;color:#8a5600;font-weight:700}
+.ws-collected-banner{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid #a8326a;border-radius:6px;padding:8px 12px;margin:10px 0;font-size:13px;color:#a8326a;font-weight:700} /* 8.5.31: 采集状态 — 仅追踪，不可审核 */
 
 /* --- 分类加载中 --- */
 .ws-category-loading{text-align:center;padding:40px;color:#999;font-size:14px}
@@ -2190,7 +2192,7 @@
   }
 
   function prStatusText(status) {
-    const map = { 0: '待排样', 1: '登记', 2: '初审', 3: '审核', 4: '复审', 5: '取消' };
+    const map = { 0: '待排样', 1: '登记', 2: '初审', 3: '审核', 4: '复审', 5: '取消', 9: '采集' }; // 8.5.31: 加 9=采集
     return map[String(status || '')] || String(status || '');
   }
 
@@ -6002,7 +6004,7 @@
   let wsActiveMachine = ''; // 当前选中的仪器 DR, ''=全部
   let wsActiveWG = ''; // 当前选中的工作组 DR, ''=全部工作组
   let wsSelectedMachinesByWG = {}; // {工作组DR: [仪器DR]}，空数组/无记录=该工作组全部仪器
-  let wsCategory = 'audit'; // 当前分类: 'audit'(待审,融合正常+异常)/'incomplete'/'pending'/'all'
+  let wsCategory = 'audit'; // 当前分类: 'audit'(待审,融合正常+异常)/'incomplete'/'pending'/'collected'/'all'
   let wsClassifiedCache = {}; // 分类缓存 {[reportDR]: {status, items, row, reportDR}}
   const _CLASSIFIED_CACHE_MAX = 1000;
   let wsClassifying = false; // 分类进行中标记
@@ -6442,11 +6444,15 @@
           machines
             .filter(m => m.RowID)
             .map(async m => {
-              const result = { rows: [], pending: [], machine: m };
+              const result = { rows: [], pending: [], collected: [], machine: m };
               try {
                 result.rows = await loadWL(m.RowID, ss);
                 try {
                   result.pending = await loadPendingForMachine(m.RowID, ss);
+                } catch (e) {}
+                try {
+                  // 8.5.31: 采集状态（病房采集中、未送到科室）独立查询，与待排样互不影响
+                  result.collected = await loadCollectedForMachine(m.RowID, ss);
                 } catch (e) {}
               } catch (e) {}
               return result;
@@ -6470,7 +6476,15 @@
             r._mn = m.CName || m.Name || m.RowID;
             r._mdr = m.RowID;
           });
-          wgData.push(...mr.rows, ...mr.pending);
+          mr.collected.forEach(r => {
+            r._wg = w.dr;
+            r._wgn = w.name;
+            r._wgc = w.color;
+            r._wgi = w.icon;
+            r._mn = m.CName || m.Name || m.RowID;
+            r._mdr = m.RowID;
+          });
+          wgData.push(...mr.rows, ...mr.pending, ...mr.collected);
           wgMachines.push({ ...m, _wg: w.dr, _wgn: w.name, _wgc: w.color, _wgi: w.icon });
         }
         // machinesOk：机器列表是否成功加载（瞬断返回空时不清理该组勾选，等下一轮再验）
@@ -6707,6 +6721,32 @@
       EpisodeNo: r.RegNo || '',
       AcceptDT: ((r.AcceptDate || '') + ' ' + (r.AcceptTime || '')).trim(),
       _pending: true
+    }));
+  }
+
+  // 8.5.31: 「采集」状态（P1=9）= 病房采集中、尚未送到科室的标本
+  // 与 loadPendingForMachine 复用 QryStatVisitStatusDetail，仅 P1 改为 9。
+  // LIS 首页「标本状态汇总」面板的 resArr[9] 就是这个状态（见 cache/.../start.js:971）。
+  async function loadCollectedForMachine(wgmDR, ss) {
+    const p = new URLSearchParams();
+    p.set('ClassName', 'LIS.WS.BLL.OT.DHCOTMain');
+    p.set('QueryName', 'QryStatVisitStatusDetail');
+    p.set('FunModul', 'JSON');
+    p.set('P0', wgmDR || '');
+    p.set('P1', '9');
+    p.set('P14', ss);
+    const data = await fetchJ(CSP + '?' + p.toString());
+    const rows = data && data.rows ? data.rows : Array.isArray(data) ? data : [];
+    return rows.map(r => ({
+      ...r,
+      ReportDR: 'collected:' + String(wgmDR || '') + ':' + String(r.Labno || '') + ':' + String(r.RegNo || ''),
+      Status: '9',
+      ReportStatus: '9',
+      IsComplete: '0',
+      EpisodeNo: r.RegNo || '',
+      AcceptDT: ((r.AcceptDate || '') + ' ' + (r.AcceptTime || '')).trim(),
+      // 病房采集尚未送到科室，没有接收/核收时间，留空避免误用 AcceptDT 当成核收
+      _collected: true
     }));
   }
   function calcMachineCounts() {
@@ -6976,6 +7016,7 @@
     const status = String(r.Status || r.ReportStatus || '');
     if (status === '3' || status === '4') {return 'audited';}
     if (status === '0') {return 'pending';}
+    if (status === '9') {return 'collected';} // 8.5.31: 病房采集中、未送到科室
     const complete = String(r.IsComplete || '');
     if (complete !== '1') {return 'incomplete';}
     const cached = wsClassifiedCache[r.ReportDR];
@@ -7159,6 +7200,11 @@
     } else if (wsCategory === 'pending') {
       d = d.filter(r => {
         return getWSAuditBucket(r) === 'pending';
+      });
+    } else if (wsCategory === 'collected') {
+      // 8.5.31: 病房采集中、尚未送到科室
+      d = d.filter(r => {
+        return getWSAuditBucket(r) === 'collected';
       });
     }
     // 'all' = 不过滤分类
@@ -7663,13 +7709,15 @@
     let normalCount = 0,
       abnormalCount = 0,
       incompleteCount = 0,
-      pendingCount = 0;
+      pendingCount = 0,
+      collectedCount = 0;
     filtered.forEach(r => {
       const bucket = getWSAuditBucket(r);
       if (bucket === 'normal') {normalCount++;}
       else if (bucket === 'abnormal') {abnormalCount++;}
       else if (bucket === 'incomplete') {incompleteCount++;}
       else if (bucket === 'pending') {pendingCount++;}
+      else if (bucket === 'collected') {collectedCount++;} // 8.5.31
     });
     const totalCount = filtered.length;
     const fd = filteredData();
@@ -7679,7 +7727,7 @@
       _catBarBuilt = true;
       _buildCategoryBarDOM(bar);
     }
-    _updateCategoryBarState(bar, normalCount, abnormalCount, incompleteCount, pendingCount, totalCount, fd);
+    _updateCategoryBarState(bar, normalCount, abnormalCount, incompleteCount, pendingCount, collectedCount, totalCount, fd);
 
     updateWSFooter({
       visible: fd.length,
@@ -7687,7 +7735,8 @@
       normal: normalCount,
       abnormal: abnormalCount,
       incomplete: incompleteCount,
-      pending: pendingCount
+      pending: pendingCount,
+      collected: collectedCount // 8.5.31
     });
 
     // 推菜单栏（当前筛选范围合计）
@@ -7699,6 +7748,7 @@
       auditReady: normalCount + abnormalCount,
       pending: pendingCount,
       incomplete: incompleteCount,
+      collected: collectedCount, // 8.5.31
       total: totalCount
     });
   }
@@ -7712,6 +7762,7 @@
     h += '<button class="cat-tab cat-audit" data-cat="audit">\n            🔍待审 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-incomplete" data-cat="incomplete">\n            📋不完整 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-pending" data-cat="pending">\n            📝待排 <span class="cat-cnt">0</span>\n        </button>';
+    h += '<button class="cat-tab cat-collected" data-cat="collected" title="病房已采未送到科室的标本（仅供追踪/催送）">\n            🩸采集 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab" data-cat="all">\n            📃全部 <span class="cat-cnt">0</span>\n        </button>';
 
     // 右侧：统计信息
@@ -7737,9 +7788,15 @@
     }
   }
 
-  function _updateCategoryBarState(bar, normalCount, abnormalCount, incompleteCount, pendingCount, totalCount, fd) {
+  function _updateCategoryBarState(bar, normalCount, abnormalCount, incompleteCount, pendingCount, collectedCount, totalCount, fd) {
     // 更新计数（不重建 DOM）
-    const cntMap = { audit: normalCount + abnormalCount, incomplete: incompleteCount, pending: pendingCount, all: totalCount };
+    const cntMap = {
+      audit: normalCount + abnormalCount,
+      incomplete: incompleteCount,
+      pending: pendingCount,
+      collected: collectedCount || 0,
+      all: totalCount
+    };
     bar.querySelectorAll('.cat-tab').forEach(b => {
       const cat = b.dataset.cat;
       b.classList.toggle('on', cat === wsCategory);
@@ -8357,6 +8414,10 @@ window.addEventListener('keydown',function(e){
       break;
     case 'incomplete':
       renderIncompleteView(data, body);
+      break;
+    case 'collected':
+      // 8.5.31: 病房采集 — 与不完整视图一致的只读模式
+      renderCollectedView(data, body);
       break;
     default:
       renderAllView(data, body);
@@ -9420,6 +9481,46 @@ window.addEventListener('keydown',function(e){
     }
   }
 
+  // --- 8.5.31: 病房采集视图（只读） — 标本已采未送，无核收、无审核 ---
+  // 与 renderIncompleteView 共用样式（条纹 / 行点击 → 详情），仅 banner 文案与列定义不同。
+  function renderCollectedView(data, body) {
+    let h = '<div class="ws-collected-banner">🩸 以下标本为病房采集中、尚未送到科室 · 仅供追踪/催送</div>';
+
+    h += '<table><thead><tr>';
+    h += '<th>仪器</th><th>姓名</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>采集日期</th>';
+    h += '</tr></thead><tbody>';
+
+    data.forEach((r, i) => {
+      h += `<tr data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
+      h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
+      h += `<td><b>${highlightText(r.Labno || '', wsSearchQuery)}</b></td>`;
+      h += `<td>${highlightText(r.RegNo || r.EpisodeNo || '', wsSearchQuery)}</td>`;
+      h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
+      // 采集中：收集 LIS 返回的 CollectionDate/CollectionTime（部分仪器有）
+      const ct = ((r.CollectionDate || '') + ' ' + (r.CollectionTime || '')).trim();
+      h += `<td>${esc(ct || '—')}</td>`;
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    body.innerHTML = h;
+
+    // 行点击 → 详情面板；空白处点击 → 收回
+    if (body._incompleteClickHandler) {
+      body.removeEventListener('click', body._incompleteClickHandler);
+    }
+    body._incompleteClickHandler = e => {
+      const tr = e.target.closest('tr[data-rdr]');
+      if (!tr) {
+        if (isDetailPanelVisible()) {closeDetailPanel();}
+        return;
+      }
+      const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
+      if (specimen) {openDetailPanel(specimen);}
+    };
+    body.addEventListener('click', body._incompleteClickHandler);
+  }
+
   // --- 结果不完整视图（只读）---
   function renderIncompleteView(data, body) {
     let h = '<div class="ws-incomplete-banner">⚠️ 以下标本结果不完整，不可审核</div>';
@@ -9472,7 +9573,8 @@ window.addEventListener('keydown',function(e){
       2: { t: '初审', cls: 'st-2t' },
       3: { t: '审核', cls: 'st-3t' },
       4: { t: '复审', cls: '' },
-      5: { t: '取消', cls: 'st-5t' }
+      5: { t: '取消', cls: 'st-5t' },
+      9: { t: '采集', cls: 'st-9t' } // 8.5.31: 病房采集中（全部视图）
     };
 
     let h = '<table><thead><tr>';
