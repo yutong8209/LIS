@@ -61,9 +61,12 @@ fi
 # 机制：标题内嵌字面 \n（反斜杠+n）会被状态栏渲染为换行（作者在 issue #149 确认的
 # "poor man's support"），不是多行输出——多行输出会轮播，单标题内换行则稳定两排。
 # 上排: 待审 不完整   下排: 待排 采集（顺序见 tooltip；下拉菜单有完整标签+跳转）
+# 裁剪修复：SwiftBar 两行标题默认偏移 twoLineMenuBarOffset = menuBarOffset - size*0.15（上移 1.65pt）
+# + 11pt 两行总高约 26pt > 菜单栏 24pt → 第一行被裁。改为 size=10（两行约 24pt 恰好放下）
+# + valign=2 正值下移抵消默认上移，使上排完整显示并整体居中。
 TITLE_ABOVE="$AR $IC"
 TITLE_BELOW="$PD $CL"
-echo "$TITLE_ABOVE\\n$TITLE_BELOW | size=11 tooltip=上排:待审 不完整 / 下排:待排 采集"
+echo "$TITLE_ABOVE\\n$TITLE_BELOW | size=10 valign=2 tooltip=待审 不完整\\n待排 采集"
 
 # ── 下拉：分类行（图标 + 标签 + 大号彩色数字，数字右对齐成列） ──
 echo "---"
