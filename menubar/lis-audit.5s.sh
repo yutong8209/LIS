@@ -1,8 +1,8 @@
 #!/bin/bash
 # <bitbar.title>LIS 待审</bitbar.title>
-# <bitbar.version>4.1</bitbar.version>
+# <bitbar.version>4.2</bitbar.version>
 # <bitbar.author>LIS-Enhancer</bitbar.author>
-# <bitbar.desc>当前筛选范围待审/不完整/待排/采集/标本总数（Apple 风格 SF Symbols，下拉分类对齐）</bitbar.desc>
+# <bitbar.desc>菜单栏两排显示 待审/不完整/待排/采集 四个状态数字（每排两个），下拉分类对齐可点击跳转</bitbar.desc>
 # <bitbar.dependencies>curl,jq</bitbar.dependencies>
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
@@ -57,12 +57,16 @@ if [ "$AGE" -gt 90 ]; then
   exit 0
 fi
 
-# ── 菜单栏标题：待审总数（正常+异常合并），有异常才显示告警圆点 ──
+# ── 菜单栏标题：两排显示四个状态数字（每排两个），随时盯数无需点开 ──
+# SwiftBar 会把每个非分隔行都渲染到状态栏 → 正好两排，每排两个状态。
+# emoji 彩色图标区分四类（菜单栏文本颜色跟随系统深浅外观，无需手动指定）。
+# 有异常待审时给第一行加红点强调；无异常保持常显 0。
 if [ "$AR" -gt 0 ] 2>/dev/null; then
-  echo ":checkmark.seal: $AR | size=14"
+  echo "🔴 ✅$AR 📋$IC | size=13"
 else
-  echo ":checkmark.seal: 0 | size=14"
+  echo "✅$AR 📋$IC | size=13"
 fi
+echo "📝$PD 🩸$CL | size=13"
 
 # ── 下拉：分类行（图标 + 标签 + 大号彩色数字，数字右对齐成列） ──
 echo "---"
