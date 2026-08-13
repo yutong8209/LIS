@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.31
+// @version      8.5.32
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -629,7 +629,7 @@
 #lis-ws-body tr.st-5{color:#8a97a6;box-shadow:inset 3px 0 0 #9aa5b1}
 .wg-tag{display:inline-block;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.2)}
 .st-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
-.st-1t{background:#fff3e0;color:#e65100}.st-2t{background:#e3f2fd;color:#1565c0}.st-3t{background:#e8f5e9;color:#2e7d32}.st-4t{background:#f3e5f5;color:#7b1fa2}.st-5t{background:#eeeeee;color:#9e9e9e}
+.st-1t{background:#fff3e0;color:#e65100}.st-2t{background:#e3f2fd;color:#1565c0}.st-3t{background:#e8f5e9;color:#2e7d32}.st-4t{background:#f3e5f5;color:#7b1fa2}.st-5t{background:#eeeeee;color:#9e9e9e}.st-9t{background:#fce4ec;color:#a8326a} /* 8.5.31: 采集状态（全部视图徽章） */
 .st-0t{background:#e0f7fa;color:#00695c}
 .stars{color:#f39c12;font-size:12px}
 .lis-highlight{background:#fff176;border-radius:2px;padding:0 2px}
@@ -6169,7 +6169,7 @@
     _detailLRU.set(key, val);
   }
 
-  const WS_CATEGORIES = ['audit', 'incomplete', 'pending', 'all'];
+  const WS_CATEGORIES = ['audit', 'incomplete', 'pending', 'collected', 'all'];
 
   function saveWSState() {
     try {
@@ -6447,13 +6447,11 @@
               const result = { rows: [], pending: [], collected: [], machine: m };
               try {
                 result.rows = await loadWL(m.RowID, ss);
-                try {
-                  result.pending = await loadPendingForMachine(m.RowID, ss);
-                } catch (e) {}
-                try {
-                  // 8.5.31: 采集状态（病房采集中、未送到科室）独立查询，与待排样互不影响
-                  result.collected = await loadCollectedForMachine(m.RowID, ss);
-                } catch (e) {}
+                // 8.5.31: 待排 + 采集 并行拉取（同一接口不同 P1），避免串行多一次等待
+                [result.pending, result.collected] = await Promise.all([
+                  loadPendingForMachine(m.RowID, ss).catch(() => []),
+                  loadCollectedForMachine(m.RowID, ss).catch(() => [])
+                ]);
               } catch (e) {}
               return result;
             })
@@ -9487,7 +9485,7 @@ window.addEventListener('keydown',function(e){
     let h = '<div class="ws-collected-banner">🩸 以下标本为病房采集中、尚未送到科室 · 仅供追踪/催送</div>';
 
     h += '<table><thead><tr>';
-    h += '<th>仪器</th><th>姓名</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>采集日期</th>';
+    h += '<th>仪器</th><th>姓名</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>采集日期</th>';
     h += '</tr></thead><tbody>';
 
     data.forEach((r, i) => {
@@ -9497,7 +9495,8 @@ window.addEventListener('keydown',function(e){
       h += `<td><b>${highlightText(r.Labno || '', wsSearchQuery)}</b></td>`;
       h += `<td>${highlightText(r.RegNo || r.EpisodeNo || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
-      // 采集中：收集 LIS 返回的 CollectionDate/CollectionTime（部分仪器有）
+      h += `<td>${highlightText(r.SpecimenDesc || r.Specimen || '', wsSearchQuery)}</td>`;
+      // 采集中：LIS 首页 dgStatusDetail 未显示采集日期列，CollectionDate 字段是否存在待真实数据确认（缺失时显示 —）
       const ct = ((r.CollectionDate || '') + ' ' + (r.CollectionTime || '')).trim();
       h += `<td>${esc(ct || '—')}</td>`;
       h += '</tr>';
@@ -10630,6 +10629,12 @@ window.addEventListener('keydown',function(e){
     if (!currentDetailSpecimen) {
       dbg('详情审核跳过: 无当前标本');
       showToast('当前没有打开的标本详情', 'warning');
+      return;
+    }
+    // 8.5.31: 采集标本（病房已采未送）不可审核，仅追踪/催送
+    if (getWSAuditBucket(currentDetailSpecimen) === 'collected') {
+      dbg('详情审核跳过: 采集标本不可审核');
+      showToast('采集标本未送检，不可审核（仅供追踪/催送）', 'warning');
       return;
     }
     if (_detailAuditInProgress) {
