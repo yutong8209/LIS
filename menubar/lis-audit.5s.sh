@@ -1,6 +1,6 @@
 #!/bin/bash
 # <bitbar.title>LIS 待审</bitbar.title>
-# <bitbar.version>4.6</bitbar.version>
+# <bitbar.version>4.7</bitbar.version>
 # <bitbar.author>LIS-Enhancer</bitbar.author>
 # <bitbar.desc>菜单栏两排显示 待审/不完整/待排/采集 四个状态数字（每排两个），下拉分类对齐可点击跳转</bitbar.desc>
 # <bitbar.dependencies>curl,jq</bitbar.dependencies>
@@ -57,9 +57,8 @@ if [ "$AGE" -gt 90 ]; then
   exit 0
 fi
 
-# ── 菜单栏标题：单行四个状态数字（待审 不完整 待排 采集），稳定不轮播 ──
-# 两行标题在菜单栏（高 24pt）上第一行必被裁（SwiftBar 行高/偏移 bug），放弃两排；单行最稳。
-echo "$AR $IC $PD $CL | size=12 tooltip=待审 不完整 待排 采集"
+# ── 菜单栏标题：单行四个状态数字（待审 · 不完整 · 待排 · 采集）──
+echo "$AR · $IC · $PD · $CL | size=14 tooltip=待审 不完整 待排 采集"
 
 # ── 下拉：分类行（图标 + 标签 + 大号彩色数字，数字右对齐成列） ──
 echo "---"
