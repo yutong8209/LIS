@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.33
+// @version      8.5.34
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7832,7 +7832,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     _updateCategoryBarState(bar, normalCount, abnormalCount, incompleteCount, pendingCount, collectedCount, totalCount, fd);
 
     updateWSFooter({
-      visible: fd.length,
+      // 8.5.34: visible 也排除忽略行，避免「可见 5 / 总 3条」倒挂
+      visible: fd.filter(r => !isWSIgnored(r.ReportDR)).length,
       total: totalCount,
       normal: normalCount,
       abnormal: abnormalCount,
@@ -8549,7 +8550,11 @@ window.addEventListener('keydown',function(e){
     if (!ft) {return;}
     if (!counts) {
       // 8.5.33: 忽略的标本不计入 footer 总数（可见行仍显示灰显，但统计数字排除）
-      counts = { visible: filteredData().length, total: wsData.filter(r => !isWSIgnored(r.ReportDR)).length };
+      // 8.5.34: visible 同样排除忽略行，避免「可见 5 / 总 3条」倒挂
+      counts = {
+        visible: filteredData().filter(r => !isWSIgnored(r.ReportDR)).length,
+        total: wsData.filter(r => !isWSIgnored(r.ReportDR)).length
+      };
     }
     const groupName = wsActiveWG ? (WG_MAP[wsActiveWG] || {}).name || wsActiveWG : '全部工作组';
     let machineName = '全部仪器';
@@ -9696,8 +9701,10 @@ window.addEventListener('keydown',function(e){
       // 8.5.33: 仅待排(0)/采集(9)行可忽略；已忽略行灰显+删除线
       const ignorable = statusVal === '0' || statusVal === '9';
       const ignored = isWSIgnored(r.ReportDR);
-      h += `<tr class="st-${statusVal} ${wsChecked.has(r.ReportDR) ? 'sel' : ''}${ignored ? ' ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
-      h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${escAttr(r.ReportDR || '')}" ${ck} /></td>`;
+      // 8.5.34: 忽略行 checkbox 禁用且不可被全选带上（忽略=不再管它）
+      const ckAttr = ignored ? ' disabled' : ck ? ' checked' : '';
+      h += `<tr class="st-${statusVal} ${wsChecked.has(r.ReportDR) && !ignored ? 'sel' : ''}${ignored ? ' ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${escAttr(r.ReportDR || '')}"${ckAttr} /></td>`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
       h += `<td><span class="st-tag ${st.cls}">${esc(st.t)}</span></td>`;
       const ic = r.IsComplete;
@@ -9754,6 +9761,12 @@ window.addEventListener('keydown',function(e){
     handlers.change = e => {
       if (e.target.id === 'lis-ws-chka') {
         body.querySelectorAll('.lis-ws-ck').forEach(c => {
+          // 8.5.34: 全选跳过忽略行（忽略行 checkbox 已禁用，这里兜底）
+          if (isWSIgnored(c.dataset.rdr)) {
+            c.checked = false;
+            c.closest('tr').classList.remove('sel');
+            return;
+          }
           if (e.target.checked) {wsChecked.add(c.dataset.rdr);}
           else {wsChecked.delete(c.dataset.rdr);}
           c.checked = e.target.checked;
@@ -9762,6 +9775,7 @@ window.addEventListener('keydown',function(e){
         return;
       }
       if (e.target.classList.contains('lis-ws-ck')) {
+        if (isWSIgnored(e.target.dataset.rdr)) {e.target.checked = false;return;} // 8.5.34: 忽略行不可勾选
         if (e.target.checked) {wsChecked.add(e.target.dataset.rdr);}
         else {wsChecked.delete(e.target.dataset.rdr);}
         e.target.closest('tr').classList.toggle('sel', e.target.checked);
@@ -10247,8 +10261,8 @@ window.addEventListener('keydown',function(e){
       return;
     }
 
-    // 获取选中的标本
-    const selectedSpecimens = filteredData().filter(r => wsChecked.has(r.ReportDR));
+    // 获取选中的标本（8.5.34: 忽略的标本不参与 F5 审核）
+    const selectedSpecimens = filteredData().filter(r => wsChecked.has(r.ReportDR) && !isWSIgnored(r.ReportDR));
     if (selectedSpecimens.length === 0) {
       toast('未找到选中的标本', 'w');
       return;
@@ -10746,6 +10760,12 @@ window.addEventListener('keydown',function(e){
     if (getWSAuditBucket(currentDetailSpecimen) === 'collected') {
       dbg('详情审核跳过: 采集标本不可审核');
       showToast('采集标本未送检，不可审核（仅供追踪/催送）', 'warning');
+      return;
+    }
+    // 8.5.34: 待排标本（未核收）同样不可审核 — 与采集守卫对称，避免拿合成 DR 去原生找标本
+    if (getWSAuditBucket(currentDetailSpecimen) === 'pending') {
+      dbg('详情审核跳过: 待排标本未核收');
+      showToast('待排标本未核收，不可审核（核收后进入待审）', 'warning');
       return;
     }
     if (_detailAuditInProgress) {
@@ -11689,6 +11709,8 @@ window.addEventListener('keydown',function(e){
         const rdr = btn.getAttribute('data-rdr') || '';
         const row = wsData.find(r => String(r.ReportDR || '') === rdr);
         toggleWSIgnore(rdr, row ? { labno: row.Labno, patName: row.PatName, testSet: row.TestSetDesc } : null);
+        // 8.5.34: 忽略后同步取消勾选（避免 F5/全选带上已忽略标本）
+        if (isWSIgnored(rdr)) {wsChecked.delete(rdr);}
         // 立即刷新分类栏 + 仪器/工作组 tab 计数 + 表格（不用等 30s 自动刷新）
         calcMachineCounts();
         renderWSTabs();
@@ -11866,7 +11888,8 @@ window.addEventListener('keydown',function(e){
   let histReports = []; // 历次报告列表（QueryReportList rows）
   const histReportCache = {}; // ReportDR -> { items, lab } 原始缓存
   const _HIST_CACHE_MAX = 40;
-  const histReportListCache = {}; // RegNo -> 历次报告列表缓存
+  const histReportListCache = {}; // RegNo -> {ts, rows} 历次报告列表缓存（8.5.34: 带时间戳，5 分钟过期）
+  const HIST_REPORT_LIST_TTL = 5 * 60 * 1000; // 8.5.34: 报告列表缓存有效期，保证新报告能出现
   let histAgg = []; // 聚合分组 [{key,name,syn,unit,ref,tier,rows}]
   let histDebug = null; // 调试信息（供真实病人实测排障）
   let histDebugVisible = false;
@@ -12027,11 +12050,12 @@ window.addEventListener('keydown',function(e){
       p.set('P5', report.TransmitDate || '');
       p.set('P14', ss);
       try {
-        data = await fetchJ(CSP + '?' + p.toString(), 20000, sig);
+        // 8.5.34: 跨组盲试 ss 时超时 20s→8s，避免首次打开历史多/跨组时长时间卡顿
+        data = await fetchJ(CSP + '?' + p.toString(), 8000, sig);
         let items = Array.isArray(data && data.ItemInfo) ? data.ItemInfo : [];
         if (!items.length && (report.Status || report.ReportStatus)) {
           p.set('P3', '');
-          data = await fetchJ(CSP + '?' + p.toString(), 20000, sig);
+          data = await fetchJ(CSP + '?' + p.toString(), 8000, sig);
           items = Array.isArray(data && data.ItemInfo) ? data.ItemInfo : [];
         }
         if (items.length) {
@@ -12187,8 +12211,10 @@ window.addEventListener('keydown',function(e){
       const regNo = String(sp.RegNo || '');
       let reports = [];
       if (regNo) {
-        if (histReportListCache[regNo]) {
-          reports = histReportListCache[regNo];
+        // 8.5.34: 缓存带时间戳，5 分钟内新核收的报告也能出现在历史里（同会话不失效）
+        const cachedList = histReportListCache[regNo];
+        if (cachedList && Date.now() - cachedList.ts < HIST_REPORT_LIST_TTL) {
+          reports = cachedList.rows;
         } else {
           // QueryReportList 不带 WorkGroupDR 时实测只返回当前登录工作组的历史，
           // 所以按每个工作组分别查一次再合并去重（同时诊断该病人是否真的无别组历史）
@@ -12220,7 +12246,7 @@ window.addEventListener('keydown',function(e){
             return true;
           });
           reports.sort((a, b) => String(_histReportDate(b)).localeCompare(String(_histReportDate(a))));
-          histReportListCache[regNo] = reports;
+          histReportListCache[regNo] = { ts: Date.now(), rows: reports }; // 8.5.34: 带时间戳
         }
       } else {
         histDebug.list = 'RegNo 为空（手工录入/未建档），跳过历次报告查询';
@@ -17462,6 +17488,8 @@ window.addEventListener('keydown',function(e){
   function registerAuditShortcuts() {
     document.addEventListener('keydown', e => {
       if (isPatientResultPanelEvent(e)) {return;}
+      // 8.5.34: 历史浮层打开时 Alt 快捷键全部让位（与 F4 桥/工作台 Enter 同款防隔层误触）
+      if (histIsOpen()) {return;}
       // 忽略输入框中的按键
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {return;}
       // 忽略如果对话框打开
