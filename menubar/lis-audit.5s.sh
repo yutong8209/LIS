@@ -1,6 +1,6 @@
 #!/bin/bash
 # <bitbar.title>LIS 待审</bitbar.title>
-# <bitbar.version>4.3</bitbar.version>
+# <bitbar.version>4.4</bitbar.version>
 # <bitbar.author>LIS-Enhancer</bitbar.author>
 # <bitbar.desc>菜单栏两排显示 待审/不完整/待排/采集 四个状态数字（每排两个），下拉分类对齐可点击跳转</bitbar.desc>
 # <bitbar.dependencies>curl,jq</bitbar.dependencies>
@@ -57,15 +57,13 @@ if [ "$AGE" -gt 90 ]; then
   exit 0
 fi
 
-# ── 菜单栏标题：单行稳定显示四个状态数字，绝不轮播 ──
-# 教训：SwiftBar 把每个非分隔行都当作一个标题 item，多个标题会在状态栏循环切换（cycled）——
-# 上一版两行标题就是「先显示前两个、过几秒换后两个」的轮播效果。菜单栏物理上只有一行，
-# 无法真正两排；故合并为单行一个 item：✅待审 📋不完整 📝待排 🩸采集 同时可见、固定不闪动。
-if [ "$AR" -gt 0 ] 2>/dev/null; then
-  echo "🔴✅$AR 📋$IC 📝$PD 🩸$CL | size=12"
-else
-  echo "✅$AR 📋$IC 📝$PD 🩸$CL | size=12"
-fi
+# ── 菜单栏标题：两行纯数字（每行两个），SwiftBar 官方 two-lines title ──
+# 机制：标题内嵌字面 \n（反斜杠+n）会被状态栏渲染为换行（作者在 issue #149 确认的
+# "poor man's support"），不是多行输出——多行输出会轮播，单标题内换行则稳定两排。
+# 上排: 待审 不完整   下排: 待排 采集（顺序见 tooltip；下拉菜单有完整标签+跳转）
+TITLE_ABOVE="$AR $IC"
+TITLE_BELOW="$PD $CL"
+echo "$TITLE_ABOVE\\n$TITLE_BELOW | size=11 tooltip=上排:待审 不完整 / 下排:待排 采集"
 
 # ── 下拉：分类行（图标 + 标签 + 大号彩色数字，数字右对齐成列） ──
 echo "---"
