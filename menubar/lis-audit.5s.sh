@@ -81,7 +81,7 @@ row() {
 row ":checkmark.seal.fill:" "待审" "$AR" "$L_GREEN" "audit"
 row ":doc.fill:" "不完整" "$IC" "$L_TEAL" "incomplete"
 row ":tray.fill:" "待排样" "$PD" "$L_INDIGO" "pending"
-row ":drop.fill:" "采集中" "$CL" "$L_PINK" "collected" # 8.5.31: 病房采集中、未送到科室
+row ":drop.fill:" "采集" "$CL" "$L_PINK" "collected" # 8.5.33: 病房采集（已采未送达）
 row ":number.circle.fill:" "标本总数" "$TO" "$L_BLUE" "all"
 
 echo "---"

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.32
+// @version      8.5.33
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -70,7 +70,8 @@
     caAuth: 'LIS_CAAuth_Persist',
     auditQueue: 'LIS_AuditQueue_Persist',
     auditQueueLock: 'LIS_AuditQueueLock',
-    wsState: 'LIS_WSState_Persist'
+    wsState: 'LIS_WSState_Persist',
+    wsIgnore: 'LIS_WSIgnore' // 8.5.33: 待排/采集标本忽略列表（忽略后不计入任何统计）
   };
   const CLASSIFY_STALE_MS = 30 * 60 * 1000;
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.61.1';
@@ -616,6 +617,13 @@
 #lis-ws-body th.sort-desc::after{content:' ↓';opacity:1}
 #lis-ws-body td{padding:4px 9px;border-bottom:1px solid var(--lis-border-light);white-space:nowrap;transition:background .12s;vertical-align:middle}
 #lis-ws-body tr{cursor:pointer;transition:background .12s}
+/* 8.5.33: 待排/采集忽略按钮 + 已忽略行灰显 */
+.ws-ignore-btn{background:none;border:1px solid #cfd8e0;border-radius:4px;font-size:11px;color:#64748b;cursor:pointer;padding:1px 6px;white-space:nowrap;vertical-align:middle}
+.ws-ignore-btn:hover{border-color:#0f766e;color:#0f766e;background:#ecfdf5}
+.ws-ignore-btn.on{border-color:#a8326a;color:#a8326a;background:#fdf2f5}
+.ws-ignore-btn.on:hover{border-color:#a8326a;color:#a8326a;background:#fce4ec}
+tr.ws-ignored td{opacity:.45;text-decoration:line-through}
+tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 #lis-ws-body tbody tr:nth-child(even){background:#fef9ee}
 #lis-ws-body tbody tr:nth-child(odd){background:#fffdfb}
 #lis-ws-body tbody tr:last-child td{border-bottom:none}
@@ -6505,6 +6513,8 @@
           return false;
         }
         wsData = allData;
+        // 8.5.33: 每次数据刷新后自动取消已核收标本的忽略（进入未审核/审核 → 恢复正常计数）
+        wsIgnoreAutoRelease(allData);
         wsMachines = allMachines;
         if (wsData.length > 0) {_lastWSNonEmptyAt = Date.now();}
         // 阶段1（partial）只加载了当前工作组，机器列表不全：此时清理勾选会把其他工作组的
@@ -6752,6 +6762,8 @@
     wsMachineCounts['_all'] = { total: 0, normalReady: 0, abnormalReady: 0, incomplete: 0 };
     wsData.forEach(r => {
       const mdr = r._mdr || '_unknown';
+      // 8.5.33: 忽略的标本不计入仪器计数
+      if (isWSIgnored(r.ReportDR)) {return;}
       if (!wsMachineCounts[mdr]) {wsMachineCounts[mdr] = { total: 0, normalReady: 0, abnormalReady: 0, incomplete: 0 };}
       wsMachineCounts[mdr].total++;
       wsMachineCounts['_all'].total++;
@@ -7008,6 +7020,92 @@
       }
     };
     setTimeout(() => tryFind(10), 1500);
+  }
+
+  // ============================================================
+  //  待排/采集标本忽略（8.5.33）：忽略后不计入任何统计；列表仍显示但灰显，可随时取消
+  // ============================================================
+  let _wsIgnored = null; // 懒加载 Map: rdr -> {labno,patName,testSet,ts}
+  function wsIgnoreLoad() {
+    if (_wsIgnored) {return;}
+    try {
+      _wsIgnored = new Map(Object.entries(JSON.parse(localStorage.getItem(K.wsIgnore) || '{}')));
+    } catch (e) {_wsIgnored = new Map();}
+  }
+  function wsIgnoreSave() {
+    if (!_wsIgnored) {return;}
+    // 顺带清理过期项：待排/采集都是当天标本（接口按今日日期查），超过 7 天仍未核收/被自动取消
+    // 说明早已离开待排列表，保留只会让 localStorage 无限增长。7 天远大于任何正常滞留时间，不会误删。
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let expired = false;
+    _wsIgnored.forEach((v, k) => {
+      if (v && v.ts && v.ts < cutoff) {
+        _wsIgnored.delete(k);
+        expired = true;
+      }
+    });
+    if (expired) {dbg('清理过期忽略项', _wsIgnored.size, '条');}
+    const obj = {};
+    _wsIgnored.forEach((v, k) => {obj[k] = v;});
+    try {localStorage.setItem(K.wsIgnore, JSON.stringify(obj));} catch (e) {}
+  }
+  function isWSIgnored(rdr) {
+    if (!rdr) {return false;}
+    wsIgnoreLoad();
+    return _wsIgnored.has(String(rdr));
+  }
+  function toggleWSIgnore(rdr, meta) {
+    if (!rdr) {return;}
+    wsIgnoreLoad();
+    const key = String(rdr);
+    if (_wsIgnored.has(key)) {_wsIgnored.delete(key);}
+    else {
+      _wsIgnored.set(key, {
+        labno: (meta && meta.labno) || '',
+        patName: (meta && meta.patName) || '',
+        testSet: (meta && meta.testSet) || '',
+        ts: Date.now()
+      });
+    }
+    wsIgnoreSave();
+  }
+  function wsIgnoreBtnHTML(rdr) {
+    if (!rdr) {return '';}
+    const ignored = isWSIgnored(rdr);
+    return '<button class="ws-ignore-btn' + (ignored ? ' on' : '') + '" data-rdr="' + escAttr(rdr) + '" title="' +
+      (ignored ? '点击取消忽略（重新计入统计）' : '点击忽略（不再计入任何统计）') + '">' +
+      (ignored ? '👁 取消' : '🙈 忽略') + '</button>';
+  }
+
+  // 8.5.33: 标本一旦核收进入未审核/审核流程（状态不再是待排 0 / 采集 9，即已在主列表出现），
+  // 自动取消忽略、恢复正常计数。忽略项 key 是合成 DR（pending:/collected:），而核收后标本用的是
+  // 真实 ReportDR，key 必然不同；此处以 Labno（检验号，院内唯一）匹配主列表标本，把对应忽略项删除。
+  function wsIgnoreAutoRelease(rows) {
+    wsIgnoreLoad();
+    if (!_wsIgnored || _wsIgnored.size === 0) {return false;}
+    const liveLabnos = new Set();
+    (rows || []).forEach(r => {
+      const st = String(r.Status || r.ReportStatus || '');
+      if (st === '0' || st === '9') {return;} // 仍在待排/采集，不动
+      const labno = String(r.Labno || '').trim();
+      if (labno) {liveLabnos.add(labno);}
+    });
+    if (liveLabnos.size === 0) {return false;}
+    let changed = false;
+    _wsIgnored.forEach((meta, key) => {
+      const k = String(key || '');
+      if (!k.startsWith('pending:') && !k.startsWith('collected:')) {return;}
+      const labno = String((meta && meta.labno) || '').trim();
+      if (labno && liveLabnos.has(labno)) {
+        _wsIgnored.delete(key);
+        changed = true;
+      }
+    });
+    if (changed) {
+      wsIgnoreSave();
+      dbg('自动取消忽略：标本已核收进入未审核/审核，恢复正常计数');
+    }
+    return changed;
   }
 
   function getWSAuditBucket(r) {
@@ -7291,6 +7389,8 @@
     machCounts['_all'] = { total: 0, normalReady: 0, abnormalReady: 0, incomplete: 0 };
 
     wsData.forEach(r => {
+      // 8.5.33: 忽略的标本不计入工作组/仪器/分类任何统计
+      if (isWSIgnored(r.ReportDR)) {return;}
       // 工作组计数
       const wg = r._wg;
       if (wgCounts[wg]) {
@@ -7421,6 +7521,8 @@
       wgCounts[w.dr] = { total: 0, normalReady: 0, abnormalReady: 0 };
     });
     wsData.forEach(r => {
+      // 8.5.33: 忽略的标本不计入工作组 tab 计数
+      if (isWSIgnored(r.ReportDR)) {return;}
       const wg = r._wg;
       if (!wgCounts[wg]) {return;}
       wgCounts[wg].total++;
@@ -7703,6 +7805,8 @@
     let filtered = wsData;
     if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
     {filtered = filtered.filter(rowPassWSMachineFilter);}
+    // 8.5.33: 忽略的标本不计入任何分类计数
+    filtered = filtered.filter(r => !isWSIgnored(r.ReportDR));
 
     let normalCount = 0,
       abnormalCount = 0,
@@ -8444,7 +8548,8 @@ window.addEventListener('keydown',function(e){
     const ft = document.getElementById('lis-ws-ft-stat');
     if (!ft) {return;}
     if (!counts) {
-      counts = { visible: filteredData().length, total: wsData.length };
+      // 8.5.33: 忽略的标本不计入 footer 总数（可见行仍显示灰显，但统计数字排除）
+      counts = { visible: filteredData().length, total: wsData.filter(r => !isWSIgnored(r.ReportDR)).length };
     }
     const groupName = wsActiveWG ? (WG_MAP[wsActiveWG] || {}).name || wsActiveWG : '全部工作组';
     let machineName = '全部仪器';
@@ -9485,11 +9590,12 @@ window.addEventListener('keydown',function(e){
     let h = '<div class="ws-collected-banner">🩸 以下标本为病房采集中、尚未送到科室 · 仅供追踪/催送</div>';
 
     h += '<table><thead><tr>';
-    h += '<th>仪器</th><th>姓名</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>采集日期</th>';
+    h += '<th>仪器</th><th>姓名</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>采集日期</th><th style="width:84px">忽略</th>';
     h += '</tr></thead><tbody>';
 
     data.forEach((r, i) => {
-      h += `<tr data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      const ignored = isWSIgnored(r.ReportDR);
+      h += `<tr class="${ignored ? 'ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
       h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
       h += `<td><b>${highlightText(r.Labno || '', wsSearchQuery)}</b></td>`;
@@ -9499,6 +9605,7 @@ window.addEventListener('keydown',function(e){
       // 采集中：LIS 首页 dgStatusDetail 未显示采集日期列，CollectionDate 字段是否存在待真实数据确认（缺失时显示 —）
       const ct = ((r.CollectionDate || '') + ' ' + (r.CollectionTime || '')).trim();
       h += `<td>${esc(ct || '—')}</td>`;
+      h += `<td style="text-align:center">${wsIgnoreBtnHTML(r.ReportDR)}</td>`;
       h += '</tr>';
     });
     h += '</tbody></table>';
@@ -9579,14 +9686,17 @@ window.addEventListener('keydown',function(e){
     let h = '<table><thead><tr>';
     h += '<th style="width:30px"><input type="checkbox" id="lis-ws-chka" /></th>';
     h +=
-      '<th>仪器</th><th>状态</th><th>完整度</th><th>流水号</th><th>姓名</th><th>检验号</th><th>医嘱</th><th>核收时间</th>';
+      '<th>仪器</th><th>状态</th><th>完整度</th><th>流水号</th><th>姓名</th><th>检验号</th><th>医嘱</th><th>核收时间</th><th style="width:84px">忽略</th>';
     h += '</tr></thead><tbody>';
 
     data.forEach((r, i) => {
       const statusVal = r.Status || r.ReportStatus || '';
       const st = stMap[statusVal] || { t: r.StatusDesc || '?', cls: '' };
       const ck = wsChecked.has(r.ReportDR) ? 'checked' : '';
-      h += `<tr class="st-${statusVal} ${wsChecked.has(r.ReportDR) ? 'sel' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      // 8.5.33: 仅待排(0)/采集(9)行可忽略；已忽略行灰显+删除线
+      const ignorable = statusVal === '0' || statusVal === '9';
+      const ignored = isWSIgnored(r.ReportDR);
+      h += `<tr class="st-${statusVal} ${wsChecked.has(r.ReportDR) ? 'sel' : ''}${ignored ? ' ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${escAttr(r.ReportDR || '')}" ${ck} /></td>`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
       h += `<td><span class="st-tag ${st.cls}">${esc(st.t)}</span></td>`;
@@ -9602,6 +9712,7 @@ window.addEventListener('keydown',function(e){
       h += `<td>${highlightText(r.Labno || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
       h += `<td>${esc(r.AcceptDT || '')}</td>`;
+      h += `<td style="text-align:center">${ignorable ? wsIgnoreBtnHTML(r.ReportDR) : ''}</td>`;
       h += '</tr>';
     });
     h += '</tbody></table>';
@@ -11566,6 +11677,25 @@ window.addEventListener('keydown',function(e){
                 <span id="lis-ws-ft-stat"></span>
             </div>`;
     document.body.appendChild(ws);
+
+    // 8.5.33: 待排/采集「忽略」按钮 — capture 阶段拦截，先于视图行点击处理器，避免误开详情
+    const wsBody = document.getElementById('lis-ws-body');
+    if (wsBody) {
+      wsBody.addEventListener('click', e => {
+        const btn = e.target && e.target.closest ? e.target.closest('.ws-ignore-btn') : null;
+        if (!btn) {return;}
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const rdr = btn.getAttribute('data-rdr') || '';
+        const row = wsData.find(r => String(r.ReportDR || '') === rdr);
+        toggleWSIgnore(rdr, row ? { labno: row.Labno, patName: row.PatName, testSet: row.TestSetDesc } : null);
+        // 立即刷新分类栏 + 仪器/工作组 tab 计数 + 表格（不用等 30s 自动刷新）
+        calcMachineCounts();
+        renderWSTabs();
+        renderWSTable();
+        renderWSCategoryBar();
+      }, true);
+    }
 
     // 监控工作台属性变化（检测是否有外部代码修改 class 或 style）
     const wsAttrObserver = new MutationObserver(muts => {
