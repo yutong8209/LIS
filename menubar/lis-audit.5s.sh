@@ -1,6 +1,6 @@
 #!/bin/bash
 # <bitbar.title>LIS 待审</bitbar.title>
-# <bitbar.version>4.9</bitbar.version>
+# <bitbar.version>5.0</bitbar.version>
 # <bitbar.author>LIS-Enhancer</bitbar.author>
 # <bitbar.desc>菜单栏两排显示 待审/不完整/待排/采集 四个状态数字（每排两个），下拉分类对齐可点击跳转</bitbar.desc>
 # <bitbar.dependencies>curl,jq</bitbar.dependencies>
@@ -61,38 +61,20 @@ fi
 # 8.5.34: tooltip 值含空格需加引号，否则 SwiftBar 只解析出第一个词「待审」
 echo "$AR · $IC · $PD · $CL | size=14 tooltip=\"待审 不完整 待排 采集\""
 
-# ── 下拉：分类行（等宽字体 + 显示宽度填充，数字右对齐成列） ──
-# 8.5.36: 对齐修复 — 原 printf %-7s 按「字符数」对齐，中文全角宽度被忽略导致数字列错位。
-# 改为 Menlo 等宽字体 + 显示宽度填充（CJK/全角=2、ASCII=1）：macOS 等宽字体下中文字形
-# 固定占 2 格、半角空格恒为 1 格，label 与数字列即可精确对齐。
+# ── 下拉：分类行（等宽字体 + tab 对齐，数字右对齐成列） ──
+# 8.5.37: 二次对齐修复 — 8.5.36 用空格填充网格，但 CJK 在 Menlo 下的 fallback 字形宽度
+# 并非严格的整数 2 倍半角空格，空格填充在混合中日文时仍会错位。
+# 改用 SwiftBar 原生 tab 对齐：SwiftBar 会把 \t 渲染到等宽 tab stop，数字列天然右对齐，
+# 跨 CJK/ASCII 宽度差异稳定对齐。文字左对齐、数字右对齐。
 echo "---"
 echo "$M | $H_FONT sfimage=slider.horizontal.3 sfcolor=$C_BLUE"
 echo "---"
 JUMP="$HOME/lis-menubar/lis_jump.sh"
 
-# 显示宽度：CJK/全角=2，ASCII=1
-disp_w() {
-  printf '%s' "$1" | perl -CSD -e 'my $s=<>; chomp $s; my @c=unpack("U*",$s); my $n=0; for(@c){$n += ($_ > 127) ? 2 : 1} print $n'
-}
-# 右填充半角空格到目标显示宽度（label 用）
-pad_r() {
-  local s="$1" w="$2" n
-  n=$(disp_w "$s")
-  while [ "$n" -lt "$w" ]; do s="$s "; n=$((n + 1)); done
-  printf '%s' "$s"
-}
-# 左填充半角空格到目标显示宽度（数字右对齐用）
-pad_l() {
-  local s="$1" w="$2" n
-  n=$(disp_w "$s")
-  while [ "$n" -lt "$w" ]; do s=" $s"; n=$((n + 1)); done
-  printf '%s' "$s"
-}
-
 row() {
   local icon="$1" label="$2" val="$3" color="$4" cat="$5"
-  # label 列固定 9 显示宽、数字列固定 4 显示宽右对齐
-  echo "$(pad_r "$label" 9)$(pad_l "$val" 4) | size=15 font=Menlo color=$color sfimage=$icon sfcolor=$color bash=$JUMP param1=$cat terminal=false"
+  # 文字（左对齐）\t 数字（右对齐到等宽 tab stop）
+  echo "$label	$val | size=15 font=Menlo color=$color sfimage=$icon sfcolor=$color bash=$JUMP param1=$cat terminal=false"
 }
 
 row "checkmark.seal.fill" "待审" "$AR" "$L_GREEN" "audit"
