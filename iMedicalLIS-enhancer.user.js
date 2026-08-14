@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.39
+// @version      8.5.40
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6609,10 +6609,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           allMachines.push(...r.machines);
           if (r.machinesOk && r.wg) {loadedWGs.add(String(r.wg));}
         }
-        if (allData.length === 0 && wsData.length > 0 && !partial) {
-          dbg('刷新返回空数据，保留原有', wsData.length, '条');
+        // 8.5.40: 空数据保护扩展到 partial 阶段——长时间闲置/会话过期/网络瞬断时，
+        // 阶段1(partial)返回空会直接把 wsData 清空、统计全变 0；阶段2 再空时 wsData 已为空
+        // 导致保护条件失效。改为：只要「返回空 && 已有数据」就保留旧数据，等下一轮恢复。
+        if (allData.length === 0 && wsData.length > 0) {
+          dbg('刷新返回空数据，保留原有', wsData.length, '条', partial ? '(partial)' : '');
           if (qi) {qi.textContent = `刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;}
-          if (force) {showToast('工作台强制刷新仍返回空数据，可能需要重新登录或刷新浏览器页面', 'warning');}
+          // 8.5.40: 强制刷新的警告只在全量阶段判断（partial 阶段空可能是瞬断，阶段2会恢复）
+          if (!partial && force) {showToast('工作台强制刷新仍返回空数据，可能需要重新登录或刷新浏览器页面', 'warning');}
           return false;
         }
         wsData = allData;
@@ -7957,6 +7961,30 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       collected: collectedCount, // 8.5.31
       total: totalCount
     });
+
+    // 8.5.40: 更新「当前 CA 认证账号」徽标（异步取默认账号）
+    updateCaUserBadge();
+  }
+
+  // 8.5.40: 工作台右侧显示当前 CA 认证账号（审核者），保证审核身份正确
+  function updateCaUserBadge() {
+    const el = document.querySelector('.cat-ca');
+    if (!el) {return;}
+    caDefaultAccount().then(acc => {
+      const cur = _caAccountCurUser();
+      const explicit = String(localStorage.getItem(K.caDefaultUser) || '');
+      const id = acc ? acc.id : '';
+      const note = acc && acc.note ? ' · ' + acc.note : '';
+      const tag = cur && id === cur ? '当前登录' : explicit && id === explicit ? '默认' : '';
+      el.title = id ? `当前 CA 认证账号：${id}${note}` : '尚未配置 CA 账号';
+      if (!id) {
+        el.innerHTML = '<span style="color:#9aa5b1;font-weight:400">👤 CA 未配置</span>';
+        return;
+      }
+      el.innerHTML =
+        `<span title="当前 CA 认证账号（审核者）">👤 ${esc(id)}${note}</span>` +
+        (tag ? `<span style="font-size:10px;color:#0f766e;background:#ecfdf5;border:1px solid #99f6e4;border-radius:4px;padding:0 4px;margin-left:4px">${tag}</span>` : '');
+    }).catch(() => {});
   }
 
   function _buildCategoryBarDOM(bar) {
@@ -7971,8 +7999,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     h += '<button class="cat-tab cat-collected" data-cat="collected" title="病房已采未送到科室的标本（仅供追踪/催送）">\n            🩸采集 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab" data-cat="all">\n            📃全部 <span class="cat-cnt">0</span>\n        </button>';
 
-    // 右侧：统计信息
-    h += '<div class="cat-right"><span class="cat-stats cat-hint"></span><span class="cat-stats cat-counts"></span></div>';
+    // 右侧：统计信息 + 当前 CA 认证账号（8.5.40）
+    h += '<div class="cat-right"><span class="cat-stats cat-hint"></span><span class="cat-stats cat-counts"></span><span class="cat-stats cat-ca" title="当前 CA 认证账号（审核者）"></span></div>';
 
     bar.innerHTML = h;
 
@@ -14386,6 +14414,8 @@ window.addEventListener('keydown',function(e){
     syncCAUkeyAcrossUsers(iframeWin);
     saveCAAuth();
     forceCloseCAWindow(iframeWin);
+    // 8.5.40: 认证成功后立即刷新工作台右侧的 CA 账号徽标
+    try { updateCaUserBadge(); } catch (e) {}
     dbg('CA: 认证成功（Ukey 已写入 / 窗口已关闭）');
   }
 
