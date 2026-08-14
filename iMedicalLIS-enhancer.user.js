@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.40
+// @version      8.5.41
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7967,6 +7967,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   // 8.5.40: 工作台右侧显示当前 CA 认证账号（审核者），保证审核身份正确
+  // 8.5.41: 只显示备注名（无备注则兜底用户名），完整信息放悬停提示，避免拥挤
   function updateCaUserBadge() {
     const el = document.querySelector('.cat-ca');
     if (!el) {return;}
@@ -7974,16 +7975,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const cur = _caAccountCurUser();
       const explicit = String(localStorage.getItem(K.caDefaultUser) || '');
       const id = acc ? acc.id : '';
-      const note = acc && acc.note ? ' · ' + acc.note : '';
+      const note = acc && acc.note ? acc.note : '';
       const tag = cur && id === cur ? '当前登录' : explicit && id === explicit ? '默认' : '';
-      el.title = id ? `当前 CA 认证账号：${id}${note}` : '尚未配置 CA 账号';
-      if (!id) {
-        el.innerHTML = '<span style="color:#9aa5b1;font-weight:400">👤 CA 未配置</span>';
-        return;
-      }
-      el.innerHTML =
-        `<span title="当前 CA 认证账号（审核者）">👤 ${esc(id)}${note}</span>` +
-        (tag ? `<span style="font-size:10px;color:#0f766e;background:#ecfdf5;border:1px solid #99f6e4;border-radius:4px;padding:0 4px;margin-left:4px">${tag}</span>` : '');
+      el.title = id
+        ? `CA认证账号：${id}${note ? ' · ' + note : ''}${tag ? '（' + tag + '）' : ''}`
+        : '尚未配置 CA 账号';
+      el.textContent = note || id || ''; // 有备注显示备注，无备注兜底用户名
     }).catch(() => {});
   }
 
