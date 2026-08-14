@@ -1,6 +1,6 @@
 #!/bin/bash
 # <bitbar.title>LIS 待审</bitbar.title>
-# <bitbar.version>4.8</bitbar.version>
+# <bitbar.version>4.9</bitbar.version>
 # <bitbar.author>LIS-Enhancer</bitbar.author>
 # <bitbar.desc>菜单栏两排显示 待审/不完整/待排/采集 四个状态数字（每排两个），下拉分类对齐可点击跳转</bitbar.desc>
 # <bitbar.dependencies>curl,jq</bitbar.dependencies>
@@ -61,25 +61,45 @@ fi
 # 8.5.34: tooltip 值含空格需加引号，否则 SwiftBar 只解析出第一个词「待审」
 echo "$AR · $IC · $PD · $CL | size=14 tooltip=\"待审 不完整 待排 采集\""
 
-# ── 下拉：分类行（图标 + 标签 + 大号彩色数字，数字右对齐成列） ──
+# ── 下拉：分类行（等宽字体 + 显示宽度填充，数字右对齐成列） ──
+# 8.5.36: 对齐修复 — 原 printf %-7s 按「字符数」对齐，中文全角宽度被忽略导致数字列错位。
+# 改为 Menlo 等宽字体 + 显示宽度填充（CJK/全角=2、ASCII=1）：macOS 等宽字体下中文字形
+# 固定占 2 格、半角空格恒为 1 格，label 与数字列即可精确对齐。
 echo "---"
 echo "$M | $H_FONT sfimage=slider.horizontal.3 sfcolor=$C_BLUE"
 echo "---"
-
-# 用 printf 把数字右对齐到固定宽度，形成整齐右列；点击跳转对应分类
 JUMP="$HOME/lis-menubar/lis_jump.sh"
-row() {
-  local icon="$1" label="$2" val="$3" color="$4" cat="$5"
-  printf "%s %-7s%4s\n" "$icon" "$label" "$val" \
-    | awk -v c="$color" -v f="size=16 font=.AppleSystemUIFont semibold=true color=$color" -v j="$JUMP" -v cat="$cat" \
-      '{ printf "%s | %s bash=%s param1=%s terminal=false\n", $0, f, j, cat }'
+
+# 显示宽度：CJK/全角=2，ASCII=1
+disp_w() {
+  printf '%s' "$1" | perl -CSD -e 'my $s=<>; chomp $s; my @c=unpack("U*",$s); my $n=0; for(@c){$n += ($_ > 127) ? 2 : 1} print $n'
+}
+# 右填充半角空格到目标显示宽度（label 用）
+pad_r() {
+  local s="$1" w="$2" n
+  n=$(disp_w "$s")
+  while [ "$n" -lt "$w" ]; do s="$s "; n=$((n + 1)); done
+  printf '%s' "$s"
+}
+# 左填充半角空格到目标显示宽度（数字右对齐用）
+pad_l() {
+  local s="$1" w="$2" n
+  n=$(disp_w "$s")
+  while [ "$n" -lt "$w" ]; do s=" $s"; n=$((n + 1)); done
+  printf '%s' "$s"
 }
 
-row ":checkmark.seal.fill:" "待审" "$AR" "$L_GREEN" "audit"
-row ":doc.fill:" "不完整" "$IC" "$L_TEAL" "incomplete"
-row ":tray.fill:" "待排样" "$PD" "$L_INDIGO" "pending"
-row ":drop.fill:" "采集" "$CL" "$L_PINK" "collected" # 8.5.33: 病房采集（已采未送达）
-row ":number.circle.fill:" "标本总数" "$TO" "$L_BLUE" "all"
+row() {
+  local icon="$1" label="$2" val="$3" color="$4" cat="$5"
+  # label 列固定 9 显示宽、数字列固定 4 显示宽右对齐
+  echo "$(pad_r "$label" 9)$(pad_l "$val" 4) | size=15 font=Menlo color=$color sfimage=$icon sfcolor=$color bash=$JUMP param1=$cat terminal=false"
+}
+
+row "checkmark.seal.fill" "待审" "$AR" "$L_GREEN" "audit"
+row "doc.fill" "不完整" "$IC" "$L_TEAL" "incomplete"
+row "tray.fill" "待排样" "$PD" "$L_INDIGO" "pending"
+row "drop.fill" "采集" "$CL" "$L_PINK" "collected" # 8.5.33: 病房采集（已采未送达）
+row "number.circle.fill" "标本总数" "$TO" "$L_BLUE" "all"
 
 echo "---"
 echo "更新于 $TIME_TXT | $SUB_FONT sfimage=clock"
