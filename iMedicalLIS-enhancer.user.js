@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.43
+// @version      8.5.44
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7230,7 +7230,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   function getWSAuditBucket(r) {
     const status = String(r.Status || r.ReportStatus || '');
-    if (status === '3' || status === '4') {return 'audited';}
+    if (status === '3' || status === '4') {
+      // 8.5.44: 审核/复审但结果不完整（如复检/打回重测，IsComplete≠1）→ 归入「不完整」，
+      // 不能一律当已审核隐藏——否则复检标本在任何标签都找不到（只在全部可见）
+      const complete = String(r.IsComplete || '');
+      if (complete !== '1') {return 'incomplete';}
+      return 'audited';
+    }
     if (status === '0') {return 'pending';}
     if (status === '9') {return 'collected';} // 8.5.31: 病房采集中、未送到科室
     const complete = String(r.IsComplete || '');
