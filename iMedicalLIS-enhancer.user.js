@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.36
+// @version      8.5.37
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -362,10 +362,12 @@
     for (const [u, a] of Object.entries(obj)) {
       if (!a || !a.user || !u) {continue;}
       let pwd = '';
-      try {
-        pwd = String(a.pwd || ''), pwd = await decPwdV2(pwd);
-      } catch (e) {
-        pwd = loadCAPwd(); // 兜底旧格式
+      if (a.pwd) {
+        try {
+          pwd = await decPwdV2(String(a.pwd));
+        } catch (e) {
+          pwd = loadCAPwd(); // 兜底旧格式
+        }
       }
       out[u] = { user: a.user, pwd, note: a.note || '', ts: a.ts || 0, legacy: !!a.legacy };
     }
@@ -11939,6 +11941,10 @@ window.addEventListener('keydown',function(e){
                 <div class="sts" id="lis-pwds"></div>
                 <label style="font-size:13px;color:#555;display:block;margin-bottom:6px;margin-top:16px">CA 认证账号（capping 多账号）</label>
                 <div id="lis-caaccts" style="max-height:200px;overflow-y:auto;border:1px solid #e3e8ef;border-radius:6px;padding:6px;margin-bottom:10px"></div>
+                <div id="lis-caedit-tip" style="display:none;align-items:center;gap:8px;padding:6px 10px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;margin-bottom:8px;font-size:12px;color:#4f46e5">
+                    <span style="flex:1">正在编辑账号：<b style="color:#3730a3"></b>（密码留空 = 不改）</span>
+                    <button id="lis-caedit-cx" style="background:none;border:none;color:#4f46e5;font-size:14px;cursor:pointer;line-height:1">✕</button>
+                </div>
                 <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
                     <input type="text" id="lis-caui" placeholder="用户名" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
                     <input type="password" id="lis-cawdi" placeholder="CA 密码" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
@@ -11969,6 +11975,9 @@ window.addEventListener('keydown',function(e){
         setTimeout(closePwdDlg, 600);
       });
       document.getElementById('lis-cawdi') && document.getElementById('lis-caadd').addEventListener('click', _maybeCommitCaForm);
+      // 取消账号编辑
+      const _cx = document.getElementById('lis-caedit-cx');
+      if (_cx) {_cx.addEventListener('click', () => _caExitEdit());}
       // Enter 快捷新增账号
       document.getElementById('lis-caadd').addEventListener('keydown', e => {
         if (e.key === 'Enter') {e.preventDefault();_maybeCommitCaForm();}
@@ -11990,6 +11999,9 @@ window.addEventListener('keydown',function(e){
         document.getElementById('lis-caui').value = '';
         document.getElementById('lis-cawdi').value = '';
         document.getElementById('lis-canote').value = '';
+        _caEditUser = ''; // 8.5.37: 清除时退出编辑态
+        const _tip = document.getElementById('lis-caedit-tip');
+        if (_tip) {_tip.style.display = 'none';}
         document.getElementById('lis-pwds').innerHTML = '<span style="color:#e74c3c">✓ 已清除</span>';
         document.getElementById('lis-cawds').innerHTML = '<span style="color:#e74c3c">✓ 已清除</span>';
         _renderCaAccountList(document.getElementById('lis-caaccts'));
@@ -12010,21 +12022,53 @@ window.addEventListener('keydown',function(e){
     document.getElementById('lis-pwdi').focus();
   }
 
+  // 当前正在编辑的账号用户名（''=新增模式）。8.5.37 支持编辑已存账号。
+  let _caEditUser = '';
+
+  // 编辑态下退出（还原表单为新增模式）
+  function _caExitEdit() {
+    _caEditUser = '';
+    document.getElementById('lis-caui').value = '';
+    document.getElementById('lis-cawdi').value = '';
+    document.getElementById('lis-canote').value = '';
+    const tip = document.getElementById('lis-caedit-tip');
+    if (tip) {tip.style.display = 'none';}
+  }
+
   // 把当前表单里的用户名+密码+备注作为账号落盘并刷新列表
   async function _maybeCommitCaForm() {
     const u = (document.getElementById('lis-caui').value || '').trim();
     const pw = document.getElementById('lis-cawdi').value;
     const note = (document.getElementById('lis-canote').value || '').trim();
     if (!u) {return false;}
-    if (!pw) {
+    // 新增时必须有密码；编辑时可留空（不改密码）
+    if (!pw && !_caEditUser) {
       toast('请输入 CA 密码', 'w');
       return false;
     }
-    await caAccountSet(u, { user: u, pwd: pw, note });
+    if (_caEditUser) {
+      // 编辑模式：更新备注；密码留空保留原密码，填了则覆盖
+      const all = await caAccountsAll();
+      const orig = all[_caEditUser] || {};
+      const newPwd = pw ? pw : (orig.pwd || '');
+      await caAccountSet(u, { user: u, pwd: newPwd, note, ts: orig.ts });
+      // 若改了用户名：清掉旧键；默认标记跟随新用户名
+      if (u !== _caEditUser) {
+        caAccountDelete(_caEditUser);
+        if (String(localStorage.getItem(K.caDefaultUser) || '') === _caEditUser) {
+          localStorage.setItem(K.caDefaultUser, u);
+        }
+      }
+      _caExitEdit();
+      document.getElementById('lis-cawds').innerHTML = '<span style="color:#27ae60">✓ 账号已更新</span>';
+      toast(`已更新账号 ${u}`);
+    } else {
+      await caAccountSet(u, { user: u, pwd: pw, note });
+      document.getElementById('lis-cawds').innerHTML = '<span style="color:#27ae60">✓ 账号已保存</span>';
+    }
     document.getElementById('lis-caui').value = '';
     document.getElementById('lis-cawdi').value = '';
     document.getElementById('lis-canote').value = '';
-    document.getElementById('lis-cawds').innerHTML = '<span style="color:#27ae60">✓ 账号已保存</span>';
     _renderCaAccountList(document.getElementById('lis-caaccts'));
     return true;
   }
@@ -12053,11 +12097,28 @@ window.addEventListener('keydown',function(e){
                     ${a.note ? ' <span style="font-size:11px;color:#9aa5b1">· ' + esc(a.note) + '</span>' : ''}
                     <div style="font-size:10px;color:#9aa5b1">${a.pwd ? '已存密码' : '无密码'}</div>
                 </div>
+                <button class="lis-ca-edit" data-u="${escAttr(u)}" style="height:24px;padding:0 8px;font-size:11px;border:1px solid #c7d2fe;border-radius:4px;background:#fff;color:#4f46e5;cursor:pointer">编辑</button>
                 <button class="lis-ca-def" data-u="${escAttr(u)}" style="height:24px;padding:0 8px;font-size:11px;border:1px solid #cfd8e0;border-radius:4px;background:#fff;color:#475569;cursor:pointer">${isDefault ? '✓默认' : '设默认'}</button>
                 <button class="lis-ca-del" data-u="${escAttr(u)}" style="height:24px;padding:0 8px;font-size:11px;border:1px solid #fecaca;border-radius:4px;background:#fff;color:#dc2626;cursor:pointer">删除</button>
             </div>`;
     });
     box.innerHTML = h;
+    box.querySelectorAll('.lis-ca-edit').forEach(b => {
+      b.addEventListener('click', async () => {
+        const u = b.getAttribute('data-u');
+        const all = await caAccountsAll();
+        const a = all[u];
+        if (!a) {return;}
+        // 回填到表单进入编辑态；密码留空表示「不改」
+        _caEditUser = u;
+        document.getElementById('lis-caui').value = a.user || u;
+        document.getElementById('lis-cawdi').value = '';
+        document.getElementById('lis-canote').value = a.note || '';
+        const tip = document.getElementById('lis-caedit-tip');
+        if (tip) {tip.style.display = 'flex';tip.querySelector('b').textContent = u;}
+        document.getElementById('lis-cawdi').focus();
+      });
+    });
     box.querySelectorAll('.lis-ca-def').forEach(b => {
       b.addEventListener('click', () => {
         const u = b.getAttribute('data-u');
