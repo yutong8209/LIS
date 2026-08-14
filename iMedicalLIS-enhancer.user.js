@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.38
+// @version      8.5.39
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -12954,8 +12954,11 @@ window.addEventListener('keydown',function(e){
             <h4>⚡ 快速登录 — iMedicalLIS</h4>
             <div class="lis-lb-row">
                 <label>用户名 <span style="color:#9aa5b1;font-weight:400">（可下拉选已存 CA 账号，或手输）</span></label>
-                <input type="text" id="lis-lu" placeholder="用户名" value="${creds ? esc(creds.user) : ''}" autocomplete="username" list="lis-ca-accounts" />
-                <datalist id="lis-ca-accounts"></datalist>
+                <div style="position:relative;display:flex;align-items:center">
+                    <input type="text" id="lis-lu" placeholder="用户名" value="${creds ? esc(creds.user) : ''}" autocomplete="username" list="lis-ca-accounts" style="flex:1" />
+                    <datalist id="lis-ca-accounts"></datalist>
+                    <button type="button" id="lis-lu-arrow" title="选择已存 CA 账号" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:12px;color:#999;padding:4px 6px">▾</button>
+                </div>
             </div>
             <div class="lis-lb-row">
                 <label>密码</label>
@@ -13059,6 +13062,16 @@ window.addEventListener('keydown',function(e){
       });
     })();
 
+    // 8.5.39: 用户名旁的 ▾ 箭头 → 弹自定义账号选择浮层（免手动删预填用户名）
+    const arrowBtn = document.getElementById('lis-lu-arrow');
+    if (arrowBtn) {
+      arrowBtn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        _loginPickAccount(); // 填入 chosen username，密码由用户手输
+      });
+    }
+
     // Enter 快捷键
     box.addEventListener('keydown', e => {
       if (e.key === 'Enter') {doLogin(selectedWG);}
@@ -13109,6 +13122,58 @@ window.addEventListener('keydown',function(e){
     // 必须走原生表单流程（服务器需要先 checkUser 创建安全组会话）
     fillNativeAndSubmit(user, pwd, wgDR);
   }
+
+  // 8.5.39: 登录弹窗的账号选择浮层 — 点 ▾ 箭头弹出，列出已存 CA 账号（用户名·备注），
+  // 点选后填入用户名输入框并聚焦到密码框（密码仍手输）。免去手动删除预填用户名的麻烦。
+  function _loginPickAccount() {
+    const lu = document.getElementById('lis-lu');
+    if (!lu) {return;}
+    (async () => {
+      const all = await caAccountsAll();
+      const keys = Object.keys(all).sort();
+      const overlay = document.createElement('div');
+      overlay.id = 'lis-accountpick';
+      overlay.style.cssText =
+        'position:fixed;inset:0;z-index:120002;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center';
+      overlay.innerHTML = `<div style="background:#fff;border-radius:12px;width:340px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.3);overflow:hidden">
+            <div style="padding:14px 18px;background:#667eea;color:#fff;font-weight:700;display:flex;justify-content:space-between;align-items:center">
+                <span>选择登录账号</span>
+                <button id="lis-accountpick-x" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1">✕</button>
+            </div>
+            <div style="padding:10px 16px;font-size:12px;color:#6b7785">选一个已保存的 CA 账号填入用户名，密码请手动输入。</div>
+            <div style="max-height:240px;overflow-y:auto;padding:0 10px 10px">
+                ${keys.length === 0 ? '<div style="padding:16px;text-align:center;color:#9aa5b1;font-size:12px">还没有已保存的 CA 账号，可在设置里添加。</div>' : ''}
+                ${keys.map(u => {
+                  const a = all[u];
+                  return `<button data-user="${escAttr(u)}" style="display:block;width:100%;text-align:left;padding:9px 12px;margin:4px 2px;border:1px solid #e3e8ef;border-radius:6px;background:#fff;color:#334155;font-size:13px;cursor:pointer">
+                            <b style="color:#dc2626">${esc(u)}</b>${a.note ? ' <span style="color:#9aa5b1">· ' + esc(a.note) + '</span>' : ''}
+                            <span style="float:right;color:#0f766e;font-size:11px">选用</span>
+                          </button>`;
+                }).join('')}
+            </div>
+            <div style="padding:10px 14px;border-top:1px solid #f0f3f7;display:flex;justify-content:flex-end">
+                <button id="lis-accountpick-cancel" style="height:30px;padding:0 14px;border:1px solid #cfd8e0;border-radius:5px;font-size:12px;background:#fff;color:#475569;cursor:pointer">取消</button>
+            </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const finish = () => { try { overlay.remove(); } catch (e) {} };
+      overlay.querySelectorAll('button[data-user]').forEach(b => {
+        b.addEventListener('click', () => {
+          const u = b.getAttribute('data-user');
+          lu.value = u;
+          finish();
+          const lp = document.getElementById('lis-lp');
+          if (lp && lp.focus) {lp.focus();}
+        });
+      });
+      overlay.querySelector('#lis-accountpick-x').addEventListener('click', finish);
+      overlay.querySelector('#lis-accountpick-cancel').addEventListener('click', finish);
+      overlay.addEventListener('click', e => { if (e.target === overlay) {finish();} });
+      const x = overlay.querySelector('#lis-accountpick-x');
+      if (x) {x.focus();}
+    })();
+  }
+
   function fillNativeLoginForm(creds, lastWG) {
     try {
       const userField = document.getElementById('txtUserCode');
