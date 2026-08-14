@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.42
+// @version      8.5.43
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -352,10 +352,15 @@
     const cur = _caAccountCurUser();
     if (cur) {
       const legacy = await loadCAPwdAsync();
+      // 8.5.43: 旧单密码首次并入当前登录用户账号后立即落盘 + 清除旧 key，
+      // 否则每次调用都重新并入内存、用户删除该账号后又被 K.caPwd 复活（删不掉）
       if (legacy && !obj[cur]) {
         let p = legacy;
         try { p = await encPwdV2(p); } catch (e) {}
         obj[cur] = { user: cur, pwd: p, note: '', ts: Date.now(), legacy: true };
+        caAccountsSave(obj);
+        try { localStorage.removeItem(K.caPwd); } catch (e) {}
+        dbg('CA 旧单密码已并入账号并清除旧 key:', cur);
       }
     }
     const out = {};
@@ -366,7 +371,8 @@
         try {
           pwd = await decPwdV2(String(a.pwd));
         } catch (e) {
-          pwd = loadCAPwd(); // 兜底旧格式
+          // 8.5.43: 解密失败返回空（不再兜底 loadCAPwd——多账号语境下会错误返回旧单密码）
+          pwd = '';
         }
       }
       out[u] = { user: a.user, pwd, note: a.note || '', ts: a.ts || 0, legacy: !!a.legacy };
@@ -14634,15 +14640,13 @@ window.addEventListener('keydown',function(e){
   // 通过一个确认提示，由用户决定是否手动换账号重试
   let caOK = await submitOnce(account);
   if (!caOK && !anyCAUkeyPresent(iframeWin)) {
-    const wantSwitch = await _caAskSwitchAccount(account.id, isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin));
-    if (wantSwitch && account.id !== (await caDefaultAccount())?.id) {
-      // 用户已通过浮层选择了新账号并设为默认，用新默认账号重试一次
-      const next = await caDefaultAccount();
-      if (next && next.id !== account.id) {
-        dbg('CA: 切换到账号', next.id, '重试');
-        account = next;
-        caOK = await submitOnce(account);
-      }
+    // 8.5.43: _caAskSwitchAccount 直接返回用户选中的账号对象，不再重查 caDefaultAccount()——
+    // 否则「当前登录优先」会把用户选的账号劫持回当前登录账号，切换永远无效
+    const picked = await _caAskSwitchAccount(account.id, isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin));
+    if (picked && picked.id && picked.id !== account.id && picked.pwd) {
+      dbg('CA: 切换到账号', picked.id, '重试');
+      account = picked;
+      caOK = await submitOnce(account);
     }
   }
   if (caOK) {return true;}
@@ -14651,7 +14655,7 @@ window.addEventListener('keydown',function(e){
 }
 
   // 8.5.36: CA 认证失败后的切换确认 — 由用户决定是否换账号重试（不自动连环试错）
-  // 返回 true=已切换并使用新账号；false/取消=不重试
+  // 8.5.43: 返回用户选中的账号对象 { id, pwd, note }（含明文密码供重试）；false=取消
   function _caAskSwitchAccount(currentId, alreadyReady) {
     return new Promise(async resolve => {
       const cur = String(currentId || '');
@@ -14689,8 +14693,9 @@ window.addEventListener('keydown',function(e){
       };
       overlay.querySelectorAll('button[data-u]').forEach(b => {
         b.addEventListener('click', () => {
-          try { localStorage.setItem(K.caDefaultUser, b.getAttribute('data-u')); } catch (e) {}
-          finish(true);
+          const u = b.getAttribute('data-u');
+          try { localStorage.setItem(K.caDefaultUser, u); } catch (e) {}
+          finish(all[u] ? { id: u, ...all[u] } : false); // 8.5.43: 返回选中账号（含明文密码）
         });
       });
       overlay.querySelector('#lis-capick-cancel').addEventListener('click', () => finish(false));
