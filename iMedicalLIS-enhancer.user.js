@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.35
+// @version      8.5.36
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -68,6 +68,8 @@
     tgt: 'LIS_NavigateTarget',
     caPwd: 'LIS_CAPwd_Persist',
     caAuth: 'LIS_CAAuth_Persist',
+    caAccounts: 'LIS_CAAccounts_Persist', // 8.5.36: 多用户 CA 账号（用户名→加密密码+认证票据）
+    caDefaultUser: 'LIS_CADefaultUser', // 8.5.36: 当前用于 CA 的默认账号用户名
     auditQueue: 'LIS_AuditQueue_Persist',
     auditQueueLock: 'LIS_AuditQueueLock',
     wsState: 'LIS_WSState_Persist',
@@ -317,6 +319,103 @@
       dbg('migratePwdStorage 失败:', e.message);
     }
   }
+
+  // ============================================================
+  //  多用户 CA 账号（8.5.36）：每个账号 = 用户名 + 加密密码（可带备注）
+  //  存储：{ [username]: { user, pwd(加密), note, ts } }
+  //  兼容：旧 K.caPwd 第一次访问时并入当前登录用户账号（legacy 兜底）
+  // ============================================================
+  const _caAccountCurUser = () => {
+    try {
+      const u = uname ? uname() : '';
+      return String(u || (loadLoginCreds && loadLoginCreds() ? loadLoginCreds().user : '') || '');
+    } catch (e) { return ''; }
+  };
+  function caAccountsLoad() {
+    try {
+      const raw = localStorage.getItem(K.caAccounts);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function caAccountsSave(obj) {
+    try {
+      localStorage.setItem(K.caAccounts, JSON.stringify(obj));
+    } catch (e) {
+      dbg('caAccountsSave 失败:', e.message);
+    }
+  }
+  // 取全部账号（解密后的明文密码；note 保留明文）
+  async function caAccountsAll() {
+    const obj = caAccountsLoad();
+    const cur = _caAccountCurUser();
+    if (cur) {
+      const legacy = await loadCAPwdAsync();
+      if (legacy && !obj[cur]) {
+        let p = legacy;
+        try { p = await encPwdV2(p); } catch (e) {}
+        obj[cur] = { user: cur, pwd: p, note: '', ts: Date.now(), legacy: true };
+      }
+    }
+    const out = {};
+    for (const [u, a] of Object.entries(obj)) {
+      if (!a || !a.user || !u) {continue;}
+      let pwd = '';
+      try {
+        pwd = String(a.pwd || ''), pwd = await decPwdV2(pwd);
+      } catch (e) {
+        pwd = loadCAPwd(); // 兜底旧格式
+      }
+      out[u] = { user: a.user, pwd, note: a.note || '', ts: a.ts || 0, legacy: !!a.legacy };
+    }
+    return out;
+  }
+  // 保存/覆盖某账号；pwd 解密存储由调用方传明文，这里负责加密落盘
+  async function caAccountSet(username, account) {
+    const u = String(username || '');
+    if (!u) {return;}
+    const obj = caAccountsLoad();
+    const a = Object.assign({}, account);
+    if (a.pwd) {
+      try { a.pwd = await encPwdV2(a.pwd); } catch (e) { /* 保留明文仅当加密不可用 */ }
+    }
+    a.ts = Date.now();
+    obj[u] = a;
+    caAccountsSave(obj);
+  }
+  function caAccountDelete(username) {
+    const obj = caAccountsLoad();
+    delete obj[String(username || '')];
+    caAccountsSave(obj);
+  }
+  function caAccountsClear() {
+    try { localStorage.removeItem(K.caAccounts); } catch (e) {}
+  }
+  // 取某用户的明文密码
+  async function caAccountPwd(username) {
+    const u = String(username || '');
+    if (!u) {return '';}
+    const all = await caAccountsAll();
+    return (all[u] && all[u].pwd) || '';
+  }
+  // 默认 CA 账号：显式指定 → 当前登录用户 → 任意有密码的首个
+  async function caDefaultAccount() {
+    const all = await caAccountsAll();
+    const cur = _caAccountCurUser();
+    const explicit = String(localStorage.getItem(K.caDefaultUser) || '');
+    const pick = id => {
+      const a = all[id];
+      return a && a.pwd ? id : null;
+    };
+    if (explicit && pick(explicit)) {return { id: explicit, ...all[explicit] };}
+    if (cur && pick(cur)) {return { id: cur, ...all[cur] };}
+    for (const [id, a] of Object.entries(all)) {
+      if (a && a.pwd) {return { id, ...a };}
+    }
+    return null;
+  }
+
   const saveCAAuth = dr => {
     try {
       localStorage.setItem(K.caAuth, JSON.stringify({ time: Date.now(), wg: dr || wgDR() }));
@@ -11838,36 +11937,62 @@ window.addEventListener('keydown',function(e){
                 <label style="font-size:13px;color:#555;display:block;margin-bottom:6px">审核密码（与登录密码一致）</label>
                 <input type="password" id="lis-pwdi" placeholder="输入审核密码" />
                 <div class="sts" id="lis-pwds"></div>
-                <label style="font-size:13px;color:#555;display:block;margin-bottom:6px;margin-top:16px">CA认证密码（与登录密码不同）</label>
-                <input type="password" id="lis-cawdi" placeholder="输入CA认证密码" />
+                <label style="font-size:13px;color:#555;display:block;margin-bottom:6px;margin-top:16px">CA 认证账号（capping 多账号）</label>
+                <div id="lis-caaccts" style="max-height:200px;overflow-y:auto;border:1px solid #e3e8ef;border-radius:6px;padding:6px;margin-bottom:10px"></div>
+                <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+                    <input type="text" id="lis-caui" placeholder="用户名" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
+                    <input type="password" id="lis-cawdi" placeholder="CA 密码" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+                    <input type="text" id="lis-canote" placeholder="备注（如：A班 / 免疫）" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
+                    <button id="lis-caadd" style="height:28px;padding:0 14px;background:#0f766e;color:#fff;border:none;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer">新增/更新</button>
+                </div>
                 <div class="sts" id="lis-cawds"></div>
                 <div class="pa">
                     <button class="b-clr" id="lis-pwdc">清除全部</button>
                     <button class="b-can" id="lis-pwdca">取消</button>
                     <button class="b-save" id="lis-pwdsave">保存</button>
                 </div>
-                <div class="tip">💡 密码保存在浏览器 localStorage 中，仅本机可用。<br>保存后审核登录和CA认证将自动填充。</div>
+                <div class="tip">💡 CA 账号按用户名区分，可存多组；认证时优先用当前登录用户名匹配到的账号（或用你设为默认的那个）。密码保存在本地 localStorage，仅本机可用。</div>
             </div>`;
       document.body.appendChild(o);
+
+      // 保存：审核密码 + 让当前多账号区落盘
       document.getElementById('lis-pwdsave').addEventListener('click', async () => {
         const auditPwd = document.getElementById('lis-pwdi').value;
-        const caPwd = document.getElementById('lis-cawdi').value;
         if (auditPwd) {await savePwdAsync(auditPwd);}
-        if (caPwd) {await saveCAPwdAsync(caPwd);}
+        // 若有未提交的账号表单，先落盘再提示
+        await _maybeCommitCaForm();
         document.getElementById('lis-pwds').innerHTML = '<span style="color:#27ae60">✓ 已保存</span>';
         document.getElementById('lis-cawds').innerHTML = '<span style="color:#27ae60">✓ 已保存</span>';
         toast('密码已保存');
         setTimeout(closePwdDlg, 600);
       });
+      document.getElementById('lis-cawdi') && document.getElementById('lis-caadd').addEventListener('click', _maybeCommitCaForm);
+      // Enter 快捷新增账号
+      document.getElementById('lis-caadd').addEventListener('keydown', e => {
+        if (e.key === 'Enter') {e.preventDefault();_maybeCommitCaForm();}
+      });
+      document.getElementById('lis-caui').addEventListener('keydown', e => {
+        if (e.key === 'Enter') {e.preventDefault();_maybeCommitCaForm();}
+      });
+      document.getElementById('lis-cawdi').addEventListener('keydown', e => {
+        if (e.key === 'Enter') {e.preventDefault();_maybeCommitCaForm();}
+      });
       document.getElementById('lis-pwdc').addEventListener('click', () => {
         try {
           localStorage.removeItem(K.pwd);
           localStorage.removeItem(K.caPwd);
+          localStorage.removeItem(K.caDefaultUser); // 8.5.36: 同时清默认账号标记
+          caAccountsClear();
         } catch (e) {}
         document.getElementById('lis-pwdi').value = '';
+        document.getElementById('lis-caui').value = '';
         document.getElementById('lis-cawdi').value = '';
+        document.getElementById('lis-canote').value = '';
         document.getElementById('lis-pwds').innerHTML = '<span style="color:#e74c3c">✓ 已清除</span>';
         document.getElementById('lis-cawds').innerHTML = '<span style="color:#e74c3c">✓ 已清除</span>';
+        _renderCaAccountList(document.getElementById('lis-caaccts'));
         toast('密码已清除', 'w');
       });
       document.getElementById('lis-pwdca').addEventListener('click', closePwdDlg);
@@ -11878,12 +12003,80 @@ window.addEventListener('keydown',function(e){
     const pwd = await loadPwdAsync();
     document.getElementById('lis-pwdi').value = pwd;
     document.getElementById('lis-pwds').textContent = pwd ? '当前已保存审核密码' : '尚未保存审核密码';
-    const caPwd = await loadCAPwdAsync();
-    document.getElementById('lis-cawdi').value = caPwd;
-    document.getElementById('lis-cawds').textContent = caPwd ? '当前已保存CA密码' : '尚未保存CA密码';
+    document.getElementById('lis-cawds').textContent = '';
+    // 渲染多账号列表
+    _renderCaAccountList(document.getElementById('lis-caaccts'));
     o.classList.add('show');
     document.getElementById('lis-pwdi').focus();
   }
+
+  // 把当前表单里的用户名+密码+备注作为账号落盘并刷新列表
+  async function _maybeCommitCaForm() {
+    const u = (document.getElementById('lis-caui').value || '').trim();
+    const pw = document.getElementById('lis-cawdi').value;
+    const note = (document.getElementById('lis-canote').value || '').trim();
+    if (!u) {return false;}
+    if (!pw) {
+      toast('请输入 CA 密码', 'w');
+      return false;
+    }
+    await caAccountSet(u, { user: u, pwd: pw, note });
+    document.getElementById('lis-caui').value = '';
+    document.getElementById('lis-cawdi').value = '';
+    document.getElementById('lis-canote').value = '';
+    document.getElementById('lis-cawds').innerHTML = '<span style="color:#27ae60">✓ 账号已保存</span>';
+    _renderCaAccountList(document.getElementById('lis-caaccts'));
+    return true;
+  }
+
+  // 渲染多账号列表
+  async function _renderCaAccountList(box) {
+    if (!box) {return;}
+    const all = await caAccountsAll();
+    const cur = _caAccountCurUser();
+    const explicit = String(localStorage.getItem(K.caDefaultUser) || '');
+    const keys = Object.keys(all);
+    if (keys.length === 0) {
+      box.innerHTML = '<div style="font-size:12px;color:#9aa5b1;padding:6px 4px">尚无 CA 账号，下方输入用户名+密码新增。</div>';
+      return;
+    }
+    let h = '';
+    keys.sort().forEach(u => {
+      const a = all[u];
+      const isCur = u === cur;
+      const isDefault = u === explicit;
+      h += `<div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid #f0f3f7">
+                <div style="flex:1;min-width:0">
+                    <b style="font-size:13px;color:#ef4444">${esc(u)}</b>
+                    ${isCur ? '<span style="font-size:10px;color:#0f766e;background:#ecfdf5;border:1px solid #99f6e4;border-radius:4px;padding:0 4px;margin-left:4px">当前登录</span>' : ''}
+                    ${isDefault ? '<span style="font-size:10px;color:#7c3aed;background:#f3e8ff;border:1px solid #ddd6fe;border-radius:4px;padding:0 4px;margin-left:4px">CA默认</span>' : ''}
+                    ${a.note ? ' <span style="font-size:11px;color:#9aa5b1">· ' + esc(a.note) + '</span>' : ''}
+                    <div style="font-size:10px;color:#9aa5b1">${a.pwd ? '已存密码' : '无密码'}</div>
+                </div>
+                <button class="lis-ca-def" data-u="${escAttr(u)}" style="height:24px;padding:0 8px;font-size:11px;border:1px solid #cfd8e0;border-radius:4px;background:#fff;color:#475569;cursor:pointer">${isDefault ? '✓默认' : '设默认'}</button>
+                <button class="lis-ca-del" data-u="${escAttr(u)}" style="height:24px;padding:0 8px;font-size:11px;border:1px solid #fecaca;border-radius:4px;background:#fff;color:#dc2626;cursor:pointer">删除</button>
+            </div>`;
+    });
+    box.innerHTML = h;
+    box.querySelectorAll('.lis-ca-def').forEach(b => {
+      b.addEventListener('click', () => {
+        const u = b.getAttribute('data-u');
+        localStorage.setItem(K.caDefaultUser, u);
+        _renderCaAccountList(box);
+        toast(`已设 ${u} 为默认 CA 认证账号`);
+      });
+    });
+    box.querySelectorAll('.lis-ca-del').forEach(b => {
+      b.addEventListener('click', async () => {
+        const u = b.getAttribute('data-u');
+        caAccountDelete(u);
+        if (String(localStorage.getItem(K.caDefaultUser) || '') === u) {localStorage.removeItem(K.caDefaultUser);}
+        _renderCaAccountList(box);
+        toast(`已删除 ${u}`);
+      });
+    });
+  }
+
   function closePwdDlg() {
     const o = document.getElementById('lis-pwdo');
     if (o) {o.classList.remove('show');}
@@ -14090,19 +14283,23 @@ window.addEventListener('keydown',function(e){
       return anyCAUkeyPresent(iframeWin);
     }
 
-    const caPwd = await loadCAPwdAsync();
-    if (!caPwd) {
-      showToast('请先设置CA密码（设置里保存 CA/capping 密码）', 'warning');
+    // 8.5.36: 多账号支持 — 取默认 CA 账号（显式指定 → 当前登录用户 → 首个有密码的）
+    // 失败时由用户确认是否切换其他已存账号重试（见 _caAskSwitchAccount）
+    let account = await caDefaultAccount();
+    if (!account || !account.pwd) {
+      showToast('请先在设置里保存 CA/capping 账号（用户名+密码）', 'warning');
       return false;
     }
-
-    const caUser = uname() || loadLoginCreds()?.user || '';
-    dbg('CA: 开始 capping 自动登录');
+    dbg('CA: 使用账号', account.id, '开始 capping 自动登录');
     updateBatchProgress('CA 认证中（capping）...', null);
     const ft = document.getElementById('lis-ws-ft-stat');
     if (ft) {ft.textContent = 'CA 认证中...';}
 
-    const deadline = Date.now() + (fast ? 45000 : 90000);
+    // 用指定账号提交 capping 登录（单账号最多 2 次），返回是否成功
+    const submitOnce = async acc => {
+      const caUser = String(acc.id || acc.user || uname() || loadLoginCreds?.()?.user || '');
+      const caPwd = String(acc.pwd || '');
+      const deadline = Date.now() + (fast ? 45000 : 90000);
     // 最多 2 次提交密码；成功判定以 Ukey 为准，不再依赖 caWin.is(':visible')
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (Date.now() > deadline) {break;}
@@ -14217,8 +14414,11 @@ window.addEventListener('keydown',function(e){
         }
 
         if (sawPwdError) {
-          showToast('CA 密码错误，请在设置中更新 CA 密码', 'error');
-          return false;
+          // 8.5.36: 不再固定弹「CA 密码错误」toast —— 返回 false，由外层尝试切换其他账号
+          dbg('CA: 密码错误，返回 false 以便尝试其他账号');
+          if (!anyCAUkeyPresent(iframeWin) && !isCASessionReady(iframeWin)) {return false;}
+          markCALoginSucceeded(iframeWin);
+          return true;
         }
         // 仅进度提示，避免右上角刷屏「CA 重试」
         if (attempt < 2) {
@@ -14237,8 +14437,77 @@ window.addEventListener('keydown',function(e){
       markCALoginSucceeded(iframeWin);
       return true;
     }
-    showToast('CA 认证未完成，请在弹窗内手动 capping 登录一次', 'error');
     return false;
+  };
+
+  // 首次用默认账号提交；失败时不自动连环试错（尊重用户选择）——
+  // 通过一个确认提示，由用户决定是否手动换账号重试
+  let caOK = await submitOnce(account);
+  if (!caOK && !anyCAUkeyPresent(iframeWin)) {
+    const wantSwitch = await _caAskSwitchAccount(account.id, isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin));
+    if (wantSwitch && account.id !== (await caDefaultAccount())?.id) {
+      // 用户已通过浮层选择了新账号并设为默认，用新默认账号重试一次
+      const next = await caDefaultAccount();
+      if (next && next.id !== account.id) {
+        dbg('CA: 切换到账号', next.id, '重试');
+        account = next;
+        caOK = await submitOnce(account);
+      }
+    }
+  }
+  if (caOK) {return true;}
+  showToast('CA 认证未完成，请在弹窗内手动 capping 登录一次', 'error');
+  return false;
+}
+
+  // 8.5.36: CA 认证失败后的切换确认 — 由用户决定是否换账号重试（不自动连环试错）
+  // 返回 true=已切换并使用新账号；false/取消=不重试
+  function _caAskSwitchAccount(currentId, alreadyReady) {
+    return new Promise(async resolve => {
+      const cur = String(currentId || '');
+      const all = await caAccountsAll();
+      const keys = Object.keys(all).filter(u => all[u].pwd && u !== cur);
+      if (alreadyReady || keys.length === 0) {resolve(false);return;}
+      const overlay = document.createElement('div');
+      overlay.id = 'lis-capick';
+      overlay.style.cssText =
+        'position:fixed;inset:0;z-index:120001;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center';
+      overlay.innerHTML = `<div style="background:#fff;border-radius:10px;width:340px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.3);overflow:hidden">
+            <div style="padding:14px 18px;background:#0f766e;color:#fff;font-weight:700">CA 认证失败 · 账号 ${esc(cur || '?')}</div>
+            <div style="padding:12px 16px;font-size:13px;color:#334155;line-height:1.6">
+                是否改用其他已存账号重试？<div style="font-size:11px;color:#9aa5b1;margin-top:4px">选择后立即用该账号重新 capping 认证，并记为默认。</div>
+            </div>
+            <div style="max-height:180px;overflow-y:auto;padding:0 10px">${keys
+              .map(u => {
+                return `<button data-u="${escAttr(u)}" style="display:block;width:100%;text-align:left;padding:8px 12px;margin:4px 2px;border:1px solid #e3e8ef;border-radius:6px;background:#fff;color:#334155;font-size:13px;cursor:pointer">
+                          <b style="color:#dc2626">${esc(u)}</b>${all[u].note ? ' <span style="color:#9aa5b1">· ' + esc(all[u].note) + '</span>' : ''}
+                        </button>`;
+              })
+              .join('')}</div>
+            <div style="padding:10px 14px;border-top:1px solid #f0f3f7;display:flex;gap:8px;justify-content:flex-end">
+                <button id="lis-capick-cancel" style="height:30px;padding:0 14px;border:1px solid #cfd8e0;border-radius:5px;font-size:12px;background:#fff;color:#475569;cursor:pointer">取消（不改）</button>
+            </div>
+            <div style="padding:10px 14px;border-top:1px solid #f0f3f7;font-size:11px;color:#9aa5b1">也可在工作台菜单保留设置里切换默认账号。</div>
+        </div>`;
+      document.body.appendChild(overlay);
+      let done = false;
+      const finish = v => {
+        if (done) {return;}
+        done = true;
+        overlay.remove();
+        resolve(v);
+      };
+      overlay.querySelectorAll('button[data-u]').forEach(b => {
+        b.addEventListener('click', () => {
+          try { localStorage.setItem(K.caDefaultUser, b.getAttribute('data-u')); } catch (e) {}
+          finish(true);
+        });
+      });
+      overlay.querySelector('#lis-capick-cancel').addEventListener('click', () => finish(false));
+      overlay.addEventListener('click', e => {
+        if (e.target === overlay) {finish(false);}
+      });
+    });
   }
 
   // --- 点击原生按钮并处理 CA/审核登录 ---
