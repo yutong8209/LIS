@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.37
+// @version      8.5.38
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -401,7 +401,9 @@
     const all = await caAccountsAll();
     return (all[u] && all[u].pwd) || '';
   }
-  // 默认 CA 账号：显式指定 → 当前登录用户 → 任意有密码的首个
+  // 默认 CA 账号：当前登录用户 → 显式指定 → 任意有密码的首个
+  // 8.5.38: 把「当前登录用户」提到最前——否则用户切了别的账号登录 LIS，只要设过默认账号
+  // 就还会用那个默认账号认证，不会跟随当前登录。想强制固定用某账号时仍可设为显式默认。
   async function caDefaultAccount() {
     const all = await caAccountsAll();
     const cur = _caAccountCurUser();
@@ -410,8 +412,8 @@
       const a = all[id];
       return a && a.pwd ? id : null;
     };
-    if (explicit && pick(explicit)) {return { id: explicit, ...all[explicit] };}
     if (cur && pick(cur)) {return { id: cur, ...all[cur] };}
+    if (explicit && pick(explicit)) {return { id: explicit, ...all[explicit] };}
     for (const [id, a] of Object.entries(all)) {
       if (a && a.pwd) {return { id, ...a };}
     }
@@ -12951,8 +12953,9 @@ window.addEventListener('keydown',function(e){
     box.innerHTML = `
             <h4>⚡ 快速登录 — iMedicalLIS</h4>
             <div class="lis-lb-row">
-                <label>用户名</label>
-                <input type="text" id="lis-lu" placeholder="用户名" value="${creds ? esc(creds.user) : ''}" autocomplete="username" />
+                <label>用户名 <span style="color:#9aa5b1;font-weight:400">（可下拉选已存 CA 账号，或手输）</span></label>
+                <input type="text" id="lis-lu" placeholder="用户名" value="${creds ? esc(creds.user) : ''}" autocomplete="username" list="lis-ca-accounts" />
+                <datalist id="lis-ca-accounts"></datalist>
             </div>
             <div class="lis-lb-row">
                 <label>密码</label>
@@ -13042,6 +13045,20 @@ window.addEventListener('keydown',function(e){
     const loginBtn = document.getElementById('lis-lbtn');
     loginBtn.addEventListener('click', () => doLogin(selectedWG));
 
+    // 8.5.38: 填充「已存 CA 账号」下拉（用户名 · 备注），登录时自动归一到 CA 默认账号
+    (async () => {
+      const all = await caAccountsAll();
+      const dl = document.getElementById('lis-ca-accounts');
+      if (!dl) {return;}
+      Object.keys(all).sort().forEach(u => {
+        const note = all[u].note ? ' · ' + all[u].note : '';
+        const op = document.createElement('option');
+        op.value = u;
+        op.label = u + note;
+        dl.appendChild(op);
+      });
+    })();
+
     // Enter 快捷键
     box.addEventListener('keydown', e => {
       if (e.key === 'Enter') {doLogin(selectedWG);}
@@ -13075,6 +13092,19 @@ window.addEventListener('keydown',function(e){
     try {
       localStorage.setItem(LOGIN_WG_KEY, wgDR);
     } catch (e) {}
+
+    // 8.5.38: 登录用的用户名（无论下拉选还是手输，lis-lu 的值就是）→ 设为 CA 默认账号，
+    // 确保「登录哪个账号、CA 就用哪个」
+    const loginUser = String((user || '').trim());
+    (async () => {
+      try {
+        const all = await caAccountsAll();
+        if (loginUser && all[loginUser] && all[loginUser].pwd) {
+          localStorage.setItem(K.caDefaultUser, loginUser);
+          dbg('登录账号设为 CA 默认:', loginUser);
+        }
+      } catch (e) {}
+    })();
 
     // 必须走原生表单流程（服务器需要先 checkUser 创建安全组会话）
     fillNativeAndSubmit(user, pwd, wgDR);
