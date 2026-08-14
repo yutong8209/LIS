@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.41
+// @version      8.5.42
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6142,6 +6142,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let _classifyRunSeq = 0; // 分类运行序号，防止旧分类任务影响新刷新
   let _classifyPendingRerun = false; // 分类进行中又有新数据时，结束后再跑一轮
   let _lastWSNonEmptyAt = 0; // 最近一次成功加载到标本的时间，用于强制刷新兜底
+  let _wsLoadedDate = ''; // 8.5.42: 工作台数据对应的日期（today），跨天时允许清空重载
   let _normalKeyHandler = null; // 普通视图键盘监听
   let _abnormalFocusDR = '';
   let _wsSearchTimer = null;
@@ -6612,13 +6613,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 8.5.40: 空数据保护扩展到 partial 阶段——长时间闲置/会话过期/网络瞬断时，
         // 阶段1(partial)返回空会直接把 wsData 清空、统计全变 0；阶段2 再空时 wsData 已为空
         // 导致保护条件失效。改为：只要「返回空 && 已有数据」就保留旧数据，等下一轮恢复。
-        if (allData.length === 0 && wsData.length > 0) {
+        // 8.5.42: 跨天例外——工作台按当天查询（SttAccDate=今天），跨天后昨天的标本在
+        // 原生列表已查不到（如 23:50 做的标本），保留旧数据只会显示「看得见审不了」的
+        // 假数据。故日期变化时允许清空重载（自动归零到新一天），同一天内的瞬断仍保留。
+        const dateChanged = !!(_wsLoadedDate && _wsLoadedDate !== today());
+        if (allData.length === 0 && wsData.length > 0 && !dateChanged) {
           dbg('刷新返回空数据，保留原有', wsData.length, '条', partial ? '(partial)' : '');
           if (qi) {qi.textContent = `刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;}
           // 8.5.40: 强制刷新的警告只在全量阶段判断（partial 阶段空可能是瞬断，阶段2会恢复）
           if (!partial && force) {showToast('工作台强制刷新仍返回空数据，可能需要重新登录或刷新浏览器页面', 'warning');}
           return false;
         }
+        // 8.5.42: 跨天后更新数据日期（无论清空重载还是正常更新，都归到新一天）
+        if (dateChanged || allData.length > 0) {_wsLoadedDate = today();}
         wsData = allData;
         // 8.5.33: 每次数据刷新后自动取消已核收标本的忽略（进入未审核/审核 → 恢复正常计数）
         wsIgnoreAutoRelease(allData);
