@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.34
+// @version      8.5.35
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9091,7 +9091,8 @@ window.addEventListener('keydown',function(e){
         iframeWin = getReportIframeWin() || iframeWin;
       }
       if (!isReportDetailLoaded(iframeWin, reportDR)) {
-        await waitReportDetailReady(iframeWin, reportDR, 4500, { fastBatch: true });
+        // 8.5.35: 预热详情等待 4500 → 3500（后台预热，避免用户紧跟 Enter 时被 4.5s 拖住）
+        await waitReportDetailReady(iframeWin, reportDR, 3500, { fastBatch: true });
       }
       iframeWin = getReportIframeWin() || iframeWin;
       if (isReportDetailLoaded(iframeWin, reportDR)) {
@@ -9167,8 +9168,9 @@ window.addEventListener('keydown',function(e){
       iframeWin = selResult.iframeWin || iframeWin;
     }
     if (!isReportDetailLoaded(iframeWin, reportDR)) {
-      const t1 = fast ? 3000 : 5000;
-      const t2 = fast ? 1500 : 2500;
+      // 8.5.35: 异常路径详情等待 3000/1500 → 2500/1200（就绪即退，只影响真慢时长的尾部）
+      const t1 = fast ? 2500 : 5000;
+      const t2 = fast ? 1200 : 2500;
       let ready = await waitReportDetailReady(iframeWin, reportDR, t1, { fastBatch: true });
       if (!ready) {
         selectNativeRowByReportDR(iframeWin, reportDR, selOpts);
@@ -9286,11 +9288,19 @@ window.addEventListener('keydown',function(e){
     }
     if (!result && verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
     // 延迟二次校验：原生状态回写可能有 1~2s 延迟，避免「已成功但脚本误判失败」
+    // 8.5.35: 改 250ms 轮询早退（成功即返回），不再固定白等 1.5s 只验一次
     if (!result && !abortCheck()) {
-      await sleep(1500);
-      iframeWin = getReportIframeWin() || iframeWin;
-      if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
-          softAuditSuccessHint(iframeWin, reportDR)) {
+      let delayedOK = false;
+      for (let _dv = 0; _dv < 6 && !abortCheck(); _dv++) {
+        await sleep(250);
+        iframeWin = getReportIframeWin() || iframeWin;
+        if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
+            softAuditSuccessHint(iframeWin, reportDR)) {
+          delayedOK = true;
+          break;
+        }
+      }
+      if (delayedOK) {
         dbg('延迟二次校验：标本已审核成功（原生状态）');
         closeNativeAuditSuccessMessage(iframeWin);
         return true;
@@ -9498,14 +9508,20 @@ window.addEventListener('keydown',function(e){
         return;
       }
       // 最终兜底：executeNativeAudit 可能因竞态误判失败，再等 2s 多重校验
+      // 8.5.35: 改 250ms 轮询早退（原生状态回写完成即继续），不再固定白等 2s
       if (!auditResult) {
         if (ft) {ft.textContent = `确认审核结果: ${specimen.PatName || specimen.Labno || targetDR}`;}
-        await sleep(2000);
-        iframeWin = getReportIframeWin() || iframeWin;
-        if (verifyAuditSucceededByReportDR(iframeWin, targetDR) ||
-            softAuditSuccessHint(iframeWin, targetDR)) {
+        for (let _dv = 0; _dv < 8; _dv++) {
+          await sleep(250);
+          iframeWin = getReportIframeWin() || iframeWin;
+          if (verifyAuditSucceededByReportDR(iframeWin, targetDR) ||
+              softAuditSuccessHint(iframeWin, targetDR)) {
+            auditResult = true;
+            break;
+          }
+        }
+        if (auditResult) {
           dbg('异常审核延迟确认成功（原生状态）:', specimen.PatName);
-          auditResult = true;
         } else {
           if (ft) {ft.textContent = `刷新数据: ${specimen.PatName || specimen.Labno || targetDR}`;}
           // 刷新 wsData 后再检查状态（审核期间轮询已停止）。
@@ -16699,7 +16715,10 @@ window.addEventListener('keydown',function(e){
     while (Date.now() < end) {
       if (!refreshed) {
         refreshed = true;
-        iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true });
+        // 8.5.35: force:false — 是否刷新交给 refreshNativeWorkListForItem 内部的 machineChanged 判断。
+        // 之前 force:true 对同机台标本也强制 ShowWorkList 服务端全量查询（每条 1 次多余往返），
+        // 是批审慢的主要冗余来源；异常待审/预热路径本来就只在机器变化时刷新，这里对齐。
+        iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: false });
       } else {
         await sleep(pollMs);
       }
@@ -17185,8 +17204,9 @@ window.addEventListener('keydown',function(e){
 
           progressPhase('加载详情');
           let detailReady = isReportDetailLoaded(iframeWin, item.reportDR);
-          const detailTimeout = batchCAReady ? 2800 : 5500;
-          const detailRetry = batchCAReady ? 1500 : 3000;
+          // 8.5.35: 秒审详情等待 2800/1500 → 2000/1200（就绪即退，只在真慢时才吃满；need-CA 首条保持宽松）
+          const detailTimeout = batchCAReady ? 2000 : 5500;
+          const detailRetry = batchCAReady ? 1200 : 3000;
           if (!detailReady) {
             detailReady = await waitReportDetailReady(iframeWin, item.reportDR, detailTimeout, { fastBatch: true });
           }
@@ -17290,10 +17310,20 @@ window.addEventListener('keydown',function(e){
             }
           } else {
             // 延迟校验：原生状态回写可能有 1~2s 延迟
-            await sleep(1500);
-            iframeWin = getReportIframeWin() || iframeWin;
-            if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
-                softAuditSuccessHint(iframeWin, item.reportDR)) {
+            // 8.5.35: 改 250ms 轮询早退（成功即返回），不再固定白等 1.5s 只验一次
+            let delayedOK = false;
+            for (let _dv = 0; _dv < 6; _dv++) {
+              await sleep(250);
+              iframeWin = getReportIframeWin() || iframeWin;
+              if (
+                verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
+                softAuditSuccessHint(iframeWin, item.reportDR)
+              ) {
+                delayedOK = true;
+                break;
+              }
+            }
+            if (delayedOK) {
               dbg('批审延迟校验成功:', item.reportDR);
               auditResult = true;
               queue.done.push(item);
