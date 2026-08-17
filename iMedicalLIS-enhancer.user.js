@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.49
+// @version      8.5.50
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7259,12 +7259,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   function getWSAuditBucket(r) {
     const status = String(r.Status || r.ReportStatus || '');
-    if (status === '3' || status === '4') {
-      // 8.5.47: 彻底回退 8.5.44/8.5.45——3/4 一律归已审核隐藏。
-      // 实测已审核标本的 IsComplete 字段并不都是 '1'（缺失/其他值），
-      // 8.5.44 用 IsComplete 区分复检导致已审核标本混入「不完整」。
-      // 复检中/复检完成与正常已审核在现有字段下无法可靠区分，一律按已审核处理最安全。
+    if (status === '3') {
+      // 8.5.50: 一审完成（审核）= 已审核，保持隐藏
       return 'audited';
+    }
+    if (status === '4') {
+      // 8.5.50: 复审（复检/复查）标本：结果不完整 → 不完整；结果完整 → 待审显示（但审核被拦截，见审核守卫）
+      // 只处理 status 4，status 3 保持隐藏——避免 8.5.44/8.5.45 误伤已审核标本的教训
+      const complete4 = String(r.IsComplete || '');
+      if (complete4 !== '1') {return 'incomplete';}
+      // 走下方分类判断：NORMAL/ABNORMAL → 待审；无缓存/待定 → 不完整
     }
     if (status === '0') {return 'pending';}
     if (status === '9') {return 'collected';} // 8.5.31: 病房采集中、未送到科室
@@ -9570,8 +9574,14 @@ window.addEventListener('keydown',function(e){
       return;
     }
     const _preStatus = String(specimen.Status || specimen.ReportStatus || '');
-    // 8.5.46: 恢复 3/4 一律拦截（8.5.45 曾只拦复检中，导致正常已审核标本可被重新审核）
-    if (_preStatus === '3' || _preStatus === '4') {
+    // 8.5.50: 复审（复检/复查）标本不可在工作台审核——只追踪/查看，需在原生 LIS 处理
+    if (_preStatus === '4') {
+      showToast(`跳过: ${specimen.PatName} 复审标本不可在工作台审核`, 'warning');
+      advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
+      return;
+    }
+    // 8.5.46: 3 一律拦截（已审核）
+    if (_preStatus === '3') {
       showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
       return;
@@ -9876,7 +9886,7 @@ window.addEventListener('keydown',function(e){
       1: { t: '登记', cls: 'st-1t' },
       2: { t: '初审', cls: 'st-2t' },
       3: { t: '审核', cls: 'st-3t' },
-      4: { t: '复审', cls: '' },
+      4: { t: '复审', cls: 'st-4t' }, // 8.5.50: 补配色（复检/复查标本在全部视图可辨）
       5: { t: '取消', cls: 'st-5t' },
       9: { t: '采集', cls: 'st-9t' } // 8.5.31: 病房采集中（全部视图）
     };
@@ -11028,8 +11038,13 @@ window.addEventListener('keydown',function(e){
       }
 
       const status = String(specimen.Status || specimen.ReportStatus || '');
-      // 8.5.46: 恢复 3/4 一律拦截（8.5.45 曾放宽导致正常已审核标本被重新审核）
-      if (status === '3' || status === '4') {
+      // 8.5.50: 复审（复检/复查）标本不可在工作台审核——需在原生 LIS 处理
+      if (status === '4') {
+        showToast(`跳过: ${specimen.PatName} 复审标本不可在工作台审核`, 'warning');
+        return;
+      }
+      // 8.5.46: 3 一律拦截（已审核）
+      if (status === '3') {
         showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
         return;
       }
@@ -16225,10 +16240,10 @@ window.addEventListener('keydown',function(e){
     try {
       if (loadSeq !== _wsLoadSeq) {return;}
       // 筛选需要分类的标本：未审核 + 结果完整 + 未缓存
-      // 8.5.46: 恢复跳过 3/4（含 IsComplete=1）——工作台列表含正常已审核标本，分类会让它们进待审
+      // 8.5.50: status 4（复审）也参与分类（供待审显示）；status 3（已审核）跳过
       const toClassify = wsData.filter(r => {
         const status = String(r.Status || r.ReportStatus || '');
-        if (status === '3' || status === '4') {return false;}
+        if (status === '3') {return false;}
         const complete = String(r.IsComplete || '');
         if (complete !== '1') {return false;}
         return isClassificationStale(r);
@@ -17560,6 +17575,14 @@ window.addEventListener('keydown',function(e){
         const liveRow = resolveQueueItemRow(item);
         if (liveRow && String(liveRow.IsComplete || '') !== '1') {
           queue.skipped.push({ ...item, reason: '结果不完整' });
+          skipCount++;
+          queue.current++;
+          saveAuditQueueNow(queue);
+          continue;
+        }
+        // 8.5.50: 复审（复检/复查）标本不可在工作台批审——需在原生 LIS 处理
+        if (liveRow && String(liveRow.Status || liveRow.ReportStatus || '') === '4') {
+          queue.skipped.push({ ...item, reason: '复审标本不可工作台审核' });
           skipCount++;
           queue.current++;
           saveAuditQueueNow(queue);
