@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.56
+// @version      8.5.57
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14364,6 +14364,33 @@ window.addEventListener('keydown',function(e){
     return false;
   }
 
+  // 8.5.57: 详情网格里是否已有实际结果值（TextRes 为 LIS 报告条目结果文本列，见缓存源码 field:"TextRes"）。
+  // 仅检查「有条目行」不够——LIS 结果回传竞态下网格可能先出现行但结果全空，
+  // 此时点审核必失败；必须等至少一条结果出现才算详情真正就绪。
+  function nativeDetailRowsHaveResults(iframeWin) {
+    try {
+      const jq = iframeWin.jQuery || iframeWin.$;
+      if (!jq) {return false;}
+      for (const sel of ['#dgLeftReportItem', '#dgRightReportItem']) {
+        const grid = jq(sel);
+        if (!grid.length || !grid.datagrid) {continue;}
+        const rows = grid.datagrid('getRows') || [];
+        for (const r of rows) {
+          // 注意：数值 0 也是合法结果值，不能用 || 判断（0 为 falsy 会被误当空）
+          let raw = null;
+          if (r) {
+            if (r.TextRes !== undefined && r.TextRes !== null) {raw = r.TextRes;}
+            else if (r.Result !== undefined && r.Result !== null) {raw = r.Result;}
+          }
+          if (raw !== null && String(raw).trim()) {return true;}
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function isReportDetailLoaded(iframeWin, reportDR) {
     if (!iframeWin || !reportDR) {return false;}
     try {
@@ -14375,6 +14402,8 @@ window.addEventListener('keydown',function(e){
       const leftRows = jq('#dgLeftReportItem').datagrid('getRows') || [];
       const rightRows = jq('#dgRightReportItem').length ? jq('#dgRightReportItem').datagrid('getRows') || [] : [];
       if (!(leftRows.length || rightRows.length)) {return false;}
+      // 8.5.57: 条目有行但结果全空 = 详情未真正加载完整（LIS 结果回传竞态），不视为就绪
+      if (!nativeDetailRowsHaveResults(iframeWin)) {return false;}
       const selected = me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
       return !!(selected && String(selected.ReportDR || '') === target);
     } catch (e) {
@@ -17430,6 +17459,18 @@ window.addEventListener('keydown',function(e){
       selectNativeRowByReportDR(iframeWin, item.reportDR, { force: true });
       ready = await waitReportDetailReady(iframeWin, item.reportDR, 2500, { fastBatch: true });
     }
+    // 8.5.57: 详情结果仍为空（LIS 结果回传竞态）——强制服务器刷新该仪器工作列表再试一次
+    if (!ready && item.mdr) {
+      iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
+      const selR = await waitAndSelectNativeRow(iframeWin, item, {
+        timeoutMs: 3000,
+        pollMs: 40,
+        skipListRefresh: true,
+        force: true
+      });
+      iframeWin = selR.iframeWin || iframeWin;
+      if (selR.ok) {ready = await waitReportDetailReady(iframeWin, item.reportDR, 2500, { fastBatch: true });}
+    }
     if (!ready) {return { ok: false, iframeWin, reason: 'detail' };}
 
     const caReady = isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin);
@@ -17856,8 +17897,33 @@ window.addEventListener('keydown',function(e){
             selectNativeRowByReportDR(iframeWin, item.reportDR);
             detailReady = await waitReportDetailReady(iframeWin, item.reportDR, detailRetry, { fastBatch: true });
           }
+          // 8.5.57: 详情有行但结果全空（LIS 结果回传竞态）——强制服务器重新拉取该仪器工作列表，
+          // 让最新结果有机会落进原生网格，再重选等待；仍无结果才放回队尾（绝不点空详情审核）
+          if (!detailReady && item.mdr) {
+            progressPhase('刷新列表重新加载详情');
+            iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
+            if (iframeWin) {
+              jq = iframeWin.jQuery || iframeWin.$;
+              me = iframeWin.me;
+            }
+            batchListFresh = true;
+            const selR = await waitAndSelectNativeRow(iframeWin, item, {
+              timeoutMs: batchCAReady ? 2500 : 4000,
+              pollMs: 40,
+              skipListRefresh: true,
+              force: true
+            });
+            iframeWin = selR.iframeWin || iframeWin;
+            if (iframeWin) {
+              jq = iframeWin.jQuery || iframeWin.$;
+              me = iframeWin.me;
+            }
+            if (selR.ok) {
+              detailReady = await waitReportDetailReady(iframeWin, item.reportDR, detailRetry, { fastBatch: true });
+            }
+          }
           if (!detailReady) {
-            if (!requeueAuditItem(queue, item, '详情未加载完成')) {skipCount++;}
+            if (!requeueAuditItem(queue, item, '详情结果为空（需刷新后重试）')) {skipCount++;}
             continue;
           }
 
@@ -18015,7 +18081,7 @@ window.addEventListener('keydown',function(e){
         const salvage = [];
         (queue.failed || []).forEach(f => salvage.push(f));
         (queue.skipped || []).forEach(s => {
-          if (s && /未确认|未找到|详情未加载|超时/.test(String(s.reason || ''))) {salvage.push(s);}
+          if (s && /未确认|未找到|详情未加载|详情结果为空|超时/.test(String(s.reason || ''))) {salvage.push(s);}
         });
         // 去重
         const seen = new Set();
