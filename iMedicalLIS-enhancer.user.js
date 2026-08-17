@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.52
+// @version      8.5.53
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9071,29 +9071,40 @@ window.addEventListener('keydown',function(e){
     return { rowPresent, detailReady, allowMissingSuccess: detailReady };
   }
 
-  function verifyAuditSucceededByReportDR(iframeWin, reportDR) {
+  // 8.5.53: 审核上下文——当前正在审核的标本是否「审核前已是复审(status 4)」。
+  // 复检标本审核前状态就是 4，静态 4 匹配/行消失不可信，成功判定只认状态变 3 或动态信号。
+  // 由 executeNativeAudit / _auditFromDetailPanel / 批审主循环在审核期间设置。
+  let _auditingPreStatus4 = false;
+
+  // 8.5.53: opts.accept4=false 时，状态 4（复审）不算「已审核成功」——
+  // 复检标本审核前状态就是 4，静态匹配会误判；必须等状态变 3 或动态信号
+  function verifyAuditSucceededByReportDR(iframeWin, reportDR, opts = {}) {
     if (!reportDR) {return false;}
+    const accept4 = opts.accept4 !== undefined ? opts.accept4 : !_auditingPreStatus4;
+    const statuses = accept4 ? ['3', '4'] : ['3'];
     const latestWin = getReportIframeWin() || iframeWin;
     if (latestWin) {
       const found = findNativeRowByReportDR(latestWin, reportDR);
-      if (found && isExpectedNativeStatus(found.row, ['3', '4'])) {return true;}
+      if (found && isExpectedNativeStatus(found.row, statuses)) {return true;}
       try {
         const me = latestWin.me;
         if (me && String(me.curReportDR || '') === String(reportDR)) {
           const sel = me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
-          if (sel && isExpectedNativeStatus(sel, ['3', '4'])) {return true;}
+          if (sel && isExpectedNativeStatus(sel, statuses)) {return true;}
         }
       } catch (e) {}
     }
     const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
-    if (liveRow && ['3', '4'].includes(String(liveRow.Status || liveRow.ReportStatus || ''))) {return true;}
+    if (liveRow && statuses.includes(String(liveRow.Status || liveRow.ReportStatus || ''))) {return true;}
     return false;
   }
 
   // CA 回调 ReportSave 后：状态回写前也能较快认成功的启发式
-  function softAuditSuccessHint(iframeWin, reportDR) {
+  // 8.5.53: opts.accept4=false 时内部静态匹配只认状态变 3（复检标本审核前就是 4）
+  function softAuditSuccessHint(iframeWin, reportDR, opts = {}) {
     if (!iframeWin || !reportDR) {return false;}
-    if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
+    const accept4 = opts.accept4 !== undefined ? opts.accept4 : !_auditingPreStatus4;
+    if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4 })) {return true;}
     try {
       const me = iframeWin.me;
       if (!me) {return false;}
@@ -9101,7 +9112,7 @@ window.addEventListener('keydown',function(e){
       if (me.IsAuthed === true && String(me.curReportDR || '') !== String(reportDR)) {
         const found = findNativeRowByReportDR(iframeWin, reportDR);
         if (!found) {return true;}
-        if (isExpectedNativeStatus(found.row, ['3', '4'])) {return true;}
+        if (isExpectedNativeStatus(found.row, accept4 ? ['3', '4'] : ['3'])) {return true;}
       }
       if (me.IsSaveSuccess === true && String(me.curReportDR || '') === String(reportDR)) {return true;}
     } catch (e) {}
@@ -9110,6 +9121,8 @@ window.addEventListener('keydown',function(e){
 
   async function confirmAuditEventually(iframeWin, reportDR, patientName, options = {}) {
     const batchMode = !!options.batchMode;
+    // 8.5.53: 复检标本（审核前已是 4）——静态 4 与行消失都不可信，只认状态变 3 或动态信号
+    const preStatus4 = !!options.preStatus4;
     const ft = document.getElementById('lis-ws-ft-stat');
     const label = patientName || reportDR;
     const tick = msg => {
@@ -9120,14 +9133,16 @@ window.addEventListener('keydown',function(e){
     // 先做几次快速校验，避免「其实已成功却干等满超时」
     for (let i = 0; i < (batchMode ? 6 : 2); i++) {
       if (options.abortCheck && options.abortCheck()) {return false;}
-      if (verifyAuditSucceededByReportDR(iframeWin, reportDR) || softAuditSuccessHint(iframeWin, reportDR)) {return true;}
+      if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
+          softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 })) {return true;}
       await sleep(batchMode ? 80 : 200);
     }
     const ctx = auditTargetContext(iframeWin, reportDR);
     const targetWasPresent =
       options.targetWasPresent !== undefined ? !!options.targetWasPresent : ctx.rowPresent || ctx.detailReady;
     const detailWasReady = options.detailWasReady !== undefined ? !!options.detailWasReady : ctx.detailReady;
-    const allowMissing = detailWasReady || !!options.afterCA;
+    // 8.5.53: 复检标本关闭「行消失=成功」
+    const allowMissing = (detailWasReady || !!options.afterCA) && !preStatus4;
     // 批审 afterCA 确认必须短：首条 CA 后 FuncStr 往往已审完，长等只会卡在姓名上
     const confirmTimeout = batchMode ? (options.afterCA ? BATCH_CONFIRM_MS.afterCA : BATCH_CONFIRM_MS.normal) : 10000;
     const confirmed = await waitNativeActionResult(iframeWin, reportDR, ['3'], confirmTimeout, allowMissing, {
@@ -9136,7 +9151,8 @@ window.addEventListener('keydown',function(e){
       turbo: true,
       abortCheck: options.abortCheck,
       quickVerify: () =>
-        verifyAuditSucceededByReportDR(iframeWin, reportDR) || softAuditSuccessHint(iframeWin, reportDR),
+        verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
+        softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 }),
       onTick: elapsed => {
         if (batchMode && elapsed > 1200) {tick(`确认中：${label}`);}
         else if (!batchMode) {tick(`确认结果中：${label}（${Math.round(elapsed / 1000)}s）`);}
@@ -9144,11 +9160,15 @@ window.addEventListener('keydown',function(e){
     });
     if (confirmed && confirmed !== 'incomplete') {return true;}
     await sleep(batchMode ? 80 : 800);
-    if (verifyAuditSucceededByReportDR(iframeWin, reportDR) || softAuditSuccessHint(iframeWin, reportDR)) {return true;}
+    if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
+        softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 })) {return true;}
     const latestWin = getReportIframeWin() || iframeWin;
     const found = findNativeRowByReportDR(latestWin, reportDR);
     if (!found) {return allowMissing;}
-    return isExpectedNativeStatus(found.row, ['3', '4']);
+    // 8.5.53: 复检标本只认状态变 3（审核前就是 4，静态 4 不算成功）
+    return preStatus4
+      ? isExpectedNativeStatus(found.row, ['3'])
+      : isExpectedNativeStatus(found.row, ['3', '4']);
   }
 
   let _abnormalAuditInProgress = false;
@@ -9445,6 +9465,9 @@ window.addEventListener('keydown',function(e){
   async function executeNativeAudit(iframeWin, specimen, options = {}) {
     const fast = options.fast !== false;
     const reportDR = specimen.ReportDR;
+    // 8.5.53: 审核前已是 status 4（复检/复审标本）——静态 4 匹配不可信，需等状态变 3 或动态信号
+    const preStatus4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
+    _auditingPreStatus4 = preStatus4; // 8.5.53: 审核期间供内部 verify/soft 兜底
     const auditCtx = auditTargetContext(iframeWin, reportDR);
     const caReady = isCASessionReady(iframeWin);
     const deadline = options.deadline || Date.now() + (fast ? (caReady ? 14000 : 40000) : 60000);
@@ -9461,7 +9484,9 @@ window.addEventListener('keydown',function(e){
       timeoutMs: fast ? (caReady ? 4500 : 7000) : 12000,
       keepWS: !!options.keepWS,
       caSessionReady: caReady,
-      missingAsSuccess: auditCtx.allowMissingSuccess,
+      // 8.5.53: 复检标本关闭「行消失=成功」（审核前就是 4，行可能因 CA 流程暂时消失）
+      missingAsSuccess: auditCtx.allowMissingSuccess && !preStatus4,
+      preStatus4, // 8.5.53: 传审核前状态标记，内部成功判定排除静态 4
       targetReportDR: reportDR,
       abortCheck,
       onTick: (elapsed, phase) => {
@@ -9471,16 +9496,18 @@ window.addEventListener('keydown',function(e){
     });
     if (!result && !abortCheck()) {
       iframeWin = getReportIframeWin() || iframeWin;
-      if (verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
+      // 8.5.53: 复检标本（preStatus4）静态 4 不可信，跳过这里直接走长确认
+      if (!preStatus4 && verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
       result = await confirmAuditEventually(iframeWin, reportDR, name, {
         batchMode: fast,
         targetWasPresent: auditCtx.rowPresent,
         detailWasReady: auditCtx.detailReady,
         afterCA: !caReady,
+        preStatus4, // 8.5.53
         abortCheck
       });
     }
-    if (!result && verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
+    if (!preStatus4 && verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
     // 延迟二次校验：原生状态回写可能有 1~2s 延迟，避免「已成功但脚本误判失败」
     // 8.5.35: 改 250ms 轮询早退（成功即返回），不再固定白等 1.5s 只验一次
     if (!result && !abortCheck()) {
@@ -9488,8 +9515,9 @@ window.addEventListener('keydown',function(e){
       for (let _dv = 0; _dv < 6 && !abortCheck(); _dv++) {
         await sleep(250);
         iframeWin = getReportIframeWin() || iframeWin;
-        if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
-            softAuditSuccessHint(iframeWin, reportDR)) {
+        // 8.5.53: 复检标本 verify 只认状态变 3；softAuditSuccessHint 有动态信号（IsAuthed/IsSaveSuccess）可信
+        if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
+            softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 })) {
           delayedOK = true;
           break;
         }
@@ -9506,7 +9534,8 @@ window.addEventListener('keydown',function(e){
       } catch (e) {}
       const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
       const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
-      if (liveStatus === '3' || liveStatus === '4') {
+      // 8.5.53: 复检标本（preStatus4）审核后状态需变 3 才算成功（审核前就是 4）
+      if (liveStatus === '3' || (!preStatus4 && liveStatus === '4')) {
         dbg('延迟二次校验：标本已审核成功（wsData 状态）');
         closeNativeAuditSuccessMessage(iframeWin);
         return true;
@@ -9514,6 +9543,7 @@ window.addEventListener('keydown',function(e){
     }
     // 最终返回前也关闭可能残留的原生弹窗
     if (result) {closeNativeAuditSuccessMessage(iframeWin);}
+    _auditingPreStatus4 = false; // 8.5.53: 审核结束重置
     return result;
   }
 
@@ -9708,11 +9738,13 @@ window.addEventListener('keydown',function(e){
       // 8.5.35: 改 250ms 轮询早退（原生状态回写完成即继续），不再固定白等 2s
       if (!auditResult) {
         if (ft) {ft.textContent = `确认审核结果: ${specimen.PatName || specimen.Labno || targetDR}`;}
+        // 8.5.53: 复检标本（审核前 status 4）verify 只认状态变 3
+        const _abPre4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
         for (let _dv = 0; _dv < 8; _dv++) {
           await sleep(250);
           iframeWin = getReportIframeWin() || iframeWin;
-          if (verifyAuditSucceededByReportDR(iframeWin, targetDR) ||
-              softAuditSuccessHint(iframeWin, targetDR)) {
+          if (verifyAuditSucceededByReportDR(iframeWin, targetDR, { accept4: !_abPre4 }) ||
+              softAuditSuccessHint(iframeWin, targetDR, { accept4: !_abPre4 })) {
             auditResult = true;
             break;
           }
@@ -9733,7 +9765,8 @@ window.addEventListener('keydown',function(e){
           } catch (e) {}
           const liveRow = wsData.find(r => String(r.ReportDR) === String(targetDR));
           const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
-          if (liveStatus === '3' || liveStatus === '4') {
+          // 8.5.53: 复检标本（审核前 status 4）需状态变 3 才算成功（审核前就是 4）
+          if (liveStatus === '3' || (liveStatus === '4' && !_abPre4)) {
             dbg('异常审核延迟确认成功（wsData 状态）:', specimen.PatName);
             auditResult = true;
           }
@@ -11013,6 +11046,8 @@ window.addEventListener('keydown',function(e){
       const specimen = currentDetailSpecimen;
       const source = detailSource;
       const idx = detailSourceIndex;
+      // 8.5.53: 详情审核期间设置复检上下文（内部 verify/soft 兜底用）
+      _auditingPreStatus4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
 
       let nextReportDR = null;
       if (source && idx >= 0) {
@@ -11111,10 +11146,12 @@ window.addEventListener('keydown',function(e){
       // 最终兜底：再等 2s 后多重校验（原生状态 + wsData + softHint）
       if (!auditResult) {
         _setDetailAuditBusy(true, '⏳ 确认审核结果…');
+        // 8.5.53: 复检标本（审核前 status 4）verify 只认状态变 3
+        const _dtPre4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
         await sleep(2000);
         iframeWin = getReportIframeWin() || iframeWin;
-        if (verifyAuditSucceededByReportDR(iframeWin, reportDR) ||
-            softAuditSuccessHint(iframeWin, reportDR)) {
+        if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !_dtPre4 }) ||
+            softAuditSuccessHint(iframeWin, reportDR, { accept4: !_dtPre4 })) {
           dbg('详情审核延迟确认成功（原生状态）:', specimen.PatName);
           auditResult = true;
         } else {
@@ -11131,7 +11168,8 @@ window.addEventListener('keydown',function(e){
           } catch (e) {}
           const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
           const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
-          if (liveStatus === '3' || liveStatus === '4') {
+          // 8.5.53: 复检标本需状态变 3 才算成功（审核前就是 4）
+          if (liveStatus === '3' || (liveStatus === '4' && !_dtPre4)) {
             dbg('详情审核延迟确认成功（wsData 状态）:', specimen.PatName);
             auditResult = true;
           }
@@ -11187,6 +11225,7 @@ window.addEventListener('keydown',function(e){
       dbg('详情面板审核失败:', e);
       showToast('审核失败: ' + e.message, 'error');
     } finally {
+      _auditingPreStatus4 = false; // 8.5.53
       clearTimeout(_detailSafetyTimer);
       _detailAuditInProgress = false;
       _setDetailAuditBusy(false);
@@ -14811,6 +14850,7 @@ window.addEventListener('keydown',function(e){
     const timeoutMs = options.timeoutMs || (isAudit ? (batchMode ? (caSessionReady ? 2200 : 6500) : 12000) : 8000);
     const missingAsSuccess =
       options.missingAsSuccess !== undefined ? options.missingAsSuccess : caSessionReady && isAudit;
+    const preStatus4 = !!options.preStatus4; // 8.5.53: 审核前已是复审（复检标本）
     const maxPoll = caSessionReady ? 2 : batchMode ? 4 : 16;
     const pollSleep = caSessionReady ? 25 : batchMode ? 40 : 180;
     const missingStableMs = batchMode ? (caSessionReady ? 180 : 350) : 900;
@@ -14822,7 +14862,8 @@ window.addEventListener('keydown',function(e){
     } catch (e) {}
     const auditCtx = auditTargetContext(iframeWin, targetReportDR);
     const targetWasPresent = auditCtx.rowPresent;
-    const allowMissingSuccess = missingAsSuccess && auditCtx.allowMissingSuccess;
+    // 8.5.53: 复检标本关闭「行消失=成功」（审核前就是 4，行可能因 CA 流程暂时消失）
+    const allowMissingSuccess = missingAsSuccess && auditCtx.allowMissingSuccess && !preStatus4;
     const makeWaitOpts = (extra = {}) => ({
       targetWasPresent,
       missingStableMs,
@@ -14830,7 +14871,10 @@ window.addEventListener('keydown',function(e){
       ignoreMessages: true,
       turbo: batchMode || caSessionReady,
       abortCheck: options.abortCheck,
-      quickVerify: targetReportDR ? () => verifyAuditSucceededByReportDR(iframeWin, targetReportDR) : null,
+      // 8.5.53: 复检标本 quickVerify 只认状态变 3（静态 4 不可信）
+      quickVerify: targetReportDR
+        ? () => verifyAuditSucceededByReportDR(iframeWin, targetReportDR, { accept4: !preStatus4 })
+        : null,
       onTick: options.onTick,
       ...extra
     });
@@ -17744,6 +17788,9 @@ window.addEventListener('keydown',function(e){
 
           progressPhase(batchCAReady ? '秒审' : '审核中');
           const auditCtx = auditTargetContext(iframeWin, item.reportDR);
+          // 8.5.53: 批审复检标本（审核前 status 4）——静态 4/行消失不可信，需等状态变 3 或动态信号
+          const _itemPre4 = liveRow && String(liveRow.Status || liveRow.ReportStatus || '') === '4';
+          _auditingPreStatus4 = _itemPre4; // 8.5.53: 该条审核期间内部 verify/soft 兜底
           let sawCAPath = false;
           let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
             action: 'audit',
@@ -17752,7 +17799,8 @@ window.addEventListener('keydown',function(e){
             timeoutMs: batchCAReady ? 2200 : 6000,
             keepWS: queue.keepWS,
             caSessionReady: batchCAReady,
-            missingAsSuccess: true, // 详情已就绪；行消失或状态 3 均算成功
+            missingAsSuccess: !_itemPre4, // 详情已就绪；行消失或状态 3 均算成功（复检标本除外）
+            preStatus4: _itemPre4, // 8.5.53
             targetReportDR: item.reportDR,
             abortCheck: itemAbort,
             onTick: (elapsed, phase) => {
@@ -17764,7 +17812,7 @@ window.addEventListener('keydown',function(e){
           if (!auditResult && !itemAbort()) {
             iframeWin = getReportIframeWin() || iframeWin;
             if (
-              verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
+              (!_itemPre4 && verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) ||
               softAuditSuccessHint(iframeWin, item.reportDR)
             ) {
               auditResult = true;
@@ -17774,8 +17822,8 @@ window.addEventListener('keydown',function(e){
               for (let q = 0; q < 10 && !auditResult; q++) {
                 await sleep(100);
                 if (
-                  verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
-                  softAuditSuccessHint(iframeWin, item.reportDR)
+                  verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_itemPre4 }) ||
+                  softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_itemPre4 })
                 ) {
                   auditResult = true;
                 }
@@ -17788,6 +17836,7 @@ window.addEventListener('keydown',function(e){
                 targetWasPresent: auditCtx.rowPresent || auditCtx.detailReady,
                 detailWasReady: true,
                 afterCA: false,
+                preStatus4: _itemPre4, // 8.5.53
                 abortCheck: itemAbort,
                 onTick: msg =>
                   updateBatchProgress(`${itemBase} - ${msg}${modeHint}`, ((queue.current + 0.7) / totalCount) * 100)
@@ -17796,21 +17845,21 @@ window.addEventListener('keydown',function(e){
               for (let q = 0; q < 8 && !auditResult; q++) {
                 await sleep(80);
                 if (
-                  verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
-                  softAuditSuccessHint(iframeWin, item.reportDR)
+                  verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_itemPre4 }) ||
+                  softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_itemPre4 })
                 )
                 {auditResult = true;}
               }
             }
           }
-          if (!auditResult && verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
+          if (!auditResult && verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_itemPre4 })) {
             dbg('批审最终校验：标本实际已审核', item.reportDR);
             auditResult = true;
           }
           // 超时但可能已成功：再验一次；仍无果则重试/跳过，绝不整批挂起
           if (!auditResult && Date.now() > itemDeadline) {
             iframeWin = getReportIframeWin() || iframeWin;
-            if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
+            if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_itemPre4 })) {
               auditResult = true;
               dbg('批审单项超时后校验成功', item.reportDR);
             } else {
@@ -17839,8 +17888,8 @@ window.addEventListener('keydown',function(e){
               await sleep(250);
               iframeWin = getReportIframeWin() || iframeWin;
               if (
-                verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
-                softAuditSuccessHint(iframeWin, item.reportDR)
+                verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_itemPre4 }) ||
+                softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_itemPre4 })
               ) {
                 delayedOK = true;
                 break;
@@ -17868,6 +17917,7 @@ window.addEventListener('keydown',function(e){
           }
           dbg('逐行审核异常:', item.name, e.message);
         } finally {
+          _auditingPreStatus4 = false; // 8.5.53: 该条审核结束重置
           queue.current++;
           saveAuditQueueTick(queue);
           refreshQueueLock();
