@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.51
+// @version      8.5.52
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7264,7 +7264,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       return 'audited';
     }
     if (status === '4') {
-      // 8.5.50: 复审（复检/复查）标本：结果不完整 → 不完整；结果完整 → 待审显示（但审核被拦截，见审核守卫）
+      // 8.5.50: 复审（复检/复查）标本：结果不完整 → 不完整；结果完整 → 待审显示
+      // 8.5.52: 复检标本可正常审核（危急值除外），仅危急值由 validateAuditClassification 红线拦截
       // 只处理 status 4，status 3 保持隐藏——避免 8.5.44/8.5.45 误伤已审核标本的教训
       const complete4 = String(r.IsComplete || '');
       if (complete4 !== '1') {return 'incomplete';}
@@ -8798,11 +8799,11 @@ window.addEventListener('keydown',function(e){
   }
 
   // 8.5.51: 复审（复检/复查）标本的小标识——各视图（待审/不完整/全部）均显示，
-  // 便于识别；status 4 才显示
+  // 便于识别；status 4 才显示。8.5.52: 复检标本可正常审核（危急值除外），仅作身份标识
   function recheckTagHTML(r) {
     const st = String((r && (r.Status || r.ReportStatus)) || '');
     return st === '4'
-      ? '<span class="st-tag st-4t" title="复检/复查标本，仅追踪查看，不可在工作台审核" style="margin-right:4px">复审</span>'
+      ? '<span class="st-tag st-4t" title="复检/复查标本" style="margin-right:4px">复审</span>'
       : '';
   }
 
@@ -8865,9 +8866,8 @@ window.addEventListener('keydown',function(e){
         h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
         h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || '', wsSearchQuery)}</span>`;
         h += `<span class="ab-card-time">${esc(r.AcceptDT || '')}</span>`;
-        // 8.5.51: 复审卡片提示不可审核
-        const _isRecheck = String(r.Status || r.ReportStatus || '') === '4';
-        h += _isRecheck ? '<span class="ab-card-hint">复审·仅查看</span>' : '<span class="ab-card-hint">Enter=审核</span>';
+        // 8.5.52: 复检标本可审核（危急值除外），提示恢复 Enter=审核
+        h += '<span class="ab-card-hint">Enter=审核</span>';
         h += '</div>';
         return;
       }
@@ -8947,12 +8947,9 @@ window.addEventListener('keydown',function(e){
         h += '<span class="ab-card-item uncertain">⚠ 待确认</span>';
       }
       h += '</div>';
-      // 8.5.51: 危急值优先提示（红线）；复审标本提示仅查看
-      const _cardIsRecheck = String(r.Status || r.ReportStatus || '') === '4';
+      // 8.5.52: 复检标本可审核（危急值除外）；危急值红线优先提示
       if (hasCritical) {
         h += '<span class="ab-card-hint" style="color:#c62828;font-weight:600">🚨 危急值</span>';
-      } else if (_cardIsRecheck) {
-        h += '<span class="ab-card-hint" style="color:#7b1fa2;font-weight:600">复审·仅查看</span>';
       } else if (hasInfectionWarning) {
         h += '<span class="ab-card-hint" style="color:#e65100;font-weight:600">⚠ 历史不一致</span>';
       } else {
@@ -9591,13 +9588,9 @@ window.addEventListener('keydown',function(e){
       return;
     }
     const _preStatus = String(specimen.Status || specimen.ReportStatus || '');
-    // 8.5.50: 复审（复检/复查）标本不可在工作台审核——只追踪/查看，需在原生 LIS 处理
-    if (_preStatus === '4') {
-      showToast(`跳过: ${specimen.PatName} 复审标本不可在工作台审核`, 'warning');
-      advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
-      return;
-    }
-    // 8.5.46: 3 一律拦截（已审核）
+    // 8.5.52: 复审（status 4）标本可正常审核（除危急值外）——移除 8.5.50 的全拦；
+    // 危急值由下方 validateAuditClassification 的 CRITICAL 红线拦截
+    // status 3（一审完成）仍拦截（已审核，不在待审视图）
     if (_preStatus === '3') {
       showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
@@ -11055,12 +11048,8 @@ window.addEventListener('keydown',function(e){
       }
 
       const status = String(specimen.Status || specimen.ReportStatus || '');
-      // 8.5.50: 复审（复检/复查）标本不可在工作台审核——需在原生 LIS 处理
-      if (status === '4') {
-        showToast(`跳过: ${specimen.PatName} 复审标本不可在工作台审核`, 'warning');
-        return;
-      }
-      // 8.5.46: 3 一律拦截（已审核）
+      // 8.5.52: 复审（status 4）可正常审核（除危急值外，危急值由 validateAuditClassification 拦）
+      // status 3（一审完成）仍拦截
       if (status === '3') {
         showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
         return;
@@ -17592,14 +17581,6 @@ window.addEventListener('keydown',function(e){
         const liveRow = resolveQueueItemRow(item);
         if (liveRow && String(liveRow.IsComplete || '') !== '1') {
           queue.skipped.push({ ...item, reason: '结果不完整' });
-          skipCount++;
-          queue.current++;
-          saveAuditQueueNow(queue);
-          continue;
-        }
-        // 8.5.50: 复审（复检/复查）标本不可在工作台批审——需在原生 LIS 处理
-        if (liveRow && String(liveRow.Status || liveRow.ReportStatus || '') === '4') {
-          queue.skipped.push({ ...item, reason: '复审标本不可工作台审核' });
           skipCount++;
           queue.current++;
           saveAuditQueueNow(queue);
