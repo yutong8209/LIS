@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.50
+// @version      8.5.51
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8797,6 +8797,15 @@ window.addEventListener('keydown',function(e){
     return `<span class="ab-card-admtype ${cls}" title="${escAttr(t)}">${label}</span>`;
   }
 
+  // 8.5.51: 复审（复检/复查）标本的小标识——各视图（待审/不完整/全部）均显示，
+  // 便于识别；status 4 才显示
+  function recheckTagHTML(r) {
+    const st = String((r && (r.Status || r.ReportStatus)) || '');
+    return st === '4'
+      ? '<span class="st-tag st-4t" title="复检/复查标本，仅追踪查看，不可在工作台审核" style="margin-right:4px">复审</span>'
+      : '';
+  }
+
   // --- 待审视图（融合正常 + 异常，单队列审核）---
   function renderAuditView(data, body) {
     if (_abnormalFocusDR) {
@@ -8851,11 +8860,14 @@ window.addEventListener('keydown',function(e){
         h += `<div class="ws-abnormal-card is-normal${focused}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
         h += '<span class="ab-card-badge ok">✅</span>';
         h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
+        h += recheckTagHTML(r);
         h += admTypeBadgeHTML(r);
         h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
         h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || '', wsSearchQuery)}</span>`;
         h += `<span class="ab-card-time">${esc(r.AcceptDT || '')}</span>`;
-        h += '<span class="ab-card-hint">Enter=审核</span>';
+        // 8.5.51: 复审卡片提示不可审核
+        const _isRecheck = String(r.Status || r.ReportStatus || '') === '4';
+        h += _isRecheck ? '<span class="ab-card-hint">复审·仅查看</span>' : '<span class="ab-card-hint">Enter=审核</span>';
         h += '</div>';
         return;
       }
@@ -8870,6 +8882,7 @@ window.addEventListener('keydown',function(e){
       h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += hasCritical ? '<span class="ab-card-badge critical">🚨</span>' : '<span class="ab-card-badge warn">⚠️</span>';
       h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
+      h += recheckTagHTML(r);
       h += admTypeBadgeHTML(r);
       h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
       h += `<span class="ab-card-test">${highlightText(r._mn || '', wsSearchQuery)}</span>`;
@@ -8934,8 +8947,12 @@ window.addEventListener('keydown',function(e){
         h += '<span class="ab-card-item uncertain">⚠ 待确认</span>';
       }
       h += '</div>';
+      // 8.5.51: 危急值优先提示（红线）；复审标本提示仅查看
+      const _cardIsRecheck = String(r.Status || r.ReportStatus || '') === '4';
       if (hasCritical) {
         h += '<span class="ab-card-hint" style="color:#c62828;font-weight:600">🚨 危急值</span>';
+      } else if (_cardIsRecheck) {
+        h += '<span class="ab-card-hint" style="color:#7b1fa2;font-weight:600">复审·仅查看</span>';
       } else if (hasInfectionWarning) {
         h += '<span class="ab-card-hint" style="color:#e65100;font-weight:600">⚠ 历史不一致</span>';
       } else {
@@ -9852,7 +9869,7 @@ window.addEventListener('keydown',function(e){
 
       h += `<tr data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
-      h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
+      h += `<td>${recheckTagHTML(r)}${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
       h += `<td><b>${highlightText(r.Labno || '', wsSearchQuery)}</b></td>`;
       h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
       h += `<td>${icHTML}</td>`;
