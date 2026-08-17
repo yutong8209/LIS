@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.46
+// @version      8.5.47
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7231,13 +7231,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   function getWSAuditBucket(r) {
     const status = String(r.Status || r.ReportStatus || '');
     if (status === '3' || status === '4') {
-      // 8.5.44: 审核/复审但结果不完整（如复检/打回重测，IsComplete≠1）→ 归入「不完整」，
-      // 不能一律当已审核隐藏——否则复检标本在任何标签都找不到（只在全部可见）
-      // 8.5.46: 回退 8.5.45——3/4+IsComplete=1 一律归 audited 隐藏。实测工作台列表含
-      // 正常已审核标本，8.5.45 让它们混入待审；复检完成与正常已审核需额外字段区分，
-      // 现有 status+IsComplete 无法可靠区分，先恢复安全行为
-      const complete = String(r.IsComplete || '');
-      if (complete !== '1') {return 'incomplete';}
+      // 8.5.47: 彻底回退 8.5.44/8.5.45——3/4 一律归已审核隐藏。
+      // 实测已审核标本的 IsComplete 字段并不都是 '1'（缺失/其他值），
+      // 8.5.44 用 IsComplete 区分复检导致已审核标本混入「不完整」。
+      // 复检中/复检完成与正常已审核在现有字段下无法可靠区分，一律按已审核处理最安全。
       return 'audited';
     }
     if (status === '0') {return 'pending';}
