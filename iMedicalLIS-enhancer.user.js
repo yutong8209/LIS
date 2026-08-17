@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.45
+// @version      8.5.46
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7231,11 +7231,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   function getWSAuditBucket(r) {
     const status = String(r.Status || r.ReportStatus || '');
     if (status === '3' || status === '4') {
-      // 8.5.44: 审核/复审但结果不完整（如复检/打回重测，IsComplete≠1）→ 归入「不完整」
-      // 8.5.45: 审核/复审且结果完整 → 复检完成待再审（工作台列表里的 3/4 均为待处理，
-      //          正常已审核的会被 LIS 移出列表）→ 走下方分类判断进待审，不再直接归 audited
+      // 8.5.44: 审核/复审但结果不完整（如复检/打回重测，IsComplete≠1）→ 归入「不完整」，
+      // 不能一律当已审核隐藏——否则复检标本在任何标签都找不到（只在全部可见）
+      // 8.5.46: 回退 8.5.45——3/4+IsComplete=1 一律归 audited 隐藏。实测工作台列表含
+      // 正常已审核标本，8.5.45 让它们混入待审；复检完成与正常已审核需额外字段区分，
+      // 现有 status+IsComplete 无法可靠区分，先恢复安全行为
       const complete = String(r.IsComplete || '');
       if (complete !== '1') {return 'incomplete';}
+      return 'audited';
     }
     if (status === '0') {return 'pending';}
     if (status === '9') {return 'collected';} // 8.5.31: 病房采集中、未送到科室
@@ -9541,9 +9544,9 @@ window.addEventListener('keydown',function(e){
       return;
     }
     const _preStatus = String(specimen.Status || specimen.ReportStatus || '');
-    // 8.5.45: 3/4 且结果完整 = 复检完成待再审，允许审核；仅复检中（不完整）拦截
-    if ((_preStatus === '3' || _preStatus === '4') && _preComplete !== '1') {
-      showToast(`跳过: ${specimen.PatName} 复检中，结果不完整`, 'warning');
+    // 8.5.46: 恢复 3/4 一律拦截（8.5.45 曾只拦复检中，导致正常已审核标本可被重新审核）
+    if (_preStatus === '3' || _preStatus === '4') {
+      showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
       return;
     }
@@ -10999,9 +11002,9 @@ window.addEventListener('keydown',function(e){
       }
 
       const status = String(specimen.Status || specimen.ReportStatus || '');
-      // 8.5.45: 3/4 且结果完整 = 复检完成待再审，允许审核（上一步已保证 IsComplete=1）
-      if ((status === '3' || status === '4') && complete !== '1') {
-        showToast(`跳过: ${specimen.PatName} 复检中，结果不完整`, 'warning');
+      // 8.5.46: 恢复 3/4 一律拦截（8.5.45 曾放宽导致正常已审核标本被重新审核）
+      if (status === '3' || status === '4') {
+        showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
         return;
       }
 
@@ -16196,11 +16199,11 @@ window.addEventListener('keydown',function(e){
     try {
       if (loadSeq !== _wsLoadSeq) {return;}
       // 筛选需要分类的标本：未审核 + 结果完整 + 未缓存
-      // 8.5.45: 3/4 且结果完整（复检完成待再审）也要分类进待审；复检中（不完整）不需要分类
+      // 8.5.46: 恢复跳过 3/4（含 IsComplete=1）——工作台列表含正常已审核标本，分类会让它们进待审
       const toClassify = wsData.filter(r => {
         const status = String(r.Status || r.ReportStatus || '');
+        if (status === '3' || status === '4') {return false;}
         const complete = String(r.IsComplete || '');
-        if ((status === '3' || status === '4') && complete !== '1') {return false;}
         if (complete !== '1') {return false;}
         return isClassificationStale(r);
       });
