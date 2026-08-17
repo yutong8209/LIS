@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.48
+// @version      8.5.49
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6633,27 +6633,33 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 8.5.42: 跨天后更新数据日期（无论清空重载还是正常更新，都归到新一天）
         if (dateChanged || allData.length > 0) {_wsLoadedDate = today();}
         wsData = allData;
-        // 8.5.48 临时诊断：复检标本字段探查（开启：F12 执行 localStorage.setItem('LIS_DebugRecheck','1') 后刷新）
+        // 8.5.49 临时诊断 v2：只输出「复检/复查」相关 3/4 标本 + 3 条普通已审核对照（JSON 文本可复制）
         try {
           if (localStorage.getItem('LIS_DebugRecheck') === '1') {
-            const recheckRows = allData.filter(r => {
+            const rows34 = allData.filter(r => {
               const st = String(r.Status || r.ReportStatus || '');
               return st === '3' || st === '4';
             });
-            if (recheckRows.length) {
-              console.log(
-                '[LIS-DEBUG] 3/4 状态标本 ' + recheckRows.length + ' 条：',
-                recheckRows.map(r => {
-                  const o = {};
-                  ['ReportDR', 'Labno', 'PatName', 'Status', 'ReportStatus', 'StatusDesc', 'ReportStatusDesc',
-                    'IsComplete', 'NoResRows', 'AuthDate', 'AuthTime', 'AuthUserDR', 'AuditUserDR', 'AuditDate',
-                    'State', 'StateDesc', 'AuthStatus', 'AuthFlag', 'IsAuthed', 'Retest', 'Recheck', 'ReTestFlag'
-                  ].forEach(k => { if (r[k] !== undefined) {o[k] = r[k];} });
-                  o.__allKeys = Object.keys(r);
-                  return o;
-                })
-              );
-            }
+            const RE = /复检|复查|重测|retest|recheck|re-test/i;
+            const pick = r => {
+              const o = {};
+              ['ReportDR', 'Labno', 'PatName', 'Status', 'ReportStatus', 'StatusDesc', 'ReportStatusDesc',
+                'IsComplete', 'NoResRows', 'AuthDate', 'AuthTime', 'AuthUserDR', 'AuditUserDR', 'AuditDate',
+                'AuditUser', 'State', 'StateDesc', 'AuthStatus', 'AuthFlag', 'IsAuthed', 'Retest', 'Recheck',
+                'ReTestFlag', 'TestStatus', 'ResultFlag'
+              ].forEach(k => { if (r[k] !== undefined && r[k] !== null && String(r[k]) !== '') { o[k] = r[k]; } });
+              return o;
+            };
+            const recheck = rows34.filter(r => RE.test(String(r.StatusDesc || r.ReportStatusDesc || '')));
+            const normal34 = rows34.filter(r => !RE.test(String(r.StatusDesc || r.ReportStatusDesc || ''))).slice(0, 3);
+            console.log(
+              '[LIS-DEBUG-复检] 状态描述含 复检/复查 的 ' + recheck.length + ' 条：\n' +
+              JSON.stringify(recheck.map(pick), null, 1)
+            );
+            console.log(
+              '[LIS-DEBUG-已审核对照] 普通 3/4 抽样 3 条：\n' +
+              JSON.stringify(normal34.map(pick), null, 1)
+            );
           }
         } catch (e) {}
         // 8.5.33: 每次数据刷新后自动取消已核收标本的忽略（进入未审核/审核 → 恢复正常计数）
