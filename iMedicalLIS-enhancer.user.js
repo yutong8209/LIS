@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.53
+// @version      8.5.54
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8807,6 +8807,29 @@ window.addEventListener('keydown',function(e){
       : '';
   }
 
+  // 8.5.54: 曾为复审（复检）状态的标本记录——脚本审核 status 4 标本成功时写入，
+  // 供「全部」视图对审核后（status 3）的复检标本显示『审核+复审』双标识。
+  // LIS 审核后状态 4→3，当前数据无法推断是否复检过，需本地记忆。
+  const RECHECK_DONE_KEY = 'LIS_RecheckDone';
+  function recheckDoneAdd(reportDR) {
+    if (!reportDR) {return;}
+    try {
+      const o = JSON.parse(localStorage.getItem(RECHECK_DONE_KEY) || '{}');
+      o[String(reportDR)] = Date.now();
+      // 清理 7 天前的记录，防止无限增长
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      Object.keys(o).forEach(k => { if (o[k] < cutoff) {delete o[k];} });
+      localStorage.setItem(RECHECK_DONE_KEY, JSON.stringify(o));
+    } catch (e) {}
+  }
+  function isRecheckDone(reportDR) {
+    if (!reportDR) {return false;}
+    try {
+      const o = JSON.parse(localStorage.getItem(RECHECK_DONE_KEY) || '{}');
+      return !!o[String(reportDR)];
+    } catch (e) {return false;}
+  }
+
   // --- 待审视图（融合正常 + 异常，单队列审核）---
   function renderAuditView(data, body) {
     if (_abnormalFocusDR) {
@@ -9780,6 +9803,8 @@ window.addEventListener('keydown',function(e){
       if (ft) {ft.textContent = `已审核: ${specimen.PatName || specimen.Labno || targetDR}`;}
       showToast(`已审核: ${specimen.PatName || specimen.Labno || ''}`, 'success');
       closeNativeAuditSuccessMessage(iframeWin);
+      // 8.5.54: 复检标本审核成功 → 记录「曾复审」，供全部视图显示双标识
+      if (String(specimen.Status || specimen.ReportStatus || '') === '4') {recheckDoneAdd(targetDR);}
 
       delete wsClassifiedCache[specimen.ReportDR];
       wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
@@ -9952,7 +9977,12 @@ window.addEventListener('keydown',function(e){
       h += `<tr class="st-${statusVal} ${wsChecked.has(r.ReportDR) && !ignored ? 'sel' : ''}${ignored ? ' ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${escAttr(r.ReportDR || '')}"${ckAttr} /></td>`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
-      h += `<td><span class="st-tag ${st.cls}">${esc(st.t)}</span></td>`;
+      // 8.5.54: 审核后（status 3）且曾为复审的标本 → 显示『审核』+『复审』双标识
+      let stHTML = `<span class="st-tag ${st.cls}">${esc(st.t)}</span>`;
+      if (String(statusVal) === '3' && isRecheckDone(r.ReportDR)) {
+        stHTML += ' <span class="st-tag st-4t" title="曾复检/复查">复审</span>';
+      }
+      h += `<td>${stHTML}</td>`;
       const ic = r.IsComplete;
       let icHTML = '';
       if (ic === '1') {icHTML = '<span class="complete-star">⭐</span>';}
@@ -11181,6 +11211,8 @@ window.addEventListener('keydown',function(e){
       }
       showToast(`审核成功: ${specimen.PatName}`, 'success');
       closeNativeAuditSuccessMessage(iframeWin);
+      // 8.5.54: 复检标本审核成功 → 记录「曾复审」
+      if (String(specimen.Status || specimen.ReportStatus || '') === '4') {recheckDoneAdd(reportDR);}
       dbg('详情审核成功:', specimen.PatName, 'ReportDR:', reportDR);
 
       // 确保焦点在主页面（审核操作后焦点可能留在 iframe 中）
@@ -17876,6 +17908,8 @@ window.addEventListener('keydown',function(e){
             successCount++;
             batchCAReady = true;
             queue.caReadyByWg[itemWg] = true;
+            // 8.5.54: 复检标本批审成功 → 记录「曾复审」
+            if (_itemPre4) {recheckDoneAdd(item.reportDR);}
             if (prepareNextBatchItemAfterAudit(iframeWin, queue, item)) {
               batchSkipSelect = true;
               dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
