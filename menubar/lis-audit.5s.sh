@@ -69,7 +69,11 @@ echo "$AR · $IC · $PD · $CL | size=14 tooltip=\"待审 不完整 待排 采�
 echo "---"
 echo "$M | $H_FONT sfimage=slider.horizontal.3 sfcolor=$C_BLUE"
 echo "---"
-JUMP="$HOME/lis-menubar/lis_jump.sh"
+# 优先用插件自身所在目录的 lis_jump.sh（无论 PluginDirectory 是软链还是实体目录），
+# 再回退软链/原始路径——避免软链缺失时下拉点击静默失效
+JUMP="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lis_jump.sh"
+[ -f "$JUMP" ] || JUMP="$HOME/lis-menubar/lis_jump.sh"
+[ -f "$JUMP" ] || JUMP="$HOME/脚本/menubar/lis_jump.sh"
 
 row() {
   local icon="$1" label="$2" val="$3" color="$4" cat="$5"

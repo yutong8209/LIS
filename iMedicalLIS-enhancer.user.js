@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.55
+// @version      8.5.56
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -2787,9 +2787,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         [r.PatName, r.Labno, r.EpisodeNo, r.RegNo, r.AdmNo, r.RecordNo].some(v => prTextMatchAny(v, filters.qTerms))
       );
     }
-    if (filters.testSet) {
-      data = data.filter(r => prTextMatchAny(r.TestSetDesc, filters.testSetTerms));
-    }
+    /* 8.5.56: 医嘱组合（testSet）不在此提前过滤——工作列表 TestSetDesc 常缺失（尤其外送/接口回传），
+       提前过滤会把本应命中的标本剔掉且后续救不回；统一放到明细读取后由 prResultPass 严格筛选。 */
     if (filters.sex)
     {data = data.filter(r => {
       const sex = String(r.Sex || r.Species || '');
@@ -4736,7 +4735,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           const date = r.TestDate || r.AddDate || r.QCDate || '';
           // 去重 key 包含运行序号/时间戳，避免同日多次检测结果被丢弃
           const seq = r.SeqNo || r.RunSeq || r.AddTime || '';
-          const key = date + '|' + levelNo + '|' + (r.TestCodeDR || testCodeDR) + '|' + seq;
+          // 8.5.56: 序号全缺时退化为「结果值」参与 key，否则同日同水平多次检测会被折叠成一条
+          const seqKey = seq || 'v' + (r.Result1 != null ? r.Result1 : r.Result != null ? r.Result : allRows.length);
+          const key = date + '|' + levelNo + '|' + (r.TestCodeDR || testCodeDR) + '|' + seqKey;
           if (seen.has(key)) {return;}
           seen.add(key);
           // 不修改原 API 响应对象，避免副作用；LevelNo 无条件补全：
@@ -5225,6 +5226,22 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           const seq = (daySeq[pt.day] = (daySeq[pt.day] || 0) + 1);
           rows.push([proj.code, month, pt.day, seq, lot, pt.value, proj.name, operator]);
         });
+      }
+      // 8.5.56: LIS 有比模板声明更多水平（如 3 水平血球质控）时显式告警，不再静默丢弃
+      const extraLvs = Object.keys(levels).filter(
+        k => /^\d+$/.test(k) && Number(k) > conc && (levels[k] || []).length > 0
+      );
+      if (extraLvs.length) {
+        try {
+          qeAddResultItem(
+            '⚠ ' + proj.name + '（' + group.name + '）',
+            0,
+            null,
+            'LIS 存在 Level ' +
+              extraLvs.map(Number).sort((a, b) => a - b).join('/') +
+              ' 数据，但模板仅声明 ' + conc + ' 个水平，该部分未导出'
+          );
+        } catch (e) {}
       }
     }
     return rows;
@@ -5980,8 +5997,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const mapMeta = mappings._meta;
     if (mapMeta && cfg._year && cfg._month && (mapMeta.year !== cfg._year || mapMeta.month !== cfg._month)) {
       qeSetStatus(
-        `映射为 ${mapMeta.year}-${String(mapMeta.month).padStart(2, '0')} 月检测，导出 ${cfg._year}-${String(cfg._month).padStart(2, '0')} 月；血常规将自动切换有数据的质控物`,
-        'info'
+        `⚠️ 映射为 ${mapMeta.year}-${String(mapMeta.month).padStart(2, '0')} 月检测，导出 ${cfg._year}-${String(cfg._month).padStart(2, '0')} 月；血常规/尿常规会自动切换有数据的质控物，其他组若当月项目编码有变可能导出空数据，建议先点「检测映射」`,
+        'error'
       );
     }
 
@@ -16259,11 +16276,27 @@ window.addEventListener('keydown',function(e){
     const _refText = item.RefRanges || item.RefRange || item.ReferenceRange || '';
     const _refNeg = isNegativeReferenceText(_refText);
     const _refPos = isPositiveReferenceText(_refText);
-    if ((_refNeg || _refPos) && parseComparableNumber(result)) {
-      const _num = parseComparableNumber(result).value;
-      const _isPos = _num > 1;
-      if (_refNeg) {return _isPos ? 'ABNORMAL' : 'NORMAL';}
-      if (_refPos) {return _isPos ? 'NORMAL' : 'ABNORMAL';}
+    if (_refNeg || _refPos) {
+      // 8.5.56: 滴度（1:64）必须单独判——parseComparableNumber 只截出前导 1，
+      // 阳性滴度会被误判 NORMAL 进入可自动审核（严重漏报风险）
+      const _titer = parseTiterResult(result);
+      const _p = parseComparableNumber(result);
+      if (_titer || _p) {
+        let _isPos;
+        if (_titer) {
+          _isPos = _titer.den >= 2;
+        } else if (_p.op === '>' || _p.op === '>=') {
+          // 实际值大于 X：X>=1 必阳；X<1 不确定 → 按异常拦截（宁可人审，不可漏放）
+          _isPos = true;
+        } else if (_p.op === '<' || _p.op === '<=') {
+          // 实际值小于 X：X<=1 必阴；X>1 不确定 → 按异常拦截
+          _isPos = _p.value > 1;
+        } else {
+          _isPos = _p.value > 1;
+        }
+        if (_refNeg) {return _isPos ? 'ABNORMAL' : 'NORMAL';}
+        if (_refPos) {return _isPos ? 'NORMAL' : 'ABNORMAL';}
+      }
     }
 
     // 回退：数值比较
@@ -16556,6 +16589,16 @@ window.addEventListener('keydown',function(e){
     return warnings.length > 0 ? warnings.join('; ') : null;
   }
 
+  // 8.5.56: 滴度结果（如 RPR/TRUST「1:64」）——裸 parseFloat 只会截出前导「1」造成漏判。
+  // 分母 >= 2 = 该稀释度下仍凝集 = 阳性；「1:1」为原液基线，不在此判阳。
+  function parseTiterResult(result) {
+    const m = String(result == null ? '' : result)
+      .trim()
+      .match(/^(\d+(?:\.\d+)?)\s*[:：]\s*(\d+(?:\.\d+)?)$/);
+    if (!m) {return null;}
+    return { num: parseFloat(m[1]), den: parseFloat(m[2]) };
+  }
+
   // 判断是否阳性结果
   function isPositiveResult(result, item) {
     if (!result) {return false;}
@@ -16563,15 +16606,23 @@ window.addEventListener('keydown',function(e){
     // 阳性标记
     if (r === '+' || r === '阳性' || r === 'POSITIVE' || r === 'POS' || r === 'REACTIVE') {return true;}
     if (/^\+{1,4}$/.test(r) || r.includes('阳性') || r.includes('弱阳')) {return true;}
-    // 数值结果：按参考值范围判断
-    const num = parseFloat(r);
-    if (!isNaN(num)) {
+    // 8.5.56: 滴度（1:64）优先判定，避免被数值分支截成 1 而漏判
+    const titer = parseTiterResult(r);
+    if (titer) {return titer.den >= 2;}
+    // 数值结果：统一走 parseComparableNumber（8.5.56：兼容 ">8.0"/"≥5" 等不等号前缀——
+    // 裸 parseFloat 对这类格式返回 NaN，会整体漏判，传染病高亮/历史比对由此失守）
+    const parsed = parseComparableNumber(r);
+    if (parsed && !isNaN(parsed.value)) {
+      const num = parsed.value;
+      const op = parsed.op;
+      // "<X" = 低于检出限/报告下限 → 不判阳
+      if (op === '<' || op === '<=') {return false;}
       if (item) {
         const range = getItemRangeValues(item);
         const high = parseComparableNumber(range.high);
         // 如果有上限参考值，按参考值判断
         if (high && !isNaN(high.value)) {
-          // 结果在参考值范围内 = 阴性
+          // 结果在参考值范围内 = 阴性（">X" 且 X 未达上限时同样不判阳：下限不足为据）
           if (num <= high.value) {return false;}
           // 结果超出参考值范围 = 阳性
           return true;
@@ -16591,20 +16642,31 @@ window.addEventListener('keydown',function(e){
     const r = result.toUpperCase().trim();
     if (r === '-' || r === '阴性' || r === 'NEGATIVE' || r === 'NEG' || r === 'NON-REACTIVE') {return true;}
     if (r.includes('阴性') || r.includes('阴')) {return true;}
-    const num = parseFloat(r);
-    if (isNaN(num)) {return false;}
+    // 8.5.56: 滴度（1:64 等）不是阴性；与 isPositiveResult 对称
+    if (parseTiterResult(r)) {return false;}
+    // 8.5.56: 统一走 parseComparableNumber——裸 parseFloat 对 "<0.1" 返回 NaN，
+    // 会把「低于检出限」的阴性结果判成「非阴性」，导致历史比对漏报「历史阳性→现阴性」
+    const parsed = parseComparableNumber(r);
+    if (!parsed || isNaN(parsed.value)) {return false;}
+    const num = parsed.value;
+    const op = parsed.op;
+    // ">X" = 明确偏高 → 不是阴性
+    if (op === '>' || op === '>=') {return false;}
     // 有参考范围：按参考范围判断（与 isPositiveResult 一致）
     if (item) {
       const range = getItemRangeValues(item);
       const low = parseComparableNumber(range.low);
       const high = parseComparableNumber(range.high);
       if ((low && !isNaN(low.value)) || (high && !isNaN(high.value))) {
+        // "<X"：实际值更低，X 在参考范围内即可确定阴性；X 超上限则无法确定
         // 在参考范围内 = 阴性（正常）；超出 = 阳性（异常）
         const inLow = !low || isNaN(low.value) || num >= low.value;
         const inHigh = !high || isNaN(high.value) || num <= high.value;
         return inLow && inHigh;
       }
     }
+    // "<X" 无参考范围：X <= 1 时确定阴性（实际值只会更低）
+    if (op === '<' || op === '<=') {return num <= 1;}
     // 无参考范围：S/CO 值 <1 为阴性
     return num < 1;
   }
@@ -17334,7 +17396,11 @@ window.addEventListener('keydown',function(e){
   async function auditOneQueueItemOnce(iframeWin, item, options = {}) {
     iframeWin = getReportIframeWin() || iframeWin;
     if (!iframeWin || !item || !item.reportDR) {return { ok: false, iframeWin };}
-    if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR)) {
+    // 8.5.56: 补审也要识别复检标本（审核前状态 4）——与主循环 8.5.53 对齐：
+    // 静态 4 与行消失都不可信，只认状态变 3，否则会把「仍是 4」误判为已审核
+    const _salvageRow = wsData.find(r => String(r.ReportDR) === String(item.reportDR)) || null;
+    const _salvagePre4 = !!(_salvageRow && String(_salvageRow.Status || _salvageRow.ReportStatus || '') === '4');
+    if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 })) {
       return { ok: true, iframeWin, already: true };
     }
     const sel = await waitAndSelectNativeRow(iframeWin, item, {
@@ -17367,37 +17433,43 @@ window.addEventListener('keydown',function(e){
     if (!ready) {return { ok: false, iframeWin, reason: 'detail' };}
 
     const caReady = isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin);
-    let result = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
-      action: 'audit',
-      expectedStatuses: ['3'],
-      batchMode: true,
-      timeoutMs: caReady ? 4000 : 8000,
-      keepWS: !!options.keepWS,
-      caSessionReady: caReady,
-      missingAsSuccess: true,
-      targetReportDR: item.reportDR
-    });
-    if (!result) {
-      await sleep(300);
-      iframeWin = getReportIframeWin() || iframeWin;
-      result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
-              softAuditSuccessHint(iframeWin, item.reportDR);
+    _auditingPreStatus4 = _salvagePre4; // 8.5.56: 让内部 verify/soft 兜底按复检语义判定
+    try {
+      let result = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
+        action: 'audit',
+        expectedStatuses: ['3'],
+        batchMode: true,
+        timeoutMs: caReady ? 4000 : 8000,
+        keepWS: !!options.keepWS,
+        caSessionReady: caReady,
+        missingAsSuccess: !_salvagePre4, // 复检标本不认「行消失=成功」（8.5.56）
+        preStatus4: _salvagePre4,
+        targetReportDR: item.reportDR
+      });
+      if (!result) {
+        await sleep(300);
+        iframeWin = getReportIframeWin() || iframeWin;
+        result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
+                softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
+      }
+      if (!result) {
+        await sleep(500);
+        iframeWin = getReportIframeWin() || iframeWin;
+        result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
+                softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
+      }
+      // 最终延迟校验
+      if (!result) {
+        await sleep(1000);
+        iframeWin = getReportIframeWin() || iframeWin;
+        result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
+                 softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
+      }
+      if (result) {closeNativeAuditSuccessMessage(iframeWin);}
+      return { ok: !!result, iframeWin };
+    } finally {
+      _auditingPreStatus4 = false; // 8.5.56: 复位，避免影响后续判定
     }
-    if (!result) {
-      await sleep(500);
-      iframeWin = getReportIframeWin() || iframeWin;
-      result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
-              softAuditSuccessHint(iframeWin, item.reportDR);
-    }
-    // 最终延迟校验
-    if (!result) {
-      await sleep(1000);
-      iframeWin = getReportIframeWin() || iframeWin;
-      result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR) ||
-               softAuditSuccessHint(iframeWin, item.reportDR);
-    }
-    if (result) {closeNativeAuditSuccessMessage(iframeWin);}
-    return { ok: !!result, iframeWin };
   }
 
   // --- 执行批量审核（逐行审核）---

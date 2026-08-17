@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * 本地脚本服务器（与 serve.py 等价，推荐用 python3 serve.py）
+ * 本地脚本服务器（仅静态服务：用户脚本 + vendor）
+ * ⚠️ 不含 serve.py 的 /stats、/cmd、/cmd/claim 菜单栏桥——
+ *    菜单栏统计/点击跳转、批审指令功能必须用 python3 serve.py
  * 用法: node serve.js
  */
 const http = require('http');

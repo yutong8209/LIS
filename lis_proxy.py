@@ -9,7 +9,7 @@ LIS 反向代理 & 代码缓存器
     python3 lis_proxy.py                          # 默认: 代理 192.168.31.111:9111，监听 9112
     python3 lis_proxy.py --target 10.0.29.100     # 直连地址
     python3 lis_proxy.py --port 9113               # 自定义监听端口
-    python3 lis_proxy.py --no-cache-api            # 不缓存 API 响应（只缓存静态资源）
+    python3 lis_proxy.py --cache-api               # 连 API 响应也缓存（仅调试用）
 
 浏览器设置:
     1. 设置 HTTP 代理指向 localhost:9112
@@ -40,6 +40,10 @@ LISTEN_HOST = '127.0.0.1'
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
 # 默认不缓存 API/接口响应（可能含检验业务数据）；仅缓存静态前端资源
 CACHE_API = False
+
+# 强制直连：urlopen 默认读取 http_proxy/HTTPS_PROXY 环境变量，
+# 内网 LIS 流量绝不能被路由到系统代理（会 502/超时，甚至把内网数据发出外网）
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 # 需要缓存的文件类型
 STATIC_EXTS = {
@@ -224,7 +228,7 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
             req = urllib.request.Request(target_url, data=req_body, headers=req_headers, method=method)
             # LIS 主服务器用长超时，其他服务器用短超时
             _timeout = 60 if TARGET in target_url else 3
-            resp = urllib.request.urlopen(req, timeout=_timeout)
+            resp = _DIRECT_OPENER.open(req, timeout=_timeout)
             resp_body = resp.read()
             resp_headers = dict(resp.getheaders())
             resp_status = resp.status
@@ -257,7 +261,9 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
             if method == 'GET' and file_type == 'other' and not is_api_path(url_path):
                 should_cache = False
         else:
-            should_cache = file_type in static_types and method == 'GET' and not is_api_path(url_path)
+            # detect_type 已按扩展名/Content-Type 确认是静态资源才进 static_types，
+            # 不再叠加 is_api_path 子串过滤——否则 /Report/js/common.js 这类纯静态也会被误排除
+            should_cache = file_type in static_types and method == 'GET'
 
         if should_cache and resp_body:
             try:
@@ -312,8 +318,6 @@ def main():
                         help='监听地址 (默认: 127.0.0.1，仅本机)')
     parser.add_argument('--cache-dir', '-d', default=None, help='缓存目录')
     parser.add_argument('--clear', action='store_true', help='启动前清空缓存')
-    parser.add_argument('--no-cache-api', action='store_true', default=True,
-                        help='不缓存 API 响应，只缓存静态资源（默认开启）')
     parser.add_argument('--cache-api', action='store_true',
                         help='缓存 API/接口响应（可能含业务数据，仅调试时用）')
     args = parser.parse_args()

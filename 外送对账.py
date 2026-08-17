@@ -276,6 +276,16 @@ def _parse_dates(s: pd.Series, col_name: str = "日期") -> pd.Series:
     return out
 
 
+def _to_fee(series: pd.Series, col_name: str, src: str) -> pd.Series:
+    """费用列转数值；无法解析的非空值按 0 计并告警——静默归零会掩盖真实少收。"""
+    orig = series.astype(str).str.strip()
+    out = pd.to_numeric(series, errors="coerce")
+    bad = int((out.isna() & orig.ne("") & ~orig.str.lower().isin(["nan", "none"])).sum())
+    if bad:
+        print(f"[警告] {src}「{col_name}」有 {bad} 行无法解析为数字，已按 0 计——请人工核对是否漏收")
+    return out.fillna(0.0)
+
+
 def _read_tp(path: Path) -> pd.DataFrame:
     df = pd.read_excel(path, dtype=str)
     # 兼容首行即表头 / 无表头
@@ -306,8 +316,8 @@ def _read_tp(path: Path) -> pd.DataFrame:
         df["条码号"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip().replace({"nan": ""})
     )
     df["日期"] = _parse_dates(df["送检日期"], "送检日期").dt.normalize()
-    df["标准物价"] = pd.to_numeric(df["标准物价"], errors="coerce").fillna(0.0)
-    df["结算金额"] = pd.to_numeric(df["结算金额"], errors="coerce").fillna(0.0)
+    df["标准物价"] = _to_fee(df["标准物价"], "标准物价", "机构表")
+    df["结算金额"] = _to_fee(df["结算金额"], "结算金额", "机构表")
     n_bad_date = int(df["日期"].isna().sum())
     df = df[df["患者"].ne("") & df["日期"].notna()].copy()
     if n_bad_date:
@@ -354,8 +364,8 @@ def _read_lis(path: Path) -> pd.DataFrame:
     df["组合"] = df["组合"].astype(str).str.strip().replace({"nan": ""})
     df["检验号"] = df["检验号"].astype(str).str.strip().replace({"nan": ""})
     df["日期"] = _parse_dates(df["核收时间"], "核收时间").dt.normalize()
-    df["报告费用"] = pd.to_numeric(df["报告费用"], errors="coerce").fillna(0.0)
-    df["医嘱费用"] = pd.to_numeric(df["医嘱费用"], errors="coerce").fillna(0.0)
+    df["报告费用"] = _to_fee(df["报告费用"], "报告费用", "LIS CSV")
+    df["医嘱费用"] = _to_fee(df["医嘱费用"], "医嘱费用", "LIS CSV")
     n_bad_date = int(df["日期"].isna().sum())
     df = df[df["姓名"].ne("") & df["日期"].notna()].copy()
     if n_bad_date:

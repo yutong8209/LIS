@@ -4,6 +4,7 @@ import http.server
 import mimetypes
 import os
 import json
+import sys
 import threading
 import time
 from urllib.parse import urlparse, unquote
@@ -39,6 +40,14 @@ def _load_cmd():
     try:
         with open(CMD_FILE, 'r', encoding='utf-8') as f:
             _cmd_data = json.load(f)
+        # 重启前写入但未被 userscript 认领的指令一律作废，避免重启后重放（与「重启后不再重放旧指令」语义对齐）
+        if isinstance(_cmd_data, dict) and not _cmd_data.get('consumed', True):
+            _cmd_data['consumed'] = True
+            try:
+                with open(CMD_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(_cmd_data, f, ensure_ascii=False)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -112,6 +121,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             print(f'[{self.log_date_time_string()}] {path} ({len(content)} bytes)')
         except Exception as e:
             self.send_response(500)
+            self.send_header('Access-Control-Allow-Origin', '*')  # 跨源 fetch 的 500 也要可读
             self.end_headers()
             self.wfile.write(str(e).encode())
 
@@ -135,6 +145,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
             except Exception as e:
                 self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(str(e).encode())
         elif path == '/cmd':
@@ -159,6 +170,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
             except Exception as e:
                 self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(str(e).encode())
         elif path == '/cmd/claim':
@@ -185,6 +197,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception as e:
                 self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(str(e).encode())
         else:
@@ -207,4 +220,14 @@ print('  2. 编辑 iMedicalLIS-enhancer.user.js')
 print('  3. 在 Tampermonkey 面板点击脚本的"更新"按钮')
 print('========================================')
 
-http.server.HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
+try:
+    http.server.HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
+except KeyboardInterrupt:
+    print('\n已停止')
+except OSError as e:
+    # errno 48 = macOS EADDRINUSE / 98 = Linux EADDRINUSE（端口被占用）
+    if getattr(e, 'errno', None) in (48, 98):
+        print(f'❌ 端口 {PORT} 已被占用：serve.py 可能已在运行（菜单栏/Tampermonkey 更新依赖它）。')
+        print('   如需重启请先结束旧进程: pkill -f serve.py')
+        sys.exit(1)
+    raise
