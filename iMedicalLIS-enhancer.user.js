@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.64
+// @version      8.5.65
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -18544,15 +18544,17 @@ window.addEventListener('keydown',function(e){
       });
 
       // 4) 日志 + 小结（skipped 已去重，只含新跳过）
+      // 8.5.65: 仅当本轮实际有审核动作（正常/异常/跳过任一 > 0）才弹小结 toast；
+      // 全 0 的空转轮次（数据未就绪/无待审标本）静默，避免开启后几秒弹出无意义弹窗
       if (nNormal > 0 || nAbnormal > 0 || skipped.length > 0) {
         autoAuditLogAdd({ normal: nNormal, abnormal: nAbnormal, skipped, audited });
+        _autoAuditMute = false; // 小结 toast 不被静默
+        const remain = autoAuditRemainText();
+        showToast(
+          '🤖 自动审核：正常 ' + nNormal + ' · 异常 ' + nAbnormal + ' · 跳过 ' + skipped.length + (remain ? ' · ' + remain : ''),
+          nNormal + nAbnormal > 0 ? 'success' : 'info'
+        );
       }
-      _autoAuditMute = false; // 小结 toast 不被静默
-      const remain = autoAuditRemainText();
-      showToast(
-        '🤖 自动审核：正常 ' + nNormal + ' · 异常 ' + nAbnormal + ' · 跳过 ' + skipped.length + (remain ? ' · ' + remain : ''),
-        nNormal + nAbnormal > 0 ? 'success' : 'info'
-      );
     } catch (e) {
       dbg('自动审核循环异常:', e);
     } finally {
