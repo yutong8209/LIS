@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.69
+// @version      8.5.70
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -736,6 +736,12 @@
 #lis-auto-audit-log-box .aal-badge.normal,#lis-auto-audit-box .aal-badge.normal{background:#e8f8ef;color:#1e8449;border:1px solid #a9dfbf}
 #lis-auto-audit-log-box .aal-badge.abnormal,#lis-auto-audit-box .aal-badge.abnormal{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1}
 #lis-auto-audit-log-box .aal-badge.skip,#lis-auto-audit-box .aal-badge.skip{background:#fef9e7;color:#9a7d0a;border:1px solid #f7dc6f}
+#lis-auto-audit-log-box .aal-row{cursor:pointer}
+#lis-auto-audit-log-box .aal-row:hover{background:#f5fbfa}
+#lis-auto-audit-log-box .aal-detail{margin-top:4px;padding:4px 8px 2px;background:#fafcfc;border-radius:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+#lis-auto-audit-log-box .aal-test{color:#2c3e50;font-size:11px;font-weight:600}
+#lis-auto-audit-log-box .aal-abn{display:inline-flex;gap:6px;flex-wrap:wrap}
+#lis-auto-audit-log-box .aal-abn-item{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;border-radius:3px;padding:1px 5px;font-size:10px;font-weight:600;white-space:nowrap}
 
 /* --- 数据表 --- */
 #lis-ws-body{flex:1!important;overflow:auto!important;background:var(--lis-bg);font-family:var(--lis-font);min-height:0!important;position:relative;z-index:1;padding:0 8px 8px}
@@ -18534,6 +18540,21 @@ window.addEventListener('keydown',function(e){
     }, 2000);
   }
 
+  // 8.5.70: 提取标本的项目组合 + 异常项目（写入审核记录，供记录查看器直观展示）；无缓存则为空
+  function auditRecordSpecInfo(reportDR, row) {
+    let test = '', abn = [];
+    const live = getLiveClassification(reportDR);
+    const rr = (live && live.row) || row || findWSSpecimenByReportDR(reportDR);
+    if (rr && rr.TestSetDesc) {test = String(rr.TestSetDesc) || '';}
+    if (live && live.items) {
+      abn = (live.items || [])
+        .filter(it => it.status && it.status !== 'NORMAL')
+        .slice(0, 10)
+        .map(it => (it.name || '') + ' ' + String(it.result || '') + (it.unit ? ' ' + it.unit : ''));
+    }
+    return { test, abn };
+  }
+
   // 主循环：每轮 = [正常批量] + [异常逐条(安全门)] + 日志/小结
   async function autoAuditTick() {
     if (!autoAuditEnabled()) {return;}
@@ -18574,7 +18595,8 @@ window.addEventListener('keydown',function(e){
           nNormal = (q.done || []).length;
           (q.done || []).forEach(it => {
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
-              audited.push({ n: it.name || '', l: it.labno || '', d: String(it.reportDR || ''), t: 'normal' });
+              const _si = auditRecordSpecInfo(it.reportDR, it.row);
+              audited.push({ n: it.name || '', l: it.labno || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn });
             }
           });
           (q.failed || []).forEach(it => autoAuditSkipOnce(skipped, it, it.reason || '批量审核失败'));
@@ -18599,12 +18621,14 @@ window.addEventListener('keydown',function(e){
           autoAuditSkipOnce(skipped, r, gate.reason);
           continue;
         }
+        // 8.5.70: 审核前采集项目组合+异常项目（审核成功后缓存会被删除，故提前采）
+        const _preSI = auditRecordSpecInfo(r.ReportDR, r);
         try {
           const ok = await auditAbnormalSpecimen(r, { quiet: true });
           if (ok) {
             nAbnormal++;
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
-              audited.push({ n: r.PatName || '', l: r.Labno || '', d: String(r.ReportDR || ''), t: 'abnormal' });
+              audited.push({ n: r.PatName || '', l: r.Labno || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn });
             }
           }
           else {skipped.push({ name: r.PatName, labno: r.Labno, reason: '审核未确认成功（留人工/下轮重试）' });}
@@ -18785,14 +18809,7 @@ window.addEventListener('keydown',function(e){
             <label style="display:flex;align-items:center;gap:6px;margin:4px 0"><input type="checkbox" id="lis-aa-inf" ${rules.blockInfectionPos ? 'checked' : ''}> 拦截传染病项目阳性（梅毒/丙肝/HIV/两对半）</label>
           </div>
         </div>
-        <div class="ab-section" style="margin-top:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <label style="font-weight:600">📑 今日自动审核记录</label>
-            <button class="ab-cancel" id="lis-aa-logbtn" style="background:#ecf0f1;color:#333;padding:3px 10px;font-size:12px">📋 查看更多</button>
-          </div>
-          <div id="lis-aa-today" style="max-height:230px;overflow-y:auto;border:1px solid #eee;border-radius:4px;background:#fafafa"></div>
-        </div>
-        <div class="ab-ft">
+        <div class="ab-ft" style="justify-content:flex-end">
           <button class="ab-cancel" id="lis-aa-stop" style="display:${enabled ? 'inline-block' : 'none'};background:#e74c3c;color:#fff">⏹ 停止</button>
           <button class="ab-confirm ok" id="lis-aa-start">${enabled ? '✅ 更新并继续' : '🚀 开启自动审核'}</button>
         </div>
@@ -18800,53 +18817,7 @@ window.addEventListener('keydown',function(e){
     document.body.appendChild(dlg);
     dlg.classList.add('show');
 
-    // 8.5.62: 弹窗内直接展示今日自动审核记录（查看更多 → 完整历史查看器）
-    const fmtDay = d =>
-      d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    const badge = s =>
-      s.t === 'abnormal'
-        ? '<span class="aal-badge abnormal">⚠ 异常</span>'
-        : s.t === 'skip'
-          ? '<span class="aal-badge skip">⏭ 跳过</span>'
-          : '<span class="aal-badge normal">✓ 正常</span>';
-    const rowHTML = s =>
-      '<div style="padding:2px 10px;display:flex;gap:8px;align-items:center;font-size:12px;border-top:1px solid #f7f7f7">' +
-      badge(s) +
-      '<b>' + esc(s.n || '') + '</b>' +
-      '<span style="color:#666">' + esc(s.l || '') + '</span>' +
-      (s.reason ? '<span style="color:#8a6d3b">（' + esc(s.reason) + '）</span>' : '') +
-      '</div>';
-    const renderToday = () => {
-      const box = document.getElementById('lis-aa-today');
-      if (!box) {return;}
-      let log = [];
-      try {log = JSON.parse(localStorage.getItem(K.autoAuditLog) || '[]');} catch (err) {}
-      const today = fmtDay(new Date());
-      const entries = log.filter(e => String(e.day || '') === today).reverse(); // 最新在前
-      if (!entries.length) {
-        box.innerHTML = '<div style="color:#999;padding:14px;text-align:center">今日暂无自动审核记录</div>';
-        return;
-      }
-      box.innerHTML = entries.slice(0, 5).map(e => {
-        const det = [
-          ...(e.audited || []).map(a => ({ n: a.n, l: a.l, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '' })),
-          ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, t: 'skip', reason: s.reason || '' }))
-        ];
-        return (
-          '<div style="border-bottom:1px solid #f0f0f0;padding:6px 0">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;padding:0 10px;margin-bottom:2px">' +
-          '<b>' + esc(e.time || '') + '</b>' +
-          '<span style="color:#666">正常 <b>' + (e.normal || 0) + '</b> · 异常 <b>' + (e.abnormal || 0) + '</b> · 跳过 <b>' + (e.skipped || []).length + '</b></span>' +
-          '</div>' +
-          (det.length
-            ? det.slice(0, 8).map(rowHTML).join('') +
-              (det.length > 8 ? '<div style="color:#999;padding:3px 10px">… 其余 ' + (det.length - 8) + ' 条见「📋 查看更多」</div>' : '')
-            : '<div style="color:#999;padding:2px 10px">本轮无样本明细</div>') +
-          '</div>'
-        );
-      }).join('') +
-      (entries.length > 5 ? '<div style="color:#999;padding:6px 10px;text-align:center">… 今日共 ' + entries.length + ' 轮，其余见「📋 查看更多」</div>' : '');
-    };
+
     // 8.5.64: 当前审核范围（工作组 + 勾选仪器；全选只显示「全选」）——与 rowPassWSMachineFilter 语义一致
     const machineName = dr => {
       const m = wsMachines.find(x => String(x.RowID) === String(dr));
@@ -18889,10 +18860,10 @@ window.addEventListener('keydown',function(e){
       box.innerHTML = '🎯 当前审核范围：' + parts.join('　') + (scope ? ' <span style="color:#0d6655;font-weight:700">（开启时固定）</span>' : '');
     };
     renderScope();
-    renderToday();
-    const todayTimer = setInterval(() => {renderScope(); renderToday();}, 5000); // 自动审核进行中时实时刷新
+    // 8.5.70: 弹窗只显示审核范围（今日记录已由头部 🕘 查看记录按钮承担），5s 刷新范围
+    const liveTimer = setInterval(() => {renderScope();}, 5000);
 
-    const close = () => {clearInterval(todayTimer); dlg.remove();};
+    const close = () => {clearInterval(liveTimer); dlg.remove();};
     document.getElementById('lis-aa-close').addEventListener('click', close);
     dlg.addEventListener('click', e => {if (e.target === dlg) {close();}});
     document.getElementById('lis-aa-stop').addEventListener('click', () => {
@@ -18908,11 +18879,6 @@ window.addEventListener('keydown',function(e){
       saveAutoAuditState();
       startAutoAudit(Number.isFinite(dur) ? dur : AUTO_AUDIT_DEFAULT_MIN);
       close();
-    });
-    document.getElementById('lis-aa-logbtn').addEventListener('click', () => {
-      // 8.5.62: 打开完整记录查看器（支持日期范围 + 搜索样本）；close() 负责清掉今日记录刷新定时器
-      close();
-      openAutoAuditLogViewer();
     });
   }
   // 8.5.61: 自动审核记录查看器 — 查找最近自动审核了哪些样本（日期范围 + 姓名/检验号搜索）
@@ -18951,16 +18917,46 @@ window.addEventListener('keydown',function(e){
         : s.t === 'skip'
           ? '<span class="aal-badge skip">⏭ 跳过</span>'
           : '<span class="aal-badge normal">✓ 正常</span>';
+    // 8.5.70: 取标本分类明细（项目组合 TestSetDesc / 异常项目）——能查缓存就展示，查不到（历史标本已不在当前数据）回退只看徽章
+    const specDetailHTML = s => {
+      if (!s) {return '';}
+      let name = '', abn = [];
+      const dr = s.d;
+      // 8.5.70: 优先用审核时写入日志的项目信息（缓存可能已被清除）；空则回退实时取
+      if (s.test) {name = s.test;}
+      if (s.abn && s.abn.length) {abn = s.abn.slice(0, 6);}
+      if (!name || !abn.length) {
+        const live = dr ? getLiveClassification(dr) : null;
+        if (!name && live && live.row && live.row.TestSetDesc) {name = String(live.row.TestSetDesc) || '';}
+        if (!name && dr) {
+          const row = findWSSpecimenByReportDR(dr);
+          if (row && row.TestSetDesc) {name = String(row.TestSetDesc) || '';}
+        }
+        if (!abn.length && live && live.items) {
+          abn = (live.items || [])
+            .filter(it => it.status && it.status !== 'NORMAL')
+            .slice(0, 6)
+            .map(it => (it.name || '') + ' ' + String(it.result || '') + (it.unit ? ' ' + it.unit : ''));
+        }
+      }
+      const bits = [];
+      if (name) {bits.push('<span class="aal-test">' + esc(name) + '</span>');}
+      if (abn.length) {bits.push('<div class="aal-abn">' + abn.map(x => '<span class="aal-abn-item">' + esc(x) + '</span>').join('') + '</div>');}
+      return bits.length ? '<div class="aal-detail">' + bits.join('') + '</div>' : '';
+    };
     const rowHTML = s =>
-      '<div style="padding:4px 10px;display:flex;gap:8px;align-items:center;font-size:12px;border-top:1px solid #f5f5f5">' +
+      '<div class="aal-row" data-rdr="' + escAttr(s.d || '') + '" style="padding:6px 10px;border-top:1px solid #f5f5f5">' +
+      '<div style="display:flex;gap:8px;align-items:center;font-size:12px;flex-wrap:wrap">' +
       badge(s) +
       '<b>' + esc(s.n || '') + '</b>' +
       '<span style="color:#666">' + esc(s.l || '') + '</span>' +
       (s.reason ? '<span style="color:#8a6d3b">（' + esc(s.reason) + '）</span>' : '') +
+      '</div>' +
+      specDetailHTML(s) +
       '</div>';
     const entryDetails = e => [
-      ...(e.audited || []).map(a => ({ n: a.n, l: a.l, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '' })),
-      ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, t: 'skip', reason: s.reason || '' }))
+      ...(e.audited || []).map(a => ({ n: a.n, l: a.l, d: a.d, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '' })),
+      ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: '', t: 'skip', reason: s.reason || '' }))
     ];
 
     const render = () => {
@@ -19049,6 +19045,26 @@ window.addEventListener('keydown',function(e){
     );
     const searchInput = document.getElementById('lis-aal-search');
     searchInput.addEventListener('input', () => {q = searchInput.value; render();});
+    // 8.5.70: 点击记录里的标本行 → 打开工作台详情面板查看该病人完整结果（若标本仍在当前数据）
+    const listBox = document.getElementById('lis-aal-list');
+    if (listBox) {
+      listBox.addEventListener('click', ev => {
+        const row = ev.target.closest('.aal-row[data-rdr]');
+        if (!row) {return;}
+        const rdr = row.dataset.rdr;
+        if (!rdr) {return;}
+        if (ev.target.closest('.aal-entry-hd')) {return;}
+        const specimen = findWSSpecimenByReportDR(rdr);
+        if (!specimen) {
+          showToast('该标本不在当前工作台数据中，无法直接打开详情', 'error');
+          return;
+        }
+        if (!isWSVisible()) {openWS();}
+        dlg.remove();
+        if (wsCategory !== 'all') {switchWSCategory('all');}
+        openDetailPanel(specimen, 'all', 0);
+      });
+    }
     render();
   }
 
