@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.68
+// @version      8.5.69
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7753,7 +7753,36 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   let _tabsBuilt = false;
   let _tabsLastActiveWG = undefined;
-  let _tabsLastMachineCount = 0; // 上次构建时的仪器数量
+  let _tabsLastMachineSet = ''; // 上次构建时可见仪器 DR 集合签名
+
+  // 8.5.69: 判断当前要显示的机器是否都已存在标签（以「是否有新增仪器」为重建条件，
+  // 而非机器数量：刷新时部分/全量加载会造成机器列表数量短暂波动，数量变化重建会导致标签闪失（历史 acd7306 同类问题）；
+  // 仅当出现 DOM 里尚无标签的新仪器时才重建加标签）
+  function wsNeedTabRebuild(tabs) {
+    if (!_tabsBuilt || _tabsLastActiveWG !== wsActiveWG) {return true;}
+    const sig = wsMachines
+      .filter(m => (wsActiveWG ? String(m._wg) === String(wsActiveWG) : true))
+      .map(m => String(m.RowID))
+      .sort()
+      .join(',');
+    if (sig !== _tabsLastMachineSet) {
+      // 集合变化：仅当出现「列表里有但 DOM 无标签」的新 DR 才重建；纯减少（如瞬断列表变少）不重建，避免闪
+      if (wsActiveWG) {
+        const has = new Set();
+        tabs.querySelectorAll('.ws-mach-tab[data-multi-m]').forEach(b => has.add(String(b.dataset.multiM)));
+        for (const m of wsMachines) {
+          if (String(m._wg) === String(wsActiveWG) && !has.has(String(m.RowID))) {return true;}
+        }
+      } else {
+        const has = new Set();
+        tabs.querySelectorAll('.ws-mach-tab[data-multi-m]').forEach(b => has.add(String(b.dataset.multiM)));
+        for (const m of wsMachines) {
+          if (!has.has(String(m.RowID))) {return true;}
+        }
+      }
+    }
+    return false;
+  }
 
   function renderWSTabs() {
     const tabs = $('#lis-ws-tabs');
@@ -7761,12 +7790,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     tabs.style.flexShrink = '0';
     const mc = wsMachineCounts;
     const wgCounts = calcWSTabCounts();
-    // 首次 / 切换工作组 / 仪器数量变化时重建 DOM，其余只更新状态
-    const needRebuild = !_tabsBuilt || _tabsLastActiveWG !== wsActiveWG || _tabsLastMachineCount !== wsMachines.length;
+    // 首次 / 切换工作组 / 出现新仪器时重建 DOM，其余只更新状态（避免刷新时闪烁）
+    const needRebuild = wsNeedTabRebuild(tabs);
     if (needRebuild) {
       _tabsBuilt = true;
       _tabsLastActiveWG = wsActiveWG;
-      _tabsLastMachineCount = wsMachines.length;
+      _tabsLastMachineSet = wsMachines
+        .filter(m => (wsActiveWG ? String(m._wg) === String(wsActiveWG) : true))
+        .map(m => String(m.RowID))
+        .sort()
+        .join(',');
       buildWSTabsDOM(tabs, wgCounts, mc);
     } else {
       updateWSTabsState(tabs, wgCounts, mc);
