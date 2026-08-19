@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.63
+// @version      8.5.64
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -18659,6 +18659,7 @@ window.addEventListener('keydown',function(e){
           <p style="margin:4px 0 10px;color:#5c6b7a">按设定时长自动审核<b>当前筛选范围</b>（工作组+勾选仪器，可跨组）的标本：
             正常标本批量秒审；异常标本按安全门逐条审核。<b>危急值 / 堵孔0值 / 传染病阳性</b> 一律跳过留人工。
             范围外标本与忽略标本不审。工作台关闭时保持运行（自动重开）。</p>
+          <div id="lis-aa-scope" style="margin:8px 0;padding:6px 10px;background:#f0f7ff;border:1px solid #d0e4f7;border-radius:4px;color:#2c5f8a;font-size:12px;font-weight:600;line-height:1.8"></div>
           <div style="display:${enabled ? 'block' : 'none'}" id="lis-aa-running">
             <p style="margin:6px 0;padding:6px 10px;background:#eef7f5;border:1px solid #bfe3dd;border-radius:4px;color:#0d6655;font-weight:600">
               ⏳ 自动审核进行中 · 剩余 ${remain || '—'}
@@ -18736,8 +18737,46 @@ window.addEventListener('keydown',function(e){
       }).join('') +
       (entries.length > 5 ? '<div style="color:#999;padding:6px 10px;text-align:center">… 今日共 ' + entries.length + ' 轮，其余见「📋 查看更多」</div>' : '');
     };
+    // 8.5.64: 当前审核范围（工作组 + 勾选仪器；全选只显示「全选」）——与 rowPassWSMachineFilter 语义一致
+    const machineName = dr => {
+      const m = wsMachines.find(x => String(x.RowID) === String(dr));
+      return (m && (m.CName || m.Name)) || String(dr);
+    };
+    const renderScope = () => {
+      const box = document.getElementById('lis-aa-scope');
+      if (!box) {return;}
+      const parts = [];
+      if (wsActiveWG) {
+        // 单工作组：显示组名；组内勾选为空 = 全选
+        parts.push('工作组：<b>' + esc((WG_MAP[wsActiveWG] || {}).name || wsActiveWG) + '</b>');
+        const sel = getWSSelectedMachineSet(wsActiveWG);
+        parts.push(sel.size === 0 ? '仪器：<b>全选</b>' : '仪器：' + [...sel].map(machineName).join('、'));
+      } else {
+        // 全部工作组模式
+        parts.push('工作组：<b>全部</b>');
+        const anySel = WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
+        if (anySel) {
+          // 有组勾选了仪器 → 只审勾选组+勾选仪器
+          const groups = [];
+          WG.forEach(w => {
+            const sel = getWSSelectedMachineSet(w.dr);
+            if (sel.size > 0) {
+              groups.push('<b>' + esc((WG_MAP[w.dr] || {}).name || w.dr) + '</b>：' + [...sel].map(machineName).join('、'));
+            }
+          });
+          parts.push('仪器：' + groups.join('；'));
+        } else if (wsActiveMachine) {
+          // 单仪器过滤
+          parts.push('仪器：<b>' + esc(machineName(wsActiveMachine)) + '</b>');
+        } else {
+          parts.push('仪器：<b>全选</b>');
+        }
+      }
+      box.innerHTML = '🎯 当前审核范围：' + parts.join('　');
+    };
+    renderScope();
     renderToday();
-    const todayTimer = setInterval(renderToday, 5000); // 自动审核进行中时实时刷新
+    const todayTimer = setInterval(() => {renderScope(); renderToday();}, 5000); // 自动审核进行中时实时刷新
 
     const close = () => {clearInterval(todayTimer); dlg.remove();};
     document.getElementById('lis-aa-close').addEventListener('click', close);
