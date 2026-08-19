@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.62
+// @version      8.5.63
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -718,6 +718,8 @@
 #lis-ws-hd .ws-icon-btn.spinning{animation:lis-spin .8s linear infinite;pointer-events:none;opacity:.6}
 #lis-ws-hd .ws-aa-btn{padding:5px 10px;height:30px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;transition:background .15s,border-color .15s,color .15s;flex-shrink:0}
 #lis-ws-hd .ws-aa-btn:hover{background:var(--lis-primary-light);border-color:var(--lis-border);color:var(--lis-primary)}
+#lis-ws-hd .ws-aa-btn.on{background:#168276;border-color:#168276;color:#fff;box-shadow:0 0 0 1px rgba(22,130,118,.35)}
+#lis-ws-hd .ws-aa-btn.on:hover{background:#0f6b60;border-color:#0f6b60;color:#fff}
 #lis-auto-audit-log{position:fixed;inset:0;z-index:100022;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
 #lis-auto-audit-log.show{display:flex}
 #lis-auto-audit-log-box{background:#fff;border-radius:12px;width:640px;max-width:94vw;max-height:84vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4);overflow:hidden}
@@ -18630,14 +18632,10 @@ window.addEventListener('keydown',function(e){
       btn.classList.add('on');
       btn.textContent = '🤖 自动审核中 ' + (remain || '');
       btn.title = '自动审核进行中，剩余 ' + autoAuditRemainText() + ' · 点击查看/停止';
-      btn.style.borderColor = '#168276';
-      btn.style.color = '#0d6655';
     } else {
       btn.classList.remove('on');
       btn.textContent = '🤖 自动审核';
       btn.title = '自动审核：按设定时长自动审核当前筛选范围的标本（正常批量+异常逐条；危急值/堵孔0值/传染病阳性等留人工）';
-      btn.style.borderColor = '';
-      btn.style.color = '';
     }
   }
 
@@ -18759,8 +18757,8 @@ window.addEventListener('keydown',function(e){
       close();
     });
     document.getElementById('lis-aa-logbtn').addEventListener('click', () => {
-      // 8.5.62: 打开完整记录查看器（支持日期范围 + 搜索样本）
-      dlg.remove();
+      // 8.5.62: 打开完整记录查看器（支持日期范围 + 搜索样本）；close() 负责清掉今日记录刷新定时器
+      close();
       openAutoAuditLogViewer();
     });
   }
