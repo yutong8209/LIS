@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.67
+// @version      8.5.68
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7696,6 +7696,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         invalidateCaches();
         wsActiveWG = b.dataset.wg;
         wsActiveMachine = '';
+        // 8.5.68: 单工作组模式只保留当前组的仪器勾选，其他组勾选清空（跨组勾选只能在「全部工作组」下进行）
+        if (wsActiveWG) {
+          WG.forEach(w => {
+            if (String(w.dr) !== String(wsActiveWG)) {delete wsSelectedMachinesByWG[String(w.dr)];}
+          });
+        }
         wsAbnormalIndex = -1;
         wsChecked.clear();
         saveWSState();
