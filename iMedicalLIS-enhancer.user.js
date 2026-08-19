@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.73
+// @version      8.5.74
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -77,7 +77,7 @@
     autoAudit: 'LIS_AutoAudit_Persist', // 8.5.58: 自动审核状态（开启/到期时间/时长/规则）
     autoAuditLog: 'LIS_AutoAuditLog' // 8.5.58: 自动审核日志（环形上限 500）
   };
-  const CLASSIFY_STALE_MS = 30 * 60 * 1000;
+  const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.61.1';
   const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
   // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
@@ -86,6 +86,8 @@
   // 批审单条硬超时（秒审 / 需 CA）；超时后二次校验，仍无果则跳过/重试，避免整批卡死
   // 秒审 / 首条 CA 后确认都宜短：真漏审靠队尾重试+补审，不靠首条空等十几秒
   const BATCH_ITEM_DEADLINE_MS = { caReady: 8000, needCA: 28000 };
+  const AUTO_AUDIT_DATA_MAX_AGE = 60000; // 自动审核要求最近一次全量刷新成功
+  const ZERO_BLOCK_MACHINE_NAMES = /生化分析仪|全自动生化|生化仪/i;
   const BATCH_CONFIRM_MS = { normal: 1500, afterCA: 2500 };
 
   // ==================== 工具 ====================
@@ -6212,6 +6214,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let _classifyPendingRerun = false; // 分类进行中又有新数据时，结束后再跑一轮
   let _lastWSNonEmptyAt = 0; // 最近一次成功加载到标本的时间，用于强制刷新兜底
   let _wsLoadedDate = ''; // 8.5.42: 工作台数据对应的日期（today），跨天时允许清空重载
+  let _wsDataHealth = { lastFullSuccessAt: 0, failed: false, partial: false }; // 自动审核数据健康状态
   let _normalKeyHandler = null; // 普通视图键盘监听
   let _abnormalFocusDR = '';
   let _wsSearchTimer = null;
@@ -6335,7 +6338,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const arr = (wsSelectedMachinesByWG[k] || []).map(String).filter(Boolean);
       if (arr.length) {byWG[String(k)] = arr;}
     });
-    return { wg: wsActiveWG || '', machine: wsActiveMachine || '', byWG };
+    const machines = wsMachines.map(m => ({ wg: String(m._wg || ''), dr: String(m.RowID || ''), name: m.CName || m.Name || '' }));
+    return { wg: wsActiveWG || '', machine: wsActiveMachine || '', byWG, machines, capturedAt: Date.now(), user: uname() || uid() };
   }
   // 快照过滤：语义与 rowPassWSMachineFilter 一致，但读开启时固定的快照（无快照回退动态，兼容旧数据）
   function rowPassAuditSnapshot(row) {
@@ -6550,10 +6554,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         const lock = JSON.parse(raw);
         if (lock.owner !== _tabId && Date.now() - (lock.ts || 0) < AUDIT_QUEUE_LOCK_TTL) {return false;}
       }
-      localStorage.setItem(K.auditQueueLock, JSON.stringify({ owner: _tabId, ts: Date.now() }));
-      return true;
+      const token = Math.random().toString(36).slice(2);
+      localStorage.setItem(K.auditQueueLock, JSON.stringify({ owner: _tabId, token, ts: Date.now() }));
+      const check = JSON.parse(localStorage.getItem(K.auditQueueLock) || '{}');
+      return check.owner === _tabId && check.token === token;
     } catch (e) {
-      return true;
+      // 无法可靠读写锁时宁可不自动审核，避免双标签页并发审核
+      return false;
     }
   }
 
@@ -6719,6 +6726,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 假数据。故日期变化时允许清空重载（自动归零到新一天），同一天内的瞬断仍保留。
         const dateChanged = !!(_wsLoadedDate && _wsLoadedDate !== today());
         if (allData.length === 0 && wsData.length > 0 && !dateChanged) {
+          _wsDataHealth.failed = true;
+          _wsDataHealth.partial = !!partial;
           dbg('刷新返回空数据，保留原有', wsData.length, '条', partial ? '(partial)' : '');
           if (qi) {qi.textContent = `刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;}
           // 8.5.40: 强制刷新的警告只在全量阶段判断（partial 阶段空可能是瞬断，阶段2会恢复）
@@ -6728,6 +6737,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 8.5.42: 跨天后更新数据日期（无论清空重载还是正常更新，都归到新一天）
         if (dateChanged || allData.length > 0) {_wsLoadedDate = today();}
         wsData = allData;
+        _wsDataHealth.partial = !!partial;
+        if (!partial) {
+          _wsDataHealth.failed = false;
+          _wsDataHealth.lastFullSuccessAt = Date.now();
+        }
         // 8.5.33: 每次数据刷新后自动取消已核收标本的忽略（进入未审核/审核 → 恢复正常计数）
         wsIgnoreAutoRelease(allData);
         wsMachines = allMachines;
@@ -6757,7 +6771,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         const priorityResult = await loadOneWG(priorityWG);
         if (seq !== _wsLoadSeq) {return;}
         if (!isWSVisible()) {return;}
-        applyResults([priorityResult], true);
+        // 只有还有其它工作组待加载时才算 partial；单工作组已是完整数据
+        applyResults([priorityResult], otherWGs.length > 0);
         classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
 
         // 阶段2：后台加载其余工作组，完成后追加渲染
@@ -6783,6 +6798,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       if (wsCategory === 'audit') {prefetchAbnormalAuditContext();}
       return { ok: true, count: wsData.length, empty: wsData.length === 0 };
     } catch (e) {
+      _wsDataHealth.failed = true;
+      _wsDataHealth.partial = false;
       dbg('loadWSData 异常:', e);
       if (qi) {qi.textContent = '加载失败';}
       return { ok: false, error: e, empty: true };
@@ -9232,7 +9249,7 @@ window.addEventListener('keydown',function(e){
   // 复检标本审核前状态就是 4，静态匹配会误判；必须等状态变 3 或动态信号
   function verifyAuditSucceededByReportDR(iframeWin, reportDR, opts = {}) {
     if (!reportDR) {return false;}
-    const accept4 = opts.accept4 !== undefined ? opts.accept4 : !_auditingPreStatus4;
+    const accept4 = !_autoAuditRunning && (opts.accept4 !== undefined ? opts.accept4 : !_auditingPreStatus4);
     const statuses = accept4 ? ['3', '4'] : ['3'];
     const latestWin = getReportIframeWin() || iframeWin;
     if (latestWin) {
@@ -9257,6 +9274,8 @@ window.addEventListener('keydown',function(e){
     if (!iframeWin || !reportDR) {return false;}
     const accept4 = opts.accept4 !== undefined ? opts.accept4 : !_auditingPreStatus4;
     if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4 })) {return true;}
+    // 自动审核只接受明确状态确认，软提示不能直接记为成功
+    if (_autoAuditRunning) {return false;}
     try {
       const me = iframeWin.me;
       if (!me) {return false;}
@@ -16728,7 +16747,7 @@ window.addEventListener('keydown',function(e){
     // 8.5.59: 只有「生化分析仪」的 0 值参与堵孔判定（该仪器会误报 0）；
     // 其他仪器的 0 值一律放行，不再需要「允许 0 值项目名」白名单
     const machineName = String((row && (row._mn || '')) || '').trim();
-    if (machineName !== '生化分析仪') {return { suspect: false, zeroCount: 0, reason: '' };}
+    if (!ZERO_BLOCK_MACHINE_NAMES.test(machineName)) {return { suspect: false, zeroCount: 0, reason: '' };}
     const zeroItems = (classifications || []).filter(c => {
       const p = parseComparableNumber(c.result);
       if (!p || p.op !== '' || p.value !== 0) {return false;} // 仅精确 0，带操作符（<0.1 等）不算
@@ -17954,7 +17973,7 @@ window.addEventListener('keydown',function(e){
       batchListFresh = true;
 
       while (queue.current < queue.items.length) {
-        if (_batchAbort) {
+        if (_batchAbort || (queue._autoMode && (_autoAuditCancelRequested || !autoAuditEnabled()))) {
           dbg('批审被用户中止');
           saveAuditQueueNow(queue);
           break;
@@ -17971,6 +17990,13 @@ window.addEventListener('keydown',function(e){
         refreshQueueLock();
         refreshAuditLock(auditLockId); // 心跳：健康长批审不被 45s 假死判定误抢
         const liveRow = resolveQueueItemRow(item);
+        if (liveRow && String(liveRow.Status || liveRow.ReportStatus || '') === '3') {
+          queue.skipped.push({ ...item, reason: '标本已审核，跳过' });
+          skipCount++;
+          queue.current++;
+          saveAuditQueueNow(queue);
+          continue;
+        }
         if (liveRow && String(liveRow.IsComplete || '') !== '1') {
           queue.skipped.push({ ...item, reason: '结果不完整' });
           skipCount++;
@@ -18034,7 +18060,11 @@ window.addEventListener('keydown',function(e){
         // 单条硬超时：避免一条标本拖死整批（表现为卡半天最后又成功）
         const itemDeadline =
           Date.now() + (batchCAReady ? BATCH_ITEM_DEADLINE_MS.caReady : BATCH_ITEM_DEADLINE_MS.needCA);
-        const itemAbort = () => _batchAbort || isAuditLockAborted(auditLockId) || Date.now() > itemDeadline;
+        const itemAbort = () =>
+          _batchAbort ||
+          (queue._autoMode && (_autoAuditCancelRequested || !autoAuditEnabled())) ||
+          isAuditLockAborted(auditLockId) ||
+          Date.now() > itemDeadline;
         const progressPhase = (phase, elapsedMs) => {
           const wait = typeof elapsedMs === 'number' && elapsedMs > 0 ? ` ${Math.round(elapsedMs / 1000)}s` : '';
           updateBatchProgress(
@@ -18423,6 +18453,7 @@ window.addEventListener('keydown',function(e){
   var _autoAudit = null; // { enabled, until, durationMin, rules }
   var _autoAuditMute = false; // 自动审核期间静默非 error toast
   var _autoAuditRunning = false; // 防重入
+  var _autoAuditCancelRequested = false; // 停止时阻止自动队列继续取下一条
   var _autoAuditTimer = null; // 30s 兜底轮询
   var _autoAuditUiTimer = null; // 5s UI 倒计时刷新
   var _autoAuditCycleTimer = null; // 数据就绪防抖调度
@@ -18432,7 +18463,7 @@ window.addEventListener('keydown',function(e){
   const AUTO_AUDIT_LOG_DETAIL_MAX = 50; // 8.5.61: 每轮自动审核记录最多保留 50 条样本明细
   const AUTO_AUDIT_DEFAULT_MIN = 60;
   function autoAuditRules() {
-    const def = { blockInfectionPos: true };
+    const def = {};
     if (!_autoAudit) {return def;}
     return Object.assign(def, _autoAudit.rules || {});
   }
@@ -18459,13 +18490,21 @@ window.addEventListener('keydown',function(e){
         enabled: false,
         until: 0,
         durationMin: AUTO_AUDIT_DEFAULT_MIN,
-        rules: { blockInfectionPos: true }
+        schema: 2,
+        rules: {}
       };
     } else {
       _autoAudit.rules = Object.assign(
-        { blockInfectionPos: true },
+        {},
         _autoAudit.rules || {}
       );
+      // 旧状态没有 schema/scope 时不恢复无人值守运行，避免用旧范围继续审核
+      if (_autoAudit.schema !== 2 || (_autoAudit.enabled && !_autoAudit.scope)) {
+        _autoAudit.enabled = false;
+        _autoAudit.until = 0;
+        _autoAudit.schema = 2;
+        try {localStorage.setItem(K.autoAudit, JSON.stringify(_autoAudit));} catch (e) {}
+      }
       // 未开启或已过期：保留规则与时长，enabled 置 false（跨天自然到期）
       if (!_autoAudit.enabled || !_autoAudit.until || _autoAudit.until <= Date.now()) {
         _autoAudit.enabled = false;
@@ -18479,7 +18518,9 @@ window.addEventListener('keydown',function(e){
 
   function startAutoAudit(durationMin) {
     const dur = Math.max(5, Math.min(480, Math.round(Number(durationMin) || AUTO_AUDIT_DEFAULT_MIN)));
+    _autoAuditCancelRequested = false;
     _autoAudit = {
+      schema: 2,
       enabled: true,
       until: Date.now() + dur * 60000,
       durationMin: dur,
@@ -18498,12 +18539,15 @@ window.addEventListener('keydown',function(e){
 
   function stopAutoAudit(reason) {
     const wasEnabled = autoAuditEnabled();
+    _autoAuditCancelRequested = true;
+    if (_autoAuditRunning) {_batchAbort = true;}
     if (!wasEnabled && !reason) {return;}
     _autoAudit = {
+      schema: 2,
       enabled: false,
       until: 0,
       durationMin: (_autoAudit && _autoAudit.durationMin) || AUTO_AUDIT_DEFAULT_MIN,
-      rules: autoAuditRules()
+      rules: {}
     };
     saveAutoAuditState();
     stopAutoAuditTimers();
@@ -18593,6 +18637,15 @@ window.addEventListener('keydown',function(e){
         nAbnormal = 0;
       const skipped = []; // {name, labno, reason}
       const audited = []; // 8.5.61: 本轮审核成功的样本明细 {n,l,d,t}（供记录查看器检索）
+      if (
+        _wsDataHealth.failed ||
+        _wsDataHealth.partial ||
+        !_wsDataHealth.lastFullSuccessAt ||
+        Date.now() - _wsDataHealth.lastFullSuccessAt > AUTO_AUDIT_DATA_MAX_AGE
+      ) {
+        autoAuditSkipOnce(skipped, { ReportDR: 'data-health', PatName: '工作台' }, '工作台数据未确认最新，自动审核暂停');
+        return;
+      }
 
       // 1) 正常标本：批量审核（统计从 queue.done/failed/skipped 读取）
       if (normals.length > 0 && autoAuditEnabled()) {
@@ -18677,6 +18730,7 @@ window.addEventListener('keydown',function(e){
       _autoAuditRunning = false;
       // 长循环中途到期兜底
       if (autoAuditEnabled() && Date.now() >= _autoAudit.until) {stopAutoAudit('到期');}
+      else if (!autoAuditEnabled() && _autoAuditCancelRequested) {_batchAbort = true;}
     }
   }
 
@@ -18688,7 +18742,7 @@ window.addEventListener('keydown',function(e){
     _autoAuditSkipSeen[key] = reason;
     // 8.5.72: 跳过标本也采集项目组合 + 异常项（危急/堵孔/传染病等需人工关注的要有信息）
     const _si = auditRecordSpecInfo(r.ReportDR || r.reportDR, r);
-    skipped.push({ name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', reason, test: _si.test, abn: _si.abn });
+    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', reason, test: _si.test, abn: _si.abn });
   }
 
   // 异常标本自动审核安全门：任一命中 → 整标本跳过留人工（原因记入日志）
@@ -18702,12 +18756,9 @@ window.addEventListener('keydown',function(e){
     if (live.status === 'NORMAL') {return { ok: false, reason: '正常标本走批量审核' };}
     if (live.status !== 'ABNORMAL') {return { ok: false, reason: '状态' + classifyStatusText(live.status) + '，不可自动审核' };}
     const items = live.items || [];
-    const rules = autoAuditRules();
     if (live.infectionWarning) {return { ok: false, reason: '传染病历史不符: ' + live.infectionWarning };}
-    if (rules.blockInfectionPos) {
-      const infPos = items.find(it => isInfectionItem(it) && isPositiveResult(it.result, it.preResult || it));
-      if (infPos) {return { ok: false, reason: '传染病项目阳性: ' + infPos.name + ' ' + infPos.result + '，需人工审核' };}
-    }
+    const infPos = items.find(it => isAutoAuditInfectionItem(it) && isPositiveResult(it.result, it.preResult || it));
+    if (infPos) {return { ok: false, reason: '梅毒/丙肝/艾滋项目阳性: ' + infPos.name + ' ' + infPos.result + '，需人工审核' };}
     if (items.some(it => it.status === 'UNCERTAIN' || isEmptyResultValue(it, it.result))) {
       return { ok: false, reason: '存在结果缺失/待定项目，需人工确认' };
     }
@@ -18717,6 +18768,12 @@ window.addEventListener('keydown',function(e){
   function isInfectionItem(it) {
     const name = String((it && (it.name || it.CName)) || '').toLowerCase();
     return INFECTION_ITEMS.some(k => name.includes(k.toLowerCase()));
+  }
+
+  // 自动审核硬红线仅限梅毒、丙肝、艾滋；两对半仍参与分类但允许自动审核
+  function isAutoAuditInfectionItem(it) {
+    const name = String((it && (it.name || it.CName)) || '').toLowerCase();
+    return INFECTION_SPECIAL_NAMES.some(k => name.includes(k.toLowerCase()));
   }
 
   // ---- 自动审核日志（环形上限 500，按天） ----
@@ -18818,8 +18875,7 @@ window.addEventListener('keydown',function(e){
             <span style="color:#999;margin-left:6px">默认 60 分钟（5–480，步进 5）</span>
           </div>
           <div class="ab-section" style="margin-top:10px">
-            <label style="display:block;font-weight:600;margin-bottom:4px">安全规则（默认开启，不推荐关闭）</label>
-            <label style="display:flex;align-items:center;gap:6px;margin:4px 0"><input type="checkbox" id="lis-aa-inf" ${rules.blockInfectionPos ? 'checked' : ''}> 拦截传染病项目阳性（梅毒/丙肝/HIV/两对半）</label>
+            <div style="padding:6px 10px;background:#fff8e1;border:1px solid #f0d58a;border-radius:4px">🔒 梅毒、丙肝、艾滋阳性为固定人工审核红线；乙肝两对半 5 项不在此红线内。</div>
           </div>
         </div>
         <div class="ab-ft" style="justify-content:flex-end">
@@ -18885,10 +18941,7 @@ window.addEventListener('keydown',function(e){
     });
     document.getElementById('lis-aa-start').addEventListener('click', () => {
       const dur = parseInt(document.getElementById('lis-aa-dur').value, 10);
-      const rulesNew = {
-        blockInfectionPos: document.getElementById('lis-aa-inf').checked
-      };
-      _autoAudit = Object.assign({}, _autoAudit || {}, { rules: rulesNew });
+      _autoAudit = Object.assign({}, _autoAudit || {}, { schema: 2, rules: {} });
       saveAutoAuditState();
       startAutoAudit(Number.isFinite(dur) ? dur : AUTO_AUDIT_DEFAULT_MIN);
       close();
@@ -18977,7 +19030,7 @@ window.addEventListener('keydown',function(e){
     };
     const entryDetails = e => [
       ...(e.audited || []).map(a => ({ n: a.n, l: a.l, d: a.d, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '', test: a.test || '', abn: a.abn || [] })),
-      ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: '', t: 'skip', reason: s.reason || '', test: s.test || '', abn: s.abn || [] }))
+      ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: s.reportDR || '', t: 'skip', reason: s.reason || '', test: s.test || '', abn: s.abn || [] }))
     ];
 
     const render = () => {
