@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.71
+// @version      8.5.72
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -722,7 +722,7 @@
 #lis-ws-hd .ws-aa-btn.on:hover{background:#0f6b60;border-color:#0f6b60;color:#fff}
 #lis-auto-audit-log{position:fixed;inset:0;z-index:100022;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
 #lis-auto-audit-log.show{display:flex}
-#lis-auto-audit-log-box{background:#fff;border-radius:12px;width:640px;max-width:94vw;max-height:84vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4);overflow:hidden}
+#lis-auto-audit-log-box{background:#fff;border-radius:12px;width:800px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4);overflow:hidden}
 #lis-auto-audit-log-box .ab-hd{padding:14px 18px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 #lis-auto-audit-log-box .ab-hd h4{margin:0;font-size:15px;color:#2c3e50}
 #lis-auto-audit-log-box .ab-hd .ab-close{background:none;border:none;font-size:20px;cursor:pointer;color:#999;padding:4px 8px;border-radius:4px}
@@ -739,10 +739,11 @@
 #lis-auto-audit-log-box .aal-row,.aal-flat-inner{cursor:pointer}
 #lis-auto-audit-log-box .aal-row:hover,#lis-auto-audit-log-box .aal-flat-inner:hover{background:#f5fbfa}
 #lis-auto-audit-log-box .aal-detail{flex-wrap:wrap}
-#lis-auto-audit-log-box .aal-abn-item{line-height:1.6;white-space:normal;max-width:100%}
+#lis-auto-audit-log-box .aal-abn-count{background:#c0392b;color:#fff;border-radius:3px;padding:1px 7px;font-size:11px;font-weight:700;white-space:nowrap}
+#lis-auto-audit-log-box .aal-abn-item{line-height:1.7;white-space:normal;max-width:100%;font-size:11px}
 #lis-auto-audit-log-box .aal-detail{margin-top:4px;padding:4px 8px 2px;background:#fafcfc;border-radius:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 #lis-auto-audit-log-box .aal-test{color:#2c3e50;font-size:11px;font-weight:600}
-#lis-auto-audit-log-box .aal-abn{display:inline-flex;gap:6px;flex-wrap:wrap}
+#lis-auto-audit-log-box .aal-abn{display:inline-flex;gap:6px;flex-wrap:wrap;flex-basis:100%}
 #lis-auto-audit-log-box .aal-abn-item{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;border-radius:3px;padding:1px 5px;font-size:10px;font-weight:600;white-space:nowrap}
 
 /* --- 数据表 --- */
@@ -18677,7 +18678,9 @@ window.addEventListener('keydown',function(e){
     if (!key) {return;}
     if (_autoAuditSkipSeen[key] === reason) {return;}
     _autoAuditSkipSeen[key] = reason;
-    skipped.push({ name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', reason });
+    // 8.5.72: 跳过标本也采集项目组合 + 异常项（危急/堵孔/传染病等需人工关注的要有信息）
+    const _si = auditRecordSpecInfo(r.ReportDR || r.reportDR, r);
+    skipped.push({ name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', reason, test: _si.test, abn: _si.abn });
   }
 
   // 异常标本自动审核安全门：任一命中 → 整标本跳过留人工（原因记入日志）
@@ -18903,7 +18906,7 @@ window.addEventListener('keydown',function(e){
             <button class="aal-range" data-range="all">全部</button>
             <input id="lis-aal-search" placeholder="搜索姓名 / 检验号…" style="flex:1;min-width:150px;padding:5px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;outline:none">
           </div>
-          <div id="lis-aal-list" style="max-height:420px;overflow-y:auto"></div>
+          <div id="lis-aal-list" style="max-height:62vh;overflow-y:auto"></div>
         </div>
       </div>`;
     document.body.appendChild(dlg);
@@ -18942,6 +18945,10 @@ window.addEventListener('keydown',function(e){
         }
       }
       const bits = [];
+      // 8.5.72: 有异常项时加醒目「N项异常」提示；项目组合与异常项分行
+      if (abn.length) {
+        bits.push('<span class="aal-abn-count">⚠ ' + abn.length + ' 项异常</span>');
+      }
       if (name) {bits.push('<span class="aal-test">' + esc(name) + '</span>');}
       if (abn.length) {bits.push('<div class="aal-abn">' + abn.map(x => '<span class="aal-abn-item">' + esc(x) + '</span>').join('') + '</div>');}
       return bits.length ? '<div class="aal-detail">' + bits.join('') + '</div>' : '';
@@ -18957,8 +18964,8 @@ window.addEventListener('keydown',function(e){
       specDetailHTML(s) +
       '</div>';
     const entryDetails = e => [
-      ...(e.audited || []).map(a => ({ n: a.n, l: a.l, d: a.d, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '' })),
-      ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: '', t: 'skip', reason: s.reason || '' }))
+      ...(e.audited || []).map(a => ({ n: a.n, l: a.l, d: a.d, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '', test: a.test || '', abn: a.abn || [] })),
+      ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: '', t: 'skip', reason: s.reason || '', test: s.test || '', abn: s.abn || [] }))
     ];
 
     const render = () => {
