@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.72
+// @version      8.5.73
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -744,7 +744,18 @@
 #lis-auto-audit-log-box .aal-detail{margin-top:4px;padding:4px 8px 2px;background:#fafcfc;border-radius:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 #lis-auto-audit-log-box .aal-test{color:#2c3e50;font-size:11px;font-weight:600}
 #lis-auto-audit-log-box .aal-abn{display:inline-flex;gap:6px;flex-wrap:wrap;flex-basis:100%}
-#lis-auto-audit-log-box .aal-abn-item{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;border-radius:3px;padding:1px 5px;font-size:10px;font-weight:600;white-space:nowrap}
+#lis-auto-audit-log-box .aal-abn-item{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;border-radius:3px;padding:1px 5px;font-size:11px;font-weight:600;white-space:normal;line-height:1.7}
+#lis-auto-audit-log-box .aal-exp-body{max-height:320px;overflow-y:auto}
+#lis-auto-audit-log-box .aal-exp-title{font-size:11px;font-weight:700;color:#2c3e50;padding:2px 2px 6px}
+#lis-auto-audit-log-box .aal-exp-table{width:100%;border-collapse:collapse;font-size:11px}
+#lis-auto-audit-log-box .aal-exp-table th{background:#f0f4f4;color:#4a5a6a;text-align:left;padding:4px 6px;border-bottom:1px solid #e3e8e8;font-weight:600}
+#lis-auto-audit-log-box .aal-exp-table td{padding:4px 6px;border-bottom:1px solid #f0f0f0}
+#lis-auto-audit-log-box .aal-exp-table tr.aal-exp-abn td{background:#fdecea;color:#c0392b;font-weight:600}
+#lis-auto-audit-log-box .aal-exp-table tr.aal-exp-cri td{background:#fbe3e3;color:#b02a2a;font-weight:700}
+#lis-auto-audit-log-box .aal-exp-bd{background:#e74c3c;color:#fff;border-radius:3px;padding:0 6px;font-size:10px;font-weight:700}
+#lis-auto-audit-log-box .aal-exp-cri .aal-exp-bd{background:#8b0000}
+#lis-auto-audit-log-box .aal-exp-abn .aal-exp-bd{background:#c0392b}
+#lis-auto-audit-log-box .aal-row-hd{cursor:pointer}
 
 /* --- 数据表 --- */
 #lis-ws-body{flex:1!important;overflow:auto!important;background:var(--lis-bg);font-family:var(--lis-font);min-height:0!important;position:relative;z-index:1;padding:0 8px 8px}
@@ -7869,7 +7880,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
-        if (autoAuditEnabled()) {showToast('自动审核范围已固定（开启时勾选），本次切换工作组不影响自动审核', 'info');}
       })
     );
     tabs.querySelectorAll('.ws-mach-all').forEach(b =>
@@ -7884,7 +7894,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
-        if (autoAuditEnabled()) {showToast('自动审核范围已固定（开启时勾选），全选调整不影响自动审核', 'info');}
       })
     );
     tabs.querySelectorAll('.ws-mach-multi').forEach(b =>
@@ -7904,7 +7913,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
-        if (autoAuditEnabled()) {showToast('自动审核范围已固定（开启时勾选），本次勾选调整不影响自动审核', 'info');}
       })
     );
     updateWSTabsState(tabs, wgCounts, mc);
@@ -18953,16 +18961,20 @@ window.addEventListener('keydown',function(e){
       if (abn.length) {bits.push('<div class="aal-abn">' + abn.map(x => '<span class="aal-abn-item">' + esc(x) + '</span>').join('') + '</div>');}
       return bits.length ? '<div class="aal-detail">' + bits.join('') + '</div>' : '';
     };
-    const rowHTML = s =>
-      '<div class="aal-row" data-rdr="' + escAttr(s.d || '') + '" style="padding:6px 10px;border-top:1px solid #f5f5f5">' +
-      '<div style="display:flex;gap:8px;align-items:center;font-size:12px;flex-wrap:wrap">' +
+    const rowHTML = s => {
+      const _rid = 'aal-exp-' + String(s.d || 'x') + '-' + Math.floor(Math.random() * 1e6);
+      return '<div class="aal-row" data-rdr="' + escAttr(s.d || '') + '" data-toggle-exp="' + _rid + '" style="padding:6px 10px;border-top:1px solid #f5f5f5">' +
+      '<div class="aal-row-hd" style="display:flex;gap:8px;align-items:center;font-size:12px;flex-wrap:wrap">' +
       badge(s) +
       '<b>' + esc(s.n || '') + '</b>' +
       '<span style="color:#666">' + esc(s.l || '') + '</span>' +
       (s.reason ? '<span style="color:#8a6d3b">（' + esc(s.reason) + '）</span>' : '') +
+      '<span style="color:#168276;font-size:10px;font-weight:600;margin-left:auto" class="aal-exp-marker">' + (s.d ? '点击看全部结果 ▾' : '') + '</span>' +
       '</div>' +
       specDetailHTML(s) +
+      '<div class="aal-exp-body" id="' + _rid + '" style="display:none;padding:6px 8px;background:#fff;border-top:1px dashed #e3e3e3;margin-top:4px"></div>' +
       '</div>';
+    };
     const entryDetails = e => [
       ...(e.audited || []).map(a => ({ n: a.n, l: a.l, d: a.d, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '', test: a.test || '', abn: a.abn || [] })),
       ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: '', t: 'skip', reason: s.reason || '', test: s.test || '', abn: s.abn || [] }))
@@ -19063,17 +19075,51 @@ window.addEventListener('keydown',function(e){
         const row = ev.target.closest('.aal-row[data-rdr]');
         if (!row) {return;}
         const rdr = row.dataset.rdr;
-        if (!rdr) {return;}
-        if (ev.target.closest('.aal-entry-hd')) {return;}
-        const specimen = findWSSpecimenByReportDR(rdr);
-        if (!specimen) {
-          showToast('该标本不在当前工作台数据中，无法直接打开详情', 'error');
+        const togg = row.dataset.toggleExp;
+        if (!togg) {return;}
+        const body = document.getElementById(togg);
+        if (!body) {return;}
+        // 8.5.73: 在记录弹窗内联展开该标本完整结果，不关闭弹窗、不切换分类
+        if (body.style.display !== 'none') {
+          body.style.display = 'none';
+          const mk = row.querySelector('.aal-exp-marker');
+          if (mk) {mk.textContent = '▾';}
           return;
         }
-        if (!isWSVisible()) {openWS();}
-        dlg.remove();
-        if (wsCategory !== 'all') {switchWSCategory('all');}
-        openDetailPanel(specimen, 'all', 0);
+        // 渲染完整结果
+        let items = [];
+        const live = rdr ? getLiveClassification(rdr) : null;
+        if (live && live.items) {items = live.items || [];}
+        // 8.5.73: 缓存分类被清时，回退用原始详情缓存（ItemInfo）渲染全部项目
+        if (!items.length && rdr && typeof _classifyRawCache !== 'undefined' && _classifyRawCache[String(rdr)]) {
+          const rawInfo = (_classifyRawCache[String(rdr)].data || {}).ItemInfo;
+          if (Array.isArray(rawInfo)) {
+            items = rawInfo.map(it => ({
+              name: it.CName || '',
+              result: it.TextRes && String(it.TextRes).trim() ? it.TextRes : (it.Result || ''),
+              unit: it.Unit || it.Units || '',
+              refRange: it.RefRanges || it.RefRange || '',
+              status: 'NORMAL' // 原始缓存无分类，中性显示
+            }));
+          }
+        }
+        if (items.length) {
+          body.innerHTML = '<div class="aal-exp-title">完整结果</div>' +
+            '<table class="aal-exp-table"><thead><tr><th>项目</th><th>结果</th><th>单位</th><th>参考范围</th><th></th></tr></thead><tbody>' +
+            items.map(it => {
+              const st = it.status || '';
+              let cls = 'aal-exp-n', badgeTxt = '';
+              if (st === 'CRITICAL') {cls = 'aal-exp-cri'; badgeTxt = '危急';}
+              else if (st === 'ABNORMAL' || st === 'HIGH' || st === 'LOW') {cls = 'aal-exp-abn'; badgeTxt = '异常';}
+              return '<tr class="' + cls + '"><td>' + esc(it.name || '') + '</td><td>' + esc(String(it.result || '')) + '</td><td>' + esc(it.unit || '') + '</td><td>' + esc(it.refRange || it.RefRanges || '') + '</td><td>' + (badgeTxt ? '<span class="aal-exp-bd">' + badgeTxt + '</span>' : '') + '</td></tr>';
+            }).join('') +
+            '</tbody></table>';
+        } else {
+          body.innerHTML = '<div style="color:#999;padding:6px">该标本已不在当前工作台数据/缓存中——历史记录仅保留异常项，上方「异常项」即为本次结果。<br>如需看全部项目，请在「全部」标本视图中定位该标本。</div>';
+        }
+        body.style.display = 'block';
+        const mk = row.querySelector('.aal-exp-marker');
+        if (mk) {mk.textContent = '▴';}
       });
     }
     render();
