@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.66
+// @version      8.5.67
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6308,6 +6308,37 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return true;
   }
 
+  // 8.5.67: 自动审核范围快照 —— 开启自动审核那一刻固定工作组+勾选仪器，之后勾选变化不影响
+  function captureAuditScopeSnapshot() {
+    const byWG = {};
+    Object.keys(wsSelectedMachinesByWG).forEach(k => {
+      const arr = (wsSelectedMachinesByWG[k] || []).map(String).filter(Boolean);
+      if (arr.length) {byWG[String(k)] = arr;}
+    });
+    return { wg: wsActiveWG || '', machine: wsActiveMachine || '', byWG };
+  }
+  // 快照过滤：语义与 rowPassWSMachineFilter 一致，但读开启时固定的快照（无快照回退动态，兼容旧数据）
+  function rowPassAuditSnapshot(row) {
+    if (!row) {return false;}
+    const scope = _autoAudit && _autoAudit.scope;
+    if (!scope) {return rowPassWSMachineFilter(row);}
+    const mdr = String(row._mdr || prWorkGroupMachineDR(row) || '');
+    if (scope.wg) {
+      // 单工作组：非该组 → 否；该组勾选为空 = 该组全选
+      if (row._wg !== scope.wg) {return false;}
+      const sel = new Set((scope.byWG && scope.byWG[scope.wg]) || []);
+      return sel.size > 0 ? sel.has(mdr) : true;
+    }
+    // 全部工作组模式
+    const anySelected = WG.some(w => ((scope.byWG && scope.byWG[w.dr]) || []).length > 0);
+    if (anySelected) {
+      const wgSel = new Set((scope.byWG && scope.byWG[row._wg || '']) || []);
+      return wgSel.size > 0 && wgSel.has(mdr);
+    }
+    if (scope.machine) {return mdr === String(scope.machine);}
+    return true;
+  }
+
   function detailLRUGet(key) {
     if (_detailLRU.has(key)) {
       const v = _detailLRU.get(key);
@@ -7790,6 +7821,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
+        if (autoAuditEnabled()) {showToast('自动审核范围已固定（开启时勾选），本次切换工作组不影响自动审核', 'info');}
       })
     );
     tabs.querySelectorAll('.ws-mach-all').forEach(b =>
@@ -7804,6 +7836,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
+        if (autoAuditEnabled()) {showToast('自动审核范围已固定（开启时勾选），全选调整不影响自动审核', 'info');}
       })
     );
     tabs.querySelectorAll('.ws-mach-multi').forEach(b =>
@@ -7823,6 +7856,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
+        if (autoAuditEnabled()) {showToast('自动审核范围已固定（开启时勾选），本次勾选调整不影响自动审核', 'info');}
       })
     );
     updateWSTabsState(tabs, wgCounts, mc);
@@ -18393,13 +18427,15 @@ window.addEventListener('keydown',function(e){
       enabled: true,
       until: Date.now() + dur * 60000,
       durationMin: dur,
-      rules: autoAuditRules()
+      rules: autoAuditRules(),
+      // 8.5.67: 开启时刻固定审核范围（工作组+勾选仪器快照），之后勾选新仪器不再纳入
+      scope: captureAuditScopeSnapshot()
     };
     saveAutoAuditState();
     startAutoAuditTimers();
     renderAutoAuditButtonState();
     updateWSFooter();
-    showToast('🤖 自动审核已开启（' + dur + ' 分钟），到期自动停止', 'success');
+    showToast('🤖 自动审核已开启（' + dur + ' 分钟），审核范围已固定为开启时的勾选', 'success');
     // 立即触发一轮（不等 30s 兜底）
     scheduleAutoAuditCycle();
   }
@@ -18477,8 +18513,8 @@ window.addEventListener('keydown',function(e){
         try {await loadWSData();} catch (e) {}
         if (!wsData.length) {return;}
       }
-      // 候选 = 当前筛选范围（工作组+勾选仪器；忽略标本不审）
-      const candidates = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassWSMachineFilter(r));
+      // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义
+      const candidates = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
       const normals = candidates.filter(r => getWSAuditBucket(r) === 'normal');
       const abnormals = candidates.filter(r => getWSAuditBucket(r) === 'abnormal');
 
@@ -18538,7 +18574,7 @@ window.addEventListener('keydown',function(e){
         }
         // 每审完一条重新取异常候选（成功者已被 auditAbnormalSpecimen 移出 wsData，新到标本纳入）
         abnormalIter = wsData.filter(
-          x => !isWSIgnored(x.ReportDR) && rowPassWSMachineFilter(x) && getWSAuditBucket(x) === 'abnormal'
+          x => !isWSIgnored(x.ReportDR) && rowPassAuditSnapshot(x) && getWSAuditBucket(x) === 'abnormal'
         );
       }
 
@@ -18691,7 +18727,7 @@ window.addEventListener('keydown',function(e){
           <button class="ab-close" id="lis-aa-close">✕</button>
         </div>
         <div class="ab-body" style="font-size:12px;line-height:1.7;color:#2c3e50">
-          <p style="margin:4px 0 10px;color:#5c6b7a">按设定时长自动审核<b>当前筛选范围</b>（工作组+勾选仪器，可跨组）的标本：
+          <p style="margin:4px 0 10px;color:#5c6b7a">按设定时长自动审核<b>开启时固定的筛选范围</b>（工作组+勾选仪器，可跨组；中途勾选新仪器<b>不会</b>纳入）：
             正常标本批量秒审；异常标本按安全门逐条审核。<b>危急值 / 堵孔0值 / 传染病阳性</b> 一律跳过留人工。
             范围外标本与忽略标本不审。工作台关闭时保持运行（自动重开）。</p>
           <div id="lis-aa-scope" style="margin:8px 0;padding:6px 10px;background:#f0f7ff;border:1px solid #d0e4f7;border-radius:4px;color:#2c5f8a;font-size:12px;font-weight:600;line-height:1.8"></div>
@@ -18777,37 +18813,41 @@ window.addEventListener('keydown',function(e){
       const m = wsMachines.find(x => String(x.RowID) === String(dr));
       return (m && (m.CName || m.Name)) || String(dr);
     };
-    const renderScope = () => {
-      const box = document.getElementById('lis-aa-scope');
-      if (!box) {return;}
+    const scopeParts = (wg, byWG, machine) => {
+      // 与 rowPassAuditSnapshot 语义一致：wg 非空=单工作组；否则全部工作组（byWG 有勾选 → 仅勾选组+仪器；machine → 单仪器；否则全选）
       const parts = [];
-      if (wsActiveWG) {
-        // 单工作组：显示组名；组内勾选为空 = 全选
-        parts.push('工作组：<b>' + esc((WG_MAP[wsActiveWG] || {}).name || wsActiveWG) + '</b>');
-        const sel = getWSSelectedMachineSet(wsActiveWG);
+      const selOf = g => new Set((byWG && byWG[g]) || []);
+      if (wg) {
+        parts.push('工作组：<b>' + esc((WG_MAP[wg] || {}).name || wg) + '</b>');
+        const sel = selOf(wg);
         parts.push(sel.size === 0 ? '仪器：<b>全选</b>' : '仪器：' + [...sel].map(machineName).join('、'));
       } else {
-        // 全部工作组模式
         parts.push('工作组：<b>全部</b>');
-        const anySel = WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
+        const anySel = WG.some(w => selOf(w.dr).size > 0);
         if (anySel) {
-          // 有组勾选了仪器 → 只审勾选组+勾选仪器
           const groups = [];
           WG.forEach(w => {
-            const sel = getWSSelectedMachineSet(w.dr);
+            const sel = selOf(w.dr);
             if (sel.size > 0) {
               groups.push('<b>' + esc((WG_MAP[w.dr] || {}).name || w.dr) + '</b>：' + [...sel].map(machineName).join('、'));
             }
           });
           parts.push('仪器：' + groups.join('；'));
-        } else if (wsActiveMachine) {
-          // 单仪器过滤
-          parts.push('仪器：<b>' + esc(machineName(wsActiveMachine)) + '</b>');
+        } else if (machine) {
+          parts.push('仪器：<b>' + esc(machineName(machine)) + '</b>');
         } else {
           parts.push('仪器：<b>全选</b>');
         }
       }
-      box.innerHTML = '🎯 当前审核范围：' + parts.join('　');
+      return parts;
+    };
+    const renderScope = () => {
+      const box = document.getElementById('lis-aa-scope');
+      if (!box) {return;}
+      // 8.5.67: 快照语义 —— 显示开启时固定的范围（_autoAudit.scope）；无快照（旧数据）回退显示当前动态范围
+      const scope = _autoAudit && _autoAudit.scope;
+      const parts = scope ? scopeParts(scope.wg, scope.byWG, scope.machine) : scopeParts(wsActiveWG, wsSelectedMachinesByWG, wsActiveMachine);
+      box.innerHTML = '🎯 当前审核范围：' + parts.join('　') + (scope ? ' <span style="color:#0d6655;font-weight:700">（开启时固定）</span>' : '');
     };
     renderScope();
     renderToday();
