@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.58
+// @version      8.5.59
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -16582,7 +16582,7 @@ window.addEventListener('keydown',function(e){
       const hasEmptyResults = classifications.some(c => isEmptyResultValue(c, c.result));
       // 8.5.58: 堵孔 0 值检测（生化仪堵孔会传一堆 0，不能自动审核；
       // 但尿蛋白类合法 0 也不能误拦——规则见 analyzeZeroResults）
-      const zeroInfo = analyzeZeroResults(classifications);
+      const zeroInfo = analyzeZeroResults(classifications, row);
 
       let overallStatus = 'NORMAL';
       if (hasCritical) {overallStatus = 'CRITICAL';}
@@ -16607,15 +16607,18 @@ window.addEventListener('keydown',function(e){
     }
   }
 
-  // --- 8.5.58: 堵孔 0 值分析（生化仪堵孔传一堆 0，不能自动审核；但参考范围含 0 的
-  // 合法 0（如尿蛋白/尿糖/尿微量白蛋白）不能误拦） ---
-  // 规则：
+  // --- 堵孔 0 值分析（8.5.58 引入，8.5.59 改为仅「生化分析仪」参与判定：
+  // 该仪器会误报 0，其他仪器的 0 值是合法结果（如尿蛋白/尿糖/尿微量白蛋白），一律放行） ---
+  // 规则（仅对 生化分析仪 标本生效）：
   //   Z1 单项目合理性：唯一 0 值项目，参考范围不含 0（下限>0）→ 可疑
   //   Z2 同标本 0 数量特征（核心）：同一标本数值为 0 的项目 ≥2 个 → 整标本可疑（"一堆 0"堵孔特征）
   //   Z3 历史对照：唯一 0 值且范围含 0 时，历史结果存在且非 0 → 可疑
-  //   Z4 项目白名单：用户在自动审核设置中配置「允许 0 值项目名」，命中项目不参与判定
   // 说明：只统计有数值参考范围的项目（定性项目无数值范围不参与）；只认精确 0（"<0.1" 检出限不算 0）
-  function analyzeZeroResults(classifications) {
+  function analyzeZeroResults(classifications, row) {
+    // 8.5.59: 只有「生化分析仪」的 0 值参与堵孔判定（该仪器会误报 0）；
+    // 其他仪器的 0 值一律放行，不再需要「允许 0 值项目名」白名单
+    const machineName = String((row && (row._mn || '')) || '').trim();
+    if (machineName !== '生化分析仪') {return { suspect: false, zeroCount: 0, reason: '' };}
     const zeroItems = (classifications || []).filter(c => {
       const p = parseComparableNumber(c.result);
       if (!p || p.op !== '' || p.value !== 0) {return false;} // 仅精确 0，带操作符（<0.1 等）不算
@@ -16625,13 +16628,7 @@ window.addEventListener('keydown',function(e){
       return (low && !isNaN(low.value)) || (high && !isNaN(high.value)); // 需有数值参考范围
     });
     if (zeroItems.length === 0) {return { suspect: false, zeroCount: 0, reason: '' };}
-    // Z4：白名单项目剔除（自动审核设置里的「允许 0 值项目名」）
-    const allowNames = autoAuditZeroAllowNames();
-    let filtered = zeroItems;
-    if (allowNames.length > 0) {
-      filtered = zeroItems.filter(c => !allowNames.some(n => (c.name || '').toLowerCase().includes(n.toLowerCase())));
-      if (filtered.length === 0) {return { suspect: false, zeroCount: zeroItems.length, reason: '' };}
-    }
+    const filtered = zeroItems;
     // Z2：≥2 个 0 = 堵孔特征（用户确认生化堵孔基本都是多个项目同时为 0）
     if (filtered.length >= 2) {
       filtered.forEach(c => {c.status = 'ZERO';}); // 供待审卡片显示「0值?」
@@ -18310,7 +18307,7 @@ window.addEventListener('keydown',function(e){
   // 夜里无人值守：按设定时长自动审核当前筛选范围的标本
   //  - 正常标本：走 executeBatchAudit（批量引擎：切组/首条CA/逐条核验/跨组切回）
   //  - 异常标本：走 auditAbnormalSpecimen（逐条），先过 autoAuditAbnormalGate 安全门
-  //  - 红线（危急/堵孔0值/结果缺失/传染病阳性/标本质量提示）一律跳过留人工，记入日志
+  //  - 红线（危急/堵孔0值/结果缺失/传染病阳性）一律跳过留人工，记入日志
   // 注意：以下状态变量用 var 声明（与脚本中 let 混用会因声明顺序造成 TDZ 报错，
   // 例如 showToast 可能在初始化阶段被调用时引用 _autoAuditMute）
   var _autoAudit = null; // { enabled, until, durationMin, rules }
@@ -18323,18 +18320,10 @@ window.addEventListener('keydown',function(e){
 
   const AUTO_AUDIT_LOG_MAX = 500;
   const AUTO_AUDIT_DEFAULT_MIN = 60;
-  const AUTO_AUDIT_QUALITY_RE = /溶血|脂血|黄疸|乳糜|凝块|纤维|稀释|不合格|重抽|干扰/;
-
   function autoAuditRules() {
-    const def = { blockInfectionPos: true, blockQualityFlag: true, zeroAllowItems: '' };
+    const def = { blockInfectionPos: true };
     if (!_autoAudit) {return def;}
     return Object.assign(def, _autoAudit.rules || {});
-  }
-  function autoAuditZeroAllowNames() {
-    return String(autoAuditRules().zeroAllowItems || '')
-      .split(/[,，、\s]+/)
-      .map(s => s.trim())
-      .filter(Boolean);
   }
   function autoAuditEnabled() {return !!(_autoAudit && _autoAudit.enabled);}
   function autoAuditRemainMs() {
@@ -18359,11 +18348,11 @@ window.addEventListener('keydown',function(e){
         enabled: false,
         until: 0,
         durationMin: AUTO_AUDIT_DEFAULT_MIN,
-        rules: { blockInfectionPos: true, blockQualityFlag: true, zeroAllowItems: '' }
+        rules: { blockInfectionPos: true }
       };
     } else {
       _autoAudit.rules = Object.assign(
-        { blockInfectionPos: true, blockQualityFlag: true, zeroAllowItems: '' },
+        { blockInfectionPos: true },
         _autoAudit.rules || {}
       );
       // 未开启或已过期：保留规则与时长，enabled 置 false（跨天自然到期）
@@ -18573,10 +18562,6 @@ window.addEventListener('keydown',function(e){
       const infPos = items.find(it => isInfectionItem(it) && isPositiveResult(it.result, it.preResult || it));
       if (infPos) {return { ok: false, reason: '传染病项目阳性: ' + infPos.name + ' ' + infPos.result + '，需人工审核' };}
     }
-    if (rules.blockQualityFlag) {
-      const q = items.find(it => AUTO_AUDIT_QUALITY_RE.test(String(it.result || '')));
-      if (q) {return { ok: false, reason: '标本质量提示: ' + q.name + ' ' + q.result + '，需人工审核' };}
-    }
     if (items.some(it => it.status === 'UNCERTAIN' || isEmptyResultValue(it, it.result))) {
       return { ok: false, reason: '存在结果缺失/待定项目，需人工确认' };
     }
@@ -18655,7 +18640,7 @@ window.addEventListener('keydown',function(e){
         </div>
         <div class="ab-body" style="font-size:12px;line-height:1.7;color:#2c3e50">
           <p style="margin:4px 0 10px;color:#5c6b7a">按设定时长自动审核<b>当前筛选范围</b>（工作组+勾选仪器，可跨组）的标本：
-            正常标本批量秒审；异常标本按安全门逐条审核。<b>危急值 / 堵孔0值 / 传染病阳性 / 标本质量提示</b> 一律跳过留人工。
+            正常标本批量秒审；异常标本按安全门逐条审核。<b>危急值 / 堵孔0值 / 传染病阳性</b> 一律跳过留人工。
             范围外标本与忽略标本不审。工作台关闭时保持运行（自动重开）。</p>
           <div style="display:${enabled ? 'block' : 'none'}" id="lis-aa-running">
             <p style="margin:6px 0;padding:6px 10px;background:#eef7f5;border:1px solid #bfe3dd;border-radius:4px;color:#0d6655;font-weight:600">
@@ -18670,11 +18655,6 @@ window.addEventListener('keydown',function(e){
           <div class="ab-section" style="margin-top:10px">
             <label style="display:block;font-weight:600;margin-bottom:4px">安全规则（默认开启，不推荐关闭）</label>
             <label style="display:flex;align-items:center;gap:6px;margin:4px 0"><input type="checkbox" id="lis-aa-inf" ${rules.blockInfectionPos ? 'checked' : ''}> 拦截传染病项目阳性（梅毒/丙肝/HIV/两对半）</label>
-            <label style="display:flex;align-items:center;gap:6px;margin:4px 0"><input type="checkbox" id="lis-aa-qf" ${rules.blockQualityFlag ? 'checked' : ''}> 拦截标本质量提示（溶血/脂血/黄疸/凝块/稀释等）</label>
-          </div>
-          <div class="ab-section" style="margin-top:10px">
-            <label style="display:block;margin-bottom:4px">允许 0 值项目名（逗号分隔，堵孔0值判定时豁免，如 尿蛋白/尿肌酐）</label>
-            <input type="text" id="lis-aa-zero" value="${escAttr(rules.zeroAllowItems || '')}" placeholder="尿蛋白,尿肌酐" style="width:100%;padding:4px 8px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
           </div>
           <div class="ab-section" id="lis-aa-log-wrap" style="margin-top:10px;display:none">
             <label style="display:block;font-weight:600;margin-bottom:4px">📋 今日自动审核记录</label>
@@ -18700,9 +18680,7 @@ window.addEventListener('keydown',function(e){
     document.getElementById('lis-aa-start').addEventListener('click', () => {
       const dur = parseInt(document.getElementById('lis-aa-dur').value, 10);
       const rulesNew = {
-        blockInfectionPos: document.getElementById('lis-aa-inf').checked,
-        blockQualityFlag: document.getElementById('lis-aa-qf').checked,
-        zeroAllowItems: document.getElementById('lis-aa-zero').value.trim()
+        blockInfectionPos: document.getElementById('lis-aa-inf').checked
       };
       _autoAudit = Object.assign({}, _autoAudit || {}, { rules: rulesNew });
       saveAutoAuditState();
