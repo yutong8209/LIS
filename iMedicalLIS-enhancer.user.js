@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.70
+// @version      8.5.71
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -736,8 +736,10 @@
 #lis-auto-audit-log-box .aal-badge.normal,#lis-auto-audit-box .aal-badge.normal{background:#e8f8ef;color:#1e8449;border:1px solid #a9dfbf}
 #lis-auto-audit-log-box .aal-badge.abnormal,#lis-auto-audit-box .aal-badge.abnormal{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1}
 #lis-auto-audit-log-box .aal-badge.skip,#lis-auto-audit-box .aal-badge.skip{background:#fef9e7;color:#9a7d0a;border:1px solid #f7dc6f}
-#lis-auto-audit-log-box .aal-row{cursor:pointer}
-#lis-auto-audit-log-box .aal-row:hover{background:#f5fbfa}
+#lis-auto-audit-log-box .aal-row,.aal-flat-inner{cursor:pointer}
+#lis-auto-audit-log-box .aal-row:hover,#lis-auto-audit-log-box .aal-flat-inner:hover{background:#f5fbfa}
+#lis-auto-audit-log-box .aal-detail{flex-wrap:wrap}
+#lis-auto-audit-log-box .aal-abn-item{line-height:1.6;white-space:normal;max-width:100%}
 #lis-auto-audit-log-box .aal-detail{margin-top:4px;padding:4px 8px 2px;background:#fafcfc;border-radius:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 #lis-auto-audit-log-box .aal-test{color:#2c3e50;font-size:11px;font-weight:600}
 #lis-auto-audit-log-box .aal-abn{display:inline-flex;gap:6px;flex-wrap:wrap}
@@ -18991,46 +18993,48 @@ window.addEventListener('keydown',function(e){
           list.innerHTML = '<div style="color:#999;padding:14px">未找到匹配的样本（' + esc(q) + '）</div>';
           return;
         }
-        list.innerHTML = rows
-          .map(r =>
-            '<div style="padding:6px 10px;display:flex;gap:10px;align-items:center;font-size:12px;border-bottom:1px solid #f0f0f0">' +
-            '<span style="color:#999;white-space:nowrap;min-width:128px">' + esc(r.time) + '</span>' +
-            rowHTML(r.s) +
-            '</div>')
-          .join('');
+        list.innerHTML = '<div class="aal-flat">' +
+          rows
+            .map(r =>
+              '<div class="aal-flat-row" style="border-bottom:1px solid #f0f0f0">' +
+              '<div style="padding:8px 10px 4px;color:#999;font-size:11px">🕘 ' + esc(r.time) + '</div>' +
+              rowHTML(r.s).replace('class="aal-row"', 'class="aal-row aal-flat-inner"') +
+              '</div>')
+            .join('') +
+          '</div>';
         return;
       }
 
-      // 浏览模式：按轮次折叠展示
-      list.innerHTML = entries
-        .map((e, i) => {
-          const cnt = (e.audited || []).length;
-          const det = entryDetails(e);
-          return (
-            '<div style="border:1px solid #eee;border-radius:6px;margin-bottom:8px;overflow:hidden">' +
-            '<div class="aal-entry-hd" style="padding:8px 12px;background:#fafafa;cursor:pointer;display:flex;gap:8px;align-items:center;justify-content:space-between">' +
-            '<span><b>' + esc(e.day) + ' ' + esc(e.time) + '</b>　正常 <b>' + (e.normal || 0) + '</b> · 异常 <b>' + (e.abnormal || 0) + '</b> · 跳过 <b>' + ((e.skipped || []).length) + '</b></span>' +
-            '<span style="color:#999;font-size:11px">' + (cnt ? '明细 ' + cnt + ' 条' : '无明细') + ' <span class="aal-marker">' + (i === 0 ? '▴' : '▾') + '</span></span>' +
-            '</div>' +
-            '<div class="aal-entry-body" style="display:' + (i === 0 ? 'block' : 'none') + '">' +
-            (det.length
-              ? det.map(rowHTML).join('')
-              : '<div style="padding:8px 12px;color:#999">本轮无样本明细</div>') +
-            '</div>' +
-            '</div>'
-          );
-        })
-        .join('');
-
-      list.querySelectorAll('.aal-entry-hd').forEach(hd =>
-        hd.addEventListener('click', () => {
-          const body = hd.nextElementSibling;
-          const isOpen = body.style.display !== 'none';
-          body.style.display = isOpen ? 'none' : 'block';
-          const marker = hd.querySelector('.aal-marker');
-          if (marker) {marker.textContent = isOpen ? '▾' : '▴';}
-        })
-      );
+      // 8.5.71: 直接平铺所有样本（无需点折叠），每行带审核时间；异常项默认横向、过长自动换行
+      const flat = [];
+      entries.forEach(e => {
+        const det = entryDetails(e);
+        if (!det.length) {
+          // 空轮次仍给一行摘要，避免遗漏
+          flat.push({
+            time: e.day + ' ' + e.time,
+            html: '<div class="aal-row aal-empty" style="padding:6px 10px;color:#999;font-size:11px">' + esc(e.time) + ' 本轮无样本明细</div>'
+          });
+          return;
+        }
+        det.forEach(s => {
+          flat.push({
+            time: e.day + ' ' + e.time,
+            html: rowHTML(s)
+          });
+        });
+      });
+      // 时间戳放每行首列（醒目），样本信息主区
+      list.innerHTML = '<div class="aal-flat">' +
+        flat.map((r, i) =>
+          '<div class="aal-flat-row" style="border-bottom:1px solid #f0f0f0">' +
+          '<div style="padding:8px 10px 4px;color:#999;font-size:11px">' +
+          '🕘 ' + esc(r.time) +
+          '</div>' +
+          r.html.replace('class="aal-row"', 'class="aal-row aal-flat-inner"') +
+          '</div>'
+        ).join('') +
+        '</div>';
     };
 
     document.getElementById('lis-aal-close').addEventListener('click', () => dlg.remove());
