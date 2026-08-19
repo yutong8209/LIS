@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.65
+// @version      8.5.66
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -769,6 +769,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .wg-tag{display:inline-block;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.2)}
 .st-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
 .st-1t{background:#fff3e0;color:#e65100}.st-2t{background:#e3f2fd;color:#1565c0}.st-3t{background:#e8f5e9;color:#2e7d32}.st-4t{background:#f3e5f5;color:#7b1fa2}.st-5t{background:#eeeeee;color:#9e9e9e}.st-9t{background:#fce4ec;color:#a8326a} /* 8.5.31: 采集状态（全部视图徽章） */
+.ws-aa-mark{display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;background:#168276;color:#fff;cursor:pointer} /* 8.5.66: 今日已由自动审核审核（全部视图） */
 .st-0t{background:#e0f7fa;color:#00695c}
 .stars{color:#f39c12;font-size:12px}
 .lis-highlight{background:#fff176;border-radius:2px;padding:0 2px}
@@ -10024,6 +10025,10 @@ window.addEventListener('keydown',function(e){
       if (String(statusVal) === '3' && isRecheckDone(r.ReportDR)) {
         stHTML += ' <span class="st-tag st-4t" title="曾复检/复查">复审</span>';
       }
+      // 8.5.66: 今日已由自动审核审核的标本 → 🤖 徽章（点击行即可查看结果详情）
+      if (String(statusVal) === '3' && autoAuditedTodayHas(r.ReportDR)) {
+        stHTML += ' <span class="ws-aa-mark" title="今日已由自动审核审核 · 点击行查看结果">🤖 自动</span>';
+      }
       h += `<td>${stHTML}</td>`;
       const ic = r.IsComplete;
       let icHTML = '';
@@ -18622,6 +18627,34 @@ window.addEventListener('keydown',function(e){
       if (log.length > AUTO_AUDIT_LOG_MAX) {log = log.slice(log.length - AUTO_AUDIT_LOG_MAX);}
       localStorage.setItem(K.autoAuditLog, JSON.stringify(log));
     } catch (e) {}
+    // 8.5.66: 新日志 → 刷新今日已审集合（全部视图 🤖 徽章）
+    rebuildAutoAuditedTodaySet();
+  }
+
+  // 8.5.66: 今日已自动审核的标本 ReportDR 集合（全部视图 🤖 徽章标注，点击行查看结果）
+  let _autoAuditedDay = ''; // 已缓存集合对应的日期
+  let _autoAuditedTodayDRs = new Set();
+  function autoAuditedTodayDayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function rebuildAutoAuditedTodaySet() {
+    _autoAuditedDay = autoAuditedTodayDayStr();
+    const s = new Set();
+    try {
+      const log = JSON.parse(localStorage.getItem(K.autoAuditLog) || '[]');
+      log.forEach(e => {
+        if (String(e.day || '') !== _autoAuditedDay) {return;}
+        (e.audited || []).forEach(a => {
+          if (a && a.d) {s.add(String(a.d));}
+        });
+      });
+    } catch (err) {}
+    _autoAuditedTodayDRs = s;
+  }
+  function autoAuditedTodayHas(reportDR) {
+    if (_autoAuditedDay !== autoAuditedTodayDayStr()) {rebuildAutoAuditedTodaySet();} // 跨天自动重建
+    return _autoAuditedTodayDRs.has(String(reportDR || ''));
   }
   // 8.5.61: autoAuditLogToday 已由 openAutoAuditLogViewer（日期范围+搜索）取代
 
