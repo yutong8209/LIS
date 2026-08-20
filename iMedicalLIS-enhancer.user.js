@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.75
+// @version      8.5.76
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -18639,13 +18639,26 @@ window.addEventListener('keydown',function(e){
       }
       // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义
       const candidates = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
-      const normals = candidates.filter(r => getWSAuditBucket(r) === 'normal');
-      const abnormals = candidates.filter(r => getWSAuditBucket(r) === 'abnormal');
+      let normals = candidates.filter(r => getWSAuditBucket(r) === 'normal');
+      let abnormals = candidates.filter(r => getWSAuditBucket(r) === 'abnormal');
 
       let nNormal = 0,
         nAbnormal = 0;
       const skipped = []; // {name, labno, reason}
       const audited = []; // 8.5.61: 本轮审核成功的样本明细 {n,l,d,t}（供记录查看器检索）
+      // 8.5.76: 负值红线 —— 含负值结果（如 -1.3）的标本一律不进自动审核（无论正常/异常分类），留人工
+      const negDRs = new Set();
+      candidates.forEach(r => {
+        const lv = getLiveClassification(r.ReportDR);
+        if (lv && (lv.items || []).some(it => isNegativeResultValue(it))) {negDRs.add(String(r.ReportDR));}
+      });
+      negDRs.forEach(dr => {
+        autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, '含负值结果，需人工审核');
+      });
+      if (negDRs.size) {
+        normals = normals.filter(r => !negDRs.has(String(r.ReportDR)));
+        abnormals = abnormals.filter(r => !negDRs.has(String(r.ReportDR)));
+      }
       if (
         _wsDataHealth.failed ||
         _wsDataHealth.partial ||
@@ -18754,6 +18767,16 @@ window.addEventListener('keydown',function(e){
     skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
   }
 
+  // 8.5.76: 结果是否为负值（如 -1.3）——任何仪器/项目出现负值结果即视为不可自动审核，留人工
+  // op='' 纯负值（-1.3）或 <负值（实际更负）都拦；>负值（实际可能为正）不误拦
+  function isNegativeResultValue(it) {
+    if (!it) {return false;}
+    const raw = it.result !== undefined && it.result !== null ? it.result : (it.TextRes || it.Result || '');
+    const p = parseComparableNumber(raw);
+    if (!p || !(p.value < 0)) {return false;}
+    return p.op === '' || p.op === '<' || p.op === '<=';
+  }
+
   // 异常标本自动审核安全门：任一命中 → 整标本跳过留人工（原因记入日志）
   function autoAuditAbnormalGate(live) {
     if (!live) {return { ok: false, reason: '分类未完成' };}
@@ -18761,10 +18784,13 @@ window.addEventListener('keydown',function(e){
     if (row && isClassificationStale(row)) {return { ok: false, reason: '分类已过期，需刷新后人工处理' };}
     if (live.status === 'CRITICAL') {return { ok: false, reason: '危急值，必须在原始LIS中审核' };}
     if (live.status === 'ZERO') {return { ok: false, reason: '含 0 值结果（疑似堵孔），需人工审核' };}
+
     if (live.status === 'UNCERTAIN') {return { ok: false, reason: '结果待定/缺失，需人工确认' };}
     if (live.status === 'NORMAL') {return { ok: false, reason: '正常标本走批量审核' };}
     if (live.status !== 'ABNORMAL') {return { ok: false, reason: '状态' + classifyStatusText(live.status) + '，不可自动审核' };}
     const items = live.items || [];
+    const negItem = items.find(it => isNegativeResultValue(it));
+    if (negItem) {return { ok: false, reason: '含负值结果: ' + (negItem.name || '') + ' ' + String(negItem.result || '') + '，需人工审核' };}
     if (live.infectionWarning) {return { ok: false, reason: '传染病历史不符: ' + live.infectionWarning };}
     const infPos = items.find(it => isAutoAuditInfectionItem(it) && isPositiveResult(it.result, it.preResult || it));
     if (infPos) {return { ok: false, reason: '梅毒/丙肝/艾滋项目阳性: ' + infPos.name + ' ' + infPos.result + '，需人工审核' };}
