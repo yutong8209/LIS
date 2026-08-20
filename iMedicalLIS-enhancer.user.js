@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.74
+// @version      8.5.75
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -18461,6 +18461,7 @@ window.addEventListener('keydown',function(e){
 
   const AUTO_AUDIT_LOG_MAX = 500;
   const AUTO_AUDIT_LOG_DETAIL_MAX = 50; // 8.5.61: 每轮自动审核记录最多保留 50 条样本明细
+  const AUTO_AUDIT_LOG_BYTES_MAX = 2.5 * 1024 * 1024; // 8.5.75: 日志完整结果总预算，超出后最早轮次降级为摘要
   const AUTO_AUDIT_DEFAULT_MIN = 60;
   function autoAuditRules() {
     const def = {};
@@ -18596,18 +18597,26 @@ window.addEventListener('keydown',function(e){
   }
 
   // 8.5.70: 提取标本的项目组合 + 异常项目（写入审核记录，供记录查看器直观展示）；无缓存则为空
+  // 8.5.75: 同时持久化完整项目结果（短键 items），记录查看器不再依赖易失缓存，历史标本也能看全结果
   function auditRecordSpecInfo(reportDR, row) {
-    let test = '', abn = [];
+    let test = '', abn = [], items = [];
     const live = getLiveClassification(reportDR);
     const rr = (live && live.row) || row || findWSSpecimenByReportDR(reportDR);
     if (rr && rr.TestSetDesc) {test = String(rr.TestSetDesc) || '';}
     if (live && live.items) {
+      items = (live.items || []).slice(0, 60).map(it => ({
+        n: it.name || '',
+        r: String(it.result !== undefined && it.result !== null ? it.result : ''),
+        u: it.unit || '',
+        f: it.refRange || it.RefRanges || it.RefRange || '',
+        s: it.status || ''
+      }));
       abn = (live.items || [])
         .filter(it => it.status && it.status !== 'NORMAL')
         .slice(0, 10)
         .map(it => (it.name || '') + ' ' + String(it.result || '') + (it.unit ? ' ' + it.unit : ''));
     }
-    return { test, abn };
+    return { test, abn, items };
   }
 
   // 主循环：每轮 = [正常批量] + [异常逐条(安全门)] + 日志/小结
@@ -18660,7 +18669,7 @@ window.addEventListener('keydown',function(e){
           (q.done || []).forEach(it => {
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
               const _si = auditRecordSpecInfo(it.reportDR, it.row);
-              audited.push({ n: it.name || '', l: it.labno || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn });
+              audited.push({ n: it.name || '', l: it.labno || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn, items: _si.items });
             }
           });
           (q.failed || []).forEach(it => autoAuditSkipOnce(skipped, it, it.reason || '批量审核失败'));
@@ -18692,7 +18701,7 @@ window.addEventListener('keydown',function(e){
           if (ok) {
             nAbnormal++;
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
-              audited.push({ n: r.PatName || '', l: r.Labno || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn });
+              audited.push({ n: r.PatName || '', l: r.Labno || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn, items: _preSI.items });
             }
           }
           else {skipped.push({ name: r.PatName, labno: r.Labno, reason: '审核未确认成功（留人工/下轮重试）' });}
@@ -18742,7 +18751,7 @@ window.addEventListener('keydown',function(e){
     _autoAuditSkipSeen[key] = reason;
     // 8.5.72: 跳过标本也采集项目组合 + 异常项（危急/堵孔/传染病等需人工关注的要有信息）
     const _si = auditRecordSpecInfo(r.ReportDR || r.reportDR, r);
-    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', reason, test: _si.test, abn: _si.abn });
+    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
   }
 
   // 异常标本自动审核安全门：任一命中 → 整标本跳过留人工（原因记入日志）
@@ -18777,6 +18786,19 @@ window.addEventListener('keydown',function(e){
   }
 
   // ---- 自动审核日志（环形上限 500，按天） ----
+  // 8.5.75: 日志总预算超限时，从最早的轮次剥离完整结果（items），只留摘要，保证近期记录始终可看完整结果
+  function trimAutoAuditLogItems(log) {
+    try {
+      let size = JSON.stringify(log).length;
+      for (let i = 0; i < log.length && size > AUTO_AUDIT_LOG_BYTES_MAX; i++) {
+        const e = log[i];
+        let changed = false;
+        (e.audited || []).forEach(s => {if (s.items) {delete s.items; changed = true;}});
+        (e.skipped || []).forEach(s => {if (s.items) {delete s.items; changed = true;}});
+        if (changed) {size = JSON.stringify(log).length;}
+      }
+    } catch (e) {}
+  }
   function autoAuditLogAdd(entry) {
     try {
       let log = [];
@@ -18794,6 +18816,7 @@ window.addEventListener('keydown',function(e){
         audited: (entry.audited || []).slice(0, AUTO_AUDIT_LOG_DETAIL_MAX)
       });
       if (log.length > AUTO_AUDIT_LOG_MAX) {log = log.slice(log.length - AUTO_AUDIT_LOG_MAX);}
+      trimAutoAuditLogItems(log);
       localStorage.setItem(K.autoAuditLog, JSON.stringify(log));
     } catch (e) {}
     // 8.5.66: 新日志 → 刷新今日已审集合（全部视图 🤖 徽章）
@@ -19014,8 +19037,25 @@ window.addEventListener('keydown',function(e){
       if (abn.length) {bits.push('<div class="aal-abn">' + abn.map(x => '<span class="aal-abn-item">' + esc(x) + '</span>').join('') + '</div>');}
       return bits.length ? '<div class="aal-detail">' + bits.join('') + '</div>' : '';
     };
+    // 8.5.75: 渲染时把每行样本对象挂到映射，展开时直接取日志持久化的完整结果，不依赖当前工作台缓存
+    const _aalSamples = {};
+    const itemsTableHTML = items => {
+      if (!items || !items.length) {return '';}
+      return '<div class="aal-exp-title">完整结果</div>' +
+        '<table class="aal-exp-table"><thead><tr><th>项目</th><th>结果</th><th>单位</th><th>参考范围</th><th></th></tr></thead><tbody>' +
+        items.map(it => {
+          const st = it.s || it.status || '';
+          let cls = 'aal-exp-n', badgeTxt = '';
+          if (st === 'CRITICAL') {cls = 'aal-exp-cri'; badgeTxt = '危急';}
+          else if (st === 'ABNORMAL' || st === 'HIGH' || st === 'LOW') {cls = 'aal-exp-abn'; badgeTxt = '异常';}
+          const rv = it.r !== undefined ? it.r : (it.result !== undefined && it.result !== null ? it.result : '');
+          return '<tr class="' + cls + '"><td>' + esc(it.n || it.name || '') + '</td><td>' + esc(String(rv)) + '</td><td>' + esc(it.u || it.unit || '') + '</td><td>' + esc(it.f || it.refRange || it.RefRanges || '') + '</td><td>' + (badgeTxt ? '<span class="aal-exp-bd">' + badgeTxt + '</span>' : '') + '</td></tr>';
+        }).join('') +
+        '</tbody></table>';
+    };
     const rowHTML = s => {
       const _rid = 'aal-exp-' + String(s.d || 'x') + '-' + Math.floor(Math.random() * 1e6);
+      _aalSamples[_rid] = s;
       return '<div class="aal-row" data-rdr="' + escAttr(s.d || '') + '" data-toggle-exp="' + _rid + '" style="padding:6px 10px;border-top:1px solid #f5f5f5">' +
       '<div class="aal-row-hd" style="display:flex;gap:8px;align-items:center;font-size:12px;flex-wrap:wrap">' +
       badge(s) +
@@ -19029,8 +19069,8 @@ window.addEventListener('keydown',function(e){
       '</div>';
     };
     const entryDetails = e => [
-      ...(e.audited || []).map(a => ({ n: a.n, l: a.l, d: a.d, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '', test: a.test || '', abn: a.abn || [] })),
-      ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: s.reportDR || '', t: 'skip', reason: s.reason || '', test: s.test || '', abn: s.abn || [] }))
+      ...(e.audited || []).map(a => ({ n: a.n, l: a.l, d: a.d, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '', test: a.test || '', abn: a.abn || [], items: a.items || [] })),
+      ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: s.reportDR || '', t: 'skip', reason: s.reason || '', test: s.test || '', abn: s.abn || [], items: s.items || [] }))
     ];
 
     const render = () => {
@@ -19139,36 +19179,30 @@ window.addEventListener('keydown',function(e){
           if (mk) {mk.textContent = '▾';}
           return;
         }
-        // 渲染完整结果
-        let items = [];
-        const live = rdr ? getLiveClassification(rdr) : null;
-        if (live && live.items) {items = live.items || [];}
+        // 渲染完整结果：8.5.75 优先用日志持久化的完整结果（历史标本也能看），其次工作台缓存
+        const s = _aalSamples[togg] || {};
+        let items = (s.items && s.items.length) ? s.items : [];
+        if (!items.length) {
+          const live = rdr ? getLiveClassification(rdr) : null;
+          if (live && live.items) {items = live.items || [];}
+        }
         // 8.5.73: 缓存分类被清时，回退用原始详情缓存（ItemInfo）渲染全部项目
         if (!items.length && rdr && typeof _classifyRawCache !== 'undefined' && _classifyRawCache[String(rdr)]) {
           const rawInfo = (_classifyRawCache[String(rdr)].data || {}).ItemInfo;
           if (Array.isArray(rawInfo)) {
             items = rawInfo.map(it => ({
-              name: it.CName || '',
-              result: it.TextRes && String(it.TextRes).trim() ? it.TextRes : (it.Result || ''),
-              unit: it.Unit || it.Units || '',
-              refRange: it.RefRanges || it.RefRange || '',
-              status: 'NORMAL' // 原始缓存无分类，中性显示
+              n: it.CName || '',
+              r: it.TextRes && String(it.TextRes).trim() ? it.TextRes : (it.Result || ''),
+              u: it.Unit || it.Units || '',
+              f: it.RefRanges || it.RefRange || '',
+              s: 'NORMAL' // 原始缓存无分类，中性显示
             }));
           }
         }
         if (items.length) {
-          body.innerHTML = '<div class="aal-exp-title">完整结果</div>' +
-            '<table class="aal-exp-table"><thead><tr><th>项目</th><th>结果</th><th>单位</th><th>参考范围</th><th></th></tr></thead><tbody>' +
-            items.map(it => {
-              const st = it.status || '';
-              let cls = 'aal-exp-n', badgeTxt = '';
-              if (st === 'CRITICAL') {cls = 'aal-exp-cri'; badgeTxt = '危急';}
-              else if (st === 'ABNORMAL' || st === 'HIGH' || st === 'LOW') {cls = 'aal-exp-abn'; badgeTxt = '异常';}
-              return '<tr class="' + cls + '"><td>' + esc(it.name || '') + '</td><td>' + esc(String(it.result || '')) + '</td><td>' + esc(it.unit || '') + '</td><td>' + esc(it.refRange || it.RefRanges || '') + '</td><td>' + (badgeTxt ? '<span class="aal-exp-bd">' + badgeTxt + '</span>' : '') + '</td></tr>';
-            }).join('') +
-            '</tbody></table>';
+          body.innerHTML = itemsTableHTML(items);
         } else {
-          body.innerHTML = '<div style="color:#999;padding:6px">该标本已不在当前工作台数据/缓存中——历史记录仅保留异常项，上方「异常项」即为本次结果。<br>如需看全部项目，请在「全部」标本视图中定位该标本。</div>';
+          body.innerHTML = '<div style="color:#999;padding:6px">该标本日志中未保存完整项目结果，且已不在当前工作台数据/缓存中。<br>如需查看，请在工作台「全部」视图中定位该标本。</div>';
         }
         body.style.display = 'block';
         const mk = row.querySelector('.aal-exp-marker');
