@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.76
+// @version      8.5.77
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -78,7 +78,7 @@
     autoAuditLog: 'LIS_AutoAuditLog' // 8.5.58: 自动审核日志（环形上限 500）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
-  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '7.61.1';
+  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '8.5.77';
   const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
   // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
   const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
@@ -179,13 +179,15 @@
   // 非安全上下文（如 http://10.x.x.x）会自动回退到 base64。
   const _cryptoAvailable = !!(typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.importKey);
   let _cryptoKey = null;
+  let _cryptoKeyUid = null;
   async function getCryptoKey() {
     if (!_cryptoAvailable) {return null;}
-    if (_cryptoKey) {return _cryptoKey;}
+    const curUid = uid();
+    if (_cryptoKey && _cryptoKeyUid === curUid) {return _cryptoKey;}
     try {
       const enc = new TextEncoder();
       // salt 加入 uid() 使每个用户的密钥不同，避免同 origin 共享密钥
-      const seed = enc.encode('lis-enhancer-v8-salt-' + uid());
+      const seed = enc.encode('lis-enhancer-v8-salt-' + curUid);
       const km = await crypto.subtle.importKey('raw', seed, 'PBKDF2', false, ['deriveKey']);
       _cryptoKey = await crypto.subtle.deriveKey(
         { name: 'PBKDF2', salt: enc.encode(location.origin), iterations: 100000, hash: 'SHA-256' },
@@ -194,6 +196,7 @@
         false,
         ['encrypt', 'decrypt']
       );
+      _cryptoKeyUid = curUid;
       return _cryptoKey;
     } catch (e) {
       return null;
@@ -578,17 +581,30 @@
     return null;
   }
 
-  // 高亮搜索文本（自动转义防 XSS，缓存正则）
+  // 高亮搜索文本（先匹配分词再转义，彻底防 XSS 且绝不破坏 HTML 实体，缓存正则）
   let _hlQuery = '',
     _hlRegex = null;
   function highlightText(text, query) {
     if (!query || !text) {return esc(text || '');}
-    const safe = esc(text);
-    if (query !== _hlQuery) {
-      _hlQuery = query;
-      _hlRegex = new RegExp('(' + query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+    const qStr = String(query).trim();
+    if (!qStr) {return esc(text || '');}
+    if (qStr !== _hlQuery) {
+      _hlQuery = qStr;
+      _hlRegex = new RegExp('(' + qStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
     }
-    return safe.replace(_hlRegex, '<span class="lis-highlight">$1</span>');
+    const raw = String(text);
+    _hlRegex.lastIndex = 0;
+    const parts = raw.split(_hlRegex);
+    let out = '';
+    for (let i = 0; i < parts.length; i++) {
+      if (!parts[i]) {continue;}
+      if (i % 2 === 1) {
+        out += '<span class="lis-highlight">' + esc(parts[i]) + '</span>';
+      } else {
+        out += esc(parts[i]);
+      }
+    }
+    return out;
   }
 
   // ==================== 样式 ====================
@@ -4946,18 +4962,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   // 从日期字符串提取日
   function qeExtractDay(dateStr) {
     const s = String(dateStr || '').trim();
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) {return parseInt(s.slice(8, 10), 10);}
+    const m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (m) {return parseInt(m[3], 10);}
     if (/^\d{8}$/.test(s)) {return parseInt(s.slice(6, 8), 10);}
-    const d = new Date(s);
+    const d = new Date(s.replace(/-/g, '/'));
     return Number.isNaN(d.getTime()) ? 0 : d.getDate();
   }
 
   // 从日期字符串提取月
   function qeExtractMonth(dateStr) {
     const s = String(dateStr || '').trim();
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) {return parseInt(s.slice(5, 7), 10);}
+    const m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (m) {return parseInt(m[2], 10);}
     if (/^\d{8}$/.test(s)) {return parseInt(s.slice(4, 6), 10);}
-    const d = new Date(s);
+    const d = new Date(s.replace(/-/g, '/'));
     return Number.isNaN(d.getTime()) ? 0 : d.getMonth() + 1;
   }
 
@@ -8823,6 +8841,17 @@ window.addEventListener('keydown',function(e){
     const data = filteredData();
     if (data.length === 0) {
       body.innerHTML = '<div class="ws-empty"><div class="ico">📭</div>暂无标本数据</div>';
+      // 即使无数据，仍需绑定 Escape 退出监听，避免空列表时无法按 Esc 关闭工作台
+      if (!isDetailPanelVisible()) {
+        _normalKeyHandler = e => {
+          if (isPatientResultPanelEvent(e)) {return;}
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            closeWS();
+          }
+        };
+        document.addEventListener('keydown', _normalKeyHandler);
+      }
       return;
     }
 
@@ -11978,7 +12007,7 @@ window.addEventListener('keydown',function(e){
         let timeDelta = '';
         if (info.CollectDT && info.ReceiveDT) {
           try {
-            const diffMs = new Date(info.ReceiveDT) - new Date(info.CollectDT);
+            const diffMs = new Date(String(info.ReceiveDT).replace(/-/g, '/')) - new Date(String(info.CollectDT).replace(/-/g, '/'));
             if (isNaN(diffMs)) {throw new Error('invalid date');}
             const diffH = Math.floor(diffMs / 3600000);
             const diffM = Math.floor((diffMs % 3600000) / 60000);
@@ -12291,7 +12320,11 @@ window.addEventListener('keydown',function(e){
       // 保存：审核密码 + 让当前多账号区落盘
       document.getElementById('lis-pwdsave').addEventListener('click', async () => {
         const auditPwd = document.getElementById('lis-pwdi').value;
-        if (auditPwd) {await savePwdAsync(auditPwd);}
+        if (auditPwd) {
+          await savePwdAsync(auditPwd);
+        } else {
+          try { localStorage.removeItem(K.pwd); } catch (e) {}
+        }
         // 若有未提交的账号表单，先落盘再提示
         await _maybeCommitCaForm();
         document.getElementById('lis-pwds').innerHTML = '<span style="color:#27ae60">✓ 已保存</span>';

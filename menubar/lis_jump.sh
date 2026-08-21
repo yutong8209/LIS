@@ -24,15 +24,12 @@ tell application "Google Chrome"
     set ti to 1
     repeat with t in tabs of w
       set u to (URL of t as text)
-      repeat with h in words of "$HOSTS"
-        if u contains h and h is not "" then
-          set active tab index of w to ti
-          set index of w to 1
-          set found to true
-          exit repeat
-        end if
-      end repeat
-      if found then exit repeat
+      if u contains "10.0.29.100" or u contains "192.168.31.111" or u contains "iMedicalLIS" then
+        set active tab index of w to ti
+        set index of w to 1
+        set found to true
+        exit repeat
+      end if
       set ti to ti + 1
     end repeat
     if found then exit repeat

@@ -154,7 +154,7 @@ async def describe_image(path: str, custom_prompt: str = ""):
     url = api_base.rstrip('/') + '/v1/messages'
     payload = json.dumps({
         "model": model,
-        "max_tokens": 2000,
+        "max_tokens": 1024,
         "messages": [{
             "role": "user",
             "content": [
