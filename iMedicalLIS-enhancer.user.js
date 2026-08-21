@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.77
+// @version      8.5.78
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -78,7 +78,7 @@
     autoAuditLog: 'LIS_AutoAuditLog' // 8.5.58: 自动审核日志（环形上限 500）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
-  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '8.5.77';
+  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '8.5.78';
   const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
   // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
   const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
@@ -14469,7 +14469,7 @@ window.addEventListener('keydown',function(e){
         } else if (missingAsSuccess && sawTargetRow) {
           if (!missingSince) {missingSince = Date.now();}
           // 秒审：IsSaveSuccess 后行消失可更快认定成功
-          const needMs = sawSaveSuccess && turbo ? Math.min(missingStableMs, 280) : missingStableMs;
+          const needMs = sawSaveSuccess && turbo ? Math.min(missingStableMs, 60) : missingStableMs;
           if (Date.now() - missingSince >= needMs) {
             dbg('原生操作成功（目标行已稳定移出列表）');
             return true;
@@ -14504,7 +14504,7 @@ window.addEventListener('keydown',function(e){
           }
           // 批审：已保存成功且详情目标匹配时，给 UI 极短回写窗口后用 quickVerify
           if (turbo && missingAsSuccess) {
-            await sleep(180);
+            await sleep(35);
             if (typeof options.quickVerify === 'function' && options.quickVerify()) {
               dbg('原生操作成功（IsSaveSuccess 后 quickVerify）');
               return true;
@@ -15194,6 +15194,28 @@ window.addEventListener('keydown',function(e){
       } catch (e2) {}
       return false;
     };
+    // 秒审模式：CA 与审核态均已就绪，直接单次极速轮询确认，避免分片轮询的碎片重置与启动延时
+    if (batchMode && caSessionReady) {
+      tickAudit('秒审确认...');
+      const fastResult = await waitNativeActionResult(
+        iframeWin,
+        targetReportDR,
+        expectedStatuses,
+        timeoutMs,
+        allowMissingSuccess,
+        makeWaitOpts({
+          missingStableMs: 60,
+          failureGraceMs: 600,
+          turbo: true
+        })
+      );
+      if (fastResult !== false) {return fastResult;}
+      if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {
+        return true;
+      }
+      return false;
+    }
+
     const instant = await waitNativeActionResult(
       iframeWin,
       targetReportDR,
@@ -18066,14 +18088,34 @@ window.addEventListener('keydown',function(e){
           continue;
         }
 
-        // 8.5.10: 跨组先试不切组——refreshNativeWorkListForItem 会按 WorkGroupMachineDR 直接
-        // 跨组加载原生列表（实测：临检组下免疫组x8 标本可直接审）；选不到标本才回退切组（见 !selectedOk）。
-        const _batchCrossGroup = !!(item.wg && resolveCurrentWG() && item.wg !== resolveCurrentWG());
+        // 8.5.78: 跨组标本判定与快速切组优化
+        const curWG = resolveCurrentWG();
+        const _batchCrossGroup = !!(item.wg && curWG && item.wg !== curWG);
 
-        const itemWg = item.wg || resolveCurrentWG();
-        // 每条开始时以真实 Ukey 为准（不要被过期缓存拖回慢路径）
-        batchCAReady = isCASessionReady(iframeWin) || !!queue.caReadyByWg[itemWg];
-        if (batchCAReady) {queue.caReadyByWg[itemWg] = true;}
+        const itemWg = item.wg || curWG;
+        // 每条开始时以真实 Ukey 为准（已认证则全局就绪，不要被过期缓存拖回慢路径）
+        batchCAReady = isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin) || !!queue.caReadyByWg[itemWg];
+        if (batchCAReady) {
+          queue.caReadyByWg[itemWg] = true;
+          if (curWG) {queue.caReadyByWg[curWG] = true;}
+        }
+
+        // 8.5.78: 跨组标本快速前置判断 —— 若当前工作组网格中确实无此标本，立即切组，不再盲等 5.6s 超时
+        if (_batchCrossGroup) {
+          const inCurrentGrid = selectNativeRowByReportDR(iframeWin, item.reportDR, { force: true });
+          if (!inCurrentGrid) {
+            if (batchCAReady && curWG) {queue.caReadyByWg[curWG] = true;}
+            queue.pausedForSwitch = true;
+            saveAuditQueueNow(queue);
+            const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
+            const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
+            showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
+            queuePausedForSwitch = true;
+            safeSwitchWG(item.wg);
+            runAuditQueueResume(2500);
+            break;
+          }
+        }
 
         batchListFresh = false;
         totalCount = queue.items.length;
@@ -18122,15 +18164,23 @@ window.addEventListener('keydown',function(e){
 
           let selectedOk = batchSkipSelect;
           batchSkipSelect = false;
-          if (selectedOk && !isReportDetailLoaded(iframeWin, item.reportDR)) {
-            dbg('批审: 自动跳下一条校验失败，重新选行', item.reportDR);
-            selectedOk = false;
+          let detailReady = false;
+          if (selectedOk) {
+            // LIS 自动跳到下一标本后正在异步加载详情，给短轮询（最长 300ms，就绪即退），避免立即丢弃选行重新触发点击
+            detailReady = isReportDetailLoaded(iframeWin, item.reportDR);
+            if (!detailReady) {
+              detailReady = await waitReportDetailReady(iframeWin, item.reportDR, 300, { fastBatch: true });
+            }
+            if (!detailReady) {
+              dbg('批审: 自动跳下一条详情等待超时，重新选行', item.reportDR);
+              selectedOk = false;
+            }
           }
           if (!selectedOk) {
             progressPhase('选中标本');
             const selectedResult = await waitAndSelectNativeRow(iframeWin, item, {
-              timeoutMs: batchCAReady ? 2800 : batchListFresh ? 4000 : 5000,
-              pollMs: batchCAReady ? 30 : 45,
+              timeoutMs: batchCAReady ? 2000 : batchListFresh ? 3500 : 4500,
+              pollMs: batchCAReady ? 25 : 40,
               skipListRefresh: batchListFresh
             });
             iframeWin = selectedResult.iframeWin || iframeWin;
@@ -18149,8 +18199,8 @@ window.addEventListener('keydown',function(e){
               batchLastMdr = String(item.mdr);
               batchListFresh = true;
               const retrySel = await waitAndSelectNativeRow(iframeWin, item, {
-                timeoutMs: 2800,
-                pollMs: 35,
+                timeoutMs: 2000,
+                pollMs: 25,
                 skipListRefresh: true
               });
               iframeWin = retrySel.iframeWin || iframeWin;
@@ -18181,10 +18231,12 @@ window.addEventListener('keydown',function(e){
           }
 
           progressPhase('加载详情');
-          let detailReady = isReportDetailLoaded(iframeWin, item.reportDR);
-          // 8.5.35: 秒审详情等待 2800/1500 → 2000/1200（就绪即退，只在真慢时才吃满；need-CA 首条保持宽松）
-          const detailTimeout = batchCAReady ? 2000 : 5500;
-          const detailRetry = batchCAReady ? 1200 : 3000;
+          if (!detailReady) {
+            detailReady = isReportDetailLoaded(iframeWin, item.reportDR);
+          }
+          // 8.5.35: 秒审详情等待 1500/800（就绪即退，只在真慢时才吃满；need-CA 首条保持宽松）
+          const detailTimeout = batchCAReady ? 1500 : 4500;
+          const detailRetry = batchCAReady ? 800 : 2500;
           if (!detailReady) {
             detailReady = await waitReportDetailReady(iframeWin, item.reportDR, detailTimeout, { fastBatch: true });
           }
@@ -18278,8 +18330,8 @@ window.addEventListener('keydown',function(e){
                   updateBatchProgress(`${itemBase} - ${msg}${modeHint}`, ((queue.current + 0.7) / totalCount) * 100)
               });
             } else {
-              for (let q = 0; q < 8 && !auditResult; q++) {
-                await sleep(80);
+              for (let q = 0; q < 5 && !auditResult; q++) {
+                await sleep(40);
                 if (
                   verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_itemPre4 }) ||
                   softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_itemPre4 })
