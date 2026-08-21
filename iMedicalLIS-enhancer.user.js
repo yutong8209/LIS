@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.78
+// @version      8.5.79
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -13295,10 +13295,11 @@ window.addEventListener('keydown',function(e){
     const box = document.createElement('div');
     box.id = 'lis-login-box';
 
+    // 8.5.77: 与 WG 常量顺序保持一致：临检 → 生化 → 免疫
     const wgs = [
-      { dr: '4', name: '免疫', color: '#2ecc71', icon: '🛡️' },
       { dr: '1', name: '临检', color: '#e74c3c', icon: '🩸' },
-      { dr: '3', name: '生化', color: '#3498db', icon: '🧪' }
+      { dr: '3', name: '生化', color: '#3498db', icon: '🧪' },
+      { dr: '4', name: '免疫', color: '#2ecc71', icon: '🛡️' }
     ];
 
     let wgHTML = '';
