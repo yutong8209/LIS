@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.80
+// @version      8.5.81
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -763,6 +763,13 @@
 #lis-auto-audit-log-box .aal-test{color:#2c3e50;font-size:11px;font-weight:600}
 #lis-auto-audit-log-box .aal-abn{display:inline-flex;gap:6px;flex-wrap:wrap;flex-basis:100%}
 #lis-auto-audit-log-box .aal-abn-item{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;border-radius:3px;padding:1px 5px;font-size:11px;font-weight:600;white-space:normal;line-height:1.7}
+/* 8.5.81: 异常项摘要标签按状态细分配色（高橙/低蓝/异常粉红/危急深红/待定灰/0值黄） */
+#lis-auto-audit-log-box .aal-abn-item.hi{background:#fff3e0;color:#e65100;border-color:#f5d9b8}
+#lis-auto-audit-log-box .aal-abn-item.lo{background:#e3f2fd;color:#1565c0;border-color:#bbd7f5}
+#lis-auto-audit-log-box .aal-abn-item.abn{background:#fce4ec;color:#e91e63;border-color:#f5c6d8}
+#lis-auto-audit-log-box .aal-abn-item.cri{background:#ffebee;color:#c62828;border-color:#f2b8b8;font-weight:700}
+#lis-auto-audit-log-box .aal-abn-item.unc{background:#f5f5f5;color:#757575;border-color:#ddd}
+#lis-auto-audit-log-box .aal-abn-item.zero{background:#fff8e1;color:#8a6d3b;border-color:#f0e0a8}
 #lis-auto-audit-log-box .aal-exp-body{max-height:320px;overflow-y:auto}
 #lis-auto-audit-log-box .aal-exp-title{font-size:11px;font-weight:700;color:#2c3e50;padding:2px 2px 6px}
 #lis-auto-audit-log-box .aal-exp-table{width:100%;border-collapse:collapse;font-size:11px}
@@ -18706,10 +18713,16 @@ window.addEventListener('keydown',function(e){
         f: it.refRange || it.RefRanges || it.RefRange || '',
         s: it.status || ''
       }));
+      // 8.5.81: 异常项保留 status，记录查看器摘要标签可按 高/低/异常/危急 细分配色
       abn = (live.items || [])
         .filter(it => it.status && it.status !== 'NORMAL')
         .slice(0, 10)
-        .map(it => (it.name || '') + ' ' + String(it.result || '') + (it.unit ? ' ' + it.unit : ''));
+        .map(it => ({
+          n: it.name || '',
+          r: String(it.result !== undefined && it.result !== null ? it.result : ''),
+          u: it.unit || '',
+          s: it.status || ''
+        }));
     }
     return { test, abn, items };
   }
@@ -18911,11 +18924,19 @@ window.addEventListener('keydown',function(e){
   function trimAutoAuditLogItems(log) {
     try {
       let size = JSON.stringify(log).length;
+      const downgradeAbn = s => {
+        // 8.5.81: 对象型 abn（带状态色）降级为字符串，保持体积可控
+        if (Array.isArray(s.abn) && s.abn.length && typeof s.abn[0] === 'object') {
+          s.abn = s.abn.map(x => (x.n || '') + ' ' + String(x.r || '') + (x.u ? ' ' + x.u : ''));
+          return true;
+        }
+        return false;
+      };
       for (let i = 0; i < log.length && size > AUTO_AUDIT_LOG_BYTES_MAX; i++) {
         const e = log[i];
         let changed = false;
-        (e.audited || []).forEach(s => {if (s.items) {delete s.items; changed = true;}});
-        (e.skipped || []).forEach(s => {if (s.items) {delete s.items; changed = true;}});
+        (e.audited || []).forEach(s => {if (s.items) {delete s.items; changed = true;} if (downgradeAbn(s)) {changed = true;}});
+        (e.skipped || []).forEach(s => {if (s.items) {delete s.items; changed = true;} if (downgradeAbn(s)) {changed = true;}});
         if (changed) {size = JSON.stringify(log).length;}
       }
     } catch (e) {}
@@ -19146,7 +19167,12 @@ window.addEventListener('keydown',function(e){
           abn = (live.items || [])
             .filter(it => it.status && it.status !== 'NORMAL')
             .slice(0, 6)
-            .map(it => (it.name || '') + ' ' + String(it.result || '') + (it.unit ? ' ' + it.unit : ''));
+            .map(it => ({
+              n: it.name || '',
+              r: String(it.result !== undefined && it.result !== null ? it.result : ''),
+              u: it.unit || '',
+              s: it.status || ''
+            }));
         }
       }
       const bits = [];
@@ -19155,7 +19181,21 @@ window.addEventListener('keydown',function(e){
         bits.push('<span class="aal-abn-count">⚠ ' + abn.length + ' 项异常</span>');
       }
       if (name) {bits.push('<span class="aal-test">' + esc(name) + '</span>');}
-      if (abn.length) {bits.push('<div class="aal-abn">' + abn.map(x => '<span class="aal-abn-item">' + esc(x) + '</span>').join('') + '</div>');}
+      // 8.5.81: 异常项标签按状态细分配色（高橙/低蓝/异常粉红/危急深红）；旧日志为字符串时回退统一红色
+      const abnItemHTML = x => {
+        if (typeof x === 'string') {return '<span class="aal-abn-item">' + esc(x) + '</span>';}
+        const st = x.s || '';
+        let cls = 'aal-abn-item', pre = '';
+        if (st === 'CRITICAL') {cls = 'aal-abn-item cri'; pre = '🚨';}
+        else if (st === 'HIGH') {cls = 'aal-abn-item hi'; pre = '▲';}
+        else if (st === 'LOW') {cls = 'aal-abn-item lo'; pre = '▼';}
+        else if (st === 'ABNORMAL') {cls = 'aal-abn-item abn'; pre = '⚠';}
+        else if (st === 'UNCERTAIN') {cls = 'aal-abn-item unc'; pre = '?';}
+        else if (st === 'ZERO') {cls = 'aal-abn-item zero'; pre = '0';}
+        const text = (x.n || '') + ' ' + String(x.r || '') + (x.u ? ' ' + x.u : '');
+        return '<span class="' + cls + '">' + (pre ? pre + ' ' : '') + esc(text) + '</span>';
+      };
+      if (abn.length) {bits.push('<div class="aal-abn">' + abn.map(abnItemHTML).join('') + '</div>');}
       return bits.length ? '<div class="aal-detail">' + bits.join('') + '</div>' : '';
     };
     // 8.5.75: 渲染时把每行样本对象挂到映射，展开时直接取日志持久化的完整结果，不依赖当前工作台缓存
