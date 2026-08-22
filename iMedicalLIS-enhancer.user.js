@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.5.81
+// @version      8.6.0
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -78,7 +78,7 @@
     autoAuditLog: 'LIS_AutoAuditLog' // 8.5.58: 自动审核日志（环形上限 500）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
-  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '8.5.78';
+  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
   const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
   // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
   const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
@@ -180,14 +180,17 @@
   const _cryptoAvailable = !!(typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.importKey);
   let _cryptoKey = null;
   let _cryptoKeyUid = null;
-  async function getCryptoKey() {
+  // 8.5.82: keyId 参数——多账号存储（K.caAccounts）按「ca:用户名」派生密钥，
+  // 否则密钥绑「当前登录 uid」：换登录用户后所有已存 CA 账号密码静默解密失败。
+  // 不传 keyId 时保持原语义（uid()），K.pwd 等单值存储行为不变
+  async function getCryptoKey(keyId) {
     if (!_cryptoAvailable) {return null;}
-    const curUid = uid();
-    if (_cryptoKey && _cryptoKeyUid === curUid) {return _cryptoKey;}
+    const kid = keyId === undefined ? uid() : String(keyId);
+    if (_cryptoKey && _cryptoKeyUid === kid) {return _cryptoKey;}
     try {
       const enc = new TextEncoder();
-      // salt 加入 uid() 使每个用户的密钥不同，避免同 origin 共享密钥
-      const seed = enc.encode('lis-enhancer-v8-salt-' + curUid);
+      // key material 加入 keyId 使每个用户/每条账号记录的密钥不同，避免同 origin 共享密钥
+      const seed = enc.encode('lis-enhancer-v8-salt-' + kid);
       const km = await crypto.subtle.importKey('raw', seed, 'PBKDF2', false, ['deriveKey']);
       _cryptoKey = await crypto.subtle.deriveKey(
         { name: 'PBKDF2', salt: enc.encode(location.origin), iterations: 100000, hash: 'SHA-256' },
@@ -196,7 +199,7 @@
         false,
         ['encrypt', 'decrypt']
       );
-      _cryptoKeyUid = curUid;
+      _cryptoKeyUid = kid;
       return _cryptoKey;
     } catch (e) {
       return null;
@@ -214,25 +217,39 @@
     for (let i = 0; i < bin.length; i++) {buf[i] = bin.charCodeAt(i);}
     return buf;
   }
-  async function encPwdV2(plain) {
-    const key = await getCryptoKey();
+  async function encPwdV2(plain, keyId) {
+    const key = await getCryptoKey(keyId);
     if (!key) {console.warn('[LIS] crypto.subtle 不可用，密码将以 base64 降级存储（非加密）');return encPwd(plain);} // crypto 不可用，直接 base64
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plain));
     return 'V2:' + toB64(iv) + ':' + toB64(ct);
   }
-  async function decPwdV2(stored) {
+  async function decPwdV2(stored, keyId, legacyKeyId) {
     if (!stored) {return '';}
     if (stored.startsWith('V2:')) {
-      const key = await getCryptoKey();
-      if (!key) {return '';} // crypto 不可用，无法解密 V2
-      try {
-        const parts = stored.slice(3).split(':');
-        const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
-        return new TextDecoder().decode(pt);
-      } catch (e) {
-        return '';
+      const key = await getCryptoKey(keyId);
+      if (key) {
+        try {
+          const parts = stored.slice(3).split(':');
+          const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(parts[0]) }, key, fromB64(parts[1]));
+          return new TextDecoder().decode(pt);
+        } catch (e) {
+          // 8.5.82: 主 keyId 解密失败时用 legacyKeyId（旧版 uid 密钥）再试一次——
+          // 旧版本按登录 uid 加密的存量记录在换密钥规则后仍可解出
+          if (legacyKeyId !== undefined) {
+            try {
+              const lkey = await getCryptoKey(legacyKeyId);
+              if (lkey) {
+                const parts = stored.slice(3).split(':');
+                const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(parts[0]) }, lkey, fromB64(parts[1]));
+                return new TextDecoder().decode(pt);
+              }
+            } catch (e2) {}
+          }
+          return '';
+        }
       }
+      return ''; // crypto 不可用，无法解密 V2
     }
     if (stored.startsWith('B64:')) {return decPwd(stored.slice(4));}
     return decPwd(stored); // 旧格式
@@ -341,7 +358,15 @@
   function caAccountsLoad() {
     try {
       const raw = localStorage.getItem(K.caAccounts);
-      return raw ? JSON.parse(raw) : {};
+      if (!raw) {return {};}
+      const o = JSON.parse(raw);
+      // 8.5.82: 校验类型——存量为 'null' 时返回 null 会让后续 obj[k]=... 抛 TypeError（异步未捕获），
+      // 存量为数组时命名属性会被 stringify 丢弃、旧 key 又已删（密码永久丢失）；损坏一律当空处理
+      if (!o || typeof o !== 'object' || Array.isArray(o)) {
+        dbg('CA 账号存储格式异常，按空处理（原文已忽略）');
+        return {};
+      }
+      return o;
     } catch (e) {
       return {};
     }
@@ -363,7 +388,7 @@
       // 否则每次调用都重新并入内存、用户删除该账号后又被 K.caPwd 复活（删不掉）
       if (legacy && !obj[cur]) {
         let p = legacy;
-        try { p = await encPwdV2(p); } catch (e) {}
+        try { p = await encPwdV2(p, 'ca:' + cur); } catch (e) { p = encPwd(p); }
         obj[cur] = { user: cur, pwd: p, note: '', ts: Date.now(), legacy: true };
         caAccountsSave(obj);
         try { localStorage.removeItem(K.caPwd); } catch (e) {}
@@ -376,7 +401,9 @@
       let pwd = '';
       if (a.pwd) {
         try {
-          pwd = await decPwdV2(String(a.pwd));
+          // 8.5.82: 每条账号用「ca:用户名」派生密钥解密（不再随当前登录用户变化）；
+          // 失败时退回旧版 uid 密钥（存量记录兼容），再失败按无法解密返回空
+          pwd = await decPwdV2(String(a.pwd), 'ca:' + a.user, uid());
         } catch (e) {
           // 8.5.43: 解密失败返回空（不再兜底 loadCAPwd——多账号语境下会错误返回旧单密码）
           pwd = '';
@@ -393,7 +420,10 @@
     const obj = caAccountsLoad();
     const a = Object.assign({}, account);
     if (a.pwd) {
-      try { a.pwd = await encPwdV2(a.pwd); } catch (e) { /* 保留明文仅当加密不可用 */ }
+      // 8.5.82: 按「ca:用户名」派生密钥加密（与解密侧对齐）；加密真异常时降级 base64，绝不落明文
+      //（原 catch 注释写「仅当加密不可用保留明文」，但 crypto 不可用时 encPwdV2 内部已自行降级 base64，
+      //  能走到 catch 的只有真异常——之前会把明文写进 localStorage 且之后自己都解不出）
+      try { a.pwd = await encPwdV2(a.pwd, 'ca:' + u); } catch (e) { a.pwd = encPwd(a.pwd); }
     }
     a.ts = Date.now();
     obj[u] = a;
@@ -420,7 +450,8 @@
   async function caDefaultAccount() {
     const all = await caAccountsAll();
     const cur = _caAccountCurUser();
-    const explicit = String(localStorage.getItem(K.caDefaultUser) || '');
+    let explicit = '';
+    try { explicit = String(localStorage.getItem(K.caDefaultUser) || ''); } catch (e) {} // 8.5.82: localStorage 禁用时不再让整个函数 reject
     const pick = id => {
       const a = all[id];
       return a && a.pwd ? id : null;
@@ -534,7 +565,11 @@
 
   async function fetchJ(u, timeoutMs, externalSignal) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs || 15000);
+    let timedOut = false; // 8.5.82: 区分「自身超时」与「外部取消」——二者都是 AbortError，但前者值得重试
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, timeoutMs || 15000);
     let externalAbort = null;
     try {
       if (externalSignal) {
@@ -559,6 +594,13 @@
       }
       return JSON.parse(trimmed);
     } catch (e) {
+      // 8.5.82: 自身超时改抛 TimeoutError——外部取消保持 AbortError（调用方靠它识别用户取消，不能重试）
+      if (e && e.name === 'AbortError' && timedOut && !(externalSignal && externalSignal.aborted)) {
+        const te = new Error('请求超时: ' + u);
+        te.name = 'TimeoutError';
+        te.isTimeout = true;
+        throw te;
+      }
       if (e.name === 'AbortError') {dbg(externalSignal && externalSignal.aborted ? 'fetch 已取消:' : 'fetch 超时:', u);}
       else {console.error('[LIS] fetch error:', e);}
       throw e;
@@ -574,6 +616,7 @@
       try {
         return await fetchJ(u, timeoutMs, externalSignal);
       } catch (e) {
+        // 8.5.82: 超时（TimeoutError）是瞬时故障，最该重试；外部取消（AbortError）仍然立即抛出
         if (e.name === 'AbortError' || i >= maxTries) {throw e;}
         await new Promise(r => setTimeout(r, gapMs || 250));
       }
@@ -1245,6 +1288,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const el = document.createElement('div');
     el.className = 'lis-t ' + type;
     el.textContent = msg;
+    // 8.5.82: 按当前存活条数错开 top——CSS 固定 top:50px 会让多条完全重叠，只看得见最后一条
+    const alive = document.querySelectorAll('.lis-t').length;
+    el.style.top = 50 + alive * 46 + 'px';
     document.body.appendChild(el);
     const ttl = type === 'e' || type === 'error' ? 5200 : 3000;
     setTimeout(() => {
@@ -2152,8 +2198,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     });
     // 面板可见时隐藏悬浮按钮
     const fabObs = new MutationObserver(() => {
-      if (panel.style.display === 'none') {showQCFab();}
-      else {hideQCFab();}
+      if (panel.style.display === 'none') {
+        // 8.5.82: 仅「用户点关闭」且仍在质控页时收起成 FAB——
+        // probe 离开质控页隐藏面板也会触发本回调，原逻辑会让 QC 按钮漂浮在所有页面上
+        if (qcPanelClosed && isQCDataInputPage()) {showQCFab();}
+      } else {hideQCFab();}
     });
     fabObs.observe(panel, { attributes: true, attributeFilter: ['style'] });
     if (!_qcObservers) {_qcObservers = [];}
@@ -2331,6 +2380,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         if (left > 0) {setTimeout(() => wait(left - 1), 300);}
         return;
       }
+      // 8.5.82: 幂等守卫——probe 每秒可能开出多条 wait 链（datagrid 初始化 >1s 时必现），
+      // 每条链 ready 后都会执行一次绑定，doc 级监听/resize/dataDiv observer 成倍叠加
+      if (qcInputInited) {return;}
       qcInputInited = true;
       qcCreatePanel();
       qcBindPageEvents();
@@ -2345,6 +2397,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const probe = () => {
       const isQC = isQCDataInputPage();
       const panel = document.getElementById('lis-qc-panel');
+      const fabEl = document.getElementById('lis-qc-fab'); // 8.5.82: FAB 显隐与页面同步
       if (isQC && !qcInputInited && !qcPanelClosed) {initQCInputEnhance();}
       else if (qcInputInited && panel) {
         if (isQC && !qcPanelClosed) {
@@ -2352,8 +2405,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           qcPlacePanel();
         } else if (!isQC) {
           panel.style.display = 'none';
+          if (fabEl) {fabEl.style.display = 'none';} // 8.5.82: 离开质控页收起 FAB，防全页漂浮
         }
       }
+      // 8.5.82: 用户关闭过面板、但回到了质控页 → 重新显示 FAB 入口
+      if (isQC && qcPanelClosed && fabEl && fabEl.style.display === 'none') {fabEl.style.display = 'flex';}
     };
     probe();
     qcProbeTimer = setInterval(probe, 1000);
@@ -2370,6 +2426,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let prPage = 1; // 当前页码（从 1 开始）
   let prDatePickerCleanup = null;
   let prLastDetailFailures = 0;
+  let prDataPartial = false; // 8.5.82: 数据不完整标记（用户中途取消/触发行数上界），导出前必须确认
+  let prLastQueryRange = null; // 8.5.82: 本次查询实际使用的日期范围快照（导出文件名用，防止查询后改日期框造成名实不符）
+  const PR_MAX_RESULT_ROWS = 200000; // 8.5.82: 结果行数硬顶——「近一年」全组查询无上界时内存可失控
   const prPageSize = 100; // 每页行数
   const _prDetailCache = new Map(); // 详情结果 LRU 缓存
   const _prDetailInflight = new Map(); // 正在读取的明细请求，防止重复点击重复请求
@@ -2419,7 +2478,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       prAbortCtrl.abort();
       prAbortCtrl = null;
     }
-    prSetStatus('已取消查询。', 'info');
+    // 8.5.82: 中途取消 → prData 是截断的部分数据，标记不完整（导出前弹确认）
+    if (prData.length) {
+      prDataPartial = true;
+      prSetStatus('已取消查询，当前结果不完整（导出前会提示确认）。', 'warning');
+    } else {
+      prSetStatus('已取消查询。', 'info');
+    }
     prSetBusy(false);
   }
 
@@ -3521,6 +3586,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (jumpInput)
     {jumpInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
+        // 8.5.82: 阻止冒泡——面板级 Enter 监听会把它当「重新查询」，跳页的同时清空刚查出的结果
+        e.stopPropagation();
         const v = parseInt(jumpInput.value, 10);
         if (!isNaN(v) && v >= 1 && v <= totalPages) {
           prPage = v;
@@ -3531,7 +3598,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   function prCsvCell(value) {
-    return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"';
+    let s = String(value == null ? '' : value);
+    // 8.5.82: CSV 公式注入防护——= + @ 或制表符开头的单元格在 Excel 打开时会被当公式执行
+    //（纯数字形态的负值如 -1.3 保持原样，仅对 -2+cmd 之类非纯数字的 - 开头加防）
+    if (/^[=+\t\r@]/.test(s) || (/^-/.test(s) && !/^-?[\d.,\s]+$/.test(s))) {
+      s = "'" + s;
+    }
+    return '"' + s.replace(/"/g, '""') + '"';
   }
 
   function prExportCSV() {
@@ -3539,10 +3612,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       showToast('没有可导出的结果', 'warning');
       return;
     }
-    if (prLastDetailFailures > 0) {
-      const ok = window.confirm(
-        `本次查询有 ${prLastDetailFailures} 个标本明细读取失败，导出的结果可能不完整。仍然导出吗？`
-      );
+    if (prLastDetailFailures > 0 || prDataPartial || prLastWorkListHadFailures) {
+      // 8.5.82: 取消/行数截断/工作组列表失败同样计入完整性确认（此前只查明细失败）
+      const reasons = [];
+      if (prLastDetailFailures > 0) {reasons.push(`${prLastDetailFailures} 个标本明细读取失败`);}
+      if (prDataPartial) {reasons.push('查询被中途取消或已达行数上界');}
+      if (prLastWorkListHadFailures) {reasons.push('部分工作组列表查询失败');}
+      const ok = window.confirm(`本次结果可能不完整：${reasons.join('；')}。仍然导出吗？`);
       if (!ok) {return;}
     }
     // 金额：报告费用=报告头总价（按标本去重汇总）；医嘱费用=组合价；项目费用=单项价（本院常为空）
@@ -3606,13 +3682,18 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       r.itemPrice || '',
       r.feeDetail || ''
     ]);
-    const csv =
-      '\uFEFF' + headers.map(prCsvCell).join(',') + '\r\n' + rows.map(row => row.map(prCsvCell).join(',')).join('\r\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    // 8.5.82: 分块拼接 Blob——此前 map().join() 一次性拼整串，「近一年」量级峰值可达数百 MB
+    const csvParts = ['\uFEFF' + headers.map(prCsvCell).join(',') + '\r\n'];
+    for (const row of rows) {
+      csvParts.push(row.map(prCsvCell).join(','));
+      csvParts.push('\r\n');
+    }
+    const blob = new Blob(csvParts, { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const f = prGetFilters();
+    // 8.5.82: 文件名用本次查询的日期快照——此前取实时输入框，查询后改日期会造成名实不符
+    const f = prLastQueryRange || prGetFilters();
     a.download = `病人结果_${f.start}_${f.end}.csv`;
     document.body.appendChild(a);
     a.click();
@@ -3887,6 +3968,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const signal = prAbortCtrl.signal;
     prData = [];
     prLastDetailFailures = 0;
+    prDataPartial = false; // 8.5.82
+    prLastQueryRange = { start: filters.start, end: filters.end }; // 8.5.82: 查询日期快照（导出文件名用）
     prRenderTable([]);
     try {
       /* 阶段1：并行加载标本列表 */
@@ -3964,6 +4047,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
 
       if (signal.aborted || querySeq !== prQuerySeq) {return;}
+      // 8.5.82: 结果行数硬顶——超过后截断并标记不完整，防止「近一年」全组查询内存失控
+      if (resultRows.length > PR_MAX_RESULT_ROWS) {
+        resultRows.length = PR_MAX_RESULT_ROWS;
+        prDataPartial = true;
+        showToast(`结果已达 ${PR_MAX_RESULT_ROWS} 行上界，已截断。请缩小日期/筛选范围获取完整数据`, 'warning');
+      }
       prData = resultRows;
       prLastDetailFailures = detailFailures;
       prPage = 1;
@@ -4508,9 +4597,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return [tc.Code, tc.Synonym, tc.LName].map(qeNormName).filter(Boolean);
   }
 
+  const _QE_ABBR_LOWER = {}; // 8.5.82: 组id→小写key查表缓存（LIS 返回大小写会漂，NA/na/Na 应同命）
   function qeAbbrHit(group, proj, tc) {
-    const groupAbbr = QE_LIS_ABBR[group.id] || {};
-    return qeTcKeys(tc).some(k => groupAbbr[k] === proj.code);
+    let tbl = _QE_ABBR_LOWER[group.id];
+    if (!tbl) {
+      tbl = {};
+      const src = QE_LIS_ABBR[group.id] || {};
+      Object.keys(src).forEach(k => {tbl[k.toLowerCase()] = src[k];});
+      _QE_ABBR_LOWER[group.id] = tbl;
+    }
+    const code = String(proj.code || '').toLowerCase();
+    return qeTcKeys(tc).some(k => tbl[k.toLowerCase()] === code);
   }
 
   // 质控物名称关键词 → 限制匹配范围（仪器+缩写命中时可跳过）
@@ -4573,10 +4670,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const code = qeNormName(tc.Code);
     const synonym = qeNormName(tc.Synonym);
     const cname = qeNormName(tc.CName);
+    let allowLoose = true;
     if (proj.lisName) {
       if (cname === proj.lisName) {return 1000;}
       if (qeLooseMatch(cname, proj.lisName)) {return 100 + Math.max(cname.length, proj.lisName.length);}
-      return -1;
+      // 8.5.82: lisName 失配不再直接判死（return -1 会让 QE_ALIASES 别名永远不可达——
+      // CName 是 lisName 的非包含式简称时映射失败）。失配后只允许「精确类」兜底（缩写/别名精确命中），
+      // 不放开模糊匹配，避免 lisName 的限定意图被模糊命中破坏
+      allowLoose = false;
     }
     if (!qeMaterialMatchesGroup(group, tc, proj, machineName)) {return -1;}
     const matName = qeNormName(tc.MaterialName);
@@ -4601,14 +4702,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
     }
     if (bestAliasExact) {return 800 + bestAliasExact;}
-    // 模糊类（低分）：按匹配串长度细分，越长（越具体）分越高
+    // 模糊类（低分）：按匹配串长度细分，越长（越具体）分越高（lisName 失配的项目不走模糊）
     let bestLoose = 0;
-    if (proj.name && qeLooseMatch(cnL, pnL) && proj.name.length > bestLoose) {bestLoose = proj.name.length;}
-    if (proj.name && qeLooseMatch(mnL, pnL) && proj.name.length > bestLoose) {bestLoose = proj.name.length;}
-    for (const alias of aliases) {
-      const aL = alias.toLowerCase();
-      if (qeLooseMatch(cnL, aL) && alias.length > bestLoose) {bestLoose = alias.length;}
-      if (qeLooseMatch(mnL, aL) && alias.length > bestLoose) {bestLoose = alias.length;}
+    if (allowLoose && proj.name && qeLooseMatch(cnL, pnL) && proj.name.length > bestLoose) {bestLoose = proj.name.length;}
+    if (allowLoose && proj.name && qeLooseMatch(mnL, pnL) && proj.name.length > bestLoose) {bestLoose = proj.name.length;}
+    if (allowLoose) {
+      for (const alias of aliases) {
+        const aL = alias.toLowerCase();
+        if (qeLooseMatch(cnL, aL) && alias.length > bestLoose) {bestLoose = alias.length;}
+        if (qeLooseMatch(mnL, aL) && alias.length > bestLoose) {bestLoose = alias.length;}
+      }
     }
     if (bestLoose) {return 100 + bestLoose;}
     // abbrMatch 兜底（大小写不敏感精确，理论上已被上面精确类覆盖，保留以防遗漏）
@@ -4760,7 +4863,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   // 通过 API 查询某项目各浓度的质控结果（对齐 DataInputNew.QueryData）
-  async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate) {
+  let _qeLevelFailures = []; // 8.5.82: 本轮导出中拉取失败的水平（项目名+水平号），导出完成时统一提示，不再静默丢数据
+  async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate, projName) {
     const api = qeQCDataApiUrl();
     const levels = [];
     try {
@@ -4777,7 +4881,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         '&MaterialCode=' +
         encodeURIComponent(matDR || '') +
         '&BatchCode=';
-      const leaveData = await fetchJ(leaveUrl, 15000);
+      // 8.5.82: 改用重试（超时是瞬时故障）——此前一次超时该水平整月数据就静默缺失
+      const leaveData = await fetchJRetry(leaveUrl, 15000, null, 2);
       const leaveRows = Array.isArray(leaveData) ? leaveData : (leaveData && leaveData.rows) || [];
       leaveRows.forEach(r => {
         if (r.LevelNo != null && r.LevelNo !== '') {
@@ -4808,7 +4913,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           '&QcRule=&MatDR=' +
           encodeURIComponent(matDR || '') +
           '&BatchCode=';
-        const data = await fetchJ(url, 25000);
+        // 8.5.82: 每水平重试 2 次——单水平失败会让 Excel 少一整水平的数据
+        const data = await fetchJRetry(url, 25000, null, 2);
         const rows = Array.isArray(data) ? data : (data && data.rows) || [];
         rows.forEach(r => {
           const levelNo = r.LevelNo || lv.levelNo;
@@ -4827,6 +4933,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         });
       } catch (e) {
         dbg('[LIS-QE] QueryTestResultData L' + lv.levelNo + ' failed:', e.message);
+        // 8.5.82: 失败登记（导出结束统一提示），不再只写调试日志让文件静默缺数据
+        _qeLevelFailures.push((projName || testCodeDR) + ' L' + lv.levelNo);
       }
     }
     return allRows;
@@ -5037,7 +5145,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       bestName = map.materialName || '',
       bestCount = 0;
     for (const c of matCandidates) {
-      const rows = await qeApiQCData(map.machineDR, map.testCodeDR, c.matDR, startDate, endDate);
+      const rows = await qeApiQCData(map.machineDR, map.testCodeDR, c.matDR, startDate, endDate, proj.name);
       const cnt = qeCountMonthQCRows(rows, month, year);
       if (cnt > bestCount) {
         bestCount = cnt;
@@ -5069,10 +5177,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (statusCb) {statusCb('凝血组：尝试质控物补查...', 'info');}
 
     const matDRs = ['167', '169', '151', '98'];
+    const tcByRowID = {}; // 8.5.82: RowID→CName 实测表，供硬编码兜底核对
     for (const matDR of matDRs) {
       const testCodes = await qeApiTestCodes(coagMach.id, startDate, endDate, matDR);
       for (const tc of testCodes) {
         const rowID = String(tc.RowID || '');
+        if (rowID) {tcByRowID[rowID] = qeNormName(tc.CName);}
         const mat = String(tc.MatDR || matDR || '');
         const cname = qeNormName(tc.CName);
         // 与主循环一致：每个 tc 只分配给匹配分最高的 proj
@@ -5111,6 +5221,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       if (mappings[h.code]) {return;}
       const proj = coagGroup.projects.find(p => p.code === h.code);
       if (!proj) {return;}
+      // 8.5.82: 有实测数据时校验硬编码 RowID 实际指向的项目名——LIS 重建库后 RowID 会漂移，
+      // 拿着正确项目名装错误数据不如不映射（不匹配则跳过，走「未映射」告警）
+      const actualName = tcByRowID[h.testCodeDR];
+      if (actualName !== undefined && actualName !== '' && !h.names.some(n => actualName.includes(n) || n.includes(actualName))) {
+        dbg('[LIS-QE] 硬编码映射校验失败: code', h.code, 'RowID', h.testCodeDR, '实际指向「' + actualName + '」，跳过');
+        if (statusCb) {statusCb(`凝血组：硬编码 DR ${h.testCodeDR} 与实际项目「${actualName}」不符，已跳过`, 'error');}
+        return;
+      }
       mappings[h.code] = {
         machineDR: coagMach.id,
         machineName: coagMach.text,
@@ -6055,39 +6173,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       return;
     }
 
-    // 保存配置
-    qeSaveConfig(cfg);
-
-    let mappings = qeLoadMappings();
-    // 映射逻辑版本不符(或缓存为空)时自动重新检测，确保用最新的 qeMatchScore 匹配，
-    // 避免旧缓存里错误的 testCodeDR(如 FT3/TT3 指向同一条)被复用导致导出数据错乱
-    if (!qeMappingCount(mappings) || !mappings._meta || mappings._meta.logicVersion !== QE_MAP_LOGIC_VERSION) {
-      qeSetStatus('质控项目映射已更新，正在重新检测（仅需一次）...', 'info');
-      try {
-        mappings = await qeDetectMappings(qeSetStatus);
-        qeSaveMappings(mappings);
-        qeShowMappingInfo(mappings);
-      } catch (e) {
-        qeSetStatus('重新检测映射失败: ' + e.message + '（可手动点"检测映射"）', 'error');
-        return;
-      }
-      if (!qeMappingCount(mappings)) {
-        qeSetStatus('未检测到任何质控项目映射，请检查仪器配置后点"检测映射"。', 'error');
-        return;
-      }
-    }
-    const mapMeta = mappings._meta;
-    if (mapMeta && cfg._year && cfg._month && (mapMeta.year !== cfg._year || mapMeta.month !== cfg._month)) {
-      qeSetStatus(
-        `⚠️ 映射为 ${mapMeta.year}-${String(mapMeta.month).padStart(2, '0')} 月检测，导出 ${cfg._year}-${String(cfg._month).padStart(2, '0')} 月；血常规/尿常规会自动切换有数据的质控物，其他组若当月项目编码有变可能导出空数据，建议先点「检测映射」`,
-        'error'
-      );
-    }
-
+    // 8.5.82: 守卫与按钮禁用前移到任何 await 之前——此前「重新检测映射」的长 await 窗口内
+    // 再次点击可并发启动第二路导出、检测按钮也未禁用；先结束的一方 finally 复位守卫后守卫彻底失效
     qeExporting = true;
     qeAbortFlag = false;
-    qeLastExportFiles = [];
-    qeUpdateZipButton();
+    _qeLevelFailures = []; // 8.5.82
     const exportBtn = document.getElementById('lis-qe-export');
     const cancelBtn = document.getElementById('lis-qe-cancel');
     const detectBtn = document.getElementById('lis-qe-detect');
@@ -6096,6 +6186,37 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (detectBtn) {detectBtn.disabled = true;}
 
     try {
+      // 保存配置
+      qeSaveConfig(cfg);
+
+      let mappings = qeLoadMappings();
+      // 映射逻辑版本不符(或缓存为空)时自动重新检测，确保用最新的 qeMatchScore 匹配，
+      // 避免旧缓存里错误的 testCodeDR(如 FT3/TT3 指向同一条)被复用导致导出数据错乱
+      if (!qeMappingCount(mappings) || !mappings._meta || mappings._meta.logicVersion !== QE_MAP_LOGIC_VERSION) {
+        qeSetStatus('质控项目映射已更新，正在重新检测（仅需一次）...', 'info');
+        try {
+          mappings = await qeDetectMappings(qeSetStatus);
+          qeSaveMappings(mappings);
+          qeShowMappingInfo(mappings);
+        } catch (e) {
+          qeSetStatus('重新检测映射失败: ' + e.message + '（可手动点"检测映射"）', 'error');
+          return;
+        }
+        if (!qeMappingCount(mappings)) {
+          qeSetStatus('未检测到任何质控项目映射，请检查仪器配置后点"检测映射"。', 'error');
+          return;
+        }
+      }
+      const mapMeta = mappings._meta;
+      if (mapMeta && cfg._year && cfg._month && (mapMeta.year !== cfg._year || mapMeta.month !== cfg._month)) {
+        qeSetStatus(
+          `⚠️ 映射为 ${mapMeta.year}-${String(mapMeta.month).padStart(2, '0')} 月检测，导出 ${cfg._year}-${String(cfg._month).padStart(2, '0')} 月；血常规/尿常规会自动切换有数据的质控物，其他组若当月项目编码有变可能导出空数据，建议先点「检测映射」`,
+          'error'
+        );
+      }
+
+      qeLastExportFiles = [];
+      qeUpdateZipButton();
       // SheetJS：@require 可能因 serve 未启动而失败，导出前再从本机补拉
       qeSetStatus('正在加载 Excel 组件（本机 serve）…', 'info');
       if (!(await qeEnsureXlsx())) {
@@ -6147,7 +6268,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
       if (!qeAbortFlag) {
         const zipHint = results.length ? ' 可点右上角「打包下载 ZIP」。' : '';
-        qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。${zipHint}`, 'ok');
+        // 8.5.82: 拉取失败的水平统一提示——此前单水平超时整月数据静默缺失，文件却显示「导出完成」
+        const failHint = _qeLevelFailures.length
+          ? ` ⚠️ 有 ${_qeLevelFailures.length} 个项目水平拉取失败（${_qeLevelFailures.slice(0, 5).join('、')}${_qeLevelFailures.length > 5 ? ' 等' : ''}），对应数据可能不完整，建议重导`
+          : '';
+        qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。${failHint}${zipHint}`, _qeLevelFailures.length ? 'error' : 'ok');
       } else {
         qeSetStatus('导出已停止。', 'info');
       }
@@ -6397,10 +6522,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return true;
   }
 
+  const DETAIL_LRU_TTL = 5 * 60 * 1000; // 8.5.82: 详情缓存有效期——标本结果被仪器重传/复检修正后，重开详情不能再看旧 HTML
   function detailLRUGet(key) {
     if (_detailLRU.has(key)) {
       const v = _detailLRU.get(key);
       _detailLRU.delete(key);
+      // 8.5.82: 过期即弃（此前 ts 写了从不校验，会话级永久有效）
+      if (v && v.ts && Date.now() - v.ts > DETAIL_LRU_TTL) {
+        return null;
+      }
       _detailLRU.set(key, v);
       return v;
     }
@@ -6581,6 +6711,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return wsData.find(r => String(r.ReportDR) === String(item.reportDR)) || null;
   }
 
+  let _queueLockToken = ''; // 8.5.82: 本队列实例的锁 token——refresh/release 必须校验，防同标签旧循环误续期/误删新循环的锁
   function acquireQueueLock() {
     try {
       const raw = localStorage.getItem(K.auditQueueLock);
@@ -6591,7 +6722,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const token = Math.random().toString(36).slice(2);
       localStorage.setItem(K.auditQueueLock, JSON.stringify({ owner: _tabId, token, ts: Date.now() }));
       const check = JSON.parse(localStorage.getItem(K.auditQueueLock) || '{}');
-      return check.owner === _tabId && check.token === token;
+      if (check.owner === _tabId && check.token === token) {_queueLockToken = token; return true;}
+      return false;
     } catch (e) {
       // 无法可靠读写锁时宁可不自动审核，避免双标签页并发审核
       return false;
@@ -6600,7 +6732,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   function refreshQueueLock() {
     try {
-      localStorage.setItem(K.auditQueueLock, JSON.stringify({ owner: _tabId, ts: Date.now() }));
+      // 8.5.82: 只续期自己 token 的锁——同标签旧循环（已被代际强停但仍卡在 CA 等待）不得覆盖新循环的锁
+      const lock = JSON.parse(localStorage.getItem(K.auditQueueLock) || 'null');
+      if (lock && lock.owner === _tabId && (lock.token === undefined || lock.token === _queueLockToken)) {
+        lock.ts = Date.now();
+        localStorage.setItem(K.auditQueueLock, JSON.stringify(lock));
+      }
     } catch (e) {}
   }
 
@@ -6609,7 +6746,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const raw = localStorage.getItem(K.auditQueueLock);
       if (!raw) {return;}
       const lock = JSON.parse(raw);
-      if (lock.owner === _tabId) {localStorage.removeItem(K.auditQueueLock);}
+      // 8.5.82: 校验 token——旧循环的 finally 不得删掉新循环刚获得的锁（token 缺失视为旧版锁，owner 匹配即删）
+      if (lock.owner === _tabId && (lock.token === undefined || lock.token === _queueLockToken)) {localStorage.removeItem(K.auditQueueLock);}
     } catch (e) {}
   }
 
@@ -6698,7 +6836,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           machines
             .filter(m => m.RowID)
             .map(async m => {
-              const result = { rows: [], pending: [], collected: [], machine: m };
+              const result = { rows: [], pending: [], collected: [], machine: m, ok: true };
               try {
                 result.rows = await loadWL(m.RowID, ss);
                 // 8.5.31: 待排 + 采集 并行拉取（同一接口不同 P1），避免串行多一次等待
@@ -6706,7 +6844,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                   loadPendingForMachine(m.RowID, ss).catch(() => []),
                   loadCollectedForMachine(m.RowID, ss).catch(() => [])
                 ]);
-              } catch (e) {}
+              } catch (e) {
+                // 8.5.82: 单台仪器加载失败不再静默吞掉——汇总进健康状态，防该仪器标本从工作台悄悄消失
+                result.ok = false;
+              }
               return result;
             })
         );
@@ -6740,17 +6881,24 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           wgMachines.push({ ...m, _wg: w.dr, _wgn: w.name, _wgc: w.color, _wgi: w.icon });
         }
         // machinesOk：机器列表是否成功加载（瞬断返回空时不清理该组勾选，等下一轮再验）
-        return { data: wgData, machines: wgMachines, wg: w.dr, machinesOk: machines.length > 0 };
+        // 8.5.82: failedMachines 汇总本组加载失败的仪器，供 applyResults 计入数据健康
+        const failedMachines = machineResults.filter(mr => !mr.ok).map(mr => mr.machine);
+        return { data: wgData, machines: wgMachines, wg: w.dr, machinesOk: machines.length > 0, failedMachines };
       }
 
       function applyResults(results, partial) {
         const allData = [];
         const allMachines = [];
         const loadedWGs = new Set();
+        const failedMachineNames = [];
         for (const r of results) {
           allData.push(...r.data);
           allMachines.push(...r.machines);
           if (r.machinesOk && r.wg) {loadedWGs.add(String(r.wg));}
+          // 8.5.82: 组级机器列表失败（machinesOk=false）或单台仪器失败——汇总进健康状态：
+          // 宁可让自动审核暂停，不可让该组/该仪器标本静默消失（漏看比慢更危险）
+          if (!r.machinesOk && r.wg && !partial) {failedMachineNames.push((WG_MAP[String(r.wg)] || {}).name + '组机器列表');}
+          (r.failedMachines || []).forEach(m => failedMachineNames.push(m.CName || m.Name || String(m.RowID)));
         }
         // 8.5.40: 空数据保护扩展到 partial 阶段——长时间闲置/会话过期/网络瞬断时，
         // 阶段1(partial)返回空会直接把 wsData 清空、统计全变 0；阶段2 再空时 wsData 已为空
@@ -6771,11 +6919,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 8.5.42: 跨天后更新数据日期（无论清空重载还是正常更新，都归到新一天）
         if (dateChanged || allData.length > 0) {_wsLoadedDate = today();}
         wsData = allData;
-        _wsDataHealth.partial = !!partial;
+        // 8.5.82: 全量阶段存在失败仪器/组 → partial 置位（自动审核闸门暂停，防漏审）且不刷新 lastFullSuccessAt
+        const _machinesUnhealthy = !partial && failedMachineNames.length > 0;
+        _wsDataHealth.partial = !!partial || _machinesUnhealthy;
         if (!partial) {
           _wsDataHealth.failed = false;
-          _wsDataHealth.lastFullSuccessAt = Date.now();
+          if (!_machinesUnhealthy) {_wsDataHealth.lastFullSuccessAt = Date.now();}
         }
+        if (_machinesUnhealthy) {dbg('部分仪器/工作组加载失败:', failedMachineNames.join(', '));}
         // 8.5.33: 每次数据刷新后自动取消已核收标本的忽略（进入未审核/审核 → 恢复正常计数）
         wsIgnoreAutoRelease(allData);
         wsMachines = allMachines;
@@ -6791,7 +6942,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         }
         calcMachineCounts();
         const label = partial ? '优先' : '';
-        if (qi) {qi.textContent = `${wsData.length} 条${label} | ${new Date().toLocaleTimeString()}`;}
+        const warnTag = _machinesUnhealthy ? `⚠${failedMachineNames.length}台加载失败 ` : '';
+        if (qi) {qi.textContent = `${warnTag}${wsData.length} 条${label} | ${new Date().toLocaleTimeString()}`;}
         invalidateCaches({ raw: true, detail: true });
         renderWSTabs();
         renderWSCategoryBar();
@@ -8285,7 +8437,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
     }
     const counts = bar.querySelector('.cat-counts');
-    if (counts) {counts.textContent = `${fd.length} / ${totalCount} 条`;}
+    // 8.5.82: 「全部」视图 fd 含忽略行而 totalCount 已排除——有忽略行时显示「7 / 5 条」倒挂，同口径排除
+    if (counts) {counts.textContent = `${fd.filter(r => !isWSIgnored(r.ReportDR)).length} / ${totalCount} 条`;}
   }
 
   // 工作台「正常可审」一键批审入口（按钮 / F4 共用）
@@ -8600,6 +8753,9 @@ window.addEventListener('keydown',function(e){
       // F4 在详情面板内已取消（8.5.1），只保留 Enter + 面板「审核」按钮
       if (isDetailPanelVisible() && currentDetailSpecimen) {
         if (e.key === 'Enter' && !e.shiftKey) {
+          // 8.5.82: 焦点在任何可编辑元素时放行原生行为（含原生 LIS 报告页 iframe 的输入框/编辑单元格）——
+          // 否则用户在原生页编辑结果/备注按回车提交输入，会被抢注为详情面板的真实审核
+          if (isEditableEventTarget(e)) {return;}
           // 焦点在详情面板内的按钮上时，放行按钮默认行为（Enter=点「关闭」/「审核」），不抢为审核
           const inPanelBtn = e.target && e.target.closest ? e.target.closest('#lis-detail-panel button') : null;
           if (inPanelBtn) {return;}
@@ -8911,9 +9067,12 @@ window.addEventListener('keydown',function(e){
     if (!counts) {
       // 8.5.33: 忽略的标本不计入 footer 总数（可见行仍显示灰显，但统计数字排除）
       // 8.5.34: visible 同样排除忽略行，避免「可见 5 / 总 3条」倒挂
+      // 8.5.82: total 同口径过工作组/仪器筛选——此前无参调用用全院总数，会覆盖
+      // renderWSCategoryBar 传入的筛选范围总数，出现「footer 5/438 vs 分类栏 5/12」互相矛盾
+      const _fdNoIgn = filteredData().filter(r => !isWSIgnored(r.ReportDR)).length;
       counts = {
-        visible: filteredData().filter(r => !isWSIgnored(r.ReportDR)).length,
-        total: wsData.filter(r => !isWSIgnored(r.ReportDR)).length
+        visible: _fdNoIgn,
+        total: _fdNoIgn
       };
     }
     const groupName = wsActiveWG ? (WG_MAP[wsActiveWG] || {}).name || wsActiveWG : '全部工作组';
@@ -9678,7 +9837,7 @@ window.addEventListener('keydown',function(e){
     }
   }
 
-  async function executeNativeAudit(iframeWin, specimen, options = {}) {
+  async function _executeNativeAuditImpl(iframeWin, specimen, options = {}) {
     const fast = options.fast !== false;
     const reportDR = specimen.ReportDR;
     // 8.5.53: 审核前已是 status 4（复检/复审标本）——静态 4 匹配不可信，需等状态变 3 或动态信号
@@ -9759,8 +9918,17 @@ window.addEventListener('keydown',function(e){
     }
     // 最终返回前也关闭可能残留的原生弹窗
     if (result) {closeNativeAuditSuccessMessage(iframeWin);}
-    _auditingPreStatus4 = false; // 8.5.53: 审核结束重置
     return result;
+  }
+  // 8.5.82: 包装层——任何路径（提前 return / 异常）都复位 preStatus4 共享标记。
+  // 原实现只有最后一条路径复位，复检标本审核成功的两条 early-return 会泄漏 true，
+  // 把下一条标本的静态 status-4 成功匹配误拒（触发多余重试/误报）
+  async function executeNativeAudit(iframeWin, specimen, options = {}) {
+    try {
+      return await _executeNativeAuditImpl(iframeWin, specimen, options);
+    } finally {
+      _auditingPreStatus4 = false; // 8.5.53: 审核结束重置
+    }
   }
 
   // 关闭原生 LIS 审核成功后的弹窗（避免用户切回时看到多个弹窗）
@@ -9792,7 +9960,14 @@ window.addEventListener('keydown',function(e){
     } catch (e) {}
   }
 
-  async function auditAbnormalSpecimen(specimen) {
+  async function auditAbnormalSpecimen(specimen, options = {}) {
+    // 8.5.82: quiet=true（自动审核夜间调用）——静默全部 toast（含 error），结果走返回值+日志；
+    // 手动路径不传 options，行为不变。此前调用方传 {quiet:true} 但函数根本不收这个参数
+    const _quiet = !!options.quiet;
+    const _toast = (msg, type) => {
+      if (_quiet) {return;}
+      showToast(msg, type);
+    };
     // 8.5.8: 消费一次跨组详情续审标记（无论成功失败都只触发一次，避免失败后残留误开详情）
     const _resumeDetail = _resumeDetailAfterAudit;
     _resumeDetailAfterAudit = false;
@@ -9803,7 +9978,13 @@ window.addEventListener('keydown',function(e){
       return;
     }
     if (_auditInProgress) {
-      showToast('正在批量审核中，请稍候', 'warning');
+      _toast('正在批量审核中，请稍候', 'warning');
+      return;
+    }
+    // 8.5.82: 与 _auditFromDetailPanel 的互检对称——详情面板审核不持有 _auditInProgress，
+    // 不查此项会出现两个审核流并发驱动原生页（选行互相覆盖）
+    if (_detailAuditInProgress) {
+      _toast('正在详情面板审核中，请稍候', 'warning');
       return;
     }
     if (!specimen) {
@@ -9814,7 +9995,7 @@ window.addEventListener('keydown',function(e){
       }
     }
     if (!specimen) {
-      showToast('没有可审核的待审标本', 'warning');
+      _toast('没有可审核的待审标本', 'warning');
       return;
     }
 
@@ -9823,13 +10004,13 @@ window.addEventListener('keydown',function(e){
     const _bucket = getWSAuditBucket(specimen);
     const _preClassCheck = validateAuditClassification(specimen.ReportDR, _bucket === 'normal' ? 'normal' : 'abnormal');
     if (!_preClassCheck.ok) {
-      showToast(_preClassCheck.msg, _preClassCheck.msg.indexOf('危急') !== -1 ? 'error' : 'warning');
+      _toast(_preClassCheck.msg, _preClassCheck.msg.indexOf('危急') !== -1 ? 'error' : 'warning');
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
       return;
     }
     const _preComplete = String(specimen.IsComplete || '');
     if (_preComplete !== '1') {
-      showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
+      _toast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
       return;
     }
@@ -9838,7 +10019,7 @@ window.addEventListener('keydown',function(e){
     // 危急值由下方 validateAuditClassification 的 CRITICAL 红线拦截
     // status 3（一审完成）仍拦截（已审核，不在待审视图）
     if (_preStatus === '3') {
-      showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
+      _toast(`跳过: ${specimen.PatName} 已审核`, 'warning');
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
       return;
     }
@@ -9859,7 +10040,7 @@ window.addEventListener('keydown',function(e){
       _auditSafetyTimer = setTimeout(() => {
         if (_abnormalAuditInProgress) {
           dbg('异常审核安全超时：操作耗时超过 60 秒');
-          showToast('审核操作耗时较长，请耐心等待', 'warning');
+          _toast('审核操作耗时较长，请耐心等待', 'warning');
         }
       }, 60000);
       dbg('异常列表审核开始:', specimen.PatName);
@@ -9897,7 +10078,7 @@ window.addEventListener('keydown',function(e){
         iframeWin = getReportIframeWin() || (await ensureReportPageLoaded({ keepWS: true, fast: true }));
       }
       if (!iframeWin) {
-        showToast('报告页面加载失败', 'error');
+        _toast('报告页面加载失败', 'error');
         advanceAbnormalFocusAfterSkip(startIndex);
         return;
       }
@@ -9932,14 +10113,14 @@ window.addEventListener('keydown',function(e){
           spDR !== resolveCurrentWG()
         ) {
           const wgName = (WG_MAP[spDR] || {}).name || spDR;
-          showToast(`未找到标本/详情未加载，切换到${wgName}重试`, 'warning');
+          _toast(`未找到标本/详情未加载，切换到${wgName}重试`, 'warning');
           saveAbnormalTarget(specimen);
           _abnormalAuditQueued = false; // 切组续跑由 saveAbnormalTarget 机制处理，不用旧索引
           safeSwitchWG(spDR);
           return;
         }
         const msg = prep.reason === 'detail' ? '报告详情未加载完成' : '未在原生列表中找到该标本';
-        showToast(msg, prep.reason === 'detail' ? 'warning' : 'error');
+        _toast(msg, prep.reason === 'detail' ? 'warning' : 'error');
         advanceAbnormalFocusAfterSkip(startIndex);
         return;
       }
@@ -9948,7 +10129,7 @@ window.addEventListener('keydown',function(e){
       releaseNativeReportFocus();
       let auditResult = await executeNativeAudit(iframeWin, specimen, { keepWS: true, fast: true });
       if (auditResult === 'incomplete') {
-        showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
+        _toast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
         advanceAbnormalFocusAfterSkip(startIndex);
         return;
       }
@@ -9991,12 +10172,12 @@ window.addEventListener('keydown',function(e){
         }
       }
       if (!auditResult) {
-        showToast('未确认审核成功，已跳到下一条', 'warning');
+        _toast('未确认审核成功，已跳到下一条', 'warning');
         advanceAbnormalFocusAfterSkip(startIndex);
         return;
       }
       if (ft) {ft.textContent = `已审核: ${specimen.PatName || specimen.Labno || targetDR}`;}
-      showToast(`已审核: ${specimen.PatName || specimen.Labno || ''}`, 'success');
+      _toast(`已审核: ${specimen.PatName || specimen.Labno || ''}`, 'success');
       closeNativeAuditSuccessMessage(iframeWin);
       // 8.5.54: 复检标本审核成功 → 记录「曾复审」，供全部视图显示双标识
       if (String(specimen.Status || specimen.ReportStatus || '') === '4') {recheckDoneAdd(targetDR);}
@@ -10029,7 +10210,7 @@ window.addEventListener('keydown',function(e){
       trySwitchBackToOrigin();
     } catch (e) {
       dbg('审核失败:', e);
-      showToast('审核失败: ' + e.message, 'error');
+      _toast('审核失败: ' + e.message, 'error');
     } finally {
       clearTimeout(_auditSafetyTimer);
       clearAbnormalAuditingCard(specimen && specimen.ReportDR);
@@ -10111,7 +10292,7 @@ window.addEventListener('keydown',function(e){
     data.forEach((r, i) => {
       const ic = r.IsComplete;
       let icHTML = '';
-      if (ic === '2') {icHTML = `<span class="complete-partial">⚠️ 缺 ${r.NoResRows || '?'} 项</span>`;}
+      if (ic === '2') {icHTML = `<span class="complete-partial">⚠️ 缺 ${esc(r.NoResRows || '?')} 项</span>`;}
       else if (ic === '0') {icHTML = '<span class="complete-empty">❌ 无结果</span>';}
       else {icHTML = '<span style="color:#999">-</span>';}
 
@@ -10187,7 +10368,7 @@ window.addEventListener('keydown',function(e){
       const ic = r.IsComplete;
       let icHTML = '';
       if (ic === '1') {icHTML = '<span class="complete-star">⭐</span>';}
-      else if (ic === '2') {icHTML = `<span class="complete-partial">⚠️ -${r.NoResRows || '?'}</span>`;}
+      else if (ic === '2') {icHTML = `<span class="complete-partial">⚠️ -${esc(r.NoResRows || '?')}</span>`;}
       else if (ic === '0') {icHTML = '<span class="complete-empty">❌</span>';}
       else {icHTML = '<span style="color:#999">-</span>';}
       h += `<td>${icHTML}</td>`;
@@ -12018,6 +12199,8 @@ window.addEventListener('keydown',function(e){
       html += '</div>';
 
       // 患者信息（可折叠）
+      // 8.5.82: 头部文本先计算、待 isCurrentDetail 守卫通过后再写 DOM（防旧标本慢请求覆盖新标本头部）
+      let _extraText = null;
       if (labInfo.length > 0) {
         const info = labInfo[0];
         let timeDelta = '';
@@ -12031,11 +12214,7 @@ window.addEventListener('keydown',function(e){
           } catch (e) {}
         }
 
-        // 更新深色头部患者详情行
-        const extraEl = document.getElementById('lis-detail-extra');
-        if (extraEl) {
-          extraEl.textContent = buildDetailExtraText(info, specimen);
-        }
+        _extraText = buildDetailExtraText(info, specimen);
 
         // 异常警告（内联）
         if (critItems > 0) {
@@ -12083,6 +12262,10 @@ window.addEventListener('keydown',function(e){
       }
 
       if (!isCurrentDetail()) {return;}
+      if (_extraText !== null) {
+        const extraEl = document.getElementById('lis-detail-extra');
+        if (extraEl) {extraEl.textContent = _extraText;}
+      }
       body.innerHTML = html;
       const _dp = document.getElementById('lis-detail-panel');
       if (_dp) {
@@ -12553,7 +12736,7 @@ window.addEventListener('keydown',function(e){
     { key: '梅毒', members: ['梅毒', 'TPPA', 'TP-Ab', 'TRUST', 'RPR', '甲苯胺红'], triggerExcludes: [], excludes: [] },
     { key: '心肌', members: ['肌酸激酶', 'CK', '肌钙蛋白', 'cTn', '肌红蛋白', 'MYO', '乳酸脱氢酶', 'LDH', '羟丁酸', 'HBDH'], triggerExcludes: [], excludes: ['磷酸肌酸'] },
     { key: '甲功', members: ['促甲状腺', 'TSH', '游离T3', '游离T4', '总T3', '总T4', 'FT3', 'FT4', '甲状腺过氧化物酶', 'TPO', '甲状腺球蛋白抗体', 'TG-Ab', '甲状腺', 'T3', 'T4'], triggerExcludes: [], excludes: ['甲状旁腺', '降钙素', 'PTH'] },
-    { key: '肝功', members: ['谷丙', '谷草', '转氨酶', 'ALT', 'AST', '碱性磷酸酶', 'ALP', '转肽酶', 'GGT', '胆红素', '白蛋白', '球蛋白', '白球比', '总蛋白', '前白蛋白', '胆汁酸'], triggerExcludes: [], excludes: ['糖化白蛋白', '微量白蛋白', '尿白蛋白', '白蛋白(尿', '白蛋白（尿'] },
+    { key: '肝功', members: ['谷丙', '谷草', '转氨酶', 'ALT', 'AST', '碱性磷酸酶', 'ALP', '转肽酶', 'GGT', '胆红素', '白蛋白', '球蛋白', '白球比', '总蛋白', '前白蛋白', '胆汁酸'], triggerExcludes: ['糖化白蛋白', '微量白蛋白', '尿白蛋白', '白蛋白(尿', '白蛋白（尿'], excludes: ['糖化白蛋白', '微量白蛋白', '尿白蛋白', '白蛋白(尿', '白蛋白（尿'] },
     { key: '肾功', members: ['肌酐', '尿素', '尿酸', '胱抑素', 'eGFR', 'β2-微球蛋白', 'β2微球蛋白', '尿微量白蛋白', '微量白蛋白', '尿蛋白', '尿肌酐'], triggerExcludes: [], excludes: [] },
     { key: '电解质', members: ['钾', '钠', '氯', '钙', '镁', '磷', '二氧化碳', 'CO2'], triggerExcludes: [], excludes: ['碱性磷酸酶', '磷酸肌酸', '脑钠肽', '利钠肽', '碳酸'] },
     { key: '血脂', members: ['胆固醇', '甘油三酯', 'HDL', 'LDL', '低密度', '高密度', '载脂蛋白', '脂蛋白(a)', 'Lp(a)', '游离脂肪酸', 'Apo'], triggerExcludes: [], excludes: [] },
@@ -12673,14 +12856,17 @@ window.addEventListener('keydown',function(e){
     return [...new Set(cand)];
   }
 
-  async function histFetchReportItems(report) {
+  async function histFetchReportItems(report, sigParam) {
     const rdr = String(report.ReportDR || '');
     if (!rdr) { return { items: [], lab: {} }; }
     const cached = _histCacheGet(rdr);
     if (cached) { return cached; }
     const ssList = histCandidateSS(report);
-    const sig = histAbortCtrl && histAbortCtrl.signal;
+    // 8.5.82: 优先用调用方传入的本次 signal——模块级 histAbortCtrl 会被新一次 histLoad 重新赋值，
+    // 旧任务读模块变量会拿到新 ctrl 的活 signal，abort 形同虚设（继续打请求、拖慢内网 LIS）
+    const sig = sigParam || (histAbortCtrl && histAbortCtrl.signal);
     let data = null;
+    let anyOk = false; // 8.5.82: 是否至少一个 ss 请求成功（区分「全失败」与「确实无项目」）
     for (const ss of ssList) {
       const p = new URLSearchParams();
       p.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
@@ -12696,6 +12882,7 @@ window.addEventListener('keydown',function(e){
       try {
         // 8.5.34: 跨组盲试 ss 时超时 20s→8s，避免首次打开历史多/跨组时长时间卡顿
         data = await fetchJ(CSP + '?' + p.toString(), 8000, sig);
+        anyOk = true;
         let items = Array.isArray(data && data.ItemInfo) ? data.ItemInfo : [];
         if (!items.length && (report.Status || report.ReportStatus)) {
           p.set('P3', '');
@@ -12713,6 +12900,9 @@ window.addEventListener('keydown',function(e){
         dbg('患者历史 GetReportInfoAll 失败:', rdr, e.message);
       }
     }
+    // 8.5.82: 全部 ss 请求失败（网络/会话过期）不缓存——否则「拉不到」被当成「无项目」永久缓存，
+    // 本会话内该报告历史永远显示为空；返回 failed 标记供调试
+    if (!anyOk) { return { items: [], lab: {}, failed: true }; }
     const val = { items: [], lab: {} };
     _histCacheSet(rdr, val);
     return val;
@@ -12753,7 +12943,14 @@ window.addEventListener('keydown',function(e){
     const worker = async () => {
       while (idx < items.length) {
         const i = idx++;
-        try { results[i] = await fn(items[i], i); } catch (e) { results[i] = null; }
+        try {
+          results[i] = await fn(items[i], i);
+        } catch (e) {
+          results[i] = null;
+          // 8.5.82: 中止必须停下该 worker——此前吞掉 AbortError 继续跑完剩余任务，
+          // 快速切换标本/关闭浮层后旧任务仍把剩余报告逐个真实请求（每个最长 ss数×2×8s）
+          if (e && e.name === 'AbortError') {return;}
+        }
       }
     };
     const n = Math.max(1, Math.min(limit, items.length));
@@ -12811,19 +13008,20 @@ window.addEventListener('keydown',function(e){
         if (hit && !blocked) { firedKeys.add(f.key); }
       });
     });
-    // 命中的家族 → 收集关联匹配模式 与 排除模式
-    const relatedPats = [];
-    const relatedExcludes = [];
+    // 命中的家族 → 按家族逐个判定关联
+    // 8.5.82: 改为逐家族判定，不再全局并集 members/excludes——并集时某家族的 excludes 会
+    // 误伤其它已触发家族的正牌成员（生化全套同时触发肝功+电解质+肾功时，电解质的
+    // excludes['碱性磷酸酶'] 把肝功正牌成员 ALP 挡掉、肾功场景下微量白蛋白被肝功 excludes 吞掉）
+    const firedList = [];
     firedKeys.forEach(k => {
       const f = HIST_FAMILIES.find(x => x.key === k);
-      if (!f) { return; }
-      f.members.forEach(p => { if (!relatedPats.includes(p)) { relatedPats.push(p); } });
-      (f.excludes || []).forEach(p => { if (!relatedExcludes.includes(p)) { relatedExcludes.push(p); } });
+      if (f) { firedList.push(f); }
     });
     arr.forEach(grp => {
       const isCur = curKeys.has(grp.key);
       const txt = grp.name + ' ' + grp.syn;
-      const isRel = histTextMatch(txt, relatedPats) && !histTextMatch(txt, relatedExcludes);
+      // 关联 = 存在任一已触发家族：命中其 members 且不命中【该家族自己的】excludes
+      const isRel = !isCur && firedList.some(f => histTextMatch(txt, f.members) && !histTextMatch(txt, f.excludes || []));
       grp.tier = isCur ? 0 : isRel ? 1 : 2;
       grp.rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
     });
@@ -12841,6 +13039,7 @@ window.addEventListener('keydown',function(e){
     const seq = histLoadSeq;
     if (histAbortCtrl) { try { histAbortCtrl.abort(); } catch (e) {} }
     histAbortCtrl = new AbortController();
+    const _ctrl = histAbortCtrl; // 8.5.82: 本次加载的 ctrl 固定引用——pool 内请求一律用它的 signal，防读到新 ctrl 的活 signal
     histBusy = true;
     histDebug = { seq, list: '', listRows: 0, regNo: String(sp.RegNo || ''), perReport: [], perWg: null };
     histSetStatus('正在加载历次报告…', 'info');
@@ -12854,6 +13053,7 @@ window.addEventListener('keydown',function(e){
     try {
       const regNo = String(sp.RegNo || '');
       let reports = [];
+      let _wgDebug = null; // 8.5.82: perWg 调试数据延迟到 seq 校验后写入，防旧加载污染新加载的 histDebug
       if (regNo) {
         // 8.5.34: 缓存带时间戳，5 分钟内新核收的报告也能出现在历史里（同会话不失效）
         const cachedList = histReportListCache[regNo];
@@ -12870,7 +13070,7 @@ window.addEventListener('keydown',function(e){
                 encodeURIComponent(regNo) +
                 '&WorkGroupDR=' +
                 encodeURIComponent(w.dr);
-              const raw = await fetchJ(url, 15000, histAbortCtrl.signal);
+              const raw = await fetchJ(url, 15000, _ctrl.signal);
               const rows = Array.isArray(raw) ? raw : (raw && raw.rows) || [];
               rows.forEach(r => { r._histWG = w.dr; });
               perWg.push({ wg: w.name, dr: w.dr, count: rows.length });
@@ -12880,7 +13080,7 @@ window.addEventListener('keydown',function(e){
               perWg.push({ wg: w.name, dr: w.dr, count: -1, err: e.message });
             }
           }
-          histDebug.perWg = perWg;
+          _wgDebug = perWg;
           // 去重（同 ReportDR），并按日期倒序
           const seen = new Set();
           reports = reports.filter(r => {
@@ -12895,9 +13095,10 @@ window.addEventListener('keydown',function(e){
       } else {
         histDebug.list = 'RegNo 为空（手工录入/未建档），跳过历次报告查询';
       }
+      if (seq !== histLoadSeq) { return; }
+      if (_wgDebug) {histDebug.perWg = _wgDebug;}
       histDebug.listRows = reports.length;
       histReports = reports;
-      if (seq !== histLoadSeq) { return; }
 
       const cutoff = histDateCutoff(histFilter.days);
       const inRange = reports.filter(r => {
@@ -12921,7 +13122,7 @@ window.addEventListener('keydown',function(e){
       const results = await histPool(targets, 4, async rep => {
         const rdr = String(rep.ReportDR || '');
         try {
-          const val = await histFetchReportItems(rep);
+          const val = await histFetchReportItems(rep, _ctrl.signal);
           histDebug.perReport.push({ rdr, items: val.items.length, ok: true });
           return { report: rep, ...val };
         } catch (e) {
@@ -13574,6 +13775,9 @@ window.addEventListener('keydown',function(e){
 
   function fillNativeAndSubmit(user, pwd, wgDR) {
     try {
+      // 8.5.82: 先清旧 interval——面板 Enter 每按一次都会调本函数，旧 interval 句柄被覆盖但仍在跑，
+      // 多个 interval 各自 login() 会重复提交登录
+      if (_loginSubmitTimer) {clearInterval(_loginSubmitTimer); _loginSubmitTimer = null;}
       const userField = document.getElementById('txtUserCode');
       const pwdField = document.getElementById('txtPassword');
 
@@ -13801,6 +14005,26 @@ window.addEventListener('keydown',function(e){
     return !!(lockId && _auditAbortedLockId === lockId) || _auditAbortFlag;
   }
 
+  // 8.5.82: 持锁心跳——批审全程（含 CA 登录最长 90s / 账号切换浮层无限等待这些没有 item 级心跳的窗口）
+  // 每 15s 续期审核锁 + 队列锁。否则队列锁 45s TTL 在等待窗口内过期，他标签页判过期抢锁 → 双标签并发批审
+  let _auditLockHeartbeat = null;
+  let _auditLockHeartbeatId = 0;
+  function startAuditLockHeartbeat(lockId) {
+    stopAuditLockHeartbeat();
+    _auditLockHeartbeatId = lockId;
+    _auditLockHeartbeat = setInterval(() => {
+      if (!_auditInProgress) {stopAuditLockHeartbeat(); return;}
+      refreshAuditLock(_auditLockHeartbeatId);
+      refreshQueueLock();
+    }, 15000);
+  }
+  function stopAuditLockHeartbeat(lockId) {
+    // 传 lockId 时只停自己代际的心跳：旧循环（被代际强停后才走到 finally）不得杀掉新循环的心跳
+    if (lockId !== undefined && _auditLockHeartbeatId !== lockId) {return;}
+    if (_auditLockHeartbeat) {clearInterval(_auditLockHeartbeat); _auditLockHeartbeat = null;}
+    _auditLockHeartbeatId = 0;
+  }
+
   // --- 检测是否在报告处理页面 ---
   function isReportPageActive() {
     // 检查是否在主框架中
@@ -13896,10 +14120,14 @@ window.addEventListener('keydown',function(e){
       if (el.length && el.datagrid) {
         try {
           el.datagrid('selectRow', index);
-          // 触发行点击事件
+          // 触发行点击事件：onSelect 是 option 不是 datagrid 方法——
+          // 8.5.82 前写的 el.datagrid('onSelect', ...) 必抛错进 catch，「下一条/上一条」详情加载从不生效
           const rows = el.datagrid('getRows');
           if (rows && rows[index]) {
-            el.datagrid('onSelect', { index: index, row: rows[index] });
+            const opts = el.datagrid('options') || {};
+            if (typeof opts.onSelect === 'function') {
+              opts.onSelect.call(el[0], index, rows[index]);
+            }
           }
           return true;
         } catch (e) {}
@@ -14221,6 +14449,9 @@ window.addEventListener('keydown',function(e){
     ) {
       return 'incomplete';
     }
+    if (t.indexOf('未成功') !== -1 || t.indexOf('不成功') !== -1 || t.indexOf('没有成功') !== -1) {
+      return 'failure'; // 8.5.82: 「审核未成功/保存不成功」含「成功」且不含「失败/错误」，原先会被误判 success
+    }
     if (t.indexOf('成功') !== -1 && t.indexOf('失败') === -1 && t.indexOf('错误') === -1) {return 'success';}
     if (
       t.indexOf('密码错误') !== -1 ||
@@ -14269,6 +14500,41 @@ window.addEventListener('keydown',function(e){
       }
     } catch (e) {}
     return '';
+  }
+
+  // 8.5.82: 只关窗不判结果——ignoreMessages 模式（批审秒审路径）下仍需清理失败/不完整弹窗，
+  // 否则 EasyUI 模态遮罩残留会挡住后续条目的选行/点击，连锁超时→重试→整批 skipped。
+  // 注意：这里关闭弹窗但【不】据其返回结果，成功判定仍以行状态/quickVerify 为准
+  function closeNativeFailureDialogs(doc, jq) {
+    try {
+      const allWins = doc.querySelectorAll(
+        '.messager-window:not([style*="display: none"]), .window:not([style*="display: none"])'
+      );
+      for (const w of allWins) {
+        if (w.offsetParent === null) {continue;}
+        const body = w.querySelector('.messager-body, .panel-body');
+        if (!body) {continue;}
+        const text = (body.textContent || '').trim();
+        const kind = classifyNativeMessage(text);
+        // 只处理明确识别的失败/不完整弹窗；success 弹窗仍交给 closeNativeAuditSuccessMessage
+        if (kind !== 'failure' && kind !== 'incomplete') {continue;}
+        const btns = w.querySelectorAll('a.l-btn, button');
+        for (const b of btns) {
+          const bText = (b.textContent || b.value || '').trim();
+          const hitIncomplete = kind === 'incomplete' && (bText === '取消' || bText === 'No' || bText === '否' || bText === '关闭');
+          const hitFailure = kind === 'failure' && (bText === '确定' || bText === 'OK' || bText === '关闭' || bText === '是');
+          if (hitIncomplete || hitFailure) {
+            try {
+              if (jq && jq(b).click) {jq(b).click();} else {b.click();}
+            } catch (e) {
+              try {b.click();} catch (e2) {}
+            }
+            dbg('已代关原生弹窗（' + kind + '，不据此判定审核结果）');
+            break;
+          }
+        }
+      }
+    } catch (e) {}
   }
 
   function isIgnorableNativeStatException(text) {
@@ -14534,6 +14800,8 @@ window.addEventListener('keydown',function(e){
         }
       }
 
+      // 8.5.82: ignoreMessages 只是「不据弹窗判结果」，失败/不完整弹窗仍要代为关闭（防遮罩残留连锁超时）
+      if (ignoreMessages) {closeNativeFailureDialogs(doc, jq);}
       const msg = ignoreMessages ? '' : readNativeMessageResult(doc, jq);
       if (msg === 'success') {
         if (!expectedStatuses || expectedStatuses.length === 0 || !targetReportDR) {return true;}
@@ -15068,9 +15336,12 @@ window.addEventListener('keydown',function(e){
       const finish = v => {
         if (done) {return;}
         done = true;
+        clearTimeout(_pickTimer);
         overlay.remove();
         resolve(v);
       };
+      // 8.5.82: 无人值守兜底——120s 无操作自动取消，避免夜间自动审核整夜卡在等用户点击
+      const _pickTimer = setTimeout(() => finish(false), 120000);
       overlay.querySelectorAll('button[data-u]').forEach(b => {
         b.addEventListener('click', () => {
           const u = b.getAttribute('data-u');
@@ -15102,7 +15373,9 @@ window.addEventListener('keydown',function(e){
         const allBtns = doc.querySelectorAll('a, button, input[type=button]');
         for (const b of allBtns) {
           const text = (b.textContent || b.value || '').trim();
-          if (text === '审核' || text.includes('审核[') || (b.id && b.id.includes('Auth'))) {
+          // 8.5.82: 去掉模糊的 id.includes('Auth')——它会误命中「审核登录」按钮（btn_AuthLogin），
+          // 点开的是登录窗而非审核，且后续会自动提交保存的密码；回退只认明确文本或精确 id
+          if (text === '审核' || text.includes('审核[') || b.id === 'btn_ReportAuth') {
             btn = b;
             break;
           }
@@ -17024,7 +17297,13 @@ window.addEventListener('keydown',function(e){
   const INFECTION_SPECIAL_NAMES = [
     '梅毒螺旋体抗体',
     '梅毒抗体',
-    'tp',
+    // 8.5.82: 裸 'tp' 会误命中 ATP/TTP 等含 tp 子串的项目——改为带边界的写法（大小写两侧已统一 toLowerCase）
+    'tp-ab',
+    'tpab',
+    'tppa',
+    '抗tp',
+    '抗-tp',
+    'tp抗体',
     '梅毒', // 梅毒
     '丙型肝炎病毒抗体测定',
     '丙型肝炎抗体',
@@ -17464,7 +17743,10 @@ window.addEventListener('keydown',function(e){
         cleanupAndRemove();
         return;
       }
-      if (e.key === 'F4' || (e.key === 'Enter' && !e.shiftKey && e.target !== checkBtn)) {
+      // 8.5.82: 焦点在任意按钮（取消/关闭/导出等）上时放行原生 Enter 激活——
+      // 否则键盘用户 Tab 到「取消」按 Enter 想取消，会被抢注为确认整批
+      const _onBtn = !!(e.target && e.target.closest && e.target.closest('button'));
+      if (e.key === 'F4' || (e.key === 'Enter' && !e.shiftKey && e.target !== checkBtn && !_onBtn)) {
         e.preventDefault();
         e.stopImmediatePropagation();
         doConfirm();
@@ -17751,10 +18033,12 @@ window.addEventListener('keydown',function(e){
     if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 })) {
       return { ok: true, iframeWin, already: true };
     }
+    // 8.5.82: 补审首轮尊重用户选行锁（批审刚结束、进度条未消失的瞬间用户可能正在原生页查看标本），
+    // 被挡住再走下方 force 升级路径——补审目标不变：列表里不留未审
     const sel = await waitAndSelectNativeRow(iframeWin, item, {
       timeoutMs: options.timeoutMs || 4000,
       pollMs: 40,
-      force: true
+      force: false
     });
     iframeWin = sel.iframeWin || iframeWin;
     if (!sel.ok) {
@@ -17769,7 +18053,15 @@ window.addEventListener('keydown',function(e){
         iframeWin = sel2.iframeWin || iframeWin;
         if (!sel2.ok) {return { ok: false, iframeWin, reason: 'select' };}
       } else {
-        return { ok: false, iframeWin, reason: 'select' };
+        // 8.5.82: 无 mdr 项被用户选行锁挡住时也升级 force 重试一次（保持补审目标不变）
+        const selF = await waitAndSelectNativeRow(iframeWin, item, {
+          timeoutMs: 2500,
+          pollMs: 40,
+          skipListRefresh: true,
+          force: true
+        });
+        iframeWin = selF.iframeWin || iframeWin;
+        if (!selF.ok) {return { ok: false, iframeWin, reason: 'select' };}
       }
     }
     let ready = isReportDetailLoaded(iframeWin, item.reportDR);
@@ -17899,6 +18191,8 @@ window.addEventListener('keydown',function(e){
     if (queue.keepWS) {keepWorkbenchOnTop('批审开始');}
     const resumeWSRefresh = !!wsTimer;
     stopWSRefresh();
+    // 8.5.82: 持锁期间全局心跳续期（见 startAuditLockHeartbeat 注释）
+    startAuditLockHeartbeat(auditLockId);
 
     // 显示进度条
     let progress = document.getElementById('lis-audit-progress');
@@ -18047,6 +18341,16 @@ window.addEventListener('keydown',function(e){
       while (queue.current < queue.items.length) {
         if (_batchAbort || (queue._autoMode && (_autoAuditCancelRequested || !autoAuditEnabled()))) {
           dbg('批审被用户中止');
+          saveAuditQueueNow(queue);
+          break;
+        }
+        // 8.5.82: 自动模式每条复查数据健康——长批审期间接口故障（会话过期/单组拉取失败）时
+        // tick 入口的一次性检查拦不住。批审期间 WS 周期刷新已停止，故只看 failed/partial
+        // （由条目延迟校验触发的 loadWSData 回写），不查 lastFullSuccessAt 年龄（必然过期会误停）。
+        // 暂停后剩余条目已保存，数据恢复后下一轮 tick 自动重审（已审的会被 per-item 状态检查跳过）
+        if (queue._autoMode && (_wsDataHealth.failed || _wsDataHealth.partial)) {
+          dbg('自动批审：工作台数据未确认最新，暂停队列（剩余条目已保存）');
+          if (!_autoAuditMute) {showToast('工作台数据未确认最新，自动批审已暂停，数据恢复后自动续审', 'warning');}
           saveAuditQueueNow(queue);
           break;
         }
@@ -18537,6 +18841,7 @@ window.addEventListener('keydown',function(e){
     } finally {
       releaseQueueLock();
       releaseAuditLock(auditLockId);
+      stopAuditLockHeartbeat(auditLockId);
       if (resumeWSRefresh && isWSVisible()) {startWSRefresh();}
       setTimeout(() => {
         const p = document.getElementById('lis-audit-progress');
@@ -18554,6 +18859,7 @@ window.addEventListener('keydown',function(e){
   // 例如 showToast 可能在初始化阶段被调用时引用 _autoAuditMute）
   var _autoAudit = null; // { enabled, until, durationMin, rules }
   var _autoAuditMute = false; // 自动审核期间静默非 error toast
+  var _lastDataHealthLogTs = 0; // 8.5.82: 数据不健康暂停的最近一次落日志时间（10 分钟一条防刷屏）
   var _autoAuditRunning = false; // 防重入
   var _autoAuditCancelRequested = false; // 停止时阻止自动队列继续取下一条
   var _autoAuditTimer = null; // 30s 兜底轮询
@@ -18656,7 +18962,9 @@ window.addEventListener('keydown',function(e){
     stopAutoAuditTimers();
     renderAutoAuditButtonState();
     updateWSFooter();
-    if (wasEnabled && !_autoAuditMute) {
+    // 8.5.82: 到期停止属于用户必须知道的状态变化，不受 mute 静默（mute 只静默常规流水提示）——
+    // 此前到期 toast 被 mute 吞掉，用户回来看不到任何「为何停了」的提示
+    if (wasEnabled && (!_autoAuditMute || reason === '到期')) {
       showToast(reason === '到期' ? '🤖 自动审核已到期，自动停止' : '🤖 自动审核已关闭', 'success');
     }
   }
@@ -18767,6 +19075,24 @@ window.addEventListener('keydown',function(e){
         normals = normals.filter(r => !negDRs.has(String(r.ReportDR)));
         abnormals = abnormals.filter(r => !negDRs.has(String(r.ReportDR)));
       }
+      // 8.5.82: 传染病阳性红线 —— 正常批量路径同样拦截。分类器对 RefRanges 缺失的 S/CO 数值结果
+      // 会判 NORMAL（classifyResultItem 无参考文本兜底），而 isPositiveResult 有 S/CO>1 判阳兜底，
+      // 二者口径不一致时梅毒/丙肝/HIV 标本可能混入 normals 被夜间自动审掉——这里按红线函数兜底，
+      // 宁可人审，不可漏放（与 abnormal 段 autoAuditAbnormalGate 的 infPos 拦截对齐）
+      const infPosDRs = new Set();
+      candidates.forEach(r => {
+        const lv = getLiveClassification(r.ReportDR);
+        if (lv && (lv.items || []).some(it => isAutoAuditInfectionItem(it) && isPositiveResult(it.result, it.preResult || it))) {
+          infPosDRs.add(String(r.ReportDR));
+        }
+      });
+      infPosDRs.forEach(dr => {
+        autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, '梅毒/丙肝/艾滋项目阳性，需人工审核');
+      });
+      if (infPosDRs.size) {
+        normals = normals.filter(r => !infPosDRs.has(String(r.ReportDR)));
+        abnormals = abnormals.filter(r => !infPosDRs.has(String(r.ReportDR)));
+      }
       if (
         _wsDataHealth.failed ||
         _wsDataHealth.partial ||
@@ -18774,6 +19100,13 @@ window.addEventListener('keydown',function(e){
         Date.now() - _wsDataHealth.lastFullSuccessAt > AUTO_AUDIT_DATA_MAX_AGE
       ) {
         autoAuditSkipOnce(skipped, { ReportDR: 'data-health', PatName: '工作台' }, '工作台数据未确认最新，自动审核暂停');
+        // 8.5.82: 数据不健康的暂停必须落日志——此前 return 跳过下方 autoAuditLogAdd，
+        // 夜间会话过期导致整夜暂停时「查看记录」一片空白，与正常空转无法区分。
+        // 10 分钟记一条，避免每 30s 轮询刷屏
+        if (Date.now() - (_lastDataHealthLogTs || 0) > 10 * 60 * 1000) {
+          _lastDataHealthLogTs = Date.now();
+          autoAuditLogAdd({ normal: 0, abnormal: 0, skipped: skipped.slice(), audited: [] });
+        }
         return;
       }
 
@@ -18921,9 +19254,12 @@ window.addEventListener('keydown',function(e){
 
   // ---- 自动审核日志（环形上限 500，按天） ----
   // 8.5.75: 日志总预算超限时，从最早的轮次剥离完整结果（items），只留摘要，保证近期记录始终可看完整结果
+  // 8.5.82: 字节口径按 UTF-16 估算（码元数×2）——localStorage 实际存储体积即如此，
+  // 此前按 length 当字节算，中文内容实际体积约翻倍，贴近 5MB 配额时 setItem 抛错被静默吞掉
+  const _logEstBytes = s => s.length * 2;
   function trimAutoAuditLogItems(log) {
     try {
-      let size = JSON.stringify(log).length;
+      let size = _logEstBytes(JSON.stringify(log));
       const downgradeAbn = s => {
         // 8.5.81: 对象型 abn（带状态色）降级为字符串，保持体积可控
         if (Array.isArray(s.abn) && s.abn.length && typeof s.abn[0] === 'object') {
@@ -18937,7 +19273,7 @@ window.addEventListener('keydown',function(e){
         let changed = false;
         (e.audited || []).forEach(s => {if (s.items) {delete s.items; changed = true;} if (downgradeAbn(s)) {changed = true;}});
         (e.skipped || []).forEach(s => {if (s.items) {delete s.items; changed = true;} if (downgradeAbn(s)) {changed = true;}});
-        if (changed) {size = JSON.stringify(log).length;}
+        if (changed) {size = _logEstBytes(JSON.stringify(log));}
       }
     } catch (e) {}
   }
@@ -18959,7 +19295,18 @@ window.addEventListener('keydown',function(e){
       });
       if (log.length > AUTO_AUDIT_LOG_MAX) {log = log.slice(log.length - AUTO_AUDIT_LOG_MAX);}
       trimAutoAuditLogItems(log);
-      localStorage.setItem(K.autoAuditLog, JSON.stringify(log));
+      try {
+        localStorage.setItem(K.autoAuditLog, JSON.stringify(log));
+      } catch (e) {
+        // 8.5.82: 配额溢出不再静默丢日志——降到 100 条再写一次，仍失败 console 留痕
+        try {
+          log = log.slice(-100);
+          trimAutoAuditLogItems(log);
+          localStorage.setItem(K.autoAuditLog, JSON.stringify(log));
+        } catch (e2) {
+          console.warn('[LIS] 自动审核日志写入失败（localStorage 配额）:', e2 && e2.message);
+        }
+      }
     } catch (e) {}
     // 8.5.66: 新日志 → 刷新今日已审集合（全部视图 🤖 徽章）
     rebuildAutoAuditedTodaySet();
@@ -19641,25 +19988,33 @@ window.addEventListener('keydown',function(e){
 
     if (!_isMain) {return;}
 
+    // 8.5.82: 逐模块异常隔离——此前 createWS 等 any 一处抛错，后面的批审断点续跑/初始化全部不执行
+    const safeInit = (name, fn) => {
+      try {
+        fn();
+      } catch (e) {
+        dbg('初始化失败 [' + name + ']:', e && e.message, e);
+      }
+    };
     // initQBar(); // 已禁用：不需要顶部快速切换条
-    createWS();
-    createPatientResultTool();
-    initAbnormalEnterBridge();
-    checkNavigateTarget();
-    checkAuditQueueResume();
-    checkAbnormalTarget();
-    startQCInputProbe();
-    startQEProbe();
-    injectToolbar();
-    initReportEnhance();
+    safeInit('createWS', createWS);
+    safeInit('createPatientResultTool', createPatientResultTool);
+    safeInit('initAbnormalEnterBridge', initAbnormalEnterBridge);
+    safeInit('checkNavigateTarget', checkNavigateTarget);
+    safeInit('checkAuditQueueResume', checkAuditQueueResume);
+    safeInit('checkAbnormalTarget', checkAbnormalTarget);
+    safeInit('startQCInputProbe', startQCInputProbe);
+    safeInit('startQEProbe', startQEProbe);
+    safeInit('injectToolbar', injectToolbar);
+    safeInit('initReportEnhance', initReportEnhance);
     // 预热仪器缓存：提前加载所有工作组的仪器列表，打开工作台时秒返
     WG.forEach(w => {
       loadMachines(w.dr).catch(() => {});
     });
     // 工作台内点刷新触发的整页重载后，自动重新打开工作台
-    maybeReopenWSAfterReload();
-    startMenubarCmdPoller(); // 菜单栏下拉点击 → 跨进程切分类
-    startMenubarKeepAlive(); // 菜单栏 keep-alive，防止离开工作台后显示过期
+    safeInit('maybeReopenWSAfterReload', maybeReopenWSAfterReload);
+    safeInit('startMenubarCmdPoller', startMenubarCmdPoller); // 菜单栏下拉点击 → 跨进程切分类
+    safeInit('startMenubarKeepAlive', startMenubarKeepAlive); // 菜单栏 keep-alive，防止离开工作台后显示过期
     dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
   }
 
@@ -19722,6 +20077,8 @@ window.addEventListener('keydown',function(e){
       clearInterval(_loginSubmitTimer);
       _loginSubmitTimer = null;
     }
+    // 8.5.82: 批审锁心跳定时器（页面卸载随文档销毁，此处显式清理保持清单完整）
+    stopAuditLockHeartbeat();
   });
 
   if (document.readyState === 'complete') {init();}
