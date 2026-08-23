@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.6.3
+// @version      8.6.4
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -817,6 +817,12 @@
 #lis-auto-audit-log-box .aal-exp-title{font-size:11px;font-weight:700;color:#2c3e50;padding:2px 2px 6px}
 #lis-auto-audit-log-box .aal-exp-table{width:100%;border-collapse:collapse;font-size:11px}
 #lis-auto-audit-log-box .aal-exp-table th{background:#f0f4f4;color:#4a5a6a;text-align:left;padding:4px 6px;border-bottom:1px solid #e3e8e8;font-weight:600}
+/* 8.6.4: 展开区内滚时表头吸顶，长项目列表（生化全套）不用滚回去看列名 */
+#lis-auto-audit-log-box .aal-exp-table thead th{position:sticky;top:0;z-index:1;box-shadow:0 1px 0 #e3e8e8}
+/* 8.6.4: 记录行「⤴ 全部视图详情」跳转按钮——一键切工作台全部视图并弹该标本详情面板 */
+#lis-auto-audit-log-box .aal-jump{font-size:10px;font-weight:600;padding:2px 8px;border:1px solid #168276;background:#e8f6f3;color:#0f766e;border-radius:3px;cursor:pointer;white-space:nowrap}
+#lis-auto-audit-log-box .aal-jump:hover{background:#d0ece7}
+#lis-auto-audit-log-box .aal-exp-title{display:flex;align-items:center;justify-content:space-between;gap:8px}
 #lis-auto-audit-log-box .aal-exp-table td{padding:4px 6px;border-bottom:1px solid #f0f0f0}
 /* 8.5.80: 展开表格按结果状态细分配色（与工作台卡片/历史浮层规则一致）：高=橙 低=蓝 异常=粉红 危急=深红 待定=灰 0值=黄 */
 #lis-auto-audit-log-box .aal-exp-table tr.aal-exp-hi td{background:#fff3e0;color:#e65100;font-weight:600}
@@ -19538,6 +19544,27 @@ window.addEventListener('keydown',function(e){
     });
   }
   // 8.5.61: 自动审核记录查看器 — 查找最近自动审核了哪些样本（日期范围 + 姓名/检验号搜索）
+  // 8.6.4: 自动审核记录 → 一键跳转：切工作台「全部」视图并直接弹出该标本详情面板
+  // （跳转前关记录弹窗；工作台未开/数据未加载时先开再等数据；标本已跨天/不在当日列表时提示）
+  async function jumpToSpecimenDetailFromLog(reportDR) {
+    const dr = String(reportDR || '');
+    if (!dr) {showToast('该记录没有报告编号，无法跳转', 'warning'); return;}
+    const dlg = document.getElementById('lis-auto-audit-log');
+    if (dlg) {dlg.remove();}
+    gotoWSCategoryFromMenubar('all');
+    let row = wsData.find(r => String(r.ReportDR) === dr) || null;
+    if (!row && !wsData.length) {
+      // 工作台刚打开、数据还在路上：最多等 10 秒
+      for (let i = 0; i < 10 && !wsData.length; i++) {await sleep(1000);}
+      row = wsData.find(r => String(r.ReportDR) === dr) || null;
+    }
+    if (!row) {
+      showToast('当前工作台数据里找不到该标本（可能已跨天或不在当日列表）', 'warning');
+      return;
+    }
+    openDetailPanel(row, 'all', -1);
+  }
+
   function openAutoAuditLogViewer() {
     const existing = document.getElementById('lis-auto-audit-log');
     if (existing) {existing.remove();}
@@ -19625,11 +19652,21 @@ window.addEventListener('keydown',function(e){
     };
     // 8.5.75: 渲染时把每行样本对象挂到映射，展开时直接取日志持久化的完整结果，不依赖当前工作台缓存
     const _aalSamples = {};
-    const itemsTableHTML = items => {
+    const itemsTableHTML = (items, rdr) => {
       if (!items || !items.length) {return '';}
-      return '<div class="aal-exp-title">完整结果</div>' +
+      // 8.6.4: 异常项置顶排序（危急>高>低>异常>0值>待定，正常垫底，同类保持原顺序）——
+      // 生化全套几十个项目时不用在一堆正常值里翻找异常的
+      const _stRank = { CRITICAL: 0, HIGH: 1, LOW: 2, ABNORMAL: 3, ZERO: 4, UNCERTAIN: 5 };
+      const rankOf = it => {const r = _stRank[it.s || it.status]; return r === undefined ? 9 : r;};
+      const sorted = items.slice().sort((a, b) => rankOf(a) - rankOf(b));
+      const abnCnt = sorted.filter(it => {const st = it.s || it.status || ''; return st && st !== 'NORMAL';}).length;
+      const statTxt = '完整结果（共 ' + sorted.length + ' 项' + (abnCnt ? '，异常 ' + abnCnt + ' 项置顶' : '') + '）';
+      const jumpBtn = rdr
+        ? '<button class="aal-jump" data-jump="' + escAttr(String(rdr)) + '">在工作台打开 ›</button>'
+        : '';
+      return '<div class="aal-exp-title"><span>' + statTxt + '</span>' + jumpBtn + '</div>' +
         '<table class="aal-exp-table"><thead><tr><th>项目</th><th>结果</th><th>单位</th><th>参考范围</th><th></th></tr></thead><tbody>' +
-        items.map(it => {
+        sorted.map(it => {
           const st = it.s || it.status || '';
           let cls = 'aal-exp-n', badgeTxt = '';
           // 8.5.80: 按结果状态细分颜色：危急=深红 高=橙 低=蓝 异常=粉红 待定=灰 0值=黄
@@ -19653,6 +19690,8 @@ window.addEventListener('keydown',function(e){
       '<b>' + esc(s.n || '') + '</b>' +
       '<span style="color:#666">' + esc(s.l || '') + '</span>' +
       (s.reason ? '<span style="color:#8a6d3b">（' + esc(s.reason) + '）</span>' : '') +
+      // 8.6.4: 一键跳转按钮——切工作台「全部」视图并直接弹出该标本详情面板
+      (s.d ? '<button class="aal-jump" data-jump="' + escAttr(s.d) + '" title="跳转到工作台「全部」视图查看该标本详细结果">⤴ 全部视图详情</button>' : '') +
       '<span style="color:#168276;font-size:10px;font-weight:600;margin-left:auto" class="aal-exp-marker">' + (s.d ? '点击看全部结果 ▾' : '') + '</span>' +
       '</div>' +
       specDetailHTML(s) +
@@ -19756,6 +19795,12 @@ window.addEventListener('keydown',function(e){
     const listBox = document.getElementById('lis-aal-list');
     if (listBox) {
       listBox.addEventListener('click', ev => {
+        // 8.6.4: 跳转按钮优先处理（按钮在记录行内，必须先于行的展开切换）
+        const jumpBtn = ev.target.closest('.aal-jump');
+        if (jumpBtn) {
+          jumpToSpecimenDetailFromLog(jumpBtn.dataset.jump);
+          return;
+        }
         const row = ev.target.closest('.aal-row[data-rdr]');
         if (!row) {return;}
         const rdr = row.dataset.rdr;
@@ -19791,9 +19836,11 @@ window.addEventListener('keydown',function(e){
           }
         }
         if (items.length) {
-          body.innerHTML = itemsTableHTML(items);
+          body.innerHTML = itemsTableHTML(items, rdr);
         } else {
-          body.innerHTML = '<div style="color:#999;padding:6px">该标本日志中未保存完整项目结果，且已不在当前工作台数据/缓存中。<br>如需查看，请在工作台「全部」视图中定位该标本。</div>';
+          body.innerHTML =
+            '<div style="color:#999;padding:6px">该标本日志中未保存完整项目结果，且已不在当前工作台数据/缓存中。</div>' +
+            (rdr ? '<button class="aal-jump" data-jump="' + escAttr(String(rdr)) + '">在工作台「全部」视图中查找 ›</button>' : '');
         }
         body.style.display = 'block';
         const mk = row.querySelector('.aal-exp-marker');
