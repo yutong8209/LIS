@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.6.1
+// @version      8.6.2
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19093,9 +19093,9 @@ window.addEventListener('keydown',function(e){
         normals = normals.filter(r => !infPosDRs.has(String(r.ReportDR)));
         abnormals = abnormals.filter(r => !infPosDRs.has(String(r.ReportDR)));
       }
-      // 8.6.1: 心肌损伤标志物红线（cTnI/CK-MB/MYO 超上限即拦，含 normal 路径——
-      // 这三个项目无危急值配置，升高只是 ABNORMAL 会被异常安全门放行；
-      // 且数值判定不依赖 RefRanges，参考范围缺失也不会漏）。CK-MB 仅限 DXI 机器，防误伤生化心肌酶谱
+      // 8.6.2: 心肌损伤标志物红线（cTnI/CK-MB/MYO 达危急拦截线才拦，含 normal 路径——
+      // 这三个项目无危急值配置，显著升高只是 ABNORMAL 会被异常安全门放行；轻度升高放行自动审；
+      // 数值判定不依赖 RefRanges，参考范围缺失也不会漏）。CK-MB 仅限 DXI 机器，防误伤生化心肌酶谱
       const cardiacDRs = new Map(); // dr -> 拦截原因
       candidates.forEach(r => {
         const lv = getLiveClassification(r.ReportDR);
@@ -19235,17 +19235,17 @@ window.addEventListener('keydown',function(e){
     return p.op === '' || p.op === '<' || p.op === '<=';
   }
 
-  // ==================== 8.6.1: 心肌损伤标志物自动审核红线（DXI800） ====================
-  // 背景：cTnI / CK-MB / MYO（DxI800 化学发光）在 LIS 未配危急值——升高只是 H 标记（ABNORMAL），
-  // 夜间自动审核的异常安全门原本会放行。规则：任一标志物数值超参考上限 → 整标本拦下留人工；
-  // 参考范围内（含低值 L 标记）照常自动审。
-  // 判定直接解析数值，不依赖 AbFlag/RefRanges 配置——防参考范围缺失时被当 NORMAL 放行（同传染病教训）。
-  // CK-MB 用机器名限定（仅 DXI），防误伤生化心肌酶谱的 CK-MB 活性（U/L，参考范围不同）；
-  // 若 LIS 里 DXI800 的仪器名不含「DXI」字样，改下方 machineOnly 正则即可。
+  // ==================== 8.6.2: 心肌损伤标志物自动审核红线（DXI800，危急值口径） ====================
+  // 背景：cTnI / CK-MB / MYO（DxI800 化学发光仪）在 LIS 未配危急值——显著升高只是 H 标记（ABNORMAL），
+  // 夜间自动审核的异常安全门原本会放行。规则：任一标志物达到「危急拦截线」（常见危急值口径，
+  // 约参考上限的 4~12 倍）→ 整标本拦下留人工；轻度升高（H 标记）与参考范围内照常自动审。
+  // 判定直接解析数值，不依赖 AbFlag/RefRanges 配置——防参考范围缺失时漏判（同传染病教训）。
+  // CK-MB 用机器名限定（仅 DXI），防误伤生化心肌酶谱的 CK-MB 活性（U/L，参考范围不同）。
+  // 阈值调整只改下方 hi；拦截线语义为「≥ 即拦」。
   const AUTO_AUDIT_CARDIAC_MARKERS = [
-    { label: 'cTnI', re: /ctn-?i|肌钙蛋白i/i, hi: 0.04 }, // 参考 0-0.04
-    { label: 'MYO', re: /\bmyo\b|myoglobin|肌红蛋白/i, hi: 105.7 }, // 参考 17.4-105.7
-    { label: 'CK-MB', re: /ck-?mb|肌酸激酶\s*mb/i, hi: 6.3, machineOnly: /dxi/i } // 参考 0.6-6.3，仅 DXI800
+    { label: 'cTnI', re: /ctn-?i|肌钙蛋白i/i, hi: 0.5 }, // 参考 0-0.04；0.5 ≈ 12×上限（AMI 常见危急值口径）
+    { label: 'MYO', re: /\bmyo\b|myoglobin|肌红蛋白/i, hi: 500 }, // 参考 17.4-105.7；500 ≈ 5×上限
+    { label: 'CK-MB', re: /ck-?mb|肌酸激酶\s*mb/i, hi: 25, machineOnly: /dxi/i } // 参考 0.6-6.3；25 ≈ 4×上限，仅 DXI800
   ];
   // 返回拦截原因（null=放行）。items 为分类缓存的条目，row 用于取仪器名（_mn）
   function cardiacMarkerBlockReason(items, row) {
@@ -19259,10 +19259,10 @@ window.addEventListener('keydown',function(e){
         const raw = it.result !== undefined && it.result !== null ? it.result : it.TextRes || it.Result || '';
         const p = parseComparableNumber(raw);
         if (!p || !(p.value > 0)) {continue;} // 非数值由待定/缺失规则管，0 值由堵孔红线管，这里只管升高
-        // ">" / ">=" 前缀（如 >100）按「实际值 ≥ 报告值」处理
-        const hit = p.op === '>' || p.op === '>=' ? p.value >= m.hi : p.value > m.hi;
+        // ">" / ">=" 前缀（如 >100）按「实际值 ≥ 报告值」处理；拦截线语义为达到即拦（≥）
+        const hit = p.value >= m.hi;
         if (hit) {
-          return `心肌标志物${m.label} ${String(raw).trim()}${it.unit ? it.unit : ''} 超上限${m.hi}，需人工审核`;
+          return `心肌标志物${m.label} ${String(raw).trim()}${it.unit ? it.unit : ''} 达危急拦截线${m.hi}，需人工审核`;
         }
       }
     }
@@ -19286,7 +19286,7 @@ window.addEventListener('keydown',function(e){
     if (live.infectionWarning) {return { ok: false, reason: '传染病历史不符: ' + live.infectionWarning };}
     const infPos = items.find(it => isAutoAuditInfectionItem(it) && isPositiveResult(it.result, it.preResult || it));
     if (infPos) {return { ok: false, reason: '梅毒/丙肝/艾滋项目阳性: ' + infPos.name + ' ' + infPos.result + '，需人工审核' };}
-    // 8.6.1: 心肌损伤标志物红线（双保险——tick 里已按候选预过滤，这里再兜异常逐条段）
+    // 8.6.1: 心肌损伤标志物红线（双保险——tick 里已按候选预过滤，这里再兜异常逐条段；8.6.2 改危急值口径）
     const cardiac = cardiacMarkerBlockReason(items, row);
     if (cardiac) {return { ok: false, reason: cardiac };}
     if (items.some(it => it.status === 'UNCERTAIN' || isEmptyResultValue(it, it.result))) {
