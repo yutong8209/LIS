@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.6.6
+// @version      8.6.7
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -817,9 +817,9 @@
 /* 8.6.6: 完整结果双列紧凑表——一行两个结果（项目|值 ×2），单行格子密度，参考范围在悬停 title */
 #lis-auto-audit-log-box .aal-exp2{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}
 #lis-auto-audit-log-box .aal-exp2 td{padding:2px 6px;border-bottom:1px solid #f4f6f7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#lis-auto-audit-log-box .aal-exp2 td.n{color:#4a5a6a;width:30%}
+#lis-auto-audit-log-box .aal-exp2 td.n{color:#4a5a6a;width:26%}
 #lis-auto-audit-log-box .aal-exp2 td.v{font-weight:700;color:#2c3e50}
-#lis-auto-audit-log-box .aal-exp2 td.v i{font-style:normal;font-weight:400;font-size:10px;color:#999}
+#lis-auto-audit-log-box .aal-exp2 td.v .r{font-weight:400;font-size:10px;color:#b6c0ca} /* 8.6.7: 参考值小灰字跟在值后 */
 #lis-auto-audit-log-box .aal-exp2 td.v + td.n{border-left:1px dashed #e8eef0} /* 第二个结果的分隔线 */
 /* 状态配色（值格背景+文字，沿用 8.5.80 细则）：危急深红 高橙 低蓝 异常粉红 待定灰 0值黄 */
 #lis-auto-audit-log-box .aal-exp2 td.v.cri{color:#c62828;background:#ffebee}
@@ -19692,9 +19692,10 @@ window.addEventListener('keydown',function(e){
         const unit = it.u || it.unit || '';
         const ref = it.f || it.refRange || it.RefRanges || '';
         const tip = name + '  ' + String(rv) + (unit ? ' ' + unit : '') + (ref ? '  参考 ' + ref : '');
+        // 8.6.7: 参考值直接显示在值后（小灰字，不另占列）；单位不再内联（放悬停 title），保证单行密度
         return '<td class="n" title="' + escAttr(tip) + '">' + esc(name) + '</td>' +
           '<td class="v' + (cls ? ' ' + cls : '') + '" title="' + escAttr(tip) + '">' + pre + esc(String(rv)) +
-          (unit ? ' <i>' + esc(unit) + '</i>' : '') + '</td>';
+          (ref ? ' <span class="r">' + esc(ref) + '</span>' : '') + '</td>';
       };
       const rows = [];
       for (let i = 0; i < sorted.length; i += 2) {rows.push([sorted[i], sorted[i + 1]]);}
