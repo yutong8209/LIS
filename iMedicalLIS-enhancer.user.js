@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.6.4
+// @version      8.6.5
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -814,6 +814,28 @@
 #lis-auto-audit-log-box .aal-abn-item.unc{background:#f5f5f5;color:#757575;border-color:#ddd}
 #lis-auto-audit-log-box .aal-abn-item.zero{background:#fff8e1;color:#8a6d3b;border-color:#f0e0a8}
 #lis-auto-audit-log-box .aal-exp-body{max-height:320px;overflow-y:auto}
+/* 8.6.5: 完整结果双列卡片网格——一行两个结果，长列表高度减半 */
+#lis-auto-audit-log-box .aal-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+#lis-auto-audit-log-box .aal-gc{border:1px solid #ecf0f2;border-radius:4px;padding:3px 7px 4px;min-width:0;background:#fff}
+#lis-auto-audit-log-box .aal-gc-hd{display:flex;justify-content:space-between;align-items:center;gap:6px}
+#lis-auto-audit-log-box .aal-gc-n{font-size:11px;color:#4a5a6a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#lis-auto-audit-log-box .aal-gc-v{font-size:12px;font-weight:700;color:#2c3e50;word-break:break-all}
+#lis-auto-audit-log-box .aal-gc-v i{font-style:normal;font-weight:400;font-size:10px;color:#999}
+#lis-auto-audit-log-box .aal-gc-ref{font-size:10px;color:#aab4be;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#lis-auto-audit-log-box .aal-gc-bd{flex:none;background:#e74c3c;color:#fff;border-radius:3px;padding:0 5px;font-size:10px;font-weight:700}
+/* 状态配色沿用 8.5.80 细则：危急=深红 高=橙 低=蓝 异常=粉红 待定=灰 0值=黄 */
+#lis-auto-audit-log-box .aal-gc.cri{background:#ffebee;border-color:#f2b8b8}
+#lis-auto-audit-log-box .aal-gc.cri .aal-gc-v{color:#c62828}
+#lis-auto-audit-log-box .aal-gc.hi{background:#fff3e0;border-color:#ffe0b2}
+#lis-auto-audit-log-box .aal-gc.hi .aal-gc-v{color:#e65100}
+#lis-auto-audit-log-box .aal-gc.lo{background:#e3f2fd;border-color:#bbdefb}
+#lis-auto-audit-log-box .aal-gc.lo .aal-gc-v{color:#1565c0}
+#lis-auto-audit-log-box .aal-gc.abn{background:#fce4ec;border-color:#f5c6d8}
+#lis-auto-audit-log-box .aal-gc.abn .aal-gc-v{color:#e91e63}
+#lis-auto-audit-log-box .aal-gc.unc{background:#f5f5f5;border-color:#ddd}
+#lis-auto-audit-log-box .aal-gc.unc .aal-gc-v{color:#757575;font-weight:600}
+#lis-auto-audit-log-box .aal-gc.zero{background:#fff8e1;border-color:#f0e0a8}
+#lis-auto-audit-log-box .aal-gc.zero .aal-gc-v{color:#8a6d3b}
 #lis-auto-audit-log-box .aal-exp-title{font-size:11px;font-weight:700;color:#2c3e50;padding:2px 2px 6px}
 #lis-auto-audit-log-box .aal-exp-table{width:100%;border-collapse:collapse;font-size:11px}
 #lis-auto-audit-log-box .aal-exp-table th{background:#f0f4f4;color:#4a5a6a;text-align:left;padding:4px 6px;border-bottom:1px solid #e3e8e8;font-weight:600}
@@ -19664,22 +19686,30 @@ window.addEventListener('keydown',function(e){
       const jumpBtn = rdr
         ? '<button class="aal-jump" data-jump="' + escAttr(String(rdr)) + '">在工作台打开 ›</button>'
         : '';
+      // 8.6.5: 一行两个结果的卡片网格（替代单列表格）——高度减半，长项目列表少滚一半；
+      // 每张卡片：项目名+状态徽标 / 结果值+单位 / 参考范围，配色沿用 8.5.80 状态细则
+      const cellHTML = it => {
+        const st = it.s || it.status || '';
+        let cls = 'aal-gc', badgeTxt = '';
+        if (st === 'CRITICAL') {cls += ' cri'; badgeTxt = '危急';}
+        else if (st === 'HIGH') {cls += ' hi'; badgeTxt = '高';}
+        else if (st === 'LOW') {cls += ' lo'; badgeTxt = '低';}
+        else if (st === 'ABNORMAL') {cls += ' abn'; badgeTxt = '异常';}
+        else if (st === 'UNCERTAIN') {cls += ' unc'; badgeTxt = '待定';}
+        else if (st === 'ZERO') {cls += ' zero'; badgeTxt = '0值';}
+        const rv = it.r !== undefined ? it.r : (it.result !== undefined && it.result !== null ? it.result : '');
+        const name = it.n || it.name || '';
+        const unit = it.u || it.unit || '';
+        const ref = it.f || it.refRange || it.RefRanges || '';
+        return '<div class="' + cls + '" title="' + escAttr(name + '  ' + String(rv) + (unit ? ' ' + unit : '') + (ref ? '  参考 ' + ref : '')) + '">' +
+          '<div class="aal-gc-hd"><span class="aal-gc-n">' + esc(name) + '</span>' +
+          (badgeTxt ? '<span class="aal-gc-bd">' + badgeTxt + '</span>' : '') + '</div>' +
+          '<div class="aal-gc-v">' + esc(String(rv)) + (unit ? ' <i>' + esc(unit) + '</i>' : '') + '</div>' +
+          (ref ? '<div class="aal-gc-ref">' + esc(ref) + '</div>' : '') +
+          '</div>';
+      };
       return '<div class="aal-exp-title"><span>' + statTxt + '</span>' + jumpBtn + '</div>' +
-        '<table class="aal-exp-table"><thead><tr><th>项目</th><th>结果</th><th>单位</th><th>参考范围</th><th></th></tr></thead><tbody>' +
-        sorted.map(it => {
-          const st = it.s || it.status || '';
-          let cls = 'aal-exp-n', badgeTxt = '';
-          // 8.5.80: 按结果状态细分颜色：危急=深红 高=橙 低=蓝 异常=粉红 待定=灰 0值=黄
-          if (st === 'CRITICAL') {cls = 'aal-exp-cri'; badgeTxt = '危急';}
-          else if (st === 'HIGH') {cls = 'aal-exp-hi'; badgeTxt = '高';}
-          else if (st === 'LOW') {cls = 'aal-exp-lo'; badgeTxt = '低';}
-          else if (st === 'ABNORMAL') {cls = 'aal-exp-abn'; badgeTxt = '异常';}
-          else if (st === 'UNCERTAIN') {cls = 'aal-exp-unc'; badgeTxt = '待定';}
-          else if (st === 'ZERO') {cls = 'aal-exp-zero'; badgeTxt = '0值';}
-          const rv = it.r !== undefined ? it.r : (it.result !== undefined && it.result !== null ? it.result : '');
-          return '<tr class="' + cls + '"><td>' + esc(it.n || it.name || '') + '</td><td>' + esc(String(rv)) + '</td><td>' + esc(it.u || it.unit || '') + '</td><td>' + esc(it.f || it.refRange || it.RefRanges || '') + '</td><td>' + (badgeTxt ? '<span class="aal-exp-bd">' + badgeTxt + '</span>' : '') + '</td></tr>';
-        }).join('') +
-        '</tbody></table>';
+        '<div class="aal-grid">' + sorted.map(cellHTML).join('') + '</div>';
     };
     const rowHTML = s => {
       const _rid = 'aal-exp-' + String(s.d || 'x') + '-' + Math.floor(Math.random() * 1e6);
