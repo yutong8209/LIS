@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.6.2
+// @version      8.6.3
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6374,6 +6374,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let _lastWSNonEmptyAt = 0; // 最近一次成功加载到标本的时间，用于强制刷新兜底
   let _wsLoadedDate = ''; // 8.5.42: 工作台数据对应的日期（today），跨天时允许清空重载
   let _wsDataHealth = { lastFullSuccessAt: 0, failed: false, partial: false }; // 自动审核数据健康状态
+  let _wsFullLoadFailStreak = 0; // 8.6.3: 全量加载连续失败/返回空的次数（成功应用后清零）
+  // 8.6.3: 连续失败升级提醒——失败时只有左上角小字一闪而过（30s 一轮），会话过期挂一整晚没人注意；
+  // 连续 10 次（约 5 分钟）toast 一次提示旧数据 + 重新登录，成功后自动清零（toast 只弹一次不刷屏）
+  function _noteWSLoadFailure() {
+    _wsFullLoadFailStreak++;
+    if (_wsFullLoadFailStreak === 10) {
+      showToast('工作台已连续约 5 分钟刷新失败（当前显示的是旧数据）。可能 LIS 登录会话已过期，请重新登录或刷新页面', 'warning');
+    }
+  }
   let _normalKeyHandler = null; // 普通视图键盘监听
   let _abnormalFocusDR = '';
   let _wsSearchTimer = null;
@@ -6804,8 +6813,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       wsClassifying = false;
       _classifyPendingRerun = false;
       _classifyRunSeq++; // 作废进行中的分类写回，避免强制刷新后被旧结果污染
-      wsClassifiedCache = {};
-      _classifyVersion++;
+      // 8.6.3: 分类缓存不再在此预清——若 force 加载失败/返回空（空数据保护保留了行数据），
+      // 预清已把分类删光，所有标本落「不完整」桶，待审/异常计数全部归 0。
+      // 改为 applyResults 成功应用新数据后再清（见下方 wipe-on-success）
       wsChecked.clear();
       wsAbnormalIndex = -1;
       wsMachineCounts = {};
@@ -6896,8 +6906,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           allMachines.push(...r.machines);
           if (r.machinesOk && r.wg) {loadedWGs.add(String(r.wg));}
           // 8.5.82: 组级机器列表失败（machinesOk=false）或单台仪器失败——汇总进健康状态：
-          // 宁可让自动审核暂停，不可让该组/该仪器标本静默消失（漏看比慢更危险）
-          if (!r.machinesOk && r.wg && !partial) {failedMachineNames.push((WG_MAP[String(r.wg)] || {}).name + '组机器列表');}
+          // 宁可让自动审核暂停，不可让该组/该仪器标本静默消失（漏看比慢更危险）。
+          // 8.6.3: 去掉 !partial 门槛——partial 阶段 results 只含已加载组，不会把「未加载的组」
+          // 误报成失败；保留该门槛反而让「跨天+优先组机器列表失败」绕过下方的空数据保护
+          if (!r.machinesOk && r.wg) {failedMachineNames.push((WG_MAP[String(r.wg)] || {}).name + '组机器列表');}
           (r.failedMachines || []).forEach(m => failedMachineNames.push(m.CName || m.Name || String(m.RowID)));
         }
         // 8.5.40: 空数据保护扩展到 partial 阶段——长时间闲置/会话过期/网络瞬断时，
@@ -6906,16 +6918,21 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 8.5.42: 跨天例外——工作台按当天查询（SttAccDate=今天），跨天后昨天的标本在
         // 原生列表已查不到（如 23:50 做的标本），保留旧数据只会显示「看得见审不了」的
         // 假数据。故日期变化时允许清空重载（自动归零到新一天），同一天内的瞬断仍保留。
+        // 8.6.3: 跨天例外再加一道门——本次加载存在失败（仪器/组机器列表）时即使跨天也保留旧数据。
+        // 否则「午夜跨天 + 会话过期」组合（午夜无人重登，最常见）会让 dateChanged 绕过保护
+        // 直接清空归零；只有各组都加载成功、新一天确实没标本时才允许归零。
         const dateChanged = !!(_wsLoadedDate && _wsLoadedDate !== today());
-        if (allData.length === 0 && wsData.length > 0 && !dateChanged) {
+        if (allData.length === 0 && wsData.length > 0 && (!dateChanged || failedMachineNames.length > 0)) {
           _wsDataHealth.failed = true;
           _wsDataHealth.partial = !!partial;
-          dbg('刷新返回空数据，保留原有', wsData.length, '条', partial ? '(partial)' : '');
+          dbg('刷新返回空数据，保留原有', wsData.length, '条', partial ? '(partial)' : '', dateChanged ? '(跨天但有加载失败，暂不清空)' : '');
           if (qi) {qi.textContent = `刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;}
           // 8.5.40: 强制刷新的警告只在全量阶段判断（partial 阶段空可能是瞬断，阶段2会恢复）
           if (!partial && force) {showToast('工作台强制刷新仍返回空数据，可能需要重新登录或刷新浏览器页面', 'warning');}
+          if (!partial) {_noteWSLoadFailure();} // 8.6.3: 连续失败升级提醒
           return false;
         }
+        if (!partial) {_wsFullLoadFailStreak = 0;} // 8.6.3: 成功应用全量数据，清零失败计数
         // 8.5.42: 跨天后更新数据日期（无论清空重载还是正常更新，都归到新一天）
         if (dateChanged || allData.length > 0) {_wsLoadedDate = today();}
         wsData = allData;
@@ -6936,6 +6953,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 同理 pruneStaleClassificationCache 也不能在 partial 阶段跑：会把其他工作组的分类缓存
         // 当「已消失」删掉，每 30s 刷新就整组重分类，数据量大时分类永远追不上刷新（拖死批审）。
         if (!partial) {
+          // 8.6.3: 强制刷新的分类缓存全清移到这里（wipe-on-success）——只有成功应用了新数据
+          // 才清；force 加载失败/返回空时行数据被空数据保护保留，分类也一并保留，计数不归 0
+          if (force) {
+            wsClassifiedCache = {};
+            _classifyVersion++;
+          }
           normalizeWSMachineSelection(loadedWGs);
           pruneStaleClassificationCache(wsData);
           scheduleAutoAuditCycle(); // 8.5.58: 数据刷新完成后触发自动审核（防抖）
@@ -6988,6 +7011,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       _wsDataHealth.partial = false;
       dbg('loadWSData 异常:', e);
       if (qi) {qi.textContent = '加载失败';}
+      _noteWSLoadFailure(); // 8.6.3: 连续失败升级提醒（wsData 未动，数字保持旧值）
       return { ok: false, error: e, empty: true };
     } finally {
       if (seq === _wsLoadSeq) {wsLoading = false;}
