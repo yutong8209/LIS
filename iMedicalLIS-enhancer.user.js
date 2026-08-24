@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.6.7
+// @version      8.7.0
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -135,6 +135,25 @@
       d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
     );
   };
+  // 8.7.0: 日期加减（YYYY-MM-DD）——工作台历史日期查看/跨天自动审核用
+  function addDays(dateStr, n) {
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(String(dateStr || ''));
+    if (!m) {return today();}
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + Number(n || 0));
+    return (
+      d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+    );
+  }
+  // 8.7.0: 从标本行提取登记日期（YYYY-MM-DD）；取不到回退空串（调用方按「未知日期」处理，不切原生列表）
+  function rowAcceptDateStr(row) {
+    if (!row) {return '';}
+    const raw = String(row.SttAccDate || row.AcceptDT || row.AcceptDate || '').trim();
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
+    if (m) {
+      return m[1] + '-' + String(Number(m[2])).padStart(2, '0') + '-' + String(Number(m[3])).padStart(2, '0');
+    }
+    return '';
+  }
   // 旧版 base64 编码（保持向后兼容）
   const encPwd = p => {
     try {
@@ -781,6 +800,17 @@
 #lis-ws-hd .ws-aa-btn:hover{background:var(--lis-primary-light);border-color:var(--lis-border);color:var(--lis-primary)}
 #lis-ws-hd .ws-aa-btn.on{background:#168276;border-color:#168276;color:#fff;box-shadow:0 0 0 1px rgba(22,130,118,.35)}
 #lis-ws-hd .ws-aa-btn.on:hover{background:#0f6b60;border-color:#0f6b60;color:#fff}
+/* 8.7.0: 头部日期选择控件 */
+.ws-date-bar{display:flex;align-items:center;gap:4px;flex-shrink:0;padding:0 2px;position:relative}
+.ws-date-bar .ws-icon-btn{width:26px;height:30px;font-size:11px;padding:0}
+#lis-ws-date-next:disabled{opacity:.35;cursor:not-allowed}
+#lis-ws-date-next:disabled:hover{background:var(--lis-surface);border-color:var(--lis-border);color:var(--lis-text-secondary)}
+#lis-ws-date-today{width:auto !important;padding:0 8px !important;font-size:11px !important;font-weight:700}
+.ws-date-btn{height:30px;min-width:64px;padding:0 10px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;transition:background .15s,border-color .15s,color .15s}
+.ws-date-btn:hover{background:var(--lis-primary-light);color:var(--lis-primary)}
+/* 查看历史日期时琥珀色高亮，提醒当前不是今天的数据 */
+.ws-date-btn.past{background:#fff7e6;border-color:#f0b357;color:#b26a00}
+.ws-date-btn.past:hover{background:#ffefd2;border-color:#e09f3e;color:#8a5200}
 #lis-auto-audit-log{position:fixed;inset:0;z-index:100022;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
 #lis-auto-audit-log.show{display:flex}
 #lis-auto-audit-log-box{background:#fff;border-radius:12px;width:800px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4);overflow:hidden}
@@ -6392,7 +6422,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let _classifyRunSeq = 0; // 分类运行序号，防止旧分类任务影响新刷新
   let _classifyPendingRerun = false; // 分类进行中又有新数据时，结束后再跑一轮
   let _lastWSNonEmptyAt = 0; // 最近一次成功加载到标本的时间，用于强制刷新兜底
-  let _wsLoadedDate = ''; // 8.5.42: 工作台数据对应的日期（today），跨天时允许清空重载
+  let _wsLoadedDate = ''; // 8.5.42: 工作台数据对应的日期（查询窗口结束日），跨天时允许清空重载
+  let wsActiveDate = ''; // 8.7.0: 工作台查看日期（''=今天，'YYYY-MM-DD'=历史日期），支持查看/审核过去日期的标本
   let _wsDataHealth = { lastFullSuccessAt: 0, failed: false, partial: false }; // 自动审核数据健康状态
   let _wsFullLoadFailStreak = 0; // 8.6.3: 全量加载连续失败/返回空的次数（成功应用后清零）
   // 8.6.3: 连续失败升级提醒——失败时只有左上角小字一闪而过（30s 一轮），会话过期挂一整晚没人注意；
@@ -6499,6 +6530,90 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return wsActiveWG ? getWSSelectedMachineSet(wsActiveWG) : new Set();
   }
 
+  // 8.7.0: 当前查看日期（''=今天）
+  function wsViewDate() {
+    return wsActiveDate || today();
+  }
+
+  // 8.7.0: 工作台查询日期窗口 [起始日, 结束日]
+  //  - 平时：选中日期单日查询（性能与旧版 today/today 完全一致）
+  //  - 自动审核运行中：开启日(最远回溯到 D-7) ~ 今天 —— 跨午夜后昨晚 23:50 这类
+  //    未审完的标本仍在 QryWorkList 结果里，自动审核能继续审掉（核心需求）
+  function getWSQueryRange() {
+    const end = today();
+    let start = wsViewDate();
+    if (start > end) {start = end;} // 未来日期钳制为今天
+    if (autoAuditEnabled()) {
+      const sd = String((_autoAudit && _autoAudit.startDate) || '');
+      if (sd && sd < start) {start = sd;}
+      const minStart = addDays(end, -7); // 安全上限：最多回溯 7 天，防异常状态把查询范围撑爆
+      if (start < minStart) {start = minStart;}
+      return [start, end];
+    }
+    return [start, start];
+  }
+
+  // 8.7.0: 头部日期控件标签
+  function wsDateLabel(dateStr) {
+    const td = today();
+    if (!dateStr || dateStr === td) {return '今天';}
+    if (dateStr === addDays(td, -1)) {return '昨天';}
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+    if (m) {return m[2] + '-' + m[3];}
+    return dateStr;
+  }
+
+  // 8.7.0: 只更新头部日期控件显示（不重建整个头部，避免搜索框内容丢失）
+  function updateWSDateControls() {
+    const btn = document.getElementById('lis-ws-date-btn');
+    if (!btn) {return;}
+    const v = wsViewDate();
+    const td = today();
+    const label = document.getElementById('lis-ws-date-label');
+    if (label) {label.textContent = wsDateLabel(v);}
+    btn.classList.toggle('past', !!wsActiveDate);
+    btn.title = wsActiveDate
+      ? '正在查看历史日期 ' + wsActiveDate + '，点击可改选其它日期'
+      : '点击选择日期（可查看/审核历史标本）';
+    const nextBtn = document.getElementById('lis-ws-date-next');
+    if (nextBtn) {nextBtn.disabled = v >= td;}
+    const todayBtn = document.getElementById('lis-ws-date-today');
+    if (todayBtn) {todayBtn.style.display = wsActiveDate ? '' : 'none';}
+  }
+
+  // 8.7.0: 切换工作台查看日期（''=今天）；作废在飞请求与缓存后按新日期强制重载。
+  // 空结果保护对「主动切日期」不适用：先清空 wsData，让新日期的空数据如实显示（不留旧日期假数据）。
+  async function setWSActiveDate(dateStr) {
+    let d = String(dateStr || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {d = '';}
+    if (d > today()) {d = '';} // 不允许未来日期，回今天
+    if (d === wsActiveDate) {updateWSDateControls(); return;}
+    wsActiveDate = d;
+    saveWSState();
+    _wsLoadSeq++;
+    wsLoading = false;
+    wsClassifying = false;
+    _classifyPendingRerun = false;
+    _classifyRunSeq++;
+    wsClassifiedCache = {};
+    _classifyVersion++;
+    wsChecked.clear();
+    wsAbnormalIndex = -1;
+    invalidateCaches({ detail: true, raw: true });
+    wsData = [];
+    updateWSDateControls();
+    renderWSTable();
+    renderWSCategoryBar();
+    const qi = document.getElementById('lis-qi');
+    if (qi) {qi.textContent = '加载 ' + wsViewDate() + ' 数据中...';}
+    try {
+      await loadWSData({ force: true });
+      showToast('已切换到 ' + (wsActiveDate ? wsActiveDate : '今天') + '：共 ' + wsData.length + ' 条', 'info');
+    } catch (e) {
+      dbg('切换日期加载数据失败:', e);
+    }
+  }
+
   function rowPassWSMachineFilter(row) {
     if (!row) {return false;}
     if (wsActiveWG && row._wg !== wsActiveWG) {return false;}
@@ -6588,7 +6703,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           wg: wsActiveWG,
           cat: wsCategory,
           mdr: wsActiveMachine,
-          multiMdr: wsSelectedMachinesByWG
+          multiMdr: wsSelectedMachinesByWG,
+          date: wsActiveDate // 8.7.0: 记住查看日期（刷新页面后接着看历史视图）
         })
       );
     } catch (e) { dbg('saveWSState 失败:', e.message); }
@@ -6607,7 +6723,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           : fallback.cat;
       const mdr = Object.prototype.hasOwnProperty.call(saved, 'mdr') ? String(saved.mdr) : fallback.mdr;
       const multiMdr = saved.multiMdr && typeof saved.multiMdr === 'object' ? saved.multiMdr : {};
-      return { wg, cat, mdr, multiMdr };
+      // 8.7.0: 恢复查看日期——只接受合法的过去日期，未来/非法一律回今天
+      let date = /^\d{4}-\d{2}-\d{2}$/.test(String(saved.date || '')) ? String(saved.date) : '';
+      if (date > today()) {date = '';}
+      return { wg, cat, mdr, multiMdr, date };
     } catch (e) {
       return fallback;
     }
@@ -6618,6 +6737,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     wsCategory = state.cat;
     wsActiveMachine = state.mdr;
     wsSelectedMachinesByWG = normalizeWSMachineFilterState(state.multiMdr || {});
+    wsActiveDate = state.date || ''; // 8.7.0: 恢复查看日期
     if (wsActiveWG && wsActiveMachine && !getWSSelectedMachineSet(wsActiveWG).size) {
       setWSSelectedMachineSet(wsActiveWG, new Set([String(wsActiveMachine)]));
       wsActiveMachine = '';
@@ -6846,6 +6966,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const qi = document.getElementById('lis-qi');
       if (qi) {qi.textContent = force ? '强制刷新中...' : '加载中...';}
 
+      // 8.7.0: 本次加载的查询日期窗口（平时=选中单日；自动审核运行中=开启日~今天）
+      const [qStart, qEnd] = getWSQueryRange();
+
       const curDR = wgDR();
       // 优先加载当前登录的工作组，其他组后台延迟加载
       const priorityWG = WG.find(w => w.dr === curDR);
@@ -6868,7 +6991,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
             .map(async m => {
               const result = { rows: [], pending: [], collected: [], machine: m, ok: true };
               try {
-                result.rows = await loadWL(m.RowID, ss);
+                result.rows = await loadWL(m.RowID, ss, qStart, qEnd); // 8.7.0: 按查询窗口取数
                 // 8.5.31: 待排 + 采集 并行拉取（同一接口不同 P1），避免串行多一次等待
                 [result.pending, result.collected] = await Promise.all([
                   loadPendingForMachine(m.RowID, ss).catch(() => []),
@@ -6941,7 +7064,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 8.6.3: 跨天例外再加一道门——本次加载存在失败（仪器/组机器列表）时即使跨天也保留旧数据。
         // 否则「午夜跨天 + 会话过期」组合（午夜无人重登，最常见）会让 dateChanged 绕过保护
         // 直接清空归零；只有各组都加载成功、新一天确实没标本时才允许归零。
-        const dateChanged = !!(_wsLoadedDate && _wsLoadedDate !== today());
+        // 8.7.0: 对比对象改为本次查询窗口结束日（自动审核跨午夜时窗口含昨天，昨晚标本不会被误清）
+        const dateChanged = !!(_wsLoadedDate && _wsLoadedDate !== qEnd);
         if (allData.length === 0 && wsData.length > 0 && (!dateChanged || failedMachineNames.length > 0)) {
           _wsDataHealth.failed = true;
           _wsDataHealth.partial = !!partial;
@@ -6954,7 +7078,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         }
         if (!partial) {_wsFullLoadFailStreak = 0;} // 8.6.3: 成功应用全量数据，清零失败计数
         // 8.5.42: 跨天后更新数据日期（无论清空重载还是正常更新，都归到新一天）
-        if (dateChanged || allData.length > 0) {_wsLoadedDate = today();}
+        if (dateChanged || allData.length > 0) {_wsLoadedDate = qEnd;}
         wsData = allData;
         // 8.5.82: 全量阶段存在失败仪器/组 → partial 置位（自动审核闸门暂停，防漏审）且不刷新 lastFullSuccessAt
         const _machinesUnhealthy = !partial && failedMachineNames.length > 0;
@@ -7118,6 +7242,18 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         return;
       }
 
+      // 8.7.0: 历史视图例外——查看过去日期时「空/失败」不代表会话失效（该日本来就可能没标本），
+      // 整页刷新兜底不适用，如实提示即可
+      if (wsActiveDate) {
+        showToast(
+          sessionDead
+            ? '会话可能已失效，请重新登录后再刷新历史视图'
+            : '已刷新 ' + wsActiveDate + '：' + (empty && !err ? '该日期无标本数据' : '加载失败，请稍后重试'),
+          empty && !err ? 'info' : 'warning'
+        );
+        return;
+      }
+
       // 锁屏/会话失效常见：一直 0 或接口失败 → 整页刷新（与浏览器强刷同效果）
       // 条件：曾经有过数据、或当前已是全 0、或明确会话错误
       if (sessionDead || hadData || alreadyEmpty || empty) {
@@ -7152,7 +7288,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return rows;
   }
 
-  async function loadWL(mdr, ss) {
+  async function loadWL(mdr, ss, dateStart, dateEnd) {
     const p = new URLSearchParams();
     p.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
     p.set('QueryName', 'QryWorkList');
@@ -7164,8 +7300,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // P11: ReportType (N^^^^)
     // P14: SessionStr
     p.set('P0', ''); // 空=全部状态
-    p.set('P1', today());
-    p.set('P2', today());
+    // 8.7.0: 查询日期窗口——平时=选中单日；自动审核运行中=开启日~今天（跨午夜续审昨晚标本）
+    p.set('P1', dateStart || today());
+    p.set('P2', dateEnd || dateStart || today());
     p.set('P10', mdr || '');
     p.set('P11', 'N^^^^');
     p.set('P14', ss);
@@ -7923,6 +8060,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
             <div class="ws-search-wrap">
                 <input type="text" class="ws-search" id="lis-ws-search" placeholder="姓名 / 检验号 / 流水号" />
             </div>
+            <div class="ws-date-bar" id="lis-ws-datebar">
+                <button class="ws-icon-btn" id="lis-ws-date-prev" title="前一天">◀</button>
+                <button class="ws-date-btn" id="lis-ws-date-btn"><span id="lis-ws-date-label">今天</span></button>
+                <button class="ws-icon-btn" id="lis-ws-date-next" title="后一天">▶</button>
+                <button class="ws-icon-btn" id="lis-ws-date-today" title="回到今天" style="display:none">今</button>
+                <input type="date" id="lis-ws-date-input" style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;border:0;padding:0" tabindex="-1" aria-hidden="true">
+            </div>
             <div class="ws-wg-inline">${wgHTML}</div>
             <div class="ws-right-group"><div class="ws-cat-hd-inline" data-ws-cat-tabs></div><div class="ws-acts">
                 <button class="ws-aa-btn" id="lis-ws-autoaudit" title="自动审核：按设定时长自动审核当前筛选范围的标本（正常批量+异常逐条；危急值/堵孔0值/传染病阳性等留人工）">🤖 自动审核</button>
@@ -7952,6 +8096,32 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // 8.5.61: 自动审核按钮 + 记录查看按钮（移至头部最右侧，刷新/CA密码旁）
     document.getElementById('lis-ws-autoaudit').addEventListener('click', () => openAutoAuditDialog());
     document.getElementById('lis-ws-aalog').addEventListener('click', () => openAutoAuditLogViewer());
+    // 8.7.0: 日期选择控件——◀ 后退一天 / 中间按钮弹日历 / ▶ 前进一天（到今天禁用）/ 今=回今天
+    document.getElementById('lis-ws-date-prev').addEventListener('click', () => {
+      setWSActiveDate(addDays(wsViewDate(), -1));
+    });
+    document.getElementById('lis-ws-date-next').addEventListener('click', () => {
+      const td = today();
+      const v = wsViewDate();
+      if (v < td) {setWSActiveDate(addDays(v, 1));}
+    });
+    document.getElementById('lis-ws-date-today').addEventListener('click', () => setWSActiveDate(''));
+    const _wsDateBtn = document.getElementById('lis-ws-date-btn');
+    const _wsDateInput = document.getElementById('lis-ws-date-input');
+    _wsDateBtn.addEventListener('click', () => {
+      try {
+        _wsDateInput.value = wsViewDate();
+        if (typeof _wsDateInput.showPicker === 'function') {_wsDateInput.showPicker();}
+        else {_wsDateInput.click();}
+      } catch (e) {
+        // showPicker 可能被浏览器策略拒绝，退化为聚焦让用户手动操作
+        try {_wsDateInput.focus(); _wsDateInput.click();} catch (e2) {}
+      }
+    });
+    _wsDateInput.addEventListener('change', () => {
+      if (_wsDateInput.value) {setWSActiveDate(_wsDateInput.value);}
+    });
+    updateWSDateControls();
     document.getElementById('lis-ws-search').addEventListener('input', () => {
       invalidateCaches();
       clearTimeout(_wsSearchTimer);
@@ -8364,6 +8534,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     pushMenubarStats({
       scope: describeWSScope(),
       url: location.href,
+      viewDate: wsViewDate(), // 8.7.0: 当前查看日期——历史视图时菜单栏可据此标注，避免误读为当日待审
       normalReady: normalCount,
       abnormalReady: abnormalCount,
       auditReady: normalCount + abnormalCount,
@@ -9747,7 +9918,8 @@ window.addEventListener('keydown',function(e){
     return {
       reportDR: specimen.ReportDR,
       mdr: prWorkGroupMachineDR(specimen) || '',
-      labno: specimen.Labno || ''
+      labno: specimen.Labno || '',
+      accDate: rowAcceptDateStr(specimen) // 8.7.0: 异常逐条审核路径同样需要按登记日期对齐原生列表
     };
   }
 
@@ -10854,6 +11026,7 @@ window.addEventListener('keydown',function(e){
         labno: row.Labno || '',
         name: row.PatName || '',
         testSet: row.TestSetDesc || '',
+        accDate: rowAcceptDateStr(row), // 8.7.0: 登记日期——跨午夜/历史标本审核时切原生列表日期用
         fingerprint: specimenFingerprint(row),
         status: sp.status || '',
         retry: 0
@@ -17944,9 +18117,15 @@ window.addEventListener('keydown',function(e){
       try {
         jq('#cmb_WorkGroupMachine').combogrid('setValue', '');
       } catch (e) {}
-      const dateStr = jq('#dt_wlReportDate').length
+      // 8.7.0: options.dateStr 显式指定日期时先写入原生日期框——
+      // 用于审核跨午夜的历史标本（如昨晚 23:50）与历史视图批审，审完由调用方恢复今天
+      const wantDate = String((options && options.dateStr) || '');
+      if (wantDate && jq('#dt_wlReportDate').length) {
+        try {jq('#dt_wlReportDate').datebox('setValue', wantDate);} catch (e) {}
+      }
+      const dateStr = wantDate || (jq('#dt_wlReportDate').length
         ? jq('#dt_wlReportDate').datebox('getValue') || jq('#dt_wlReportDate').datebox('getText') || today()
-        : today();
+        : today());
       const findStr = '&WorkGroupMachineDR=&ReportStatus=&SttAccDate=' + dateStr;
       if (typeof iframeWin.ShowWorkList === 'function') {iframeWin.ShowWorkList(findStr);}
       await sleep(options.fast ? 120 : 250);
@@ -17962,9 +18141,19 @@ window.addEventListener('keydown',function(e){
     const jq = iframeWin.jQuery || iframeWin.$;
     const me = iframeWin.me;
     if (!jq || !me) {return iframeWin;}
+    // 8.7.0: 标本登记日期与原生列表日期不一致时也视为「需要刷新」——
+    // 跨午夜自动审核昨晚标本 / 历史视图批审的命门：原生列表查的是今天，昨天的行永远选不中
+    const wantDate = String((options && options.dateStr) || item.accDate || '');
+    let nativeCurDate = '';
+    try {
+      nativeCurDate = jq('#dt_wlReportDate').length
+        ? jq('#dt_wlReportDate').datebox('getValue') || jq('#dt_wlReportDate').datebox('getText') || ''
+        : '';
+    } catch (e) {nativeCurDate = '';}
+    const dateChanged = !!(wantDate && nativeCurDate && wantDate !== nativeCurDate);
     const mdrKey = String(item.mdr || '');
     const machineChanged = mdrKey && String(me.WorkGroupMachineDR || '') !== mdrKey;
-    if (!machineChanged && !options.force) {return iframeWin;}
+    if (!machineChanged && !dateChanged && !options.force) {return iframeWin;}
     try {
       if (item.mdr) {
         if (me.WorkGroupMachineDR !== undefined) {me.WorkGroupMachineDR = item.mdr;}
@@ -17972,9 +18161,10 @@ window.addEventListener('keydown',function(e){
           jq('#cmb_WorkGroupMachine').combogrid('setValue', item.mdr);
         } catch (e) {}
       }
-      const dateStr = jq('#dt_wlReportDate').length
-        ? jq('#dt_wlReportDate').datebox('getValue') || jq('#dt_wlReportDate').datebox('getText') || today()
-        : today();
+      if (wantDate && jq('#dt_wlReportDate').length) {
+        try {jq('#dt_wlReportDate').datebox('setValue', wantDate);} catch (e) {}
+      }
+      const dateStr = wantDate || nativeCurDate || today();
       const findStr = '&WorkGroupMachineDR=' + (item.mdr || '') + '&ReportStatus=&SttAccDate=' + dateStr;
       if (typeof iframeWin.ShowWorkList === 'function') {iframeWin.ShowWorkList(findStr);}
       else if (typeof iframeWin.FindFast === 'function') {iframeWin.FindFast(item.labno || findStr);}
@@ -18187,6 +18377,7 @@ window.addEventListener('keydown',function(e){
   }
 
   async function continueAuditQueue(queue) {
+    let batchUsedCustomDate = false; // 8.7.0: 本队列是否为历史/跨午夜标本切过原生日期框（结束时恢复今天）
     if (!queue || !queue.items || queue.items.length === 0) {return;}
     if (wsClassifying) {
       queue._classifyingRetries = (queue._classifyingRetries || 0) + 1;
@@ -18406,6 +18597,10 @@ window.addEventListener('keydown',function(e){
 
         const item = currentQueueItem(queue);
         if (!item) {break;}
+
+        // 8.7.0: 该标本登记日非今天 → 原生列表需要按其日期刷新（waitAndSelectNativeRow 内自动处理），
+        // 并记录标记，队列结束后把原生日期框恢复回今天
+        if (item.accDate && item.accDate !== today()) {batchUsedCustomDate = true;}
 
         refreshQueueLock();
         refreshAuditLock(auditLockId); // 心跳：健康长批审不被 45s 假死判定误抢
@@ -18886,6 +19081,13 @@ window.addEventListener('keydown',function(e){
       releaseQueueLock();
       releaseAuditLock(auditLockId);
       stopAuditLockHeartbeat(auditLockId);
+      // 8.7.0: 审过历史/跨午夜标本时原生日期框被切走过，恢复回今天，避免原生页面停在旧日期
+      if (batchUsedCustomDate) {
+        const _fwRestore = getReportIframeWin();
+        if (_fwRestore) {
+          Promise.resolve(refreshNativeWorkListAllMachines(_fwRestore, { fast: true, dateStr: today() })).catch(() => {});
+        }
+      }
       if (resumeWSRefresh && isWSVisible()) {startWSRefresh();}
       setTimeout(() => {
         const p = document.getElementById('lis-audit-progress');
@@ -18963,6 +19165,8 @@ window.addEventListener('keydown',function(e){
         _autoAudit.enabled = false;
         _autoAudit.until = 0;
       }
+      // 8.7.0: 兼容旧状态——运行中但无 startDate（升级前开启）按今天兜底，不回溯历史
+      if (_autoAudit.enabled && !_autoAudit.startDate) {_autoAudit.startDate = today();}
     }
   }
   function saveAutoAuditState() {
@@ -18977,6 +19181,7 @@ window.addEventListener('keydown',function(e){
       enabled: true,
       until: Date.now() + dur * 60000,
       durationMin: dur,
+      startDate: today(), // 8.7.0: 开启日期——跨午夜后查询窗口从这天起，昨晚未审完标本仍可见可审
       rules: autoAuditRules(),
       // 8.5.67: 开启时刻固定审核范围（工作组+勾选仪器快照），之后勾选新仪器不再纳入
       scope: captureAuditScopeSnapshot()
@@ -19573,7 +19778,7 @@ window.addEventListener('keydown',function(e){
       row = wsData.find(r => String(r.ReportDR) === dr) || null;
     }
     if (!row) {
-      showToast('当前工作台数据里找不到该标本（可能已跨天或不在当日列表）', 'warning');
+      showToast('当前工作台数据里找不到该标本（可能已跨天）——可用左上角日期按钮切到该标本登记日再点跳转', 'warning');
       return;
     }
     openDetailPanel(row, 'all', -1);
