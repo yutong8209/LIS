@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.3
+// @version      8.8.4
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -809,11 +809,10 @@
 .ws-date-pill .ws-dp-caret{font-size:8px;opacity:.75;margin-top:1px}
 #lis-ws-date-next:disabled{opacity:.35;cursor:not-allowed}
 #lis-ws-date-next:disabled:hover{background:transparent;color:var(--lis-text-secondary)}
-/* 8.8.3: 快速回到今天按钮——查看历史日期时才出现（8.8.0 合并胶囊时被删，用户要求恢复） */
-#lis-ws-date-today{height:30px;min-width:30px;padding:0 7px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s,border-color .15s,color .15s;white-space:nowrap}
-#lis-ws-date-today:hover{background:var(--lis-primary-light);border-color:#c8956c;color:var(--lis-primary)}
-#lis-ws-date-today.past{background:#fff7e6;border-color:#f0b357;color:#b26a00}
-#lis-ws-date-today.past:hover{background:#ffefd2;border-color:#e09f3e;color:#8a5200}
+/* 8.8.3: 「今」按钮——查看历史日期时才出现（8.8.0 合并胶囊时被删，用户要求恢复）
+   8.8.4: 改为胶囊内区段（共享边框），与日期控件永远贴紧，不再隔开 */
+#lis-ws-date-today{border-left:1px solid var(--lis-border)}
+.ws-date-pill.past #lis-ws-date-today{color:#b26a00}
 /* 查看历史日期时琥珀色高亮，提醒当前不是今天的数据 */
 .ws-date-pill.past{border-color:#f0b357;background:#fff7e6}
 .ws-date-pill.past .ws-dp-main{color:#b26a00}
@@ -6608,12 +6607,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     const nextBtn = document.getElementById('lis-ws-date-next');
     if (nextBtn) {nextBtn.disabled = v >= td;}
-    // 8.8.3: 「今」按钮——查看历史日期时显示（回到今天后隐藏，因为已经是今天）
+    // 8.8.3: 「今」按钮——查看历史日期时显示（回到今天后隐藏，因为已经是今天）；
+    // 8.8.4: 并入胶囊内区段，胶囊自身 .past 琥珀高亮即可，按钮不再单独加类
     const todayBtn = document.getElementById('lis-ws-date-today');
-    if (todayBtn) {
-      todayBtn.style.display = wsActiveDate ? '' : 'none';
-      todayBtn.classList.toggle('past', !!wsActiveDate);
-    }
+    if (todayBtn) {todayBtn.style.display = wsActiveDate ? '' : 'none';}
     // 日历弹层开着时同步：前一天/后一天步进后选中态与月份跟随
     if (document.getElementById('lis-ws-date-picker')) {wsDatePickerRender();}
   }
@@ -8223,8 +8220,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                 <button class="ws-dp-zone" id="lis-ws-date-prev" title="前一天">◀</button>
                 <button class="ws-dp-zone ws-dp-main" id="lis-ws-date-btn" title="点击弹出日历选择日期（可查看/审核历史标本）"><span id="lis-ws-date-label">今天</span><span class="ws-dp-caret">▾</span></button>
                 <button class="ws-dp-zone" id="lis-ws-date-next" title="后一天">▶</button>
+                <button type="button" class="ws-dp-zone ws-dp-now" id="lis-ws-date-today" title="回到今天" style="display:none">今</button>
             </div>
-            <button type="button" id="lis-ws-date-today" title="回到今天" style="display:none">今</button>
             <div class="ws-wg-inline">${wgHTML}</div>
             <div class="ws-right-group"><div class="ws-cat-hd-inline" data-ws-cat-tabs></div><div class="ws-acts">
                 <button class="ws-aa-btn" id="lis-ws-autoaudit" title="自动审核：按设定时长自动审核当前筛选范围的标本（正常批量+异常逐条；危急值/堵孔0值/传染病阳性等留人工）">🤖 自动审核</button>
