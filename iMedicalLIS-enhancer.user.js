@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.0
+// @version      8.8.1
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10023,6 +10023,14 @@ window.addEventListener('keydown',function(e){
         });
         iframeWin = getReportIframeWin() || iframeWin;
       }
+      // 8.8.1: FindFast/选行后立即把焦点拉回详情面板（若还开着），
+      // 避免焦点滞留原生 iframe 可编辑控件（快速查找框/日期框/编辑格），
+      // 导致下一次 Enter 被原生输入吃掉、详情审核不触发（连续 Enter 审第二条失效的根因）。
+      // 仅详情面板场景需要；列表视图（无面板）不受影响。
+      if (isDetailPanelVisible()) {
+        try {releaseNativeReportFocus();} catch (e) {}
+        refocusDetailPanel();
+      }
       if (!isReportDetailLoaded(iframeWin, reportDR)) {
         // 8.5.35: 预热详情等待 4500 → 3500（后台预热，避免用户紧跟 Enter 时被 4.5s 拖住）
         await waitReportDetailReady(iframeWin, reportDR, 3500, { fastBatch: true });
@@ -10031,6 +10039,7 @@ window.addEventListener('keydown',function(e){
       if (isReportDetailLoaded(iframeWin, reportDR)) {
         _abnormalNativeReadyDR = reportDR;
       }
+      return true; // 8.8.1: 驱动过原生页（FindFast/选行/等详情）才返回 true，供调用方决定是否回收焦点
     })().finally(() => {
       if (_abnormalPrewarmDR === reportDR) {_abnormalPrewarmPromise = null;}
     });
@@ -11746,7 +11755,22 @@ window.addEventListener('keydown',function(e){
       if (_detailAuditInProgress || _auditInProgress || _abnormalAuditInProgress) {return;}
       if (!isDetailPanelVisible() || !currentDetailSpecimen) {return;}
       if (String(currentDetailSpecimen.ReportDR) !== String(specimen.ReportDR)) {return;}
-      prewarmAbnormalAuditNative(specimen).catch(() => {});
+      prewarmAbnormalAuditNative(specimen)
+        .catch(() => false)
+        .then(drove => {
+          // 8.8.1: 预热驱动原生页后（FindFast/日期框 setValue/选行）焦点常落在 iframe 内的
+          // 可编辑控件（快速查找框/日期框/网格编辑格）。此时再按 Enter 会被 _f4BridgeHandler
+          // 的 isEditableEventTarget 放行给原生输入、不触发详情审核（用户反馈：审完第一条自动跳
+          // 第二条后 Enter 失效，须点列表该标本才能继续）。预热完把焦点拉回详情面板，
+          // 保证连续 Enter 直接审下一条（与 scheduleAbnormalFocusRecovery 同款收尾）。
+          // 仅当预热真正驱动过原生页（drove=true）才回收焦点；用户正看其它标本的跳过路径不抢。
+          if (!drove) {return;}
+          if (_detailAuditInProgress || _auditInProgress || _abnormalAuditInProgress) {return;}
+          if (!isDetailPanelVisible() || !currentDetailSpecimen) {return;}
+          if (String(currentDetailSpecimen.ReportDR) !== String(specimen.ReportDR)) {return;}
+          releaseNativeReportFocus();
+          refocusDetailPanel();
+        });
     }, delay);
   }
 
