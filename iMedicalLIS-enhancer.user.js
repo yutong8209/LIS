@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.1
+// @version      8.8.2
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6557,15 +6557,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   //  - 平时：选中日期单日查询（性能与旧版 today/today 完全一致）
   //  - 自动审核运行中：开启日(最远回溯到 D-7) ~ 今天 —— 跨午夜后昨晚 23:50 这类
   //    未审完的标本仍在 QryWorkList 结果里，自动审核能继续审掉（核心需求）
+  // 8.8.2: 修正两点——(1) D-7 只约束「自动审核按开启日回溯」这条扩展，不钳制用户主动选的
+  // 历史日期（用户选 10 天前就如实查 10 天前）；(2) 扩展永不把窗口起点推得比用户查看日更晚
   function getWSQueryRange() {
     const end = today();
     let start = wsViewDate();
     if (start > end) {start = end;} // 未来日期钳制为今天
     if (autoAuditEnabled()) {
       const sd = String((_autoAudit && _autoAudit.startDate) || '');
-      if (sd && sd < start) {start = sd;}
-      const minStart = addDays(end, -7); // 安全上限：最多回溯 7 天，防异常状态把查询范围撑爆
-      if (start < minStart) {start = minStart;}
+      // 仅当「开启日」比用户当前查看日更早时才向回扩展；最多回溯 D-7（防异常状态撑爆），
+      // 且扩展后的起点不晚于用户主动选择的查看日（min(start, minStart) 保证）
+      if (sd && sd < start) {
+        const minStart = addDays(end, -7);
+        start = sd < minStart ? Math.min(start, minStart) : sd;
+      }
       return [start, end];
     }
     return [start, start];
@@ -6969,6 +6974,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     document.body.style.overflow = '';
     stopWSRefresh();
     closeDetailPanel(true); // 关闭详情面板，避免工作台关闭后详情面板残留
+    restoreNativeDateboxToday(); // 8.8.2: 工作台关闭兜底——原生日期框若被历史审核切走过，恢复今天
     updateAbnormalEnterBridge();
     // 清理键盘监听器
     _removeAbnormalKeyHandler();
@@ -9902,6 +9908,9 @@ window.addEventListener('keydown',function(e){
   let _nativeUserSelectDR = '';
   let _nativeUserSelectAt = 0;
   let _nativeGuardTimer = null;
+  // 8.8.2: 原生日期框被切到非今天（跨午夜/历史审核）——会话结束时恢复今天，
+  // 覆盖异常逐条 / 详情面板 / 预热路径（批审原来只有 continueAuditQueue 恢复）
+  let _wsDateboxCustom = false;
 
   function markAbnormalAuditUI(specimen, phase) {
     if (!specimen) {return;}
@@ -9995,7 +10004,10 @@ window.addEventListener('keydown',function(e){
       if (mdrKey) {
         const mdrChanged = mdrKey !== String(_abnormalLastMdr || '');
         const nativeMismatch = !nativeMachineMatches(iframeWin, mdrKey);
-        if (mdrChanged || nativeMismatch) {
+        // 8.8.2: 同机器但登记日不同（跨午夜/历史标本）也要刷新原生列表——否则列表停在今天，
+        // 昨天的行永远选不中（prewarm 白等 2.8s 超时）
+        const dateDiff = nativeDateDiffers(iframeWin, item.accDate);
+        if (mdrChanged || nativeMismatch || dateDiff) {
           iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
           _abnormalLastMdr = mdrKey;
         } else {
@@ -10066,6 +10078,22 @@ window.addEventListener('keydown',function(e){
     return String(iframeWin.me.WorkGroupMachineDR || '') === String(mdrKey);
   }
 
+  // 8.8.2: 原生日期框当前值与标本登记日不一致（跨午夜/历史标本同机器时也要切日期）。
+  // 日期框读不到值也视为「需要切」——保守刷新，避免停在错误的默认日期上选不中行
+  function nativeDateDiffers(iframeWin, accDate) {
+    if (!iframeWin || !accDate) {return false;}
+    const jq = iframeWin.jQuery || iframeWin.$;
+    if (!jq) {return false;}
+    try {
+      const cur = jq('#dt_wlReportDate').length
+        ? jq('#dt_wlReportDate').datebox('getValue') || jq('#dt_wlReportDate').datebox('getText') || ''
+        : '';
+      return !cur || String(cur) !== String(accDate);
+    } catch (e) {
+      return false;
+    }
+  }
+
   async function ensureSpecimenReadyForAudit(iframeWin, specimen, ctx = {}) {
     const reportDR = specimen.ReportDR;
     const item = specimenToAuditItem(specimen);
@@ -10087,7 +10115,8 @@ window.addEventListener('keydown',function(e){
     }
 
     let listFresh = false;
-    if (mdrKey && (mdrChanged || nativeMismatch)) {
+    if (mdrKey && (mdrChanged || nativeMismatch || nativeDateDiffers(iframeWin, item.accDate))) {
+      // 8.8.2: 机器或登记日任一变化都刷新原生列表（跨午夜/历史标本同机器时日期也要切）
       iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast });
       ctx.lastMdr = mdrKey;
       listFresh = true;
@@ -10572,6 +10601,9 @@ window.addEventListener('keydown',function(e){
       if (resumeWSRefresh && isWSVisible()) {startWSRefresh();}
       updateWSFooter();
       dbg('异常列表审核结束');
+      // 8.8.2: 手动单条审核跨午夜/历史标本后恢复原生日期框（自动审核一轮的恢复由 autoAuditTick finally 统一收口；
+      // 有排队下一条时不恢复——连续 Enter 审历史标本时避免每条都切来切去，审完最后一条才恢复今天）
+      if (!_autoAuditRunning && !_abnormalAuditQueued) {restoreNativeDateboxToday();}
       if (wsCategory === 'audit') {scheduleAbnormalFocusRecovery();}
       if (_abnormalAuditQueued) {
         _abnormalAuditQueued = false;
@@ -12042,6 +12074,8 @@ window.addEventListener('keydown',function(e){
     // 隐藏遮罩层
     const overlay = document.getElementById('lis-detail-overlay');
     if (overlay) {overlay.style.display = 'none';}
+    // 8.8.2: 详情面板会话结束（审过跨午夜/历史标本）——原生日期框恢复今天
+    restoreNativeDateboxToday();
     // 详情已关闭：恢复 iframe Enter 桥（若在待审视图则重新激活，否则置 inactive）
     updateAbnormalEnterBridge();
     // 如果当前是待审视图，恢复键盘监听
@@ -18276,6 +18310,8 @@ window.addEventListener('keydown',function(e){
       if (wantDate && jq('#dt_wlReportDate').length) {
         try {jq('#dt_wlReportDate').datebox('setValue', wantDate);} catch (e) {}
       }
+      // 8.8.2: 切到非今天也标记（批审起始对齐首条日期等），会话结束统一恢复
+      if (wantDate && wantDate !== today()) {_wsDateboxCustom = true;}
       const dateStr = wantDate || (jq('#dt_wlReportDate').length
         ? jq('#dt_wlReportDate').datebox('getValue') || jq('#dt_wlReportDate').datebox('getText') || today()
         : today());
@@ -18296,6 +18332,8 @@ window.addEventListener('keydown',function(e){
     if (!jq || !me) {return iframeWin;}
     // 8.7.0: 标本登记日期与原生列表日期不一致时也视为「需要刷新」——
     // 跨午夜自动审核昨晚标本 / 历史视图批审的命门：原生列表查的是今天，昨天的行永远选不中
+    // 8.8.2: 日期框还读不到值时（页面刚加载）同样按「需要切日期」处理，否则提前返回不刷新，
+    // 列表停在默认今天，跨午夜标本照样选不中
     const wantDate = String((options && options.dateStr) || item.accDate || '');
     let nativeCurDate = '';
     try {
@@ -18303,7 +18341,7 @@ window.addEventListener('keydown',function(e){
         ? jq('#dt_wlReportDate').datebox('getValue') || jq('#dt_wlReportDate').datebox('getText') || ''
         : '';
     } catch (e) {nativeCurDate = '';}
-    const dateChanged = !!(wantDate && nativeCurDate && wantDate !== nativeCurDate);
+    const dateChanged = !!(wantDate && (!nativeCurDate || wantDate !== nativeCurDate));
     const mdrKey = String(item.mdr || '');
     const machineChanged = mdrKey && String(me.WorkGroupMachineDR || '') !== mdrKey;
     if (!machineChanged && !dateChanged && !options.force) {return iframeWin;}
@@ -18317,6 +18355,8 @@ window.addEventListener('keydown',function(e){
       if (wantDate && jq('#dt_wlReportDate').length) {
         try {jq('#dt_wlReportDate').datebox('setValue', wantDate);} catch (e) {}
       }
+      // 8.8.2: 登记日非今天 → 标记日期框被切走，会话结束（批审完/自动审核一轮完/关面板/关工作台）恢复今天
+      if (wantDate && wantDate !== today()) {_wsDateboxCustom = true;}
       const dateStr = wantDate || nativeCurDate || today();
       const findStr = '&WorkGroupMachineDR=' + (item.mdr || '') + '&ReportStatus=&SttAccDate=' + dateStr;
       if (typeof iframeWin.ShowWorkList === 'function') {iframeWin.ShowWorkList(findStr);}
@@ -18333,6 +18373,19 @@ window.addEventListener('keydown',function(e){
     const fillEl = document.getElementById('lis-prog-fill');
     if (textEl && text) {textEl.textContent = text;}
     if (fillEl && typeof pct === 'number') {fillEl.style.width = Math.max(0, Math.min(100, pct)) + '%';}
+  }
+
+  // 8.8.2: 原生日期框若被跨午夜/历史审核切到非今天，会话结束时恢复今天——
+  // 批审/自动审核一轮/关详情面板/关工作台四处统一收口（原只有批审 finally 恢复）
+  // 仅当工作台当前查看「今天」时恢复：用户主动在历史日期视图审核时，原生页停在
+  // 该日期是符合预期的（与查看日一致），不强行拉回今天
+  function restoreNativeDateboxToday() {
+    if (!_wsDateboxCustom) {return;}
+    if (wsViewDate() !== today()) {return;}
+    const w = getReportIframeWin();
+    if (!w) {return;}
+    _wsDateboxCustom = false;
+    Promise.resolve(refreshNativeWorkListAllMachines(w, { fast: true, dateStr: today() })).catch(() => {});
   }
 
   async function waitAndSelectNativeRow(iframeWin, item, options = {}) {
@@ -18703,7 +18756,11 @@ window.addEventListener('keydown',function(e){
 
       const prepHint = batchCAReady ? 'CA 已就绪，秒审模式...' : '首条将自动 CA 认证，加载全部仪器列表...';
       updateBatchProgress(prepHint, 0);
-      iframeWin = await refreshNativeWorkListAllMachines(iframeWin, { fast: true });
+      // 8.8.2: 批审起始刷新对齐首条标本的登记日（跨午夜续审昨晚标本时直接从昨晚列表开始，
+      // 首条不再先在今天的空列表上白等超时；无日期回退今天）
+      const _firstQItem = currentQueueItem(queue);
+      const _startDate = (_firstQItem && _firstQItem.accDate) || '';
+      iframeWin = await refreshNativeWorkListAllMachines(iframeWin, { fast: true, dateStr: _startDate || today() });
       if (iframeWin) {
         jq = iframeWin.jQuery || iframeWin.$;
         me = iframeWin.me;
@@ -19235,12 +19292,8 @@ window.addEventListener('keydown',function(e){
       releaseAuditLock(auditLockId);
       stopAuditLockHeartbeat(auditLockId);
       // 8.7.0: 审过历史/跨午夜标本时原生日期框被切走过，恢复回今天，避免原生页面停在旧日期
-      if (batchUsedCustomDate) {
-        const _fwRestore = getReportIframeWin();
-        if (_fwRestore) {
-          Promise.resolve(refreshNativeWorkListAllMachines(_fwRestore, { fast: true, dateStr: today() })).catch(() => {});
-        }
-      }
+      // 8.8.2: batchUsedCustomDate 保留兼容；_wsDateboxCustom 覆盖预热/其它路径切走的日期
+      if (batchUsedCustomDate || _wsDateboxCustom) {restoreNativeDateboxToday();}
       if (resumeWSRefresh && isWSVisible()) {startWSRefresh();}
       setTimeout(() => {
         const p = document.getElementById('lis-audit-progress');
@@ -19610,6 +19663,8 @@ window.addEventListener('keydown',function(e){
     } finally {
       _autoAuditMute = prevMute;
       _autoAuditRunning = false;
+      // 8.8.2: 一轮自动审核结束（可能审过跨午夜/历史标本）——原生日期框恢复今天
+      restoreNativeDateboxToday();
       // 长循环中途到期兜底
       if (autoAuditEnabled() && Date.now() >= _autoAudit.until) {stopAutoAudit('到期');}
       else if (!autoAuditEnabled() && _autoAuditCancelRequested) {_batchAbort = true;}
