@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.7.0
+// @version      8.8.0
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -782,11 +782,11 @@
 /* --- 全屏工作台 --- */
 #lis-ws{position:fixed!important;inset:0!important;z-index:100000!important;background:var(--lis-bg);display:none;color:var(--lis-text);font-family:var(--lis-font)}
 #lis-ws.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
-#lis-ws-hd{background:var(--lis-surface);padding:6px 14px;display:flex;align-items:center;gap:10px;flex-shrink:0!important;border-bottom:1px solid var(--lis-border);box-shadow:0 1px 0 rgba(31,41,51,.04)}
-#lis-ws-hd .ws-title{display:flex;align-items:center;gap:8px;min-width:128px}
+#lis-ws-hd{background:var(--lis-surface);padding:6px 12px;display:flex;align-items:center;gap:8px;flex-shrink:0!important;border-bottom:1px solid var(--lis-border);box-shadow:0 1px 0 rgba(31,41,51,.04)}
+#lis-ws-hd .ws-title{display:flex;align-items:center;gap:6px;min-width:0}
 #lis-ws-hd .ws-title-dot{width:4px;height:20px;border-radius:2px;background:var(--lis-primary);display:inline-block}
 #lis-ws-hd h3{margin:0;font-size:15px;line-height:1;color:var(--lis-text);font-weight:700;white-space:nowrap;letter-spacing:0}
-#lis-ws-hd .ws-search-wrap{position:relative;flex:0 1 360px;min-width:220px}
+#lis-ws-hd .ws-search-wrap{position:relative;flex:0 1 300px;min-width:170px}
 #lis-ws-hd .ws-search-wrap::before{content:'⌕';position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#6b7785;font-size:14px}
 #lis-ws-hd .ws-search{width:100%;box-sizing:border-box;padding:7px 10px 7px 30px;border:1px solid var(--lis-border);border-radius:6px;font-size:12px;outline:none;background:var(--lis-primary-lighter);color:var(--lis-text);transition:border-color .15s,background .15s}
 #lis-ws-hd .ws-search:focus{background:#fffdfb;border-color:var(--lis-primary);box-shadow:0 0 0 2px rgba(180,83,9,.12)}
@@ -796,21 +796,39 @@
 #lis-ws-hd .ws-icon-btn.danger:hover{border-color:#dc2626;color:var(--lis-error);background:#fef2f2}
 @keyframes lis-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 #lis-ws-hd .ws-icon-btn.spinning{animation:lis-spin .8s linear infinite;pointer-events:none;opacity:.6}
-#lis-ws-hd .ws-aa-btn{padding:5px 10px;height:30px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;transition:background .15s,border-color .15s,color .15s;flex-shrink:0}
+#lis-ws-hd .ws-aa-btn{padding:4px 9px;height:30px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;transition:background .15s,border-color .15s,color .15s;flex-shrink:0}
 #lis-ws-hd .ws-aa-btn:hover{background:var(--lis-primary-light);border-color:var(--lis-border);color:var(--lis-primary)}
 #lis-ws-hd .ws-aa-btn.on{background:#168276;border-color:#168276;color:#fff;box-shadow:0 0 0 1px rgba(22,130,118,.35)}
 #lis-ws-hd .ws-aa-btn.on:hover{background:#0f6b60;border-color:#0f6b60;color:#fff}
-/* 8.7.0: 头部日期选择控件 */
-.ws-date-bar{display:flex;align-items:center;gap:4px;flex-shrink:0;padding:0 2px;position:relative}
-.ws-date-bar .ws-icon-btn{width:26px;height:30px;font-size:11px;padding:0}
+/* 8.8.0: 头部日期控件——单一「日期胶囊」◀ 前一天 / 中间弹出日历 / ▶ 后一天，替代 8.7.0 的 4 个独立按钮省空间 */
+.ws-date-pill{display:flex;align-items:stretch;flex-shrink:0;height:30px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);overflow:hidden;transition:border-color .15s,background .15s}
+.ws-date-pill:hover{border-color:#c8956c}
+.ws-date-pill .ws-dp-zone{border:none;background:transparent;color:var(--lis-text-secondary);cursor:pointer;font-size:11px;font-weight:700;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,color .15s;white-space:nowrap}
+.ws-date-pill .ws-dp-zone:hover{background:var(--lis-primary-light);color:var(--lis-primary)}
+.ws-date-pill .ws-dp-main{min-width:58px;gap:4px;font-size:12px;padding:0 8px;border-left:1px solid var(--lis-border);border-right:1px solid var(--lis-border)}
+.ws-date-pill .ws-dp-caret{font-size:8px;opacity:.75;margin-top:1px}
 #lis-ws-date-next:disabled{opacity:.35;cursor:not-allowed}
-#lis-ws-date-next:disabled:hover{background:var(--lis-surface);border-color:var(--lis-border);color:var(--lis-text-secondary)}
-#lis-ws-date-today{width:auto !important;padding:0 8px !important;font-size:11px !important;font-weight:700}
-.ws-date-btn{height:30px;min-width:64px;padding:0 10px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;transition:background .15s,border-color .15s,color .15s}
-.ws-date-btn:hover{background:var(--lis-primary-light);color:var(--lis-primary)}
+#lis-ws-date-next:disabled:hover{background:transparent;color:var(--lis-text-secondary)}
 /* 查看历史日期时琥珀色高亮，提醒当前不是今天的数据 */
-.ws-date-btn.past{background:#fff7e6;border-color:#f0b357;color:#b26a00}
-.ws-date-btn.past:hover{background:#ffefd2;border-color:#e09f3e;color:#8a5200}
+.ws-date-pill.past{border-color:#f0b357;background:#fff7e6}
+.ws-date-pill.past .ws-dp-main{color:#b26a00}
+.ws-date-pill.past .ws-dp-zone:hover{background:#ffefd2;color:#8a5200}
+/* 8.8.0: 工作台日历弹层（自绘，不依赖 showPicker——Safari 不支持原生弹出） */
+#lis-ws-date-picker{position:fixed;z-index:100021;width:252px;background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:6px;box-shadow:0 8px 24px rgba(31,45,61,.18);padding:8px;font-family:var(--lis-font)}
+#lis-ws-date-picker .ws-dp-head{display:flex;gap:6px;margin-bottom:8px;align-items:center}
+#lis-ws-date-picker select{height:26px;border:1px solid #ddd6ce;border-radius:4px;background:#fffdfb;color:#292524;font-size:12px;padding:0 4px;flex:1;cursor:pointer}
+#lis-ws-date-picker .ws-dp-today{height:26px;border:1px solid #c8956c;border-radius:4px;background:#fef9ee;color:#a87548;font-size:12px;font-weight:700;padding:0 8px;cursor:pointer;white-space:nowrap}
+#lis-ws-date-picker .ws-dp-today:hover{background:#ffefd2;border-color:#e09f3e;color:#8a5200}
+#lis-ws-date-picker .ws-dp-week,#lis-ws-date-picker .ws-dp-days{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+#lis-ws-date-picker .ws-dp-week span{font-size:10px;color:#a8a29e;text-align:center;padding:2px 0}
+#lis-ws-date-picker .ws-dp-days button{height:26px;border:1px solid transparent;border-radius:4px;background:#fffdfb;color:#292524;font-size:12px;padding:0;cursor:pointer}
+#lis-ws-date-picker .ws-dp-days button.blank{visibility:hidden;pointer-events:none}
+#lis-ws-date-picker .ws-dp-days button:hover{background:var(--lis-primary-lighter);border-color:var(--lis-border)}
+#lis-ws-date-picker .ws-dp-days button.on{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff;font-weight:700}
+#lis-ws-date-picker .ws-dp-days button.today:not(.on){border-color:#c8956c;color:#a87548;font-weight:700}
+#lis-ws-date-picker .ws-dp-foot{display:flex;gap:6px;margin-top:8px}
+#lis-ws-date-picker .ws-dp-foot button{flex:1;height:26px;border:1px solid var(--lis-border);border-radius:4px;background:var(--lis-primary-lighter);color:var(--lis-text-secondary);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
+#lis-ws-date-picker .ws-dp-foot button:hover{background:var(--lis-primary-light);color:var(--lis-primary);border-color:var(--lis-primary-hover)}
 #lis-auto-audit-log{position:fixed;inset:0;z-index:100022;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
 #lis-auto-audit-log.show{display:flex}
 #lis-auto-audit-log-box{background:#fff;border-radius:12px;width:800px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4);overflow:hidden}
@@ -925,14 +943,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 #lis-ws-ft{background:var(--lis-surface);padding:4px 14px;display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary);flex-shrink:0!important;border-top:1px solid var(--lis-border)}
 
 /* --- 仪器标签栏 --- */
-#lis-ws-tabs{background:var(--lis-surface);padding:5px 14px 4px;display:flex!important;align-items:flex-start!important;justify-content:flex-start!important;text-align:left!important;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
+#lis-ws-tabs{background:var(--lis-surface);padding:4px 10px 3px;display:flex!important;align-items:flex-start!important;justify-content:flex-start!important;text-align:left!important;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
 #lis-ws-tabs::-webkit-scrollbar{display:none}
 .ws-ws-row1{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .ws-wg-row{display:none}
-.ws-wg-inline{display:flex;align-items:center;gap:3px;flex-shrink:0;margin-left:4px}
-.ws-wg-inline .ws-wg-tab{padding:4px 9px;border-radius:5px;font-size:12px;font-weight:600}
+.ws-wg-inline{display:flex;align-items:center;gap:2px;flex-shrink:0;margin-left:2px}
+.ws-wg-inline .ws-wg-tab{padding:4px 7px;border-radius:5px;font-size:12px;font-weight:600}
 .ws-wg-inline .ws-wg-tab .mach-cnt{font-size:10px;padding:0 5px;min-width:15px}
-.ws-right-group{display:flex;align-items:center;gap:8px;margin-left:auto;padding-left:10px;border-left:1px solid var(--lis-border);flex-shrink:0}
+.ws-right-group{display:flex;align-items:center;gap:6px;margin-left:auto;padding-left:8px;border-left:1px solid var(--lis-border);flex-shrink:0}
 .ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap;min-width:0}
 .ws-ws-row1{display:none}
 .ws-cat-row-inline{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0;flex-wrap:wrap;min-width:0}
@@ -966,7 +984,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
 /* --- 分类标签栏 --- */
 #lis-ws-bar{display:none}
-.cat-tab{padding:3px 10px;border-radius:5px;border:1px solid var(--lis-border);background:var(--lis-surface);cursor:pointer;font-size:12px;font-weight:600;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:5px;color:var(--lis-text)}
+.cat-tab{padding:3px 8px;border-radius:5px;border:1px solid var(--lis-border);background:var(--lis-surface);cursor:pointer;font-size:12px;font-weight:600;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:5px;color:var(--lis-text)}
 .cat-tab:hover{border-color:#7ebbb3;background:var(--lis-primary-lighter)}
 .cat-tab.on{border-color:transparent;background:var(--lis-primary);color:#fff}
 .cat-tab .cat-cnt{border-radius:10px;padding:0 6px;font-size:11px;min-width:15px;text-align:center;line-height:1.55;font-weight:700}
@@ -6563,22 +6581,25 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return dateStr;
   }
 
-  // 8.7.0: 只更新头部日期控件显示（不重建整个头部，避免搜索框内容丢失）
+  // 8.8.0: 只更新头部日期胶囊显示（不重建整个头部，避免搜索框内容丢失）
   function updateWSDateControls() {
-    const btn = document.getElementById('lis-ws-date-btn');
-    if (!btn) {return;}
+    const pill = document.getElementById('lis-ws-date-pill');
+    if (!pill) {return;}
     const v = wsViewDate();
     const td = today();
     const label = document.getElementById('lis-ws-date-label');
     if (label) {label.textContent = wsDateLabel(v);}
-    btn.classList.toggle('past', !!wsActiveDate);
-    btn.title = wsActiveDate
-      ? '正在查看历史日期 ' + wsActiveDate + '，点击可改选其它日期'
-      : '点击选择日期（可查看/审核历史标本）';
+    pill.classList.toggle('past', !!wsActiveDate);
+    const mainBtn = document.getElementById('lis-ws-date-btn');
+    if (mainBtn) {
+      mainBtn.title = wsActiveDate
+        ? '正在查看历史日期 ' + wsActiveDate + '，点击弹出日历改选日期'
+        : '点击弹出日历选择日期（可查看/审核历史标本）';
+    }
     const nextBtn = document.getElementById('lis-ws-date-next');
     if (nextBtn) {nextBtn.disabled = v >= td;}
-    const todayBtn = document.getElementById('lis-ws-date-today');
-    if (todayBtn) {todayBtn.style.display = wsActiveDate ? '' : 'none';}
+    // 日历弹层开着时同步：前一天/后一天步进后选中态与月份跟随
+    if (document.getElementById('lis-ws-date-picker')) {wsDatePickerRender();}
   }
 
   // 8.7.0: 切换工作台查看日期（''=今天）；作废在飞请求与缓存后按新日期强制重载。
@@ -6612,6 +6633,127 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     } catch (e) {
       dbg('切换日期加载数据失败:', e);
     }
+  }
+
+  // 8.8.0: 工作台日历弹层（自绘，Safari 无 showPicker 也能稳定弹日历）
+  let _wsDatePickerState = null; // 弹层当前展示的年月 {y, m}
+  let _wsDatePickerCleanup = null;
+
+  function wsCloseDatePicker() {
+    const p = document.getElementById('lis-ws-date-picker');
+    if (p) {p.remove();}
+    if (_wsDatePickerCleanup) {
+      _wsDatePickerCleanup();
+      _wsDatePickerCleanup = null;
+    }
+    _wsDatePickerState = null;
+  }
+
+  // 重建弹层内容并重新绑定事件；由月份切换 / 前一天·后一天步进后调用
+  function wsDatePickerRender() {
+    const picker = document.getElementById('lis-ws-date-picker');
+    if (!picker || !_wsDatePickerState) {return;}
+    const st = _wsDatePickerState;
+    const viewYear = st.y;
+    const viewMonth = st.m;
+    const sel = wsViewDate();
+    const td = today();
+    const minYear = Math.min(2020, new Date().getFullYear() - 5, viewYear - 2);
+    const maxYear = Math.max(new Date().getFullYear() + 1, viewYear + 2);
+    const years = [];
+    for (let y = minYear; y <= maxYear; y += 1) {
+      years.push(`<option value="${y}"${y === viewYear ? ' selected' : ''}>${y}年</option>`);
+    }
+    const months = [];
+    for (let m = 1; m <= 12; m += 1) {
+      months.push(`<option value="${m}"${m === viewMonth ? ' selected' : ''}>${m}月</option>`);
+    }
+    const firstDay = new Date(viewYear, viewMonth - 1, 1).getDay();
+    const count = new Date(viewYear, viewMonth, 0).getDate();
+    const days = [];
+    for (let i = 0; i < firstDay; i += 1) {days.push('<button type="button" class="blank" tabindex="-1"></button>');}
+    for (let d = 1; d <= count; d += 1) {
+      const value = viewYear + '-' + String(viewMonth).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+      let cls = '';
+      if (value === sel) {cls += ' on';}
+      if (value === td) {cls += ' today';}
+      days.push(`<button type="button" data-date="${value}" class="${cls.trim()}">${d}</button>`);
+    }
+    picker.innerHTML = `
+      <div class="ws-dp-head">
+        <select class="ws-dp-year">${years.join('')}</select>
+        <select class="ws-dp-month">${months.join('')}</select>
+        <button type="button" class="ws-dp-today">今天</button>
+      </div>
+      <div class="ws-dp-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+      <div class="ws-dp-days">${days.join('')}</div>
+      <div class="ws-dp-foot">
+        <button type="button" id="ws-dp-prevday">◀ 前一天</button>
+        <button type="button" id="ws-dp-nextday">后一天 ▶</button>
+      </div>`;
+    picker.querySelector('.ws-dp-year').addEventListener('change', e => {
+      st.y = Number(e.target.value);
+      wsDatePickerRender();
+    });
+    picker.querySelector('.ws-dp-month').addEventListener('change', e => {
+      st.m = Number(e.target.value);
+      wsDatePickerRender();
+    });
+    picker.querySelector('.ws-dp-today').addEventListener('click', e => {
+      e.stopPropagation();
+      wsCloseDatePicker();
+      setWSActiveDate('');
+    });
+    picker.querySelectorAll('.ws-dp-days button[data-date]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const d = btn.dataset.date;
+        wsCloseDatePicker();
+        setWSActiveDate(d);
+      });
+    });
+    picker.querySelector('#ws-dp-prevday').addEventListener('click', e => {
+      e.stopPropagation();
+      setWSActiveDate(addDays(wsViewDate(), -1)); // 弹层保持打开，选中态/月份由 updateWSDateControls 同步
+    });
+    picker.querySelector('#ws-dp-nextday').addEventListener('click', e => {
+      e.stopPropagation();
+      setWSActiveDate(addDays(wsViewDate(), 1)); // 未来日期会被钳制回今天
+    });
+  }
+
+  function wsOpenDatePicker() {
+    wsCloseDatePicker();
+    const base = wsViewDate();
+    const m = /^(\d{4})-(\d{2})/.exec(base);
+    const now = new Date();
+    _wsDatePickerState = {
+      y: m ? Number(m[1]) : now.getFullYear(),
+      m: m ? Number(m[2]) : now.getMonth() + 1
+    };
+    const picker = document.createElement('div');
+    picker.id = 'lis-ws-date-picker';
+    document.body.appendChild(picker);
+    wsDatePickerRender();
+    const anchor = document.getElementById('lis-ws-date-pill');
+    const rect = anchor ? anchor.getBoundingClientRect() : { left: 0, bottom: 0 };
+    picker.style.left = Math.min(rect.left, window.innerWidth - picker.offsetWidth - 8) + 'px';
+    picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - picker.offsetHeight - 8) + 'px';
+    const closeOnOutside = e => {
+      const t = e.target;
+      if (t && t.closest && t.closest('#lis-ws-date-picker, #lis-ws-date-pill')) {return;}
+      wsCloseDatePicker();
+    };
+    const closeOnEsc = e => {
+      if (e.key === 'Escape') {wsCloseDatePicker();}
+    };
+    _wsDatePickerCleanup = () => {
+      document.removeEventListener('mousedown', closeOnOutside, true);
+      document.removeEventListener('keydown', closeOnEsc, true);
+    };
+    // 打开瞬间的 mousedown 已发生在注册之前，直接挂监听即可
+    document.addEventListener('mousedown', closeOnOutside, true);
+    document.addEventListener('keydown', closeOnEsc, true);
   }
 
   function rowPassWSMachineFilter(row) {
@@ -8060,12 +8202,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
             <div class="ws-search-wrap">
                 <input type="text" class="ws-search" id="lis-ws-search" placeholder="姓名 / 检验号 / 流水号" />
             </div>
-            <div class="ws-date-bar" id="lis-ws-datebar">
-                <button class="ws-icon-btn" id="lis-ws-date-prev" title="前一天">◀</button>
-                <button class="ws-date-btn" id="lis-ws-date-btn"><span id="lis-ws-date-label">今天</span></button>
-                <button class="ws-icon-btn" id="lis-ws-date-next" title="后一天">▶</button>
-                <button class="ws-icon-btn" id="lis-ws-date-today" title="回到今天" style="display:none">今</button>
-                <input type="date" id="lis-ws-date-input" style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:0;border:0;padding:0" tabindex="-1" aria-hidden="true">
+            <div class="ws-date-pill" id="lis-ws-date-pill">
+                <button class="ws-dp-zone" id="lis-ws-date-prev" title="前一天">◀</button>
+                <button class="ws-dp-zone ws-dp-main" id="lis-ws-date-btn" title="点击弹出日历选择日期（可查看/审核历史标本）"><span id="lis-ws-date-label">今天</span><span class="ws-dp-caret">▾</span></button>
+                <button class="ws-dp-zone" id="lis-ws-date-next" title="后一天">▶</button>
             </div>
             <div class="ws-wg-inline">${wgHTML}</div>
             <div class="ws-right-group"><div class="ws-cat-hd-inline" data-ws-cat-tabs></div><div class="ws-acts">
@@ -8096,7 +8236,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // 8.5.61: 自动审核按钮 + 记录查看按钮（移至头部最右侧，刷新/CA密码旁）
     document.getElementById('lis-ws-autoaudit').addEventListener('click', () => openAutoAuditDialog());
     document.getElementById('lis-ws-aalog').addEventListener('click', () => openAutoAuditLogViewer());
-    // 8.7.0: 日期选择控件——◀ 后退一天 / 中间按钮弹日历 / ▶ 前进一天（到今天禁用）/ 今=回今天
+    // 8.8.0: 日期胶囊——◀ 前一天 / 中间点击直接弹出日历 / ▶ 后一天（到今天禁用）
     document.getElementById('lis-ws-date-prev').addEventListener('click', () => {
       setWSActiveDate(addDays(wsViewDate(), -1));
     });
@@ -8105,21 +8245,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const v = wsViewDate();
       if (v < td) {setWSActiveDate(addDays(v, 1));}
     });
-    document.getElementById('lis-ws-date-today').addEventListener('click', () => setWSActiveDate(''));
-    const _wsDateBtn = document.getElementById('lis-ws-date-btn');
-    const _wsDateInput = document.getElementById('lis-ws-date-input');
-    _wsDateBtn.addEventListener('click', () => {
-      try {
-        _wsDateInput.value = wsViewDate();
-        if (typeof _wsDateInput.showPicker === 'function') {_wsDateInput.showPicker();}
-        else {_wsDateInput.click();}
-      } catch (e) {
-        // showPicker 可能被浏览器策略拒绝，退化为聚焦让用户手动操作
-        try {_wsDateInput.focus(); _wsDateInput.click();} catch (e2) {}
-      }
-    });
-    _wsDateInput.addEventListener('change', () => {
-      if (_wsDateInput.value) {setWSActiveDate(_wsDateInput.value);}
+    document.getElementById('lis-ws-date-btn').addEventListener('click', () => {
+      // 点「今天」直接弹日历选日期；已开着则收起（开关切换）
+      if (document.getElementById('lis-ws-date-picker')) {wsCloseDatePicker();}
+      else {wsOpenDatePicker();}
     });
     updateWSDateControls();
     document.getElementById('lis-ws-search').addEventListener('input', () => {
