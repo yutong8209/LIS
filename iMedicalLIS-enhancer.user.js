@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.6
+// @version      8.8.7
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -847,51 +847,51 @@
 #lis-auto-audit-log-box .ab-hd h4{margin:0;font-size:16px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:6px}
 #lis-auto-audit-log-box .ab-hd .ab-close{background:none;border:none;font-size:20px;cursor:pointer;color:#94a3b8;padding:4px 8px;border-radius:4px;line-height:1;transition:background .15s,color .15s}
 #lis-auto-audit-log-box .ab-hd .ab-close:hover{background:#f1f5f9;color:#0f172a}
-#lis-auto-audit-log-box .ab-body{flex:1;overflow-y:auto;padding:14px 20px;background:#f8fafc}
-.aal-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-.aal-range-group{display:inline-flex;background:#e2e8f0;padding:2px;border-radius:6px;gap:2px}
-#lis-auto-audit-log-box .aal-range{padding:4px 12px;border:none;border-radius:4px;background:transparent;color:#475569;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+#lis-auto-audit-log-box .ab-body{flex:1;overflow-y:auto;padding:10px 16px;background:#f8fafc}
+.aal-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.aal-range-group{display:inline-flex;background:#e2e8f0;padding:2px;border-radius:5px;gap:2px}
+#lis-auto-audit-log-box .aal-range{padding:3px 10px;border:none;border-radius:3px;background:transparent;color:#475569;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s}
 #lis-auto-audit-log-box .aal-range:hover{color:#0f172a}
 #lis-auto-audit-log-box .aal-range.on{background:#fff;color:#0f766e;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-#lis-aal-search{flex:1;min-width:180px;height:32px;padding:0 12px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;color:#1e293b;outline:none;transition:border-color .15s,box-shadow .15s}
+#lis-aal-search{flex:1;min-width:180px;height:28px;padding:0 10px;background:#fff;border:1px solid #cbd5e1;border-radius:5px;font-size:11.5px;color:#1e293b;outline:none;transition:border-color .15s,box-shadow .15s}
 #lis-aal-search:focus{border-color:#14b8a6;box-shadow:0 0 0 3px rgba(20,184,166,.15)}
-.aal-summary-bar{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:7px 14px;margin-bottom:10px;font-size:12px;color:#475569;flex-wrap:wrap}
-.aal-summary-item{display:inline-flex;align-items:center;gap:4px;font-weight:600}
+.aal-summary-bar{display:flex;gap:10px;align-items:center;background:#fff;border:1px solid #e2e8f0;border-radius:5px;padding:5px 12px;margin-bottom:8px;font-size:11.5px;color:#475569;flex-wrap:wrap}
+.aal-summary-item{display:inline-flex;align-items:center;gap:3px;font-weight:600}
 .aal-summary-item.normal{color:#059669}
 .aal-summary-item.abnormal{color:#d97706}
 .aal-summary-item.skip{color:#b45309}
-.aal-date-divider{font-size:11px;font-weight:700;color:#64748b;padding:8px 4px 4px;margin-top:6px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.3px}
+.aal-date-divider{font-size:10.5px;font-weight:700;color:#64748b;padding:6px 4px 3px;margin-top:4px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.3px}
 .aal-date-divider::after{content:'';flex:1;height:1px;background:#e2e8f0}
-.aal-card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.03);transition:border-color .15s,box-shadow .15s;overflow:hidden}
-.aal-card:hover{border-color:#cbd5e1;box-shadow:0 3px 8px rgba(0,0,0,.06)}
-.aal-card.open{border-color:#14b8a6;box-shadow:0 4px 12px rgba(20,184,166,.1)}
-.aal-card-main{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;user-select:none;gap:12px}
-.aal-card-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1;min-width:0}
-.aal-card-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
-#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.3}
+.aal-card{background:#fff;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:5px;box-shadow:0 1px 2px rgba(0,0,0,.03);transition:border-color .15s,box-shadow .15s;overflow:hidden}
+.aal-card:hover{border-color:#cbd5e1;box-shadow:0 2px 6px rgba(0,0,0,.05)}
+.aal-card.open{border-color:#14b8a6;box-shadow:0 3px 10px rgba(20,184,166,.1)}
+.aal-card-main{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;cursor:pointer;user-select:none;gap:8px;min-height:30px}
+.aal-card-left{display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1;min-width:0}
+.aal-card-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
+#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:center;padding:1px 6px;border-radius:3px;font-size:10.5px;font-weight:700;white-space:nowrap;line-height:1.25}
 #lis-auto-audit-log-box .aal-badge.normal{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
 #lis-auto-audit-log-box .aal-badge.abnormal{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
 #lis-auto-audit-log-box .aal-badge.skip{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
-.aal-pat-name{font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap}
-.aal-labno{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;color:#64748b;background:#f1f5f9;padding:1px 6px;border-radius:4px;white-space:nowrap}
-.aal-test-pill{font-size:11px;font-weight:600;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;padding:2px 8px;border-radius:4px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.aal-time{font-size:11px;color:#94a3b8;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-#lis-auto-audit-log-box .aal-jump{font-size:11px;font-weight:600;padding:3px 8px;border:1px solid #cbd5e1;background:#fff;color:#0f766e;border-radius:4px;cursor:pointer;white-space:nowrap;transition:all .15s}
+.aal-pat-name{font-size:12.5px;font-weight:700;color:#0f172a;white-space:nowrap}
+.aal-labno{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;color:#64748b;background:#f1f5f9;padding:0 5px;border-radius:3px;white-space:nowrap;line-height:1.4}
+.aal-test-pill{font-size:10.5px;font-weight:600;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;padding:1px 6px;border-radius:3px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3}
+.aal-time{font-size:10.5px;color:#94a3b8;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+#lis-auto-audit-log-box .aal-jump{font-size:10.5px;font-weight:600;padding:1px 6px;border:1px solid #cbd5e1;background:#fff;color:#0f766e;border-radius:3px;cursor:pointer;white-space:nowrap;line-height:1.3;transition:all .15s}
 #lis-auto-audit-log-box .aal-jump:hover{background:#f0fdfa;border-color:#14b8a6}
-.aal-chevron{font-size:10px;color:#94a3b8;transition:transform .2s;display:inline-block;padding:2px 4px}
+.aal-chevron{font-size:9.5px;color:#94a3b8;transition:transform .2s;display:inline-block;padding:1px 3px}
 .aal-card.open .aal-chevron{transform:rotate(180deg);color:#0f766e}
-.aal-card-sub{padding:0 14px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed #f1f5f9;margin-top:2px;padding-top:8px}
-.aal-abn-summary{display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1}
-.aal-abn-chip-count{font-size:10px;font-weight:700;background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:3px;white-space:nowrap}
-#lis-auto-audit-log-box .aal-abn-item{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap}
+.aal-card-sub{padding:0 12px 6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px dashed #f1f5f9;margin-top:0;padding-top:5px}
+.aal-abn-summary{display:flex;align-items:center;gap:4px;flex-wrap:wrap;flex:1}
+.aal-abn-chip-count{font-size:9.5px;font-weight:700;background:#fee2e2;color:#b91c1c;padding:0 5px;border-radius:3px;white-space:nowrap;line-height:1.3}
+#lis-auto-audit-log-box .aal-abn-item{display:inline-flex;align-items:center;gap:2px;padding:1px 5px;border-radius:3px;font-size:10.5px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap}
 #lis-auto-audit-log-box .aal-abn-item.hi{background:#fff7ed;color:#c2410c;border-color:#ffedd5}
 #lis-auto-audit-log-box .aal-abn-item.lo{background:#eff6ff;color:#1d4ed8;border-color:#dbeafe}
 #lis-auto-audit-log-box .aal-abn-item.abn{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
 #lis-auto-audit-log-box .aal-abn-item.cri{background:#fef2f2;color:#b91c1c;border-color:#fee2e2;font-weight:700}
 #lis-auto-audit-log-box .aal-abn-item.unc{background:#f8fafc;color:#64748b;border-color:#e2e8f0}
 #lis-auto-audit-log-box .aal-abn-item.zero{background:#fffbeb;color:#b45309;border-color:#fef3c7}
-.aal-skip-box{display:flex;align-items:center;gap:6px;background:#fffbeb;border:1px solid #fef3c7;color:#92400e;padding:4px 10px;border-radius:4px;font-size:11px;width:100%}
-.aal-card-exp{padding:12px 14px;background:#f8fafc;border-top:1px solid #e2e8f0;max-height:320px;overflow-y:auto}
+.aal-skip-box{display:flex;align-items:center;gap:5px;background:#fffbeb;border:1px solid #fef3c7;color:#92400e;padding:2px 8px;border-radius:3px;font-size:10.5px;width:100%;line-height:1.35}
+.aal-card-exp{padding:10px 12px;background:#f8fafc;border-top:1px solid #e2e8f0;max-height:300px;overflow-y:auto}
 #lis-auto-audit-log-box .aal-exp2{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}
 #lis-auto-audit-log-box .aal-exp2 td{padding:2px 6px;border-bottom:1px solid #f1f5f9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #lis-auto-audit-log-box .aal-exp2 td.n{color:#475569;width:26%}
