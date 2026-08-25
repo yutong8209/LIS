@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.9
+// @version      8.8.10
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -144,11 +144,25 @@
       d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
     );
   }
-  // 8.7.0: 从标本行提取登记日期（YYYY-MM-DD）；取不到回退空串（调用方按「未知日期」处理，不切原生列表）
+  // 8.7.0: 从标本行提取登记/接收日期（YYYY-MM-DD）；取不到回退空串
   // 8.8.5: 正则兼容斜杠(/)、点号(.)、单数月日及 8 位紧凑数字(YYYYMMDD)
+  // 8.8.10: 覆盖所有 LIS 常见日期字段（SttAccDate/AcceptDT/AcceptDate/AuthDate/AuthDT/CollectDate/ReceiveDate/TransmitDate/Date/SpecDate/RegDate）
   function rowAcceptDateStr(row) {
     if (!row) {return '';}
-    const raw = String(row.SttAccDate || row.AcceptDT || row.AcceptDate || '').trim();
+    const raw = String(
+      row.SttAccDate ||
+      row.AcceptDT ||
+      row.AcceptDate ||
+      row.AuthDate ||
+      row.AuthDT ||
+      row.CollectDate ||
+      row.ReceiveDate ||
+      row.TransmitDate ||
+      row.Date ||
+      row.SpecDate ||
+      row.RegDate ||
+      ''
+    ).trim();
     const m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(raw);
     if (m) {
       return m[1] + '-' + String(Number(m[2])).padStart(2, '0') + '-' + String(Number(m[3])).padStart(2, '0');
@@ -6577,22 +6591,22 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   // 8.7.0: 工作台查询日期窗口 [起始日, 结束日]
-  //  - 平时：选中日期单日查询（性能与旧版 today/today 完全一致）
-  //  - 自动审核运行中：开启日(最远回溯到 D-7) ~ 今天 —— 跨午夜后昨晚 23:50 这类
-  //    未审完的标本仍在 QryWorkList 结果里，自动审核能继续审掉（核心需求）
-  // 8.8.2: 修正两点——(1) D-7 只约束「自动审核按开启日回溯」这条扩展，不钳制用户主动选的
-  // 历史日期（用户选 10 天前就如实查 10 天前）；(2) 扩展永不把窗口起点推得比用户查看日更晚
+  //  - 历史日期查看（wsActiveDate）：严格单日查询 [wsActiveDate, wsActiveDate]，绝不混入今天或其它日期
+  //  - 今天（默认）：单日 [today(), today()]；若自动审核在运行且开启日早于今天，回溯到开启日（跨午夜未审标本）
   function getWSQueryRange() {
     const end = today();
+    // 8.8.10: 用户主动查看历史日期时，严格按该单日查询，决不向后扩展到今天
+    if (wsActiveDate && wsActiveDate !== end) {
+      return [wsActiveDate, wsActiveDate];
+    }
     let start = wsViewDate();
     if (start > end) {start = end;} // 未来日期钳制为今天
     if (autoAuditEnabled()) {
       const sd = String((_autoAudit && _autoAudit.startDate) || '');
-      // 仅当「开启日」比用户当前查看日更早时才向回扩展；最多回溯 D-7（防异常状态撑爆），
-      // 且扩展后的起点不晚于用户主动选择的查看日（min(start, minStart) 保证）
+      // 仅当查看今天、且自动审核「开启日」比今天早时，才向回扩展查询窗口以覆盖跨午夜未审标本
       if (sd && sd < start) {
         const minStart = addDays(end, -7);
-        start = sd < minStart ? Math.min(start, minStart) : sd;
+        start = sd < minStart ? minStart : sd;
       }
       return [start, end];
     }
@@ -7178,11 +7192,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
               const result = { rows: [], pending: [], collected: [], machine: m, ok: true };
               try {
                 result.rows = await loadWL(m.RowID, ss, qStart, qEnd); // 8.7.0: 按查询窗口取数
-                // 8.5.31: 待排 + 采集 并行拉取（同一接口不同 P1），避免串行多一次等待
-                [result.pending, result.collected] = await Promise.all([
-                  loadPendingForMachine(m.RowID, ss).catch(() => []),
-                  loadCollectedForMachine(m.RowID, ss).catch(() => [])
-                ]);
+                // 8.8.10: 待排/采集是当天实时排队队列，仅查看今天时拉取；历史日期不混入当天实时待排/采集
+                if (!wsActiveDate || wsActiveDate === today()) {
+                  [result.pending, result.collected] = await Promise.all([
+                    loadPendingForMachine(m.RowID, ss).catch(() => []),
+                    loadCollectedForMachine(m.RowID, ss).catch(() => [])
+                  ]);
+                }
               } catch (e) {
                 // 8.5.82: 单台仪器加载失败不再静默吞掉——汇总进健康状态，防该仪器标本从工作台悄悄消失
                 result.ok = false;
@@ -7226,7 +7242,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
 
       function applyResults(results, partial) {
-        const allData = [];
+        let allData = [];
         const allMachines = [];
         const loadedWGs = new Set();
         const failedMachineNames = [];
@@ -7240,6 +7256,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           // 误报成失败；保留该门槛反而让「跨天+优先组机器列表失败」绕过下方的空数据保护
           if (!r.machinesOk && r.wg) {failedMachineNames.push((WG_MAP[String(r.wg)] || {}).name + '组机器列表');}
           (r.failedMachines || []).forEach(m => failedMachineNames.push(m.CName || m.Name || String(m.RowID)));
+        }
+
+        // 8.8.10: 历史日期视图严格过滤：只保留登记日期与当前查看日期完全一致的标本，决不混入今天或其它日期
+        const curTargetDate = wsActiveDate;
+        if (curTargetDate && curTargetDate !== today()) {
+          const beforeCnt = allData.length;
+          allData = allData.filter(r => {
+            const d = rowAcceptDateStr(r);
+            return !d || d === curTargetDate;
+          });
+          if (allData.length !== beforeCnt) {
+            dbg('[WS] 历史日期', curTargetDate, '过滤剔除非当日标本:', beforeCnt - allData.length, '条');
+          }
         }
         // 8.5.40: 空数据保护扩展到 partial 阶段——长时间闲置/会话过期/网络瞬断时，
         // 阶段1(partial)返回空会直接把 wsData 清空、统计全变 0；阶段2 再空时 wsData 已为空
@@ -8064,6 +8093,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       machineFilterKey = allSel.length ? allSel.sort().join('|') : wsActiveMachine;
     }
     const ck =
+      wsActiveDate +
+      '|' +
       wsActiveWG +
       '|' +
       machineFilterKey +
@@ -8077,6 +8108,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       _classifyVersion;
     if (_filteredCache && _filteredCacheKey === ck) {return _filteredCache;}
     let d = [...wsData];
+    // 8.8.10: 历史日期视图严格兜底过滤：确保只展示目标日期的标本
+    if (wsActiveDate && wsActiveDate !== today()) {
+      d = d.filter(r => {
+        const dStr = rowAcceptDateStr(r);
+        return !dStr || dStr === wsActiveDate;
+      });
+    }
     // 工作组 + 仪器过滤
     if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
     {d = d.filter(rowPassWSMachineFilter);}
