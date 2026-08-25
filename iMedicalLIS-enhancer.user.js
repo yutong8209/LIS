@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.8
+// @version      8.8.9
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20017,21 +20017,28 @@ window.addEventListener('keydown',function(e){
   }
   // 8.5.61: 自动审核记录查看器 — 查找最近自动审核了哪些样本（日期范围 + 姓名/检验号搜索）
   // 8.6.4: 自动审核记录 → 一键跳转：切工作台「全部」视图并直接弹出该标本详情面板
-  // （跳转前关记录弹窗；工作台未开/数据未加载时先开再等数据；标本已跨天/不在当日列表时提示）
-  async function jumpToSpecimenDetailFromLog(reportDR) {
+  // 8.8.9: 若标本登记在历史日期，自动切换工作台到该日期并等待数据加载就绪后再弹详情
+  async function jumpToSpecimenDetailFromLog(reportDR, targetDate) {
     const dr = String(reportDR || '');
     if (!dr) {showToast('该记录没有报告编号，无法跳转', 'warning'); return;}
     const dlg = document.getElementById('lis-auto-audit-log');
     if (dlg) {dlg.remove();}
+    const tDate = String(targetDate || '').trim();
+    if (tDate && /^\d{4}-\d{2}-\d{2}$/.test(tDate) && tDate !== wsViewDate()) {
+      await setWSActiveDate(tDate === today() ? '' : tDate);
+    }
     gotoWSCategoryFromMenubar('all');
     let row = wsData.find(r => String(r.ReportDR) === dr) || null;
-    if (!row && !wsData.length) {
-      // 工作台刚打开、数据还在路上：最多等 10 秒
-      for (let i = 0; i < 10 && !wsData.length; i++) {await sleep(1000);}
-      row = wsData.find(r => String(r.ReportDR) === dr) || null;
+    if (!row && (!wsData.length || wsLoading)) {
+      // 工作台刚打开或数据在路上：最多等 10 秒
+      for (let i = 0; i < 20 && (!wsData.length || wsLoading); i++) {
+        await sleep(500);
+        row = wsData.find(r => String(r.ReportDR) === dr) || null;
+        if (row) {break;}
+      }
     }
     if (!row) {
-      showToast('当前工作台数据里找不到该标本（可能已跨天）——可用左上角日期按钮切到该标本登记日再点跳转', 'warning');
+      showToast('当前工作台数据里未找到该标本（可能在历史日期或已被撤销）', 'warning');
       return;
     }
     openDetailPanel(row, 'all', -1);
@@ -20182,7 +20189,7 @@ window.addEventListener('keydown',function(e){
       }
 
       const jumpBtn = s.d
-        ? `<button type="button" class="aal-jump" data-jump="${escAttr(s.d)}" title="在工作台「全部」视图中打开该标本">⤴ 工作台</button>`
+        ? `<button type="button" class="aal-jump" data-jump="${escAttr(s.d)}" data-date="${escAttr(fullTime.slice(0, 10))}" title="在工作台「全部」视图中打开该标本">⤴ 工作台</button>`
         : '';
 
       const canExpand = !!(s.d || (s.items && s.items.length));
@@ -20315,7 +20322,7 @@ window.addEventListener('keydown',function(e){
         const jumpBtn = ev.target.closest('.aal-jump');
         if (jumpBtn) {
           ev.stopPropagation();
-          jumpToSpecimenDetailFromLog(jumpBtn.dataset.jump);
+          jumpToSpecimenDetailFromLog(jumpBtn.dataset.jump, jumpBtn.dataset.date);
           return;
         }
         const card = ev.target.closest('.aal-card[data-toggle-exp]');
