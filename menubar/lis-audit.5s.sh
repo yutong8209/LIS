@@ -33,6 +33,12 @@ if [ -z "$J" ] || [ "$(echo "$J" | jq -r '.ok // false')" != "true" ]; then
 fi
 
 M=$(echo "$J" | jq -r '.scope // "全部仪器"')
+VD=$(echo "$J" | jq -r '.viewDate // empty')
+TD=$(date +%Y-%m-%d)
+if [ -n "$VD" ] && [ "$VD" != "$TD" ]; then
+  VD_LABEL=$(echo "$VD" | sed -E 's/^[0-9]{4}-//')
+  M="$M [$VD_LABEL]"
+fi
 # 待审总数（正常+异常已合并）；兼容旧 serve 无 auditReady 字段时回退为两者之和
 AR=$(echo "$J" | jq -r '.auditReady // ((.normalReady // 0) + (.abnormalReady // 0))')
 NR=$(echo "$J" | jq -r '.normalReady // 0')

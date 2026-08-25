@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.4
+// @version      8.8.5
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -145,12 +145,17 @@
     );
   }
   // 8.7.0: 从标本行提取登记日期（YYYY-MM-DD）；取不到回退空串（调用方按「未知日期」处理，不切原生列表）
+  // 8.8.5: 正则兼容斜杠(/)、点号(.)、单数月日及 8 位紧凑数字(YYYYMMDD)
   function rowAcceptDateStr(row) {
     if (!row) {return '';}
     const raw = String(row.SttAccDate || row.AcceptDT || row.AcceptDate || '').trim();
-    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
+    const m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(raw);
     if (m) {
       return m[1] + '-' + String(Number(m[2])).padStart(2, '0') + '-' + String(Number(m[3])).padStart(2, '0');
+    }
+    const m2 = /^(\d{4})(\d{2})(\d{2})/.exec(raw);
+    if (m2) {
+      return m2[1] + '-' + m2[2] + '-' + m2[3];
     }
     return '';
   }
@@ -830,6 +835,8 @@
 #lis-ws-date-picker .ws-dp-days button:hover{background:var(--lis-primary-lighter);border-color:var(--lis-border)}
 #lis-ws-date-picker .ws-dp-days button.on{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff;font-weight:700}
 #lis-ws-date-picker .ws-dp-days button.today:not(.on){border-color:#c8956c;color:#a87548;font-weight:700}
+#lis-ws-date-picker .ws-dp-days button:disabled,
+#lis-ws-date-picker .ws-dp-foot button:disabled{opacity:.35;cursor:not-allowed;pointer-events:none}
 #lis-ws-date-picker .ws-dp-foot{display:flex;gap:6px;margin-top:8px}
 #lis-ws-date-picker .ws-dp-foot button{flex:1;height:26px;border:1px solid var(--lis-border);border-radius:4px;background:var(--lis-primary-lighter);color:var(--lis-text-secondary);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
 #lis-ws-date-picker .ws-dp-foot button:hover{background:var(--lis-primary-light);color:var(--lis-primary);border-color:var(--lis-primary-hover)}
@@ -6623,6 +6630,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (d > today()) {d = '';} // 不允许未来日期，回今天
     if (d === wsActiveDate) {updateWSDateControls(); return;}
     wsActiveDate = d;
+    // 8.8.5: 同步日历弹层年/月状态，保证跨月步进时日历跟随后续月份渲染
+    const curV = wsViewDate();
+    const curM = /^(\d{4})-(\d{2})/.exec(curV);
+    if (curM && _wsDatePickerState) {
+      _wsDatePickerState.y = Number(curM[1]);
+      _wsDatePickerState.m = Number(curM[2]);
+    }
     saveWSState();
     _wsLoadSeq++;
     wsLoading = false;
@@ -6690,7 +6704,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       let cls = '';
       if (value === sel) {cls += ' on';}
       if (value === td) {cls += ' today';}
-      days.push(`<button type="button" data-date="${value}" class="${cls.trim()}">${d}</button>`);
+      const isFuture = value > td;
+      if (isFuture) {cls += ' future';}
+      days.push(`<button type="button" data-date="${value}" class="${cls.trim()}"${isFuture ? ' disabled' : ''}>${d}</button>`);
     }
     picker.innerHTML = `
       <div class="ws-dp-head">
@@ -6702,7 +6718,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       <div class="ws-dp-days">${days.join('')}</div>
       <div class="ws-dp-foot">
         <button type="button" id="ws-dp-prevday">◀ 前一天</button>
-        <button type="button" id="ws-dp-nextday">后一天 ▶</button>
+        <button type="button" id="ws-dp-nextday"${wsViewDate() >= td ? ' disabled' : ''}>后一天 ▶</button>
       </div>`;
     picker.querySelector('.ws-dp-year').addEventListener('change', e => {
       st.y = Number(e.target.value);
@@ -6721,6 +6737,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       btn.addEventListener('click', e => {
         e.stopPropagation();
         const d = btn.dataset.date;
+        if (d > td) {return;}
         wsCloseDatePicker();
         setWSActiveDate(d);
       });
@@ -6731,6 +6748,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     });
     picker.querySelector('#ws-dp-nextday').addEventListener('click', e => {
       e.stopPropagation();
+      if (wsViewDate() >= td) {return;}
       setWSActiveDate(addDays(wsViewDate(), 1)); // 未来日期会被钳制回今天
     });
   }
@@ -6750,8 +6768,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     wsDatePickerRender();
     const anchor = document.getElementById('lis-ws-date-pill');
     const rect = anchor ? anchor.getBoundingClientRect() : { left: 0, bottom: 0 };
-    picker.style.left = Math.min(rect.left, window.innerWidth - picker.offsetWidth - 8) + 'px';
-    picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - picker.offsetHeight - 8) + 'px';
+    picker.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - picker.offsetWidth - 8)) + 'px';
+    picker.style.top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - picker.offsetHeight - 8)) + 'px';
     const closeOnOutside = e => {
       const t = e.target;
       if (t && t.closest && t.closest('#lis-ws-date-picker, #lis-ws-date-pill')) {return;}
@@ -10129,8 +10147,9 @@ window.addEventListener('keydown',function(e){
     }
 
     let listFresh = false;
-    if (mdrKey && (mdrChanged || nativeMismatch || nativeDateDiffers(iframeWin, item.accDate))) {
-      // 8.8.2: 机器或登记日任一变化都刷新原生列表（跨午夜/历史标本同机器时日期也要切）
+    const dateChanged = nativeDateDiffers(iframeWin, item.accDate);
+    if ((mdrKey && (mdrChanged || nativeMismatch)) || dateChanged) {
+      // 8.8.2: 机器或登记日任一变化都刷新原生列表（跨午夜/历史标本同机器时日期也要切；无 mdr 标本也支持切日期）
       iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast });
       ctx.lastMdr = mdrKey;
       listFresh = true;
