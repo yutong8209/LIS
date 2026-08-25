@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.5
+// @version      8.8.6
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -840,62 +840,74 @@
 #lis-ws-date-picker .ws-dp-foot{display:flex;gap:6px;margin-top:8px}
 #lis-ws-date-picker .ws-dp-foot button{flex:1;height:26px;border:1px solid var(--lis-border);border-radius:4px;background:var(--lis-primary-lighter);color:var(--lis-text-secondary);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
 #lis-ws-date-picker .ws-dp-foot button:hover{background:var(--lis-primary-light);color:var(--lis-primary);border-color:var(--lis-primary-hover)}
-#lis-auto-audit-log{position:fixed;inset:0;z-index:100022;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
+#lis-auto-audit-log{position:fixed;inset:0;z-index:100022;background:rgba(15,23,42,.6);display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
 #lis-auto-audit-log.show{display:flex}
-#lis-auto-audit-log-box{background:#fff;border-radius:12px;width:800px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4);overflow:hidden}
-#lis-auto-audit-log-box .ab-hd{padding:14px 18px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
-#lis-auto-audit-log-box .ab-hd h4{margin:0;font-size:15px;color:#2c3e50}
-#lis-auto-audit-log-box .ab-hd .ab-close{background:none;border:none;font-size:20px;cursor:pointer;color:#999;padding:4px 8px;border-radius:4px}
-#lis-auto-audit-log-box .ab-hd .ab-close:hover{background:#f0f0f0}
-#lis-auto-audit-log-box .ab-body{flex:1;overflow-y:auto;padding:14px 18px}
-#lis-auto-audit-log-box .aal-range{padding:3px 10px;border:1px solid #ddd;border-radius:4px;background:#fff;color:#444;font-size:11px;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
-#lis-auto-audit-log-box .aal-range:hover{background:#eef4f3}
-#lis-auto-audit-log-box .aal-range.on{background:#168276;border-color:#168276;color:#fff}
-#lis-auto-audit-log-box .aal-entry-hd:hover{background:#f1f5f4}
-#lis-auto-audit-log-box .aal-badge,#lis-auto-audit-box .aal-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;white-space:nowrap}
-#lis-auto-audit-log-box .aal-badge.normal,#lis-auto-audit-box .aal-badge.normal{background:#e8f8ef;color:#1e8449;border:1px solid #a9dfbf}
-#lis-auto-audit-log-box .aal-badge.abnormal,#lis-auto-audit-box .aal-badge.abnormal{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1}
-#lis-auto-audit-log-box .aal-badge.skip,#lis-auto-audit-box .aal-badge.skip{background:#fef9e7;color:#9a7d0a;border:1px solid #f7dc6f}
-#lis-auto-audit-log-box .aal-row,.aal-flat-inner{cursor:pointer}
-#lis-auto-audit-log-box .aal-row:hover,#lis-auto-audit-log-box .aal-flat-inner:hover{background:#f5fbfa}
-#lis-auto-audit-log-box .aal-detail{flex-wrap:wrap}
-#lis-auto-audit-log-box .aal-abn-count{background:#c0392b;color:#fff;border-radius:3px;padding:1px 7px;font-size:11px;font-weight:700;white-space:nowrap}
-#lis-auto-audit-log-box .aal-abn-item{line-height:1.7;white-space:normal;max-width:100%;font-size:11px}
-#lis-auto-audit-log-box .aal-detail{margin-top:4px;padding:4px 8px 2px;background:#fafcfc;border-radius:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-#lis-auto-audit-log-box .aal-test{color:#2c3e50;font-size:11px;font-weight:600}
-#lis-auto-audit-log-box .aal-abn{display:inline-flex;gap:6px;flex-wrap:wrap;flex-basis:100%}
-#lis-auto-audit-log-box .aal-abn-item{background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;border-radius:3px;padding:1px 5px;font-size:11px;font-weight:600;white-space:normal;line-height:1.7}
-/* 8.5.81: 异常项摘要标签按状态细分配色（高橙/低蓝/异常粉红/危急深红/待定灰/0值黄） */
-#lis-auto-audit-log-box .aal-abn-item.hi{background:#fff3e0;color:#e65100;border-color:#f5d9b8}
-#lis-auto-audit-log-box .aal-abn-item.lo{background:#e3f2fd;color:#1565c0;border-color:#bbd7f5}
-#lis-auto-audit-log-box .aal-abn-item.abn{background:#fce4ec;color:#e91e63;border-color:#f5c6d8}
-#lis-auto-audit-log-box .aal-abn-item.cri{background:#ffebee;color:#c62828;border-color:#f2b8b8;font-weight:700}
-#lis-auto-audit-log-box .aal-abn-item.unc{background:#f5f5f5;color:#757575;border-color:#ddd}
-#lis-auto-audit-log-box .aal-abn-item.zero{background:#fff8e1;color:#8a6d3b;border-color:#f0e0a8}
-#lis-auto-audit-log-box .aal-exp-body{max-height:320px;overflow-y:auto}
-/* 8.6.6: 完整结果双列紧凑表——一行两个结果（项目|值 ×2），单行格子密度，参考范围在悬停 title */
+#lis-auto-audit-log-box{background:#f8fafc;border-radius:12px;width:840px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(15,23,42,.28);overflow:hidden;font-family:var(--lis-font)}
+#lis-auto-audit-log-box .ab-hd{padding:14px 20px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+#lis-auto-audit-log-box .ab-hd h4{margin:0;font-size:16px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:6px}
+#lis-auto-audit-log-box .ab-hd .ab-close{background:none;border:none;font-size:20px;cursor:pointer;color:#94a3b8;padding:4px 8px;border-radius:4px;line-height:1;transition:background .15s,color .15s}
+#lis-auto-audit-log-box .ab-hd .ab-close:hover{background:#f1f5f9;color:#0f172a}
+#lis-auto-audit-log-box .ab-body{flex:1;overflow-y:auto;padding:14px 20px;background:#f8fafc}
+.aal-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.aal-range-group{display:inline-flex;background:#e2e8f0;padding:2px;border-radius:6px;gap:2px}
+#lis-auto-audit-log-box .aal-range{padding:4px 12px;border:none;border-radius:4px;background:transparent;color:#475569;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+#lis-auto-audit-log-box .aal-range:hover{color:#0f172a}
+#lis-auto-audit-log-box .aal-range.on{background:#fff;color:#0f766e;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+#lis-aal-search{flex:1;min-width:180px;height:32px;padding:0 12px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;color:#1e293b;outline:none;transition:border-color .15s,box-shadow .15s}
+#lis-aal-search:focus{border-color:#14b8a6;box-shadow:0 0 0 3px rgba(20,184,166,.15)}
+.aal-summary-bar{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:7px 14px;margin-bottom:10px;font-size:12px;color:#475569;flex-wrap:wrap}
+.aal-summary-item{display:inline-flex;align-items:center;gap:4px;font-weight:600}
+.aal-summary-item.normal{color:#059669}
+.aal-summary-item.abnormal{color:#d97706}
+.aal-summary-item.skip{color:#b45309}
+.aal-date-divider{font-size:11px;font-weight:700;color:#64748b;padding:8px 4px 4px;margin-top:6px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.3px}
+.aal-date-divider::after{content:'';flex:1;height:1px;background:#e2e8f0}
+.aal-card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.03);transition:border-color .15s,box-shadow .15s;overflow:hidden}
+.aal-card:hover{border-color:#cbd5e1;box-shadow:0 3px 8px rgba(0,0,0,.06)}
+.aal-card.open{border-color:#14b8a6;box-shadow:0 4px 12px rgba(20,184,166,.1)}
+.aal-card-main{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;user-select:none;gap:12px}
+.aal-card-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1;min-width:0}
+.aal-card-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.3}
+#lis-auto-audit-log-box .aal-badge.normal{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
+#lis-auto-audit-log-box .aal-badge.abnormal{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+#lis-auto-audit-log-box .aal-badge.skip{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.aal-pat-name{font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap}
+.aal-labno{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;color:#64748b;background:#f1f5f9;padding:1px 6px;border-radius:4px;white-space:nowrap}
+.aal-test-pill{font-size:11px;font-weight:600;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;padding:2px 8px;border-radius:4px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aal-time{font-size:11px;color:#94a3b8;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+#lis-auto-audit-log-box .aal-jump{font-size:11px;font-weight:600;padding:3px 8px;border:1px solid #cbd5e1;background:#fff;color:#0f766e;border-radius:4px;cursor:pointer;white-space:nowrap;transition:all .15s}
+#lis-auto-audit-log-box .aal-jump:hover{background:#f0fdfa;border-color:#14b8a6}
+.aal-chevron{font-size:10px;color:#94a3b8;transition:transform .2s;display:inline-block;padding:2px 4px}
+.aal-card.open .aal-chevron{transform:rotate(180deg);color:#0f766e}
+.aal-card-sub{padding:0 14px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed #f1f5f9;margin-top:2px;padding-top:8px}
+.aal-abn-summary{display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1}
+.aal-abn-chip-count{font-size:10px;font-weight:700;background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:3px;white-space:nowrap}
+#lis-auto-audit-log-box .aal-abn-item{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap}
+#lis-auto-audit-log-box .aal-abn-item.hi{background:#fff7ed;color:#c2410c;border-color:#ffedd5}
+#lis-auto-audit-log-box .aal-abn-item.lo{background:#eff6ff;color:#1d4ed8;border-color:#dbeafe}
+#lis-auto-audit-log-box .aal-abn-item.abn{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
+#lis-auto-audit-log-box .aal-abn-item.cri{background:#fef2f2;color:#b91c1c;border-color:#fee2e2;font-weight:700}
+#lis-auto-audit-log-box .aal-abn-item.unc{background:#f8fafc;color:#64748b;border-color:#e2e8f0}
+#lis-auto-audit-log-box .aal-abn-item.zero{background:#fffbeb;color:#b45309;border-color:#fef3c7}
+.aal-skip-box{display:flex;align-items:center;gap:6px;background:#fffbeb;border:1px solid #fef3c7;color:#92400e;padding:4px 10px;border-radius:4px;font-size:11px;width:100%}
+.aal-card-exp{padding:12px 14px;background:#f8fafc;border-top:1px solid #e2e8f0;max-height:320px;overflow-y:auto}
 #lis-auto-audit-log-box .aal-exp2{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}
-#lis-auto-audit-log-box .aal-exp2 td{padding:2px 6px;border-bottom:1px solid #f4f6f7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#lis-auto-audit-log-box .aal-exp2 td.n{color:#4a5a6a;width:26%}
-#lis-auto-audit-log-box .aal-exp2 td.v{font-weight:700;color:#2c3e50}
-#lis-auto-audit-log-box .aal-exp2 td.v .r{font-weight:400;font-size:10px;color:#b6c0ca} /* 8.6.7: 参考值小灰字跟在值后 */
-#lis-auto-audit-log-box .aal-exp2 td.v + td.n{border-left:1px dashed #e8eef0} /* 第二个结果的分隔线 */
-/* 状态配色（值格背景+文字，沿用 8.5.80 细则）：危急深红 高橙 低蓝 异常粉红 待定灰 0值黄 */
-#lis-auto-audit-log-box .aal-exp2 td.v.cri{color:#c62828;background:#ffebee}
-#lis-auto-audit-log-box .aal-exp2 td.v.hi{color:#e65100;background:#fff3e0}
-#lis-auto-audit-log-box .aal-exp2 td.v.lo{color:#1565c0;background:#e3f2fd}
-#lis-auto-audit-log-box .aal-exp2 td.v.abn{color:#e91e63;background:#fce4ec}
-#lis-auto-audit-log-box .aal-exp2 td.v.unc{color:#757575;background:#f5f5f5;font-weight:600}
-#lis-auto-audit-log-box .aal-exp2 td.v.zero{color:#8a6d3b;background:#fff8e1}
-#lis-auto-audit-log-box .aal-exp-title{font-size:11px;font-weight:700;color:#2c3e50;padding:2px 2px 6px}
+#lis-auto-audit-log-box .aal-exp2 td{padding:2px 6px;border-bottom:1px solid #f1f5f9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#lis-auto-audit-log-box .aal-exp2 td.n{color:#475569;width:26%}
+#lis-auto-audit-log-box .aal-exp2 td.v{font-weight:700;color:#0f172a}
+#lis-auto-audit-log-box .aal-exp2 td.v .r{font-weight:400;font-size:10px;color:#94a3b8}
+#lis-auto-audit-log-box .aal-exp2 td.v + td.n{border-left:1px dashed #e2e8f0}
+#lis-auto-audit-log-box .aal-exp2 td.v.cri{color:#b91c1c;background:#fef2f2}
+#lis-auto-audit-log-box .aal-exp2 td.v.hi{color:#c2410c;background:#fff7ed}
+#lis-auto-audit-log-box .aal-exp2 td.v.lo{color:#1d4ed8;background:#eff6ff}
+#lis-auto-audit-log-box .aal-exp2 td.v.abn{color:#be185d;background:#fdf2f8}
+#lis-auto-audit-log-box .aal-exp2 td.v.unc{color:#64748b;background:#f8fafc;font-weight:600}
+#lis-auto-audit-log-box .aal-exp2 td.v.zero{color:#b45309;background:#fffbeb}
+#lis-auto-audit-log-box .aal-exp-title{font-size:11px;font-weight:700;color:#334155;padding:2px 2px 8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
 #lis-auto-audit-log-box .aal-exp-table{width:100%;border-collapse:collapse;font-size:11px}
 #lis-auto-audit-log-box .aal-exp-table th{background:#f0f4f4;color:#4a5a6a;text-align:left;padding:4px 6px;border-bottom:1px solid #e3e8e8;font-weight:600}
-/* 8.6.4: 展开区内滚时表头吸顶，长项目列表（生化全套）不用滚回去看列名 */
 #lis-auto-audit-log-box .aal-exp-table thead th{position:sticky;top:0;z-index:1;box-shadow:0 1px 0 #e3e8e8}
-/* 8.6.4: 记录行「⤴ 全部视图详情」跳转按钮——一键切工作台全部视图并弹该标本详情面板 */
-#lis-auto-audit-log-box .aal-jump{font-size:10px;font-weight:600;padding:2px 8px;border:1px solid #168276;background:#e8f6f3;color:#0f766e;border-radius:3px;cursor:pointer;white-space:nowrap}
-#lis-auto-audit-log-box .aal-jump:hover{background:#d0ece7}
-#lis-auto-audit-log-box .aal-exp-title{display:flex;align-items:center;justify-content:space-between;gap:8px}
 #lis-auto-audit-log-box .aal-exp-table td{padding:4px 6px;border-bottom:1px solid #f0f0f0}
 /* 8.5.80: 展开表格按结果状态细分配色（与工作台卡片/历史浮层规则一致）：高=橙 低=蓝 异常=粉红 危急=深红 待定=灰 0值=黄 */
 #lis-auto-audit-log-box .aal-exp-table tr.aal-exp-hi td{background:#fff3e0;color:#e65100;font-weight:600}
@@ -20034,17 +20046,20 @@ window.addEventListener('keydown',function(e){
       <div id="lis-auto-audit-log-box">
         <div class="ab-hd">
           <h4>📋 自动审核记录</h4>
-          <button class="ab-close" id="lis-aal-close">✕</button>
+          <button class="ab-close" id="lis-aal-close" title="关闭 (Esc)">✕</button>
         </div>
-        <div class="ab-body" style="font-size:12px;line-height:1.7;color:#2c3e50">
-          <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
-            <button class="aal-range on" data-range="today">今天</button>
-            <button class="aal-range" data-range="3d">近3天</button>
-            <button class="aal-range" data-range="7d">近7天</button>
-            <button class="aal-range" data-range="all">全部</button>
-            <input id="lis-aal-search" placeholder="搜索姓名 / 检验号…" style="flex:1;min-width:150px;padding:5px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;outline:none">
+        <div class="ab-body">
+          <div class="aal-toolbar">
+            <div class="aal-range-group">
+              <button class="aal-range on" data-range="today">今天</button>
+              <button class="aal-range" data-range="3d">近3天</button>
+              <button class="aal-range" data-range="7d">近7天</button>
+              <button class="aal-range" data-range="all">全部</button>
+            </div>
+            <input id="lis-aal-search" placeholder="🔍 搜索姓名 / 检验号 / 组合项目 / 异常指标 / 原因…">
           </div>
-          <div id="lis-aal-list" style="max-height:62vh;overflow-y:auto"></div>
+          <div id="lis-aal-summary"></div>
+          <div id="lis-aal-list" style="max-height:64vh;overflow-y:auto"></div>
         </div>
       </div>`;
     document.body.appendChild(dlg);
@@ -20060,72 +20075,21 @@ window.addEventListener('keydown',function(e){
         : s.t === 'skip'
           ? '<span class="aal-badge skip">⏭ 跳过</span>'
           : '<span class="aal-badge normal">✓ 正常</span>';
-    // 8.5.70: 取标本分类明细（项目组合 TestSetDesc / 异常项目）——能查缓存就展示，查不到（历史标本已不在当前数据）回退只看徽章
-    const specDetailHTML = s => {
-      if (!s) {return '';}
-      let name = '', abn = [];
-      const dr = s.d;
-      // 8.5.70: 优先用审核时写入日志的项目信息（缓存可能已被清除）；空则回退实时取
-      if (s.test) {name = s.test;}
-      if (s.abn && s.abn.length) {abn = s.abn.slice(0, 6);}
-      if (!name || !abn.length) {
-        const live = dr ? getLiveClassification(dr) : null;
-        if (!name && live && live.row && live.row.TestSetDesc) {name = String(live.row.TestSetDesc) || '';}
-        if (!name && dr) {
-          const row = findWSSpecimenByReportDR(dr);
-          if (row && row.TestSetDesc) {name = String(row.TestSetDesc) || '';}
-        }
-        if (!abn.length && live && live.items) {
-          abn = (live.items || [])
-            .filter(it => it.status && it.status !== 'NORMAL')
-            .slice(0, 6)
-            .map(it => ({
-              n: it.name || '',
-              r: String(it.result !== undefined && it.result !== null ? it.result : ''),
-              u: it.unit || '',
-              s: it.status || ''
-            }));
-        }
-      }
-      const bits = [];
-      // 8.5.72: 有异常项时加醒目「N项异常」提示；项目组合与异常项分行
-      if (abn.length) {
-        bits.push('<span class="aal-abn-count">⚠ ' + abn.length + ' 项异常</span>');
-      }
-      if (name) {bits.push('<span class="aal-test">' + esc(name) + '</span>');}
-      // 8.5.81: 异常项标签按状态细分配色（高橙/低蓝/异常粉红/危急深红）；旧日志为字符串时回退统一红色
-      const abnItemHTML = x => {
-        if (typeof x === 'string') {return '<span class="aal-abn-item">' + esc(x) + '</span>';}
-        const st = x.s || '';
-        let cls = 'aal-abn-item', pre = '';
-        if (st === 'CRITICAL') {cls = 'aal-abn-item cri'; pre = '🚨';}
-        else if (st === 'HIGH') {cls = 'aal-abn-item hi'; pre = '▲';}
-        else if (st === 'LOW') {cls = 'aal-abn-item lo'; pre = '▼';}
-        else if (st === 'ABNORMAL') {cls = 'aal-abn-item abn'; pre = '⚠';}
-        else if (st === 'UNCERTAIN') {cls = 'aal-abn-item unc'; pre = '?';}
-        else if (st === 'ZERO') {cls = 'aal-abn-item zero'; pre = '0';}
-        const text = (x.n || '') + ' ' + String(x.r || '') + (x.u ? ' ' + x.u : '');
-        return '<span class="' + cls + '">' + (pre ? pre + ' ' : '') + esc(text) + '</span>';
-      };
-      if (abn.length) {bits.push('<div class="aal-abn">' + abn.map(abnItemHTML).join('') + '</div>');}
-      return bits.length ? '<div class="aal-detail">' + bits.join('') + '</div>' : '';
-    };
+
     // 8.5.75: 渲染时把每行样本对象挂到映射，展开时直接取日志持久化的完整结果，不依赖当前工作台缓存
     const _aalSamples = {};
     const itemsTableHTML = (items, rdr) => {
       if (!items || !items.length) {return '';}
-      // 8.6.4: 异常项置顶排序（危急>高>低>异常>0值>待定，正常垫底，同类保持原顺序）——
-      // 生化全套几十个项目时不用在一堆正常值里翻找异常的
+      // 8.6.4: 异常项置顶排序（危急>高>低>异常>0值>待定，正常垫底，同类保持原顺序）
       const _stRank = { CRITICAL: 0, HIGH: 1, LOW: 2, ABNORMAL: 3, ZERO: 4, UNCERTAIN: 5 };
       const rankOf = it => {const r = _stRank[it.s || it.status]; return r === undefined ? 9 : r;};
       const sorted = items.slice().sort((a, b) => rankOf(a) - rankOf(b));
       const abnCnt = sorted.filter(it => {const st = it.s || it.status || ''; return st && st !== 'NORMAL';}).length;
-      const statTxt = '完整结果（共 ' + sorted.length + ' 项' + (abnCnt ? '，异常 ' + abnCnt + ' 项置顶' : '') + '）';
+      const statTxt = '完整指标结果（共 ' + sorted.length + ' 项' + (abnCnt ? ' · 异常 ' + abnCnt + ' 项置顶' : '') + '）';
       const jumpBtn = rdr
         ? '<button class="aal-jump" data-jump="' + escAttr(String(rdr)) + '">在工作台打开 ›</button>'
         : '';
-      // 8.6.6: 双列紧凑表格（替代 8.6.5 的卡片网格——卡片每项三行太高反而更占地方）——
-      // 一行两个结果，每个结果只占「项目名 | 值」两格一行；参考范围/完整信息放悬停 title
+      // 8.6.6: 双列紧凑表格（一行两个结果，项目名 | 值），参考范围小灰字跟在值后
       const _stCls = { CRITICAL: 'cri', HIGH: 'hi', LOW: 'lo', ABNORMAL: 'abn', UNCERTAIN: 'unc', ZERO: 'zero' };
       const _stPre = { CRITICAL: '🚨', HIGH: '▲', LOW: '▼', ABNORMAL: '⚠', UNCERTAIN: '?', ZERO: '0:' };
       const pairHTML = it => {
@@ -20138,7 +20102,6 @@ window.addEventListener('keydown',function(e){
         const unit = it.u || it.unit || '';
         const ref = it.f || it.refRange || it.RefRanges || '';
         const tip = name + '  ' + String(rv) + (unit ? ' ' + unit : '') + (ref ? '  参考 ' + ref : '');
-        // 8.6.7: 参考值直接显示在值后（小灰字，不另占列）；单位不再内联（放悬停 title），保证单行密度
         return '<td class="n" title="' + escAttr(tip) + '">' + esc(name) + '</td>' +
           '<td class="v' + (cls ? ' ' + cls : '') + '" title="' + escAttr(tip) + '">' + pre + esc(String(rv)) +
           (ref ? ' <span class="r">' + esc(ref) + '</span>' : '') + '</td>';
@@ -20150,23 +20113,100 @@ window.addEventListener('keydown',function(e){
         rows.map(pr => '<tr>' + pairHTML(pr[0]) + pairHTML(pr[1]) + '</tr>').join('') +
         '</tbody></table>';
     };
-    const rowHTML = s => {
+
+    // 8.8.6: 结构化单卡片渲染 —— 左右分栏、清晰对齐、信息层次分明
+    const cardHTML = (s, timeStr, fullTime) => {
       const _rid = 'aal-exp-' + String(s.d || 'x') + '-' + Math.floor(Math.random() * 1e6);
       _aalSamples[_rid] = s;
-      return '<div class="aal-row" data-rdr="' + escAttr(s.d || '') + '" data-toggle-exp="' + _rid + '" style="padding:6px 10px;border-top:1px solid #f5f5f5">' +
-      '<div class="aal-row-hd" style="display:flex;gap:8px;align-items:center;font-size:12px;flex-wrap:wrap">' +
-      badge(s) +
-      '<b>' + esc(s.n || '') + '</b>' +
-      '<span style="color:#666">' + esc(s.l || '') + '</span>' +
-      (s.reason ? '<span style="color:#8a6d3b">（' + esc(s.reason) + '）</span>' : '') +
-      // 8.6.4: 一键跳转按钮——切工作台「全部」视图并直接弹出该标本详情面板
-      (s.d ? '<button class="aal-jump" data-jump="' + escAttr(s.d) + '" title="跳转到工作台「全部」视图查看该标本详细结果">⤴ 全部视图详情</button>' : '') +
-      '<span style="color:#168276;font-size:10px;font-weight:600;margin-left:auto" class="aal-exp-marker">' + (s.d ? '点击看全部结果 ▾' : '') + '</span>' +
-      '</div>' +
-      specDetailHTML(s) +
-      '<div class="aal-exp-body" id="' + _rid + '" style="display:none;padding:6px 8px;background:#fff;border-top:1px dashed #e3e3e3;margin-top:4px"></div>' +
-      '</div>';
+
+      // 1. 组合项目名推导
+      let profileName = s.test || '';
+      if (!profileName && s.d) {
+        const live = getLiveClassification(s.d);
+        if (live && live.row && live.row.TestSetDesc) {profileName = String(live.row.TestSetDesc);}
+        else {
+          const row = findWSSpecimenByReportDR(s.d);
+          if (row && row.TestSetDesc) {profileName = String(row.TestSetDesc);}
+        }
+      }
+      const profileHTML = profileName
+        ? `<span class="aal-test-pill" title="${escAttr(profileName)}">${esc(profileName)}</span>`
+        : '';
+
+      // 2. 异常项摘要
+      let abn = (s.abn && s.abn.length) ? s.abn.slice(0, 8) : [];
+      if (!abn.length && s.d && s.t === 'abnormal') {
+        const live = getLiveClassification(s.d);
+        if (live && live.items) {
+          abn = (live.items || [])
+            .filter(it => it.status && it.status !== 'NORMAL')
+            .slice(0, 8)
+            .map(it => ({
+              n: it.name || '',
+              r: String(it.result !== undefined && it.result !== null ? it.result : ''),
+              u: it.unit || '',
+              s: it.status || ''
+            }));
+        }
+      }
+
+      // 3. 次级内容区（仅异常或跳过时展示）
+      let subHTML = '';
+      if (s.t === 'abnormal' && abn.length) {
+        const abnChips = abn.map(x => {
+          if (typeof x === 'string') {return '<span class="aal-abn-item">' + esc(x) + '</span>';}
+          const st = x.s || '';
+          let cls = 'aal-abn-item', pre = '';
+          if (st === 'CRITICAL') {cls = 'aal-abn-item cri'; pre = '🚨';}
+          else if (st === 'HIGH') {cls = 'aal-abn-item hi'; pre = '▲';}
+          else if (st === 'LOW') {cls = 'aal-abn-item lo'; pre = '▼';}
+          else if (st === 'ABNORMAL') {cls = 'aal-abn-item abn'; pre = '⚠';}
+          else if (st === 'UNCERTAIN') {cls = 'aal-abn-item unc'; pre = '?';}
+          else if (st === 'ZERO') {cls = 'aal-abn-item zero'; pre = '0:';}
+          const text = (x.n || '') + ' ' + String(x.r || '') + (x.u ? ' ' + x.u : '');
+          return '<span class="' + cls + '">' + (pre ? pre + ' ' : '') + esc(text) + '</span>';
+        }).join('');
+        subHTML = `
+          <div class="aal-card-sub">
+            <span class="aal-abn-chip-count">⚠ ${abn.length} 项异常</span>
+            <div class="aal-abn-summary">${abnChips}</div>
+          </div>`;
+      } else if (s.t === 'skip' && s.reason) {
+        subHTML = `
+          <div class="aal-card-sub">
+            <div class="aal-skip-box">
+              <span>🛑</span>
+              <span>${esc(s.reason)}</span>
+            </div>
+          </div>`;
+      }
+
+      const jumpBtn = s.d
+        ? `<button type="button" class="aal-jump" data-jump="${escAttr(s.d)}" title="在工作台「全部」视图中打开该标本">⤴ 工作台</button>`
+        : '';
+
+      const canExpand = !!(s.d || (s.items && s.items.length));
+
+      return `
+        <div class="aal-card" data-rdr="${escAttr(s.d || '')}" data-toggle-exp="${_rid}">
+          <div class="aal-card-main">
+            <div class="aal-card-left">
+              ${badge(s)}
+              <span class="aal-pat-name">${esc(s.n || '未知姓名')}</span>
+              <span class="aal-labno">${esc(s.l || '—')}</span>
+              ${profileHTML}
+            </div>
+            <div class="aal-card-right">
+              <span class="aal-time" title="${escAttr(fullTime)}">🕘 ${esc(timeStr)}</span>
+              ${jumpBtn}
+              ${canExpand ? '<span class="aal-chevron" title="点击展开/折叠全部指标">▾</span>' : ''}
+            </div>
+          </div>
+          ${subHTML}
+          <div class="aal-card-exp" id="${_rid}" style="display:none"></div>
+        </div>`;
     };
+
     const entryDetails = e => [
       ...(e.audited || []).map(a => ({ n: a.n, l: a.l, d: a.d, t: a.t === 'abnormal' ? 'abnormal' : 'normal', reason: '', test: a.test || '', abn: a.abn || [], items: a.items || [] })),
       ...(e.skipped || []).map(s => ({ n: s.name, l: s.labno, d: s.reportDR || '', t: 'skip', reason: s.reason || '', test: s.test || '', abn: s.abn || [], items: s.items || [] }))
@@ -20182,74 +20222,81 @@ window.addEventListener('keydown',function(e){
       else if (range === '7d') {minDay = fmtDay(new Date(now.getTime() - 6 * 86400000));}
       const entries = log.filter(e => !minDay || String(e.day || '') >= minDay).reverse(); // 最新在前
       const list = document.getElementById('lis-aal-list');
+      const sumBox = document.getElementById('lis-aal-summary');
       if (!list) {return;}
       const ql = q.trim().toLowerCase();
 
-      if (!entries.length) {
-        list.innerHTML = '<div style="color:#999;padding:14px">该范围内暂无自动审核记录</div>';
-        return;
-      }
+      let totalCount = 0;
+      let normalCount = 0;
+      let abnormalCount = 0;
+      let skipCount = 0;
 
-      if (ql) {
-        // 搜索模式：只列出匹配的样本（附审核时间）
-        const rows = [];
-        entries.forEach(e => {
-          entryDetails(e).forEach(s => {
-            if (((s.n || '') + ' ' + (s.l || '')).toLowerCase().includes(ql)) {
-              rows.push({ time: e.day + ' ' + e.time, s });
-            }
-          });
-        });
-        if (!rows.length) {
-          list.innerHTML = '<div style="color:#999;padding:14px">未找到匹配的样本（' + esc(q) + '）</div>';
-          return;
-        }
-        list.innerHTML = '<div class="aal-flat">' +
-          rows
-            .map(r =>
-              '<div class="aal-flat-row" style="border-bottom:1px solid #f0f0f0">' +
-              '<div style="padding:8px 10px 4px;color:#999;font-size:11px">🕘 ' + esc(r.time) + '</div>' +
-              rowHTML(r.s).replace('class="aal-row"', 'class="aal-row aal-flat-inner"') +
-              '</div>')
-            .join('') +
-          '</div>';
-        return;
-      }
-
-      // 8.5.71: 直接平铺所有样本（无需点折叠），每行带审核时间；异常项默认横向、过长自动换行
-      const flat = [];
+      const dayMap = new Map();
       entries.forEach(e => {
+        const dayStr = String(e.day || '');
+        const timeStr = String(e.time || '').slice(0, 8);
+        const fullTimeStr = (dayStr + ' ' + timeStr).trim();
         const det = entryDetails(e);
-        if (!det.length) {
-          // 空轮次仍给一行摘要，避免遗漏
-          flat.push({
-            time: e.day + ' ' + e.time,
-            html: '<div class="aal-row aal-empty" style="padding:6px 10px;color:#999;font-size:11px">' + esc(e.time) + ' 本轮无样本明细</div>'
-          });
-          return;
-        }
         det.forEach(s => {
-          flat.push({
-            time: e.day + ' ' + e.time,
-            html: rowHTML(s)
-          });
+          if (ql) {
+            const abnStr = (s.abn || []).map(x => typeof x === 'string' ? x : ((x.n || '') + ' ' + (x.r || ''))).join(' ');
+            const searchable = [s.n, s.l, s.test, s.reason, abnStr].join(' ').toLowerCase();
+            if (!searchable.includes(ql)) {return;}
+          }
+          totalCount++;
+          if (s.t === 'normal') {normalCount++;}
+          else if (s.t === 'abnormal') {abnormalCount++;}
+          else if (s.t === 'skip') {skipCount++;}
+
+          if (!dayMap.has(dayStr)) {dayMap.set(dayStr, []);}
+          dayMap.get(dayStr).push({ time: timeStr, s, fullTime: fullTimeStr });
         });
       });
-      // 时间戳放每行首列（醒目），样本信息主区
-      list.innerHTML = '<div class="aal-flat">' +
-        flat.map((r, i) =>
-          '<div class="aal-flat-row" style="border-bottom:1px solid #f0f0f0">' +
-          '<div style="padding:8px 10px 4px;color:#999;font-size:11px">' +
-          '🕘 ' + esc(r.time) +
-          '</div>' +
-          r.html.replace('class="aal-row"', 'class="aal-row aal-flat-inner"') +
-          '</div>'
-        ).join('') +
-        '</div>';
+
+      // 概要统计条
+      if (sumBox) {
+        if (totalCount > 0) {
+          sumBox.innerHTML = `
+            <div class="aal-summary-bar">
+              <span>当前共 <b>${totalCount}</b> 个标本</span>
+              <span class="aal-summary-item normal">✓ 正常 <b>${normalCount}</b></span>
+              <span class="aal-summary-item abnormal">⚠ 异常 <b>${abnormalCount}</b></span>
+              <span class="aal-summary-item skip">⏭ 跳过 <b>${skipCount}</b></span>
+            </div>`;
+        } else {
+          sumBox.innerHTML = '';
+        }
+      }
+
+      if (!totalCount) {
+        list.innerHTML = `<div style="text-align:center;color:#94a3b8;padding:48px 14px;font-size:13px">
+          ${ql ? '未找到匹配的标本记录（' + esc(q) + '）' : '所选范围内暂无自动审核记录'}
+        </div>`;
+        return;
+      }
+
+      const todayStr = fmtDay(now);
+      const yestStr = fmtDay(new Date(now.getTime() - 86400000));
+      const htmlParts = [];
+
+      for (const [day, items] of dayMap.entries()) {
+        const dayLabel = day === todayStr ? `今天 (${day})` : day === yestStr ? `昨天 (${day})` : day;
+        htmlParts.push(`<div class="aal-date-divider">📅 ${dayLabel} · ${items.length} 条记录</div>`);
+        htmlParts.push(items.map(it => cardHTML(it.s, it.time, it.fullTime)).join(''));
+      }
+
+      list.innerHTML = htmlParts.join('');
     };
 
-    document.getElementById('lis-aal-close').addEventListener('click', () => dlg.remove());
-    dlg.addEventListener('click', e => {if (e.target === dlg) {dlg.remove();}});
+    const closeDlg = () => {
+      dlg.remove();
+      document.removeEventListener('keydown', escListener);
+    };
+    const escListener = ev => {if (ev.key === 'Escape') {closeDlg();}};
+    document.addEventListener('keydown', escListener);
+
+    document.getElementById('lis-aal-close').addEventListener('click', closeDlg);
+    dlg.addEventListener('click', e => {if (e.target === dlg) {closeDlg();}});
     dlg.querySelectorAll('.aal-range').forEach(b =>
       b.addEventListener('click', () => {
         dlg.querySelectorAll('.aal-range').forEach(x => x.classList.remove('on'));
@@ -20260,38 +20307,37 @@ window.addEventListener('keydown',function(e){
     );
     const searchInput = document.getElementById('lis-aal-search');
     searchInput.addEventListener('input', () => {q = searchInput.value; render();});
-    // 8.5.70: 点击记录里的标本行 → 打开工作台详情面板查看该病人完整结果（若标本仍在当前数据）
+
+    // 8.5.70: 点击记录里的标本行/卡片 → 展开完整指标结果；点击「⤴ 工作台」直接跳转
     const listBox = document.getElementById('lis-aal-list');
     if (listBox) {
       listBox.addEventListener('click', ev => {
-        // 8.6.4: 跳转按钮优先处理（按钮在记录行内，必须先于行的展开切换）
         const jumpBtn = ev.target.closest('.aal-jump');
         if (jumpBtn) {
+          ev.stopPropagation();
           jumpToSpecimenDetailFromLog(jumpBtn.dataset.jump);
           return;
         }
-        const row = ev.target.closest('.aal-row[data-rdr]');
-        if (!row) {return;}
-        const rdr = row.dataset.rdr;
-        const togg = row.dataset.toggleExp;
+        const card = ev.target.closest('.aal-card[data-toggle-exp]');
+        if (!card) {return;}
+        const togg = card.dataset.toggleExp;
         if (!togg) {return;}
         const body = document.getElementById(togg);
         if (!body) {return;}
-        // 8.5.73: 在记录弹窗内联展开该标本完整结果，不关闭弹窗、不切换分类
+        const rdr = card.dataset.rdr;
         if (body.style.display !== 'none') {
           body.style.display = 'none';
-          const mk = row.querySelector('.aal-exp-marker');
-          if (mk) {mk.textContent = '▾';}
+          card.classList.remove('open');
           return;
         }
-        // 渲染完整结果：8.5.75 优先用日志持久化的完整结果（历史标本也能看），其次工作台缓存
+        // 展开
+        card.classList.add('open');
         const s = _aalSamples[togg] || {};
         let items = (s.items && s.items.length) ? s.items : [];
-        if (!items.length) {
-          const live = rdr ? getLiveClassification(rdr) : null;
+        if (!items.length && rdr) {
+          const live = getLiveClassification(rdr);
           if (live && live.items) {items = live.items || [];}
         }
-        // 8.5.73: 缓存分类被清时，回退用原始详情缓存（ItemInfo）渲染全部项目
         if (!items.length && rdr && typeof _classifyRawCache !== 'undefined' && _classifyRawCache[String(rdr)]) {
           const rawInfo = (_classifyRawCache[String(rdr)].data || {}).ItemInfo;
           if (Array.isArray(rawInfo)) {
@@ -20300,7 +20346,7 @@ window.addEventListener('keydown',function(e){
               r: it.TextRes && String(it.TextRes).trim() ? it.TextRes : (it.Result || ''),
               u: it.Unit || it.Units || '',
               f: it.RefRanges || it.RefRange || '',
-              s: 'NORMAL' // 原始缓存无分类，中性显示
+              s: 'NORMAL'
             }));
           }
         }
@@ -20308,12 +20354,10 @@ window.addEventListener('keydown',function(e){
           body.innerHTML = itemsTableHTML(items, rdr);
         } else {
           body.innerHTML =
-            '<div style="color:#999;padding:6px">该标本日志中未保存完整项目结果，且已不在当前工作台数据/缓存中。</div>' +
-            (rdr ? '<button class="aal-jump" data-jump="' + escAttr(String(rdr)) + '">在工作台「全部」视图中查找 ›</button>' : '');
+            '<div style="color:#94a3b8;padding:8px;font-size:11px">该标本日志中未保存完整项目结果，且已不在当前工作台数据/缓存中。</div>' +
+            (rdr ? '<button class="aal-jump" data-jump="' + escAttr(String(rdr)) + '" style="margin-left:8px">在工作台「全部」视图中查找 ›</button>' : '');
         }
         body.style.display = 'block';
-        const mk = row.querySelector('.aal-exp-marker');
-        if (mk) {mk.textContent = '▴';}
       });
     }
     render();
