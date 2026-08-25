@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.10
+// @version      8.8.11
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6676,6 +6676,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     invalidateCaches({ detail: true, raw: true });
     wsData = [];
     updateWSDateControls();
+    // 8.8.11: 从历史视图切回今天时，把被审核切走的原生日期框一并恢复今天（与查看日保持一致）；
+    // 切到历史日期时 restoreNativeDateboxToday 内部守卫会跳过（原生页停在查看日是符合预期的）
+    restoreNativeDateboxToday();
     renderWSTable();
     renderWSCategoryBar();
     const qi = document.getElementById('lis-qi');
@@ -7027,6 +7030,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     stopWSRefresh();
     closeDetailPanel(true); // 关闭详情面板，避免工作台关闭后详情面板残留
     restoreNativeDateboxToday(); // 8.8.2: 工作台关闭兜底——原生日期框若被历史审核切走过，恢复今天
+    wsCloseDatePicker(); // 8.8.11: 日历弹层挂在 body 上，关工作台必须一并收起，否则悬浮残留
     updateAbnormalEnterBridge();
     // 清理键盘监听器
     _removeAbnormalKeyHandler();
@@ -10121,9 +10125,14 @@ window.addEventListener('keydown',function(e){
       // 避免焦点滞留原生 iframe 可编辑控件（快速查找框/日期框/编辑格），
       // 导致下一次 Enter 被原生输入吃掉、详情审核不触发（连续 Enter 审第二条失效的根因）。
       // 仅详情面板场景需要；列表视图（无面板）不受影响。
+      // 8.8.11: 用户正在输入框打字（如工作台搜索框）时不抢焦点
       if (isDetailPanelVisible()) {
-        try {releaseNativeReportFocus();} catch (e) {}
-        refocusDetailPanel();
+        const _ae = document.activeElement;
+        const _typing = _ae && /^(INPUT|TEXTAREA|SELECT)$/i.test(_ae.tagName);
+        if (!_typing) {
+          try {releaseNativeReportFocus();} catch (e) {}
+          refocusDetailPanel();
+        }
       }
       if (!isReportDetailLoaded(iframeWin, reportDR)) {
         // 8.5.35: 预热详情等待 4500 → 3500（后台预热，避免用户紧跟 Enter 时被 4.5s 拖住）
@@ -11883,6 +11892,9 @@ window.addEventListener('keydown',function(e){
           if (_detailAuditInProgress || _auditInProgress || _abnormalAuditInProgress) {return;}
           if (!isDetailPanelVisible() || !currentDetailSpecimen) {return;}
           if (String(currentDetailSpecimen.ReportDR) !== String(specimen.ReportDR)) {return;}
+          // 8.8.11: 用户正在输入框打字（如工作台搜索框）时不抢焦点
+          const _ae = document.activeElement;
+          if (_ae && /^(INPUT|TEXTAREA|SELECT)$/i.test(_ae.tagName)) {return;}
           releaseNativeReportFocus();
           refocusDetailPanel();
         });
