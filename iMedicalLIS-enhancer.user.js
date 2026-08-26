@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.18
+// @version      8.8.19
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19426,6 +19426,11 @@ window.addEventListener('keydown',function(e){
     return Object.assign(def, _autoAudit.rules || {});
   }
   function autoAuditEnabled() {return !!(_autoAudit && _autoAudit.enabled);}
+  // 8.8.18: 通知推送模式。all=成功+未成功都推；blocked=只推未成功/红线留人工；off=不推。
+  function autoAuditNotifyMode() {
+    const m = _autoAudit && _autoAudit.notifyMode;
+    return (m === 'blocked' || m === 'off') ? m : 'all';
+  }
   function autoAuditRemainMs() {
     if (!autoAuditEnabled()) {return 0;}
     return Math.max(0, _autoAudit.until - Date.now());
@@ -19456,6 +19461,10 @@ window.addEventListener('keydown',function(e){
         {},
         _autoAudit.rules || {}
       );
+      // 8.8.18: 通知推送模式——all(成功+未成功标本都推) / blocked(只推未成功/红线) / off(不推)。旧状态无此字段按 all。
+      if (!_autoAudit.notifyMode || !['all', 'blocked', 'off'].includes(_autoAudit.notifyMode)) {
+        _autoAudit.notifyMode = 'all';
+      }
       // 旧状态没有 schema/scope 时不恢复无人值守运行，避免用旧范围继续审核
       if (_autoAudit.schema !== 2 || (_autoAudit.enabled && !_autoAudit.scope)) {
         _autoAudit.enabled = false;
@@ -19486,6 +19495,8 @@ window.addEventListener('keydown',function(e){
       durationMin: dur,
       startDate: today(), // 8.7.0: 开启日期——跨午夜后查询窗口从这天起，昨晚未审完标本仍可见可审
       rules: autoAuditRules(),
+      // 8.8.18: 通知推送模式沿用当前设置（不随开启/停止重置）
+      notifyMode: autoAuditNotifyMode(),
       // 8.5.67: 开启时刻固定审核范围（工作组+勾选仪器快照），之后勾选新仪器不再纳入
       scope: captureAuditScopeSnapshot()
     };
@@ -19508,7 +19519,8 @@ window.addEventListener('keydown',function(e){
       enabled: false,
       until: 0,
       durationMin: (_autoAudit && _autoAudit.durationMin) || AUTO_AUDIT_DEFAULT_MIN,
-      rules: {}
+      rules: {},
+      notifyMode: autoAuditNotifyMode() // 8.8.18: 通知推送模式保留，停止不重置
     };
     saveAutoAuditState();
     stopAutoAuditTimers();
@@ -19521,7 +19533,8 @@ window.addEventListener('keydown',function(e){
     }
     // 8.8.12: 停止事件 → 手机推送（Bark）。只发状态，无任何业务明细；同内容 60s 去重防双触发
     // 8.8.14: 停止事件仍只发状态（不涉标本明细），隐私口径不变
-    if (wasEnabled) {
+    // 8.8.18: 通知模式 off 时不推（连停止事件也不推）；blocked/all 都推状态类推送
+    if (wasEnabled && autoAuditNotifyMode() !== 'off') {
       pushAutoAuditNotify({
         title: reason === '到期' ? '⏰ 自动审核已停止' : '🛑 自动审核已关闭',
         body: reason === '到期' ? '审核时长已到，自动停止（如需继续请重新开启）' : '自动审核已被手动关闭',
@@ -19939,19 +19952,41 @@ window.addEventListener('keydown',function(e){
         // 8.8.16: 推送分级——本轮标本全部能正常通过自动审核 → 普通提醒(active)；
         // 有无法通过自动审核的标本（危急值/堵孔0值/传染病阳性/心肌标志物/含负值等红线）→ 重要提醒(critical+🚨，穿透勿扰)。
         // 8.8.17: 通过自动审核的标本同样列出异常值（与留人工呈现一致），仅推送级别不同。
+        // 8.8.18: 推送模式开关——autoAuditNotifyMode()：all=成功+未成功都推（本轮有动作即推）；
+        // blocked=只推未成功自动审核的标本（有留人工才推，全部通过则不推；红线仍 critical）；
+        // off=完全不推。
         // 隐私红线：用户已确认标本号与接收时间可进推送；姓名/住院号/床号/科室等身份信息绝不含。
+        const _notifyMode = autoAuditNotifyMode();
         const redLineN = skipped.filter(s => isAutoAuditRedLineReason(s.reason)).length;
-        const abnLines = autoAuditAbnSpecimenSummary([...skipped, ...audited], redLineN > 0 ? 8 : 6);
         let body = '正常 ' + nNormal + ' · 异常 ' + nAbnormal + ' · 留人工 ' + skipped.length;
         if (redLineN > 0) {
           const brk = autoAuditRedLineBreakdown(skipped);
           if (brk) {body += '\n' + brk;}
         }
-        if (abnLines.length) {body += '\n' + abnLines.join('\n');}
-        if (redLineN > 0) {
-          pushAutoAuditNotify({ title: '🚨 自动审核：危急红线 ' + redLineN + ' 例留人工', body, level: 'critical' });
+        if (_notifyMode === 'off') {
+          // 不推送：仍续算（供下方只在推送时用），但直接跳过发送
+        } else if (_notifyMode === 'blocked') {
+          // 只推送未成功自动审核的标本：有留人工才推；全部通过自动审核则不打扰
+          if (skipped.length > 0) {
+            if (redLineN > 0) {
+              pushAutoAuditNotify({ title: '🚨 自动审核：危急红线 ' + redLineN + ' 例留人工', body, level: 'critical' });
+            } else {
+              const abnLines = autoAuditAbnSpecimenSummary(skipped, 6);
+              let _b2 = body;
+              if (abnLines.length) {_b2 += '\n' + abnLines.join('\n');}
+              pushAutoAuditNotify({ title: '⚠️ 自动审核：' + skipped.length + ' 例留人工', body: _b2, level: 'active' });
+            }
+          }
+          // skipped.length === 0：本轮全部自动审核成功 → 不推送
         } else {
-          pushAutoAuditNotify({ title: '🤖 自动审核完成一轮', body, level: 'active' });
+          // all（默认）：本轮有动作即推
+          const abnLines = autoAuditAbnSpecimenSummary([...skipped, ...audited], redLineN > 0 ? 8 : 6);
+          if (abnLines.length) {body += '\n' + abnLines.join('\n');}
+          if (redLineN > 0) {
+            pushAutoAuditNotify({ title: '🚨 自动审核：危急红线 ' + redLineN + ' 例留人工', body, level: 'critical' });
+          } else {
+            pushAutoAuditNotify({ title: '🤖 自动审核完成一轮', body, level: 'active' });
+          }
         }
       }
     } catch (e) {
@@ -20195,6 +20230,15 @@ window.addEventListener('keydown',function(e){
             <span style="color:#999;margin-left:6px">默认 60 分钟（5–480，步进 5）</span>
           </div>
           <div class="ab-section" style="margin-top:10px">
+            <label style="display:block;margin-bottom:6px">📲 通知推送</label>
+            <div id="lis-aa-notify-opts" style="display:flex;gap:16px;flex-wrap:wrap">
+              <label style="cursor:pointer"><input type="radio" name="lis-aa-notify" value="all" ${autoAuditNotifyMode() === 'all' ? 'checked' : ''}> 推送所有（成功+未成功标本）</label>
+              <label style="cursor:pointer"><input type="radio" name="lis-aa-notify" value="blocked" ${autoAuditNotifyMode() === 'blocked' ? 'checked' : ''}> 只推送未成功的标本</label>
+              <label style="cursor:pointer"><input type="radio" name="lis-aa-notify" value="off" ${autoAuditNotifyMode() === 'off' ? 'checked' : ''}> 不推送</label>
+            </div>
+            <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。</div>
+          </div>
+          <div class="ab-section" style="margin-top:10px">
             <div style="padding:6px 10px;background:#fff8e1;border:1px solid #f0d58a;border-radius:4px">🔒 梅毒、丙肝、艾滋阳性为固定人工审核红线；乙肝两对半 5 项不在此红线内。</div>
           </div>
         </div>
@@ -20261,7 +20305,10 @@ window.addEventListener('keydown',function(e){
     });
     document.getElementById('lis-aa-start').addEventListener('click', () => {
       const dur = parseInt(document.getElementById('lis-aa-dur').value, 10);
-      _autoAudit = Object.assign({}, _autoAudit || {}, { schema: 2, rules: {} });
+      // 8.8.18: 读取通知推送模式单选
+      const sel = document.querySelector('#lis-aa-notify-opts input[name="lis-aa-notify"]:checked');
+      const notifyMode = (sel && sel.value) || 'all';
+      _autoAudit = Object.assign({}, _autoAudit || {}, { schema: 2, rules: {}, notifyMode });
       saveAutoAuditState();
       startAutoAudit(Number.isFinite(dur) ? dur : AUTO_AUDIT_DEFAULT_MIN);
       close();
