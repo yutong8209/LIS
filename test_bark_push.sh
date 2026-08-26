@@ -46,7 +46,7 @@ try:
         import base64, secrets, string
         iv = fixed_iv or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
         payload = {'device_key': key, 'level': 'active',
-                   'ciphertext': base64.b64encode(serve.aes_cbc_encrypt(inner.encode(), ek, iv.encode())).decode(),
+                   'ciphertext': base64.b64encode(serve.aes_cbc_encrypt(inner.encode(), ek, str(iv).encode())).decode(),
                    'iv': iv}
         enc_note = '[已加密]'
 except Exception as e:

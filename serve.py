@@ -254,9 +254,9 @@ def _load_encrypt_cfg(cfg):
         raise ValueError(f'encrypt_key 须为 {klen} 位（{algo}），当前 {len(key)} 位')
     iv_raw = str(cfg.get('encrypt_iv') or '').strip()
     if iv_raw:
-        iv = iv_raw.encode('utf-8')
-        if len(iv) != 16:
-            raise ValueError(f'encrypt_iv 须为 16 位或留空（留空则每次推送自动随机），当前 {len(iv)} 位')
+        if len(iv_raw.encode('utf-8')) != 16:
+            raise ValueError(f'encrypt_iv 须为 16 位或留空（留空则每次推送自动随机），当前 {len(iv_raw.encode("utf-8"))} 位')
+        iv = iv_raw  # 保持 str，由调用处统一 encode
     else:
         iv = None
     return key, iv
