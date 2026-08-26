@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.11
+// @version      8.8.12
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19517,6 +19517,44 @@ window.addEventListener('keydown',function(e){
     if (wasEnabled && (!_autoAuditMute || reason === '到期')) {
       showToast(reason === '到期' ? '🤖 自动审核已到期，自动停止' : '🤖 自动审核已关闭', 'success');
     }
+    // 8.8.12: 停止事件 → 手机推送（Bark）。只发状态，无任何业务明细；同内容 60s 去重防双触发
+    if (wasEnabled) {
+      pushAutoAuditNotify({
+        title: reason === '到期' ? '⏰ 自动审核已停止' : '🛑 自动审核已关闭',
+        body: reason === '到期' ? '审核时长已到，自动停止（如需继续请重新开启）' : '自动审核已被手动关闭',
+        level: 'active'
+      });
+    }
+  }
+
+  // ==================== 8.8.12: 自动审核关键事件 → 手机推送（Bark → iPhone，Apple Watch 自动镜像） ====================
+  // 通道：本地 serve.py /notify → https://api.day.app/push（Bark 云端）→ APNs → iPhone 通知中心。
+  // 隐私红线：只发「聚合计数/状态」，绝不携带患者姓名、标本号、检验结果等任何业务明细（业务数据不出内网）。
+  // 频率控制：关键事件才推（有审核动作的一轮小结 / 危急红线留人工 / 停止事件），同内容 60s 去重防刷屏。
+  let _notifyBarkTimer = null;
+  let _notifyBarkLast = { key: '', t: 0 };
+  function pushAutoAuditNotify(payload) {
+    const key = (payload.title || '') + '|' + (payload.body || '') + '|' + (payload.level || '');
+    const now = Date.now();
+    if (_notifyBarkLast.key === key && now - _notifyBarkLast.t < 60 * 1000) {return;} // 60s 同内容去重
+    _notifyBarkLast = { key, t: now };
+    clearTimeout(_notifyBarkTimer);
+    _notifyBarkTimer = setTimeout(() => {
+      try {
+        fetch('http://127.0.0.1:8765/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' }, // text/plain 免 CORS 预检
+          body: JSON.stringify(payload),
+          keepalive: true
+        }).catch(() => {});
+      } catch (e) {}
+    }, 500);
+  }
+  // 危急红线原因判定：这些标本被拦下留人工，属于必须立即知道的关键事件
+  // （危急值 / 负值 / 传染病阳性 / 心肌标志物达拦截线 / 疑似堵孔）
+  function isAutoAuditRedLineReason(reason) {
+    if (!reason) {return false;}
+    return /危急值|含负值|梅毒|丙肝|艾滋|心肌标志物|疑似堵孔/.test(String(reason));
   }
 
   function startAutoAuditTimers() {
@@ -19752,6 +19790,22 @@ window.addEventListener('keydown',function(e){
           '🤖 自动审核：正常 ' + nNormal + ' · 异常 ' + nAbnormal + ' · 跳过 ' + skipped.length + (remain ? ' · ' + remain : ''),
           nNormal + nAbnormal > 0 ? 'success' : 'info'
         );
+        // 8.8.12: 本轮有审核动作 → 手机推送关键事件（仅聚合计数，无明细）。
+        // 存在危急红线留人工（危急值/负值/传染病阳性/心肌标志物/疑似堵孔）时用 critical 级突破免打扰
+        const redLineN = skipped.filter(s => isAutoAuditRedLineReason(s.reason)).length;
+        if (redLineN > 0) {
+          pushAutoAuditNotify({
+            title: '⚠️ 自动审核：危急红线 ' + redLineN + ' 例留人工',
+            body: '正常 ' + nNormal + ' · 异常 ' + nAbnormal + ' · 留人工 ' + skipped.length,
+            level: 'critical'
+          });
+        } else {
+          pushAutoAuditNotify({
+            title: '🤖 自动审核完成一轮',
+            body: '正常 ' + nNormal + ' · 异常 ' + nAbnormal + ' · 留人工 ' + skipped.length,
+            level: 'active'
+          });
+        }
       }
     } catch (e) {
       dbg('自动审核循环异常:', e);

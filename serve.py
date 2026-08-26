@@ -7,6 +7,7 @@ import json
 import sys
 import threading
 import time
+import urllib.request
 from urllib.parse import urlparse, unquote
 
 PORT = 8765
@@ -53,6 +54,44 @@ def _load_cmd():
 
 
 _load_cmd()
+
+# ── Bark 推送（自动审核关键事件 → iPhone / Apple Watch）──────────────────────
+# 配置：notify_config.json（不入库，勿提交）：
+#   {"bark_key": "你在 Bark App 里的设备码", "enabled": true}
+NOTIFY_CONFIG_FILE = os.path.join(ROOT, 'notify_config.json')
+BARK_PUSH_URL = 'https://api.day.app/push'
+_NOTIFY_LEVELS = {'active', 'passive', 'timeSensitive', 'critical'}
+
+
+def _load_notify_config():
+    try:
+        with open(NOTIFY_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
+def _notify_bark(key, title, body, level):
+    """后台线程转发到 Bark 云端 → APNs → iPhone（Apple Watch 镜像）。失败仅打印，不阻塞 serve。"""
+    if level not in _NOTIFY_LEVELS:
+        level = 'active'
+    payload = json.dumps({
+        'device_key': key,
+        'title': title,
+        'body': body,
+        'level': level,
+    }, ensure_ascii=False).encode('utf-8')
+    req = urllib.request.Request(
+        BARK_PUSH_URL, data=payload,
+        headers={'Content-Type': 'application/json; charset=utf-8'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f'[{time.strftime("%H:%M:%S")}] Bark 推送成功 [{level}] {title} - {body}')
+    except Exception as e:
+        print(f'[{time.strftime("%H:%M:%S")}] Bark 推送失败: {e}')
 
 
 ALLOWED = {
@@ -203,6 +242,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(body)
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+        elif path == '/notify':
+            # 自动审核关键事件 → Bark 推送。userscript 只发聚合计数（正常/异常/留人工），
+            # 绝不携带患者姓名、标本号、检验结果等明细（隐私红线：业务数据不出内网）。
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                raw = self.rfile.read(length) if length else b'{}'
+                data = json.loads(raw.decode('utf-8'))
+                title = str(data.get('title') or '自动审核')
+                body = str(data.get('body') or '')
+                level = str(data.get('level') or 'active')
+                cfg = _load_notify_config()
+                key = (cfg.get('bark_key') or '').strip()
+                if not key or not cfg.get('enabled', True):
+                    # 未配置 Bark key：静默丢弃（不打扰用户），打印提示便于排查
+                    print(f'[{time.strftime("%H:%M:%S")}] [notify] 未配置 bark_key（{NOTIFY_CONFIG_FILE}），忽略推送: {title} - {body}')
+                    accepted = False
+                else:
+                    threading.Thread(target=_notify_bark, args=(key, title, body, level), daemon=True).start()
+                    accepted = True
+                body_resp = json.dumps({'accepted': accepted}, ensure_ascii=False).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body_resp)))
+                self.send_header('Cache-Control', 'no-cache')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(body_resp)
             except Exception as e:
                 self.send_response(500)
                 self.send_header('Access-Control-Allow-Origin', '*')

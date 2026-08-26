@@ -74,3 +74,6 @@ FORMAT_SUMMARY.md
 # Agent 临时产物（勿提交）
 .pi-subagents/
 .workbuddy/
+
+# Bark 推送配置（本地密钥，勿提交；模板见 notify_config.example.json）
+notify_config.json
