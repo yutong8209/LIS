@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.23
+// @version      8.8.24
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19649,7 +19649,9 @@ window.addEventListener('keydown',function(e){
       // 8.8.23: 前缀文案「流水」→「流水号」（与详情面板用词一致）
       const seq = String(s.seq || s.EpisodeNo || s.episodeNo || '').trim();
       const tm = pushShortTime(s.acceptDT || s.AcceptDT || '');
-      lines.push([seq ? '流水号 ' + seq : ('检验号 ' + labno), tm].filter(Boolean).join(' ') || '标本');
+      // 8.8.24: 头行带上项目组合（如「血常规」，超10字截断），手机端一眼知道是什么标本
+      const tst = String(s.test || '').trim().slice(0, 10);
+      lines.push([seq ? '流水号 ' + seq : ('检验号 ' + labno), tm, tst].filter(Boolean).join(' ') || '标本');
       if (lines.length >= maxLines) {return;}
       const segs = abn.slice(0, 6).map(it => {
         const st = it.s || it.status || '';
@@ -19704,6 +19706,40 @@ window.addEventListener('keydown',function(e){
       if (n > 0) {parts.push(label + ' ' + n + ' 例');}
     });
     return parts.join(' · ');
+  }
+
+  // 8.8.24: 跳过原因 → 红线类别名（供推送标题分组）；非红线返回 ''（归入「审核失败」）
+  function autoAuditReasonCat(reason) {
+    const s = String(reason || '');
+    if (/危急值/.test(s)) {return '危急值';}
+    if (/含负值/.test(s)) {return '含负值';}
+    if (/梅毒|丙肝|艾滋/.test(s)) {return '传染病阳性';}
+    if (/心肌标志物/.test(s)) {return '心肌标志物';}
+    if (/疑似堵孔|0 ?值结果/.test(s)) {return '疑似堵孔';}
+    return '';
+  }
+
+  // 8.8.24: 推送标题直接说结果——「审核了2个正常的XN-1000标本；危急值 1 例留人工」。
+  // passByMn: { '机器名|正常'/'机器名|异常': n }；redCats: [['危急值', n], ...]；otherFailN: 非红线失败数。
+  // 有留人工/失败时先说问题再说通过；总长超 90 字截断尾部加「等」（正文里有完整明细）。
+  function autoAuditPushTitle(passByMn, redCats, otherFailN, emoji) {
+    const segs = [];
+    (redCats || []).forEach(([cat, n]) => {segs.push(cat + ' ' + n + ' 例留人工');});
+    if (otherFailN > 0) {segs.push(otherFailN + ' 例审核失败');}
+    Object.keys(passByMn || {}).forEach(k => {
+      const parts = k.split('|');
+      const mn = parts.slice(0, -1).join('|') || '未知仪器';   // 机器名本身可含 |
+      const kind = parts[parts.length - 1];
+      const n = passByMn[k];
+      segs.push('审核了' + (n > 1 ? n + '个' : '一个') + kind + '的' + mn + '标本');
+    });
+    if (!segs.length) {return '';}
+    let out = segs.join('；');
+    while (out.length > 90 && segs.length > 1) {
+      segs.pop();
+      out = segs.join('；') + ' 等';
+    }
+    return (emoji ? emoji + ' ' : '') + out;
   }
 
   function startAutoAuditTimers() {
@@ -19799,6 +19835,8 @@ window.addEventListener('keydown',function(e){
         nAbnormal = 0;
       const skipped = []; // {name, labno, reason}
       const audited = []; // 8.5.61: 本轮审核成功的样本明细 {n,l,d,t}（供记录查看器检索）
+      // 8.8.24: 推送标题统计「机器|正常|异常 → 例数」——独立于 audited 的 50 条明细上限，保证计数完整
+      const _passByMn = {};
       // 8.5.76: 负值红线 —— 含负值结果（如 -1.3）的标本一律不进自动审核（无论正常/异常分类），留人工
       const negDRs = new Set();
       candidates.forEach(r => {
@@ -19876,11 +19914,14 @@ window.addEventListener('keydown',function(e){
           nNormal = (q.done || []).length;
           const _rowByDR = new Map(normals.map(r => [String(r.ReportDR), r]));
           (q.done || []).forEach(it => {
+            const _row = _rowByDR.get(String(it.reportDR)) || it.row || {};
+            // 8.8.24: 标题统计——每例通过都计数（不受 audited 明细 50 条上限影响）
+            const _pk = String(_row._mn || _row.MachineName || '') + '|正常';
+            _passByMn[_pk] = (_passByMn[_pk] || 0) + 1;
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
-              const _row = _rowByDR.get(String(it.reportDR)) || it.row || {};
               const _si = auditRecordSpecInfo(it.reportDR, _row);
-              // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq
-              audited.push({ n: it.name || '', l: it.labno || '', labno: it.labno || '', seq: _row.EpisodeNo || _row.episodeNo || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn, items: _si.items, acceptDT: _row.AcceptDT || _row.acceptDT || '' });
+              // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq；8.8.24: 补机器名 mn
+              audited.push({ n: it.name || '', l: it.labno || '', labno: it.labno || '', seq: _row.EpisodeNo || _row.episodeNo || '', mn: _row._mn || _row.MachineName || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn, items: _si.items, acceptDT: _row.AcceptDT || _row.acceptDT || '' });
             }
           });
           (q.failed || []).forEach(it => autoAuditSkipOnce(skipped, it, it.reason || '批量审核失败'));
@@ -19911,14 +19952,17 @@ window.addEventListener('keydown',function(e){
           const ok = await auditAbnormalSpecimen(r, { quiet: true });
           if (ok) {
             nAbnormal++;
+            // 8.8.24: 标题统计——异常逐条通过也计数
+            const _pk = String(r._mn || r.MachineName || '') + '|异常';
+            _passByMn[_pk] = (_passByMn[_pk] || 0) + 1;
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
-              // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq
-              audited.push({ n: r.PatName || '', l: r.Labno || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn, items: _preSI.items, acceptDT: r.AcceptDT || r.acceptDT || '' });
+              // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq；8.8.24: 补机器名 mn
+              audited.push({ n: r.PatName || '', l: r.Labno || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn, items: _preSI.items, acceptDT: r.AcceptDT || r.acceptDT || '' });
             }
           }
-          else {skipped.push({ name: r.PatName, labno: r.Labno, reason: '审核未确认成功（留人工/下轮重试）' });}
+          else {skipped.push({ name: r.PatName, labno: r.Labno, mn: r._mn || r.MachineName || '', reason: '审核未确认成功（留人工/下轮重试）' });}
         } catch (e) {
-          skipped.push({ name: r.PatName, labno: r.Labno, reason: '审核异常: ' + ((e && e.message) || e) });
+          skipped.push({ name: r.PatName, labno: r.Labno, mn: r._mn || r.MachineName || '', reason: '审核异常: ' + ((e && e.message) || e) });
         }
         // 每审完一条重新取异常候选（成功者已被 auditAbnormalSpecimen 移出 wsData，新到标本纳入）
         abnormalIter = wsData.filter(
@@ -19953,8 +19997,21 @@ window.addEventListener('keydown',function(e){
         // blocked=只推未成功自动审核的标本（有留人工才推，全部通过则不推；红线仍 critical）；
         // off=完全不推。
         // 隐私红线：用户已确认标本号与接收时间可进推送；姓名/住院号/床号/科室等身份信息绝不含。
+        // 8.8.24: 标题直接说结果——「审核了2个正常的XN-1000标本；危急值 1 例留人工」，正文仍带完整明细。
         const _notifyMode = autoAuditNotifyMode();
         const redLineN = skipped.filter(s => isAutoAuditRedLineReason(s.reason)).length;
+        // 标题分组统计：红线按类别、其余失败归「审核失败」
+        const _redCats = [];
+        let _otherFailN = 0;
+        skipped.forEach(s => {
+          const cat = autoAuditReasonCat(s.reason);
+          if (cat) {
+            const hit = _redCats.find(x => x[0] === cat);
+            if (hit) {hit[1]++;} else {_redCats.push([cat, 1]);}
+          } else {_otherFailN++;}
+        });
+        const _titleEmoji = redLineN > 0 ? '🚨' : (_notifyMode === 'blocked' ? '⚠️' : '🤖');
+        const _pushTitle = autoAuditPushTitle(_passByMn, _redCats, _otherFailN, _titleEmoji) || ('自动审核 ' + (nNormal + nAbnormal) + ' 例');
         let body = '正常 ' + nNormal + ' · 异常 ' + nAbnormal + ' · 留人工 ' + skipped.length;
         if (redLineN > 0) {
           const brk = autoAuditRedLineBreakdown(skipped);
@@ -19965,26 +20022,18 @@ window.addEventListener('keydown',function(e){
         } else if (_notifyMode === 'blocked') {
           // 只推送未成功自动审核的标本：有留人工才推；全部通过自动审核则不打扰
           if (skipped.length > 0) {
-            // 8.8.20: 红线 critical 同样按标本展开异常明细（此前 critical 反而没有明细，与非红线/all 模式不一致）
+            // 8.8.20: 红线 critical 与非红线 active 一致按标本展开异常明细
             const abnLines = autoAuditAbnSpecimenSummary(skipped, redLineN > 0 ? 8 : 6);
             let _b2 = body;
             if (abnLines.length) {_b2 += '\n' + abnLines.join('\n');}
-            if (redLineN > 0) {
-              pushAutoAuditNotify({ title: '🚨 自动审核：危急红线 ' + redLineN + ' 例留人工', body: _b2, level: 'critical' });
-            } else {
-              pushAutoAuditNotify({ title: '⚠️ 自动审核：' + skipped.length + ' 例留人工', body: _b2, level: 'active' });
-            }
+            pushAutoAuditNotify({ title: _pushTitle, body: _b2, level: redLineN > 0 ? 'critical' : 'active' });
           }
           // skipped.length === 0：本轮全部自动审核成功 → 不推送
         } else {
           // all（默认）：本轮有动作即推
           const abnLines = autoAuditAbnSpecimenSummary([...skipped, ...audited], redLineN > 0 ? 8 : 6);
           if (abnLines.length) {body += '\n' + abnLines.join('\n');}
-          if (redLineN > 0) {
-            pushAutoAuditNotify({ title: '🚨 自动审核：危急红线 ' + redLineN + ' 例留人工', body, level: 'critical' });
-          } else {
-            pushAutoAuditNotify({ title: '🤖 自动审核完成一轮', body, level: 'active' });
-          }
+          pushAutoAuditNotify({ title: _pushTitle, body, level: redLineN > 0 ? 'critical' : 'active' });
         }
       }
     } catch (e) {
@@ -20009,8 +20058,8 @@ window.addEventListener('keydown',function(e){
     // 8.5.72: 跳过标本也采集项目组合 + 异常项（危急/堵孔/传染病等需人工关注的要有信息）
     const _si = auditRecordSpecInfo(r.ReportDR || r.reportDR, r);
     // 8.8.14: 一并携带接收时间（报告时间语境，与工作台卡片一致）——用户已确认标本标识/时间可进推送
-    // 8.8.22: 一并携带流水号 EpisodeNo（推送标本头优先用流水号）
-    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', seq: r.EpisodeNo || r.episodeNo || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
+    // 8.8.22: 一并携带流水号 EpisodeNo（推送标本头优先用流水号）；8.8.24: 补机器名 mn（推送标题分组）
+    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
   }
 
   // 8.5.76: 结果是否为负值（如 -1.3）——任何仪器/项目出现负值结果即视为不可自动审核，留人工
