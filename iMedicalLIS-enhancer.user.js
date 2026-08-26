@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.22
+// @version      8.8.23
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19646,9 +19646,10 @@ window.addEventListener('keydown',function(e){
       if (!abn.length) {return;}
       const labno = String(s.labno || s.Labno || '').trim();
       // 8.8.22: 标本头改用流水号（EpisodeNo，与工作台表格/详情面板一致，便于按管找标本）；无流水号回退检验号
+      // 8.8.23: 前缀文案「流水」→「流水号」（与详情面板用词一致）
       const seq = String(s.seq || s.EpisodeNo || s.episodeNo || '').trim();
       const tm = pushShortTime(s.acceptDT || s.AcceptDT || '');
-      lines.push([seq ? '流水' + seq : ('标本' + labno), tm].filter(Boolean).join(' ') || '标本');
+      lines.push([seq ? '流水号 ' + seq : ('检验号 ' + labno), tm].filter(Boolean).join(' ') || '标本');
       if (lines.length >= maxLines) {return;}
       const segs = abn.slice(0, 6).map(it => {
         const st = it.s || it.status || '';
