@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.24
+// @version      8.8.25
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -77,7 +77,8 @@
     wsState: 'LIS_WSState_Persist',
     wsIgnore: 'LIS_WSIgnore', // 8.5.33: 待排/采集标本忽略列表（忽略后不计入任何统计）
     autoAudit: 'LIS_AutoAudit_Persist', // 8.5.58: 自动审核状态（开启/到期时间/时长/规则）
-    autoAuditLog: 'LIS_AutoAuditLog' // 8.5.58: 自动审核日志（环形上限 500）
+    autoAuditLog: 'LIS_AutoAuditLog', // 8.5.58: 自动审核日志（环形上限 500）
+    autoAuditRound: 'LIS_AutoAuditRoundAccum' // 8.8.25: 进行中的一轮统计（页面被整页刷新后补报推送，防丢）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -19543,24 +19544,22 @@ window.addEventListener('keydown',function(e){
   //   姓名、住院号、床号、科室等身份信息绝不含（不出内网）。
   // 频率控制：关键事件才推（有审核动作的一轮小结 / 危急红线留人工），同内容 60s 去重防刷屏。
   // 8.8.21: 停止/关闭事件不再推送。
-  let _notifyBarkTimer = null;
   let _notifyBarkLast = { key: '', t: 0 };
   function pushAutoAuditNotify(payload) {
     const key = (payload.title || '') + '|' + (payload.body || '') + '|' + (payload.level || '');
     const now = Date.now();
     if (_notifyBarkLast.key === key && now - _notifyBarkLast.t < 60 * 1000) {return;} // 60s 同内容去重
     _notifyBarkLast = { key, t: now };
-    clearTimeout(_notifyBarkTimer);
-    _notifyBarkTimer = setTimeout(() => {
-      try {
-        fetch('http://127.0.0.1:8765/notify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' }, // text/plain 免 CORS 预检
-          body: JSON.stringify(payload),
-          keepalive: true
-        }).catch(() => {});
-      } catch (e) {}
-    }, 500);
+    // 8.8.25: 立即发送（keepalive 保证页面刷新时在途请求仍可完成）——
+    // 此前的 500ms setTimeout 防抖在整页刷新场景会把已入队的推送整个丢掉
+    try {
+      fetch('http://127.0.0.1:8765/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' }, // text/plain 免 CORS 预检
+        body: JSON.stringify(payload),
+        keepalive: true
+      }).catch(() => {});
+    } catch (e) {}
   }
   // 危急红线原因判定：这些标本被拦下留人工，属于必须立即知道的关键事件
   // （危急值 / 负值 / 传染病阳性 / 心肌标志物达拦截线 / 疑似堵孔）
@@ -19742,6 +19741,79 @@ window.addEventListener('keydown',function(e){
     return (emoji ? emoji + ' ' : '') + out;
   }
 
+  // ---- 8.8.25: 轮次统计增量持久化（跨组审核触发整页刷新时，被中断轮次的推送不再丢失）----
+  // 背景：跨组/会话失效保护会 hardReloadPageForWS() 整页刷新——审核请求已发出（标本审掉了），
+  // 但内存里的本轮计数与未发出的推送一起消失；刷新回来后下一轮无标本可审、静默空转，推送永久丢失。
+  // 机制：每个标本审过/跳过立刻累计进内存并节流写 localStorage；pagehide 时同步落盘；
+  // 正常走完的轮次发出推送后清空。下次初始化若发现残留累积器 → 组装一条「补报」推送。
+  // 注：多标签同时开自动审核时补报归因可能错位（现状单机单标签，风险可接受）。
+  let _aaAccum = null;
+  let _aaFlushTimer = null;
+  function _aaAccumLoad() {
+    try {
+      const raw = localStorage.getItem(K.autoAuditRound);
+      _aaAccum = raw ? JSON.parse(raw) : null;
+    } catch (e) {_aaAccum = null;}
+  }
+  function _aaAccumSave() {
+    try {
+      if (_aaAccum) {localStorage.setItem(K.autoAuditRound, JSON.stringify(_aaAccum));}
+      else {localStorage.removeItem(K.autoAuditRound);}
+    } catch (e) {}
+  }
+  function _aaAccumSchedule() {
+    if (_aaFlushTimer) {return;}
+    _aaFlushTimer = setTimeout(() => {_aaFlushTimer = null; _aaAccumSave();}, 1000);
+  }
+  // kind: '正常' | '异常' | '留人工'；entry 为与 audited/skipped 同构的标本对象
+  function aaRecordEvent(kind, entry) {
+    try {
+      if (!_aaAccum) {
+        _aaAccum = { ts: Date.now(), passN: 0, abnPassN: 0, skipN: 0, pass: {}, redCats: {}, otherFailN: 0, lines: [] };
+      }
+      const mn = String((entry && (entry.mn || entry._mn)) || '');
+      if (kind === '正常' || kind === '异常') {
+        const k = mn + '|' + kind;
+        _aaAccum.pass[k] = (_aaAccum.pass[k] || 0) + 1;
+        if (kind === '正常') {_aaAccum.passN++;} else {_aaAccum.abnPassN++;}
+      } else {
+        _aaAccum.skipN++;
+        const cat = autoAuditReasonCat(entry && entry.reason);
+        if (cat) {_aaAccum.redCats[cat] = (_aaAccum.redCats[cat] || 0) + 1;} else {_aaAccum.otherFailN++;}
+      }
+      if (_aaAccum.lines.length < 60) {
+        autoAuditAbnSpecimenSummary([entry || {}], 4).forEach(l => {
+          if (_aaAccum.lines.length < 60) {_aaAccum.lines.push(l);}
+        });
+      }
+      _aaAccumSchedule();
+    } catch (e) {dbg('轮次统计记录异常:', e);}
+  }
+  function aaClear() {
+    _aaAccum = null;
+    try {localStorage.removeItem(K.autoAuditRound);} catch (e) {}
+    if (_aaFlushTimer) {clearTimeout(_aaFlushTimer); _aaFlushTimer = null;}
+  }
+  // 页面卸载前同步落盘（location.reload / 关闭标签都触发 pagehide）
+  window.addEventListener('pagehide', () => {if (_aaAccum) {_aaAccumSave();}});
+  // 初始化时：发现上次被整页刷新打断的轮次 → 补报一条推送
+  function aaRecoverIfInterrupted() {
+    _aaAccumLoad();
+    if (!_aaAccum) {return;}
+    const a = _aaAccum;
+    _aaAccum = null; // 先取走再发，防重复补报
+    try {localStorage.removeItem(K.autoAuditRound);} catch (e) {}
+    try {
+      const redEntries = Object.entries(a.redCats || {});
+      const hasRed = redEntries.length > 0;
+      const title = autoAuditPushTitle(a.pass || {}, redEntries, a.otherFailN || 0, hasRed ? '🚨' : '🤖');
+      if (!title) {return;}
+      let body = '正常 ' + (a.passN || 0) + ' · 异常 ' + (a.abnPassN || 0) + ' · 留人工 ' + (a.skipN || 0) + '\n（上一轮被页面刷新打断，此为补报）';
+      if ((a.lines || []).length) {body += '\n' + a.lines.join('\n');}
+      pushAutoAuditNotify({ title: title + '（补报）', body, level: hasRed ? 'critical' : 'active' });
+    } catch (e) {dbg('轮次补报异常:', e);}
+  }
+
   function startAutoAuditTimers() {
     stopAutoAuditTimers();
     _autoAuditTimer = setInterval(() => {
@@ -19760,6 +19832,7 @@ window.addEventListener('keydown',function(e){
   // 页面刷新/工作台重开后恢复（openWS 调用）
   function resumeAutoAuditIfActive() {
     loadAutoAuditState();
+    aaRecoverIfInterrupted(); // 8.8.25: 上次被整页刷新打断的轮次先补报，再恢复计时
     if (autoAuditEnabled()) {
       startAutoAuditTimers();
       renderAutoAuditButtonState();
@@ -19918,11 +19991,13 @@ window.addEventListener('keydown',function(e){
             // 8.8.24: 标题统计——每例通过都计数（不受 audited 明细 50 条上限影响）
             const _pk = String(_row._mn || _row.MachineName || '') + '|正常';
             _passByMn[_pk] = (_passByMn[_pk] || 0) + 1;
+            const _si = auditRecordSpecInfo(it.reportDR, _row);
+            const entry = { n: it.name || '', l: it.labno || '', labno: it.labno || '', seq: _row.EpisodeNo || _row.episodeNo || '', mn: _row._mn || _row.MachineName || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn, items: _si.items, acceptDT: _row.AcceptDT || _row.acceptDT || '' };
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
-              const _si = auditRecordSpecInfo(it.reportDR, _row);
               // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq；8.8.24: 补机器名 mn
-              audited.push({ n: it.name || '', l: it.labno || '', labno: it.labno || '', seq: _row.EpisodeNo || _row.episodeNo || '', mn: _row._mn || _row.MachineName || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn, items: _si.items, acceptDT: _row.AcceptDT || _row.acceptDT || '' });
+              audited.push(entry);
             }
+            aaRecordEvent('正常', entry); // 8.8.25: 增量持久化，防整页刷新丢推送
           });
           (q.failed || []).forEach(it => autoAuditSkipOnce(skipped, it, it.reason || '批量审核失败'));
           (q.skipped || []).forEach(it => autoAuditSkipOnce(skipped, it, it.reason || '批量跳过'));
@@ -19955,14 +20030,22 @@ window.addEventListener('keydown',function(e){
             // 8.8.24: 标题统计——异常逐条通过也计数
             const _pk = String(r._mn || r.MachineName || '') + '|异常';
             _passByMn[_pk] = (_passByMn[_pk] || 0) + 1;
+            const entry = { n: r.PatName || '', l: r.Labno || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn, items: _preSI.items, acceptDT: r.AcceptDT || r.acceptDT || '' };
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
               // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq；8.8.24: 补机器名 mn
-              audited.push({ n: r.PatName || '', l: r.Labno || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn, items: _preSI.items, acceptDT: r.AcceptDT || r.acceptDT || '' });
+              audited.push(entry);
             }
+            aaRecordEvent('异常', entry); // 8.8.25: 增量持久化
           }
-          else {skipped.push({ name: r.PatName, labno: r.Labno, mn: r._mn || r.MachineName || '', reason: '审核未确认成功（留人工/下轮重试）' });}
+          else {
+            const entry = { name: r.PatName, labno: r.Labno, seq: r.EpisodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || '', reason: '审核未确认成功（留人工/下轮重试）' };
+            skipped.push(entry);
+            aaRecordEvent('留人工', entry);
+          }
         } catch (e) {
-          skipped.push({ name: r.PatName, labno: r.Labno, mn: r._mn || r.MachineName || '', reason: '审核异常: ' + ((e && e.message) || e) });
+          const entry = { name: r.PatName, labno: r.Labno, seq: r.EpisodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || '', reason: '审核异常: ' + ((e && e.message) || e) };
+          skipped.push(entry);
+          aaRecordEvent('留人工', entry);
         }
         // 每审完一条重新取异常候选（成功者已被 auditAbnormalSpecimen 移出 wsData，新到标本纳入）
         abnormalIter = wsData.filter(
@@ -19971,16 +20054,19 @@ window.addEventListener('keydown',function(e){
       }
 
       // 3) 清理已消失标本的跳过记录（人工审掉/已出范围的标本不再占位）
-      const _liveDRs = new Set(wsData.map(x => String(x.ReportDR)));
-      Object.keys(_autoAuditSkipSeen).forEach(k => {
-        if (!_liveDRs.has(k)) {delete _autoAuditSkipSeen[k];}
-      });
+      // 8.8.25: 各收尾步骤互相隔离——任何一步抛错都不再吞掉后续的推送
+      try {
+        const _liveDRs = new Set(wsData.map(x => String(x.ReportDR)));
+        Object.keys(_autoAuditSkipSeen).forEach(k => {
+          if (!_liveDRs.has(k)) {delete _autoAuditSkipSeen[k];}
+        });
+      } catch (e) {dbg('清理跳过记录异常:', e);}
 
       // 4) 日志 + 小结（skipped 已去重，只含新跳过）
       // 8.5.65: 仅当本轮实际有审核动作（正常/异常/跳过任一 > 0）才弹小结 toast；
       // 全 0 的空转轮次（数据未就绪/无待审标本）静默，避免开启后几秒弹出无意义弹窗
       if (nNormal > 0 || nAbnormal > 0 || skipped.length > 0) {
-        autoAuditLogAdd({ normal: nNormal, abnormal: nAbnormal, skipped, audited });
+        try {autoAuditLogAdd({ normal: nNormal, abnormal: nAbnormal, skipped, audited });} catch (e) {dbg('审核日志写入异常:', e);}
         _autoAuditMute = false; // 小结 toast 不被静默
         const remain = autoAuditRemainText();
         showToast(
@@ -20035,6 +20121,8 @@ window.addEventListener('keydown',function(e){
           if (abnLines.length) {body += '\n' + abnLines.join('\n');}
           pushAutoAuditNotify({ title: _pushTitle, body, level: redLineN > 0 ? 'critical' : 'active' });
         }
+        // 8.8.25: 本轮完整走完并已推送 → 清空累积器（off 模式也清，避免日后重开时误补报旧轮）
+        aaClear();
       }
     } catch (e) {
       dbg('自动审核循环异常:', e);
@@ -20059,7 +20147,9 @@ window.addEventListener('keydown',function(e){
     const _si = auditRecordSpecInfo(r.ReportDR || r.reportDR, r);
     // 8.8.14: 一并携带接收时间（报告时间语境，与工作台卡片一致）——用户已确认标本标识/时间可进推送
     // 8.8.22: 一并携带流水号 EpisodeNo（推送标本头优先用流水号）；8.8.24: 补机器名 mn（推送标题分组）
-    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
+    const entry = { reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items };
+    skipped.push(entry);
+    aaRecordEvent('留人工', entry); // 8.8.25: 增量持久化
   }
 
   // 8.5.76: 结果是否为负值（如 -1.3）——任何仪器/项目出现负值结果即视为不可自动审核，留人工
