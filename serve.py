@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """本地脚本服务器 - 配合 Tampermonkey 自动更新，并托管 vendor 依赖（SheetJS 等）"""
+import base64
 import http.server
 import mimetypes
 import os
 import json
+import secrets
+import string
 import sys
 import threading
 import time
@@ -87,24 +90,176 @@ def _notify_bark(key, title, body, level):
     global _notify_last
     if level not in _NOTIFY_LEVELS:
         level = 'active'
-    payload = json.dumps({
-        'device_key': key,
-        'title': title,
-        'body': body,
-        'level': level,
-    }, ensure_ascii=False).encode('utf-8')
+    # ── 8.8.23: 推送内容端到端加密（Bark App「加密设置」配了 Key 即启用）──
+    # 开启后 title/body 全部进 AES 密文，Bark 云与 APNs 只见密文；level 等非敏感参数仍明文传递。
+    # 加密失败一律不回退明文（fail-closed），避免隐私内容意外裸奔。
+    enc_payload = None
+    enc_err = None
+    try:
+        enc_cfg = _load_encrypt_cfg(_load_notify_config())
+        if enc_cfg:
+            enc_key, fixed_iv = enc_cfg
+            inner = json.dumps({'title': title, 'body': body}, ensure_ascii=False)
+            iv_str = fixed_iv or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            ct = base64.b64encode(aes_cbc_encrypt(inner.encode('utf-8'), enc_key, iv_str.encode('utf-8'))).decode('ascii')
+            enc_payload = {'ciphertext': ct, 'iv': iv_str}
+    except Exception as e:
+        enc_err = e
+        enc_payload = None
+    payload = {'device_key': key, 'level': level}
+    log_tail = f'{title} - {body}'
+    if enc_payload is not None:
+        payload.update(enc_payload)
+        log_tail = f'{title} - [已加密 {len(payload["ciphertext"])}B 密文]'  # 加密后控制台不再落明文正文
+    elif enc_err is not None:
+        # 配置了加密但加密失败：宁可不发也不发明文
+        print(f'[{time.strftime("%H:%M:%S")}] Bark 推送放弃（加密配置无效，fail-closed）: {enc_err}')
+        _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': f'加密配置无效: {str(enc_err)[:100]}'}
+        return
+    data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request(
-        BARK_PUSH_URL, data=payload,
+        BARK_PUSH_URL, data=data,
         headers={'Content-Type': 'application/json; charset=utf-8'},
         method='POST',
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            print(f'[{time.strftime("%H:%M:%S")}] Bark 推送成功 [{level}] {title} - {body}')
-            _notify_last = {'ts': time.time(), 'ok': True, 'title': title[:60], 'detail': f'Bark 转发成功 [{level}]'}
+            print(f'[{time.strftime("%H:%M:%S")}] Bark 推送成功 [{level}] {log_tail}')
+            _notify_last = {'ts': time.time(), 'ok': True, 'title': str(title)[:60], 'detail': f'Bark 转发成功 [{level}]' + ('（密文）' if enc_payload else '')}
     except Exception as e:
         print(f'[{time.strftime("%H:%M:%S")}] Bark 推送失败: {e}')
-        _notify_last = {'ts': time.time(), 'ok': False, 'title': title[:60], 'detail': str(e)[:120]}
+        _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': str(e)[:120]}
+
+
+# ── Bark 推送加密（纯 Python AES-128/256-CBC + PKCS7，零第三方依赖）──────────
+# 与 Bark App「设置 → 加密设置」对应：算法 AES128/AES256、模式 CBC、Padding pkcs7。
+# App 里填的 Key（16/32 位）须与 notify_config.json 的 encrypt_key 完全一致；
+# IV 建议在 notify_config.json 留空 → 每次推送随机生成并随请求传给客户端解密。
+
+_SBOX = None
+
+
+def _init_aes_tables():
+    """生成 AES S 盒（程序化构造，避免手抄 256 项出错）"""
+    global _SBOX
+    if _SBOX is not None:
+        return
+    sbox = [0] * 256
+    p = q = 1
+    while True:
+        p = p ^ ((p << 1) & 0xFF) ^ (0x1B if p & 0x80 else 0)          # p *= x (GF(2^8))
+        q ^= (q << 1) & 0xFF
+        q ^= (q << 2) & 0xFF
+        q ^= (q << 4) & 0xFF
+        q &= 0xFF
+        if q & 0x80:
+            q ^= 0x09                                                   # q /= x
+        rotl = lambda v, r: ((v << r) | (v >> (8 - r))) & 0xFF
+        x = q ^ rotl(q, 1) ^ rotl(q, 2) ^ rotl(q, 3) ^ rotl(q, 4)
+        sbox[p] = (x ^ 0x63) & 0xFF
+        if p == 1:
+            break
+    sbox[0] = 0x63
+    _SBOX = sbox
+
+
+def _xtime(a):
+    return ((a << 1) ^ 0x1B) & 0xFF if a & 0x80 else (a << 1)
+
+
+def _aes_key_expansion(key):
+    _init_aes_tables()
+    nk = len(key) // 4          # 4=AES128, 6=AES192, 8=AES256
+    nr = nk + 6                 # 轮数 10/12/14
+    words = [list(key[4 * i:4 * i + 4]) for i in range(nk)]
+    rcon = 1
+    for i in range(nk, 4 * (nr + 1)):
+        temp = list(words[i - 1])
+        if i % nk == 0:
+            temp = [_SBOX[temp[(j + 1) % 4]] for j in range(4)]         # RotWord + SubWord
+            temp[0] ^= rcon
+            rcon = _xtime(rcon)
+        elif nk > 6 and i % nk == 4:
+            temp = [_SBOX[b] for b in temp]                             # SubWord（AES256 额外轮）
+        words.append([temp[j] ^ words[i - nk][j] for j in range(4)])
+    return words, nr
+
+
+def _aes_encrypt_block(block, words, nr):
+    """单块加密。block/state 均为 16 字节列优先扁平数组（in[i] → 列 i//4 行 i%4）"""
+    st = list(block)
+
+    def add_round_key(rd):
+        for c in range(4):
+            for r in range(4):
+                st[4 * c + r] ^= words[rd * 4 + c][r]
+
+    def sub_bytes_shift_rows():
+        out = [0] * 16
+        for c in range(4):
+            for r in range(4):
+                # ShiftRows：第 r 行循环左移 r —— 新列 c 取旧列 (c+r)%4；先 SubBytes 再摆位
+                out[4 * c + r] = _SBOX[st[4 * ((c + r) % 4) + r]]
+        st[:] = out
+
+    def mix_columns():
+        out = [0] * 16
+        for c in range(4):
+            a = st[4 * c:4 * c + 4]
+            for r in range(4):
+                out[4 * c + r] = (_xtime(a[r]) ^ _xtime(a[(r + 1) % 4]) ^ a[(r + 1) % 4]
+                                  ^ a[(r + 2) % 4] ^ a[(r + 3) % 4])
+        st[:] = out
+
+    add_round_key(0)
+    for rd in range(1, nr):
+        sub_bytes_shift_rows()
+        mix_columns()
+        add_round_key(rd)
+    sub_bytes_shift_rows()
+    add_round_key(nr)
+    return bytes(st)
+
+
+def aes_cbc_encrypt(plaintext: bytes, key: bytes, iv: bytes) -> bytes:
+    """AES-CBC + PKCS7 加密（Bark 推送加密用）。key 16/24/32 字节，iv 16 字节"""
+    if len(key) not in (16, 24, 32):
+        raise ValueError(f'AES key 长度须为 16/24/32 字节，当前 {len(key)}')
+    if len(iv) != 16:
+        raise ValueError(f'AES iv 须为 16 字节，当前 {len(iv)}')
+    pad_len = 16 - (len(plaintext) % 16)
+    data = plaintext + bytes([pad_len]) * pad_len                       # PKCS7
+    words, nr = _aes_key_expansion(key)
+    prev = iv
+    out = []
+    for i in range(0, len(data), 16):
+        blk = bytes(x ^ y for x, y in zip(data[i:i + 16], prev))
+        prev = _aes_encrypt_block(blk, words, nr)
+        out.append(prev)
+    return b''.join(out)
+
+
+def _load_encrypt_cfg(cfg):
+    """读取推送加密配置。返回 None=不加密；(key_bytes, 固定iv或None)=加密。
+    配置了 push_encrypt 但参数非法时抛异常（调用方 fail-closed 不发明文）。"""
+    if not cfg.get('push_encrypt'):
+        return None
+    algo = str(cfg.get('encrypt_algo') or 'aes128').strip().lower()
+    klen = {'aes128': 16, 'aes256': 32}.get(algo)
+    if not klen:
+        raise ValueError(f'未知 encrypt_algo「{algo}」（支持 aes128/aes256）')
+    key_raw = str(cfg.get('encrypt_key') or '')
+    key = key_raw.encode('utf-8')
+    if len(key) != klen:
+        raise ValueError(f'encrypt_key 须为 {klen} 位（{algo}），当前 {len(key)} 位')
+    iv_raw = str(cfg.get('encrypt_iv') or '').strip()
+    if iv_raw:
+        iv = iv_raw.encode('utf-8')
+        if len(iv) != 16:
+            raise ValueError(f'encrypt_iv 须为 16 位或留空（留空则每次推送自动随机），当前 {len(iv)} 位')
+    else:
+        iv = None
+    return key, iv
 
 
 ALLOWED = {
@@ -343,26 +498,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass  # 静默 access 日志；成功提供在 do_GET 里打印
 
 
-print('========================================')
-print('  脚本服务器已启动')
-print(f'  地址: http://localhost:{PORT}/')
-print(f'  更新URL: http://localhost:{PORT}/iMedicalLIS-enhancer.user.js')
-print(f'  SheetJS: http://localhost:{PORT}/vendor/xlsx.full.min.js')
-print('========================================')
-print('  使用方法:')
-print('  1. 保持此窗口运行')
-print('  2. 编辑 iMedicalLIS-enhancer.user.js')
-print('  3. 在 Tampermonkey 面板点击脚本的"更新"按钮')
-print('========================================')
+def _main():
+    print('========================================')
+    print('  脚本服务器已启动')
+    print(f'  地址: http://localhost:{PORT}/')
+    print(f'  更新URL: http://localhost:{PORT}/iMedicalLIS-enhancer.user.js')
+    print(f'  SheetJS: http://localhost:{PORT}/vendor/xlsx.full.min.js')
+    print('========================================')
+    print('  使用方法:')
+    print('  1. 保持此窗口运行')
+    print('  2. 编辑 iMedicalLIS-enhancer.user.js')
+    print('  3. 在 Tampermonkey 面板点击脚本的"更新"按钮')
+    print('========================================')
 
-try:
-    http.server.HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
-except KeyboardInterrupt:
-    print('\n已停止')
-except OSError as e:
-    # errno 48 = macOS EADDRINUSE / 98 = Linux EADDRINUSE（端口被占用）
-    if getattr(e, 'errno', None) in (48, 98):
-        print(f'❌ 端口 {PORT} 已被占用：serve.py 可能已在运行（菜单栏/Tampermonkey 更新依赖它）。')
-        print('   如需重启请先结束旧进程: pkill -f serve.py')
-        sys.exit(1)
-    raise
+    try:
+        http.server.HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
+    except KeyboardInterrupt:
+        print('\n已停止')
+    except OSError as e:
+        # errno 48 = macOS EADDRINUSE / 98 = Linux EADDRINUSE（端口被占用）
+        if getattr(e, 'errno', None) in (48, 98):
+            print(f'❌ 端口 {PORT} 已被占用：serve.py 可能已在运行（菜单栏/Tampermonkey 更新依赖它）。')
+            print('   如需重启请先结束旧进程: pkill -f serve.py')
+            sys.exit(1)
+        raise
+
+
+# main guard：允许 test_bark_push.sh 等 import 本模块复用加密函数而不启动服务
+if __name__ == '__main__':
+    _main()

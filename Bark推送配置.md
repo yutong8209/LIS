@@ -90,7 +90,35 @@ bash ~/脚本/test_bark_push.sh
 | `[notify] Bark API 失败` | 设备码错误/网络问题；用 `test_bark_push.sh --direct` 复现 |
 | 同一条重复推送 | 已内置 60 秒内容去重，正常不会重复 |
 | 推送正文会出现哪些信息 | 数字计数 + 标本的流水号与接收时间 + 异常项目（项目名/数值/方向标记 🔺/🔽/危急/0值/参考范围，不显示单位）。姓名、住院号、床号、科室等身份信息**永远不会**出现在推送里 |
+| 手机上通知显示乱码 | App「加密设置」开了但 Key 与 `notify_config.json` 的 `encrypt_key` 不一致（或 serve.py 未重启加载新配置）；两边改成同一个 16 位 Key 后重试 |
 | 想彻底关闭 | 把 `enabled` 改为 `false`，或删除 `notify_config.json` |
+
+## 推送加密（8.8.23，可选强烈推荐）
+
+开启后推送正文在 serve.py 就被 **AES-128-CBC 加密**，Bark 云（api.day.app）与 Apple APNs 全程只见密文，只有你手机上的 Bark App 能解密——第三方彻底看不到「流水号 + 异常值」。
+
+**设置步骤**：
+
+1. **App 端**：Bark → 设置 → 「加密设置」，按默认 `AES128 / CBC / pkcs7`，**Key 填一串 16 位随机字符**，IV 一栏**留空**（每次推送自动随机 IV，更安全）→ 完成。
+   ```bash
+   # 终端生成一个 16 位随机 Key，例如：xK7mQp2vL9wR4tYz
+   LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16; echo
+   ```
+2. **本机端**：把**同一个 Key** 写进 `~/脚本/notify_config.json` 并开启开关：
+   ```json
+   {
+     "bark_key": "你的设备码",
+     "enabled": true,
+     "push_encrypt": true,
+     "encrypt_algo": "aes128",
+     "encrypt_key": "刚才的16位Key",
+     "encrypt_iv": ""
+   }
+   ```
+3. **重启 serve.py** 使配置生效（launchd 管理时 kill 进程即自动拉起）。
+4. **验证**：`bash ~/脚本/test_bark_push.sh`（走 serve.py 全链路，自动加密）或 `--direct`（直连云，同样自动加密）。手机收到正常文字即成功；乱码 = 两边 Key 不一致。
+
+> ⚠️ 注意：App 开启加密后，**所有**发往该设备码的未加密推送都会显示乱码——此后一律经 serve.py 发送（自动加密）。`encrypt_iv` 填固定 16 位也能用，但留空更安全。AES 为纯 Python 内置实现（零新依赖），已通过 FIPS-197 官方向量 + openssl 27 组对拍。加密配置无效时 serve 会**拒绝发送明文**（fail-closed），日志提示「加密配置无效」。
 
 ## 安全
 
@@ -109,11 +137,11 @@ bash ~/脚本/test_bark_push.sh
 
 | 环节 | 能看到什么 | 风险与对策 |
 |---|---|---|
-| 本机 serve.py /notify | 明文正文（计数+流水号+异常值） | 仅监听 127.0.0.1，局域网其他机器不可达；Origin 白名单挡网页滥用。⚠️ 正文会随日志打进 `serve.py` 控制台（launchd 下为 `/tmp/lis-serve.log`），重启后清空 |
-| Bark 云（第三方） | **明文正文**（TLS 传输，但服务端可见） | 官方声明无状态不存储、开源可自建；介意可 ① 自建 bark-server 放院内网 ② 开启 Bark 内容加密（服务端只见密文） |
-| Apple APNs | 通知结构 + 正文 | 端到端 TLS 到设备；锁屏会显示明文预览——建议 iPhone 设置 → 通知 → Bark → 显示预览改为「解锁时」，旁人瞄不到内容 |
+| 本机 serve.py /notify | 明文正文（计数+流水号+异常值） | 仅监听 127.0.0.1，局域网其他机器不可达；Origin 白名单挡网页滥用。⚠️ 未开加密时正文会随日志打进控制台（launchd 下 `/tmp/lis-serve.log`）；**开启加密后日志只落密文长度，不再落明文**（8.8.23） |
+| Bark 云（第三方） | TLS 传输但服务端可见；**开启加密后只见密文** | 官方声明无状态不存储、开源可自建；推荐直接开启上方「推送加密」，一劳永逸 |
+| Apple APNs | 通知结构；**加密后正文为密文** | 端到端 TLS 到设备；未加密时锁屏显示明文预览——建议 iPhone 设置 → 通知 → Bark → 显示预览改「解锁时」 |
 | 局域网传输 | 浏览器→serve.py 是明文 HTTP | 仅在本机回环 127.0.0.1，不出网卡 |
 
 **当前推送内容的最小化口径**：数字计数、流水号（EpisodeNo，检验号兜底）、接收时间、异常项目名+数值+方向+参考范围。不含姓名/住院号/床号/科室/ReportDR。流水号是匿名标识（同一天不同仪器可能重号，配合接收时间区分），拿到推送的人无法直接反查病人身份（需进内网 LIS 才能对应）。
 
-可选加固（按需）：`chmod 600 ~/脚本/notify_config.json` 收紧密钥文件权限；Bark App 内开启推送加密后改 serve.py 加密后再发。
+可选加固：`chmod 600 ~/脚本/notify_config.json` 收紧密钥文件权限（已完成）；院内网自建 bark-server（手机离开医院 Wi-Fi 收不到，一般没必要）。

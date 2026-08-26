@@ -25,11 +25,40 @@ if [ "$ENABLED" != "True" ]; then
 fi
 
 if [ "${1:-}" = "--direct" ]; then
-  echo "→ 直连 Bark 云验证设备码..."
-  curl -s -m 10 -X POST "https://api.day.app/push" \
-    -H 'Content-Type: application/json' \
-    -d "{\"device_key\":\"$KEY\",\"title\":\"🧪 Bark 直连测试\",\"body\":\"设备码有效，链路可达\",\"level\":\"active\"}"
-  echo
+  echo "→ 直连 Bark 云验证设备码（若配置了推送加密则自动加密）..."
+  python3 - "$DIR" <<'PYEOF'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+os.chdir(sys.argv[1])
+import urllib.request
+import serve  # main guard 后仅复用函数，不启动服务
+
+cfg = json.load(open('notify_config.json'))
+key = cfg['bark_key'].strip()
+payload = {'device_key': key, 'title': '🧪 Bark 直连测试',
+           'body': '设备码有效，链路可达', 'level': 'active'}
+enc_note = ''
+try:
+    enc = serve._load_encrypt_cfg(cfg)
+    if enc:
+        ek, fixed_iv = enc
+        inner = json.dumps({'title': payload['title'], 'body': payload['body']}, ensure_ascii=False)
+        import base64, secrets, string
+        iv = fixed_iv or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+        payload = {'device_key': key, 'level': 'active',
+                   'ciphertext': base64.b64encode(serve.aes_cbc_encrypt(inner.encode(), ek, iv.encode())).decode(),
+                   'iv': iv}
+        enc_note = '[已加密]'
+except Exception as e:
+    print(f'❌ 加密配置无效（fail-closed，不发送）: {e}')
+    sys.exit(1)
+
+req = urllib.request.Request('https://api.day.app/push',
+                             data=json.dumps(payload).encode(),
+                             headers={'Content-Type': 'application/json'})
+print(urllib.request.urlopen(req, timeout=10).read().decode())
+print(f'✅ 已直连 Bark 云{enc_note}，手机上应收到「🧪 Bark 直连测试」')
+PYEOF
 else
   echo "→ 走本地 serve.py /notify（需 serve.py 在运行）..."
   RESP="$(curl -s -m 10 -X POST "http://127.0.0.1:8765/notify" \
