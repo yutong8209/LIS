@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.26
+// @version      8.8.27
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7622,6 +7622,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         return false;
       }
       if (String(sel.value) === String(dr)) {return true;} // 已在目标组
+      // 8.8.27: 切组时若工作台可见，标记重载后立即自动重开工作台并保持状态，避免漏出原始 LIS 页面
+      try {
+        if (isWSVisible()) {
+          sessionStorage.setItem(WS_REOPEN_KEY, '1');
+          saveWSState();
+        }
+      } catch (e) {}
       sel.value = String(dr);
       // 调用父框架原生 changeLogin，与用户手动选工作组完全一致
       if (typeof topWin.changeLogin === 'function') {
@@ -7734,6 +7741,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
   function saveAbnormalTarget(specimen, extra) {
     try {
+      // 8.8.27: 记住重开工作台
+      sessionStorage.setItem(WS_REOPEN_KEY, '1');
+      saveWSState();
       // 读取已有 cycle 计数，累加防循环
       let cycle = 0;
       try {
@@ -10661,6 +10671,40 @@ window.addEventListener('keydown',function(e){
       // 8.5.54: 复检标本审核成功 → 记录「曾复审」，供全部视图显示双标识
       if (String(specimen.Status || specimen.ReportStatus || '') === '4') {recheckDoneAdd(targetDR);}
       _auditOutcome = true; // 8.5.58
+
+      // 8.8.27: 若当前开启了自动审核但处于跨组独立续审状态（!_autoAuditRunning），记录事件并主动触发推送
+      if (autoAuditEnabled() && !_autoAuditRunning) {
+        try {
+          const _si = auditRecordSpecInfo(targetDR, specimen);
+          const _entry = {
+            n: specimen.PatName || '',
+            l: specimen.Labno || '',
+            labno: specimen.Labno || '',
+            seq: specimen.EpisodeNo || specimen.episodeNo || '',
+            mn: specimen._mn || specimen.MachineName || '',
+            d: String(targetDR),
+            t: 'abnormal',
+            test: _si.test,
+            abn: _si.abn,
+            items: _si.items,
+            acceptDT: specimen.AcceptDT || specimen.acceptDT || ''
+          };
+          aaRecordEvent('异常', _entry);
+          _aaAccumLoad();
+          if (_aaAccum && (_aaAccum.passN > 0 || _aaAccum.abnPassN > 0)) {
+            const redEntries = Object.entries(_aaAccum.redCats || {});
+            const hasRed = redEntries.length > 0;
+            const _title = autoAuditPushTitle(_aaAccum.pass || {}, redEntries, _aaAccum.otherFailN || 0, hasRed ? '🚨' : '🤖');
+            if (_title) {
+              let body = '正常 ' + (_aaAccum.passN || 0) + ' · 异常 ' + (_aaAccum.abnPassN || 0) + ' · 留人工 ' + (_aaAccum.skipN || 0);
+              if ((_aaAccum.lines || []).length) {body += '\n' + _aaAccum.lines.join('\n');}
+              pushAutoAuditNotify({ title: _title, body, level: hasRed ? 'critical' : 'active' });
+              autoAuditLogAdd({ normal: _aaAccum.passN || 0, abnormal: _aaAccum.abnPassN || 0, skipped: [], audited: [] });
+            }
+            aaClear();
+          }
+        } catch (e) {dbg('跨组异常审核推送异常:', e);}
+      }
 
       delete wsClassifiedCache[specimen.ReportDR];
       wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
@@ -18882,6 +18926,45 @@ window.addEventListener('keydown',function(e){
       }
       batchListFresh = true;
 
+      // 8.8.27: 自动审核事件增量记录辅助（防整页刷新或切组续跑丢失推送）
+      const _aaRecordQueueItem = (kind, qItem, reason) => {
+        if (!queue || !queue._autoMode) {return;}
+        try {
+          const _r = resolveQueueItemRow(qItem) || qItem.row || {};
+          const _si = auditRecordSpecInfo(qItem.reportDR, _r);
+          if (kind === '正常' || kind === '异常') {
+            const _entry = {
+              n: qItem.name || _r.PatName || '',
+              l: qItem.labno || _r.Labno || '',
+              labno: qItem.labno || _r.Labno || '',
+              seq: _r.EpisodeNo || _r.episodeNo || qItem.seq || '',
+              mn: _r._mn || _r.MachineName || qItem.mn || '',
+              d: String(qItem.reportDR || ''),
+              t: kind === '正常' ? 'normal' : 'abnormal',
+              test: _si.test,
+              abn: _si.abn,
+              items: _si.items,
+              acceptDT: _r.AcceptDT || _r.acceptDT || ''
+            };
+            aaRecordEvent(kind, _entry);
+          } else {
+            const _entry = {
+              reportDR: String(qItem.reportDR || ''),
+              name: qItem.name || _r.PatName || '',
+              labno: qItem.labno || _r.Labno || '',
+              seq: _r.EpisodeNo || _r.episodeNo || qItem.seq || '',
+              mn: _r._mn || _r.MachineName || qItem.mn || '',
+              acceptDT: _r.AcceptDT || _r.acceptDT || '',
+              reason: reason || qItem.reason || '批审跳过',
+              test: _si.test,
+              abn: _si.abn,
+              items: _si.items
+            };
+            aaRecordEvent('留人工', _entry);
+          }
+        } catch (e) {dbg('批审自动审核事件记录异常:', e);}
+      };
+
       while (queue.current < queue.items.length) {
         if (_batchAbort || (queue._autoMode && (_autoAuditCancelRequested || !autoAuditEnabled()))) {
           dbg('批审被用户中止');
@@ -18916,6 +18999,7 @@ window.addEventListener('keydown',function(e){
         const liveRow = resolveQueueItemRow(item);
         if (liveRow && String(liveRow.Status || liveRow.ReportStatus || '') === '3') {
           queue.skipped.push({ ...item, reason: '标本已审核，跳过' });
+          _aaRecordQueueItem('留人工', item, '标本已审核，跳过');
           skipCount++;
           queue.current++;
           saveAuditQueueNow(queue);
@@ -18923,6 +19007,7 @@ window.addEventListener('keydown',function(e){
         }
         if (liveRow && String(liveRow.IsComplete || '') !== '1') {
           queue.skipped.push({ ...item, reason: '结果不完整' });
+          _aaRecordQueueItem('留人工', item, '结果不完整');
           skipCount++;
           queue.current++;
           saveAuditQueueNow(queue);
@@ -18944,20 +19029,23 @@ window.addEventListener('keydown',function(e){
         }
         if (!liveClassified) {
           queue.skipped.push({ ...item, reason: '分类缓存缺失，需刷新后重试' });
+          _aaRecordQueueItem('留人工', item, '分类缓存缺失，需刷新后重试');
           skipCount++;
           queue.current++;
           saveAuditQueueNow(queue);
           continue;
         }
         if (!isAutoAuditableClassified(liveClassified)) {
-          queue.skipped.push({ ...item, reason: classifyStatusText(liveClassified.status) + '标本不可自动审核' });
+          const _reason = classifyStatusText(liveClassified.status) + '标本不可自动审核';
+          queue.skipped.push({ ...item, reason: _reason });
+          _aaRecordQueueItem('留人工', item, _reason);
           skipCount++;
           queue.current++;
           saveAuditQueueNow(queue);
           continue;
         }
 
-        // 8.5.78: 跨组标本判定与快速切组优化
+        // 8.5.10: 跨组标本判定与快速切组优化（选不到时才回退切组）
         const curWG = resolveCurrentWG();
         const _batchCrossGroup = !!(item.wg && curWG && item.wg !== curWG);
 
@@ -18967,23 +19055,6 @@ window.addEventListener('keydown',function(e){
         if (batchCAReady) {
           queue.caReadyByWg[itemWg] = true;
           if (curWG) {queue.caReadyByWg[curWG] = true;}
-        }
-
-        // 8.5.78: 跨组标本快速前置判断 —— 若当前工作组网格中确实无此标本，立即切组，不再盲等 5.6s 超时
-        if (_batchCrossGroup) {
-          const inCurrentGrid = selectNativeRowByReportDR(iframeWin, item.reportDR, { force: true });
-          if (!inCurrentGrid) {
-            if (batchCAReady && curWG) {queue.caReadyByWg[curWG] = true;}
-            queue.pausedForSwitch = true;
-            saveAuditQueueNow(queue);
-            const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
-            const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
-            showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
-            queuePausedForSwitch = true;
-            safeSwitchWG(item.wg);
-            runAuditQueueResume(2500);
-            break;
-          }
         }
 
         batchListFresh = false;
@@ -19086,11 +19157,18 @@ window.addEventListener('keydown',function(e){
               const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
               showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
               queuePausedForSwitch = true;
+              try {
+                sessionStorage.setItem(WS_REOPEN_KEY, '1');
+                saveWSState();
+              } catch (e) {}
               safeSwitchWG(item.wg);
               runAuditQueueResume(2500);
               break;
             }
-            if (!requeueAuditItem(queue, item, '原生列表未找到')) {skipCount++;}
+            if (!requeueAuditItem(queue, item, '原生列表未找到')) {
+              skipCount++;
+              _aaRecordQueueItem('留人工', item, '原生列表未找到');
+            }
             continue;
           }
           if (itemAbort() && !_batchAbort) {
@@ -19226,10 +19304,12 @@ window.addEventListener('keydown',function(e){
           }
           if (auditResult === 'incomplete') {
             queue.skipped.push({ ...item, reason: '结果不完整' });
+            _aaRecordQueueItem('留人工', item, '结果不完整');
             skipCount++;
           } else if (auditResult) {
             closeNativeAuditSuccessMessage(iframeWin);
             queue.done.push(item);
+            _aaRecordQueueItem('正常', item);
             successCount++;
             batchCAReady = true;
             queue.caReadyByWg[itemWg] = true;
@@ -19258,6 +19338,7 @@ window.addEventListener('keydown',function(e){
               dbg('批审延迟校验成功:', item.reportDR);
               auditResult = true;
               queue.done.push(item);
+              _aaRecordQueueItem('正常', item);
               successCount++;
               batchCAReady = true;
               queue.caReadyByWg[itemWg] = true;
@@ -19265,6 +19346,7 @@ window.addEventListener('keydown',function(e){
               // 未确认成功：优先队尾重试，不要直接放弃（真漏审多由此产生）
               if (!requeueAuditItem(queue, item, '审核未确认成功')) {
                 queue.failed.push({ ...item, reason: '审核未确认成功' });
+                _aaRecordQueueItem('留人工', item, '审核未确认成功');
                 failCount++;
               }
             }
@@ -19272,6 +19354,7 @@ window.addEventListener('keydown',function(e){
         } catch (e) {
           if (!requeueAuditItem(queue, item, e.message || '异常')) {
             queue.failed.push({ ...item, reason: e.message });
+            _aaRecordQueueItem('留人工', item, e.message || '审核异常');
             failCount++;
           }
           dbg('逐行审核异常:', item.name, e.message);
@@ -19327,10 +19410,12 @@ window.addEventListener('keydown',function(e){
               successCount++;
               failCount = Math.max(0, failCount - 1);
               queue.done.push(it);
+              _aaRecordQueueItem('正常', it);
               batchCAReady = true;
               if (it.wg) {queue.caReadyByWg[it.wg] = true;}
             } else {
               stillFail.push(it);
+              _aaRecordQueueItem('留人工', it, '补审仍未确认');
             }
           }
           queue.failed = stillFail;
@@ -19363,6 +19448,25 @@ window.addEventListener('keydown',function(e){
         );
       } else {
         showToast('❌ 审核全部失败', 'error');
+      }
+
+      // 8.8.27: 若本批审为切组独立续跑（无外层 autoAuditTick 正在等待），在结束或切回原组前主动触发推送与日志结算
+      if (queue._autoMode && !_autoAuditRunning && (successCount > 0 || failCount > 0 || skipCount > 0)) {
+        try {
+          _aaAccumLoad();
+          if (_aaAccum && (_aaAccum.passN > 0 || _aaAccum.abnPassN > 0 || _aaAccum.skipN > 0)) {
+            const redEntries = Object.entries(_aaAccum.redCats || {});
+            const hasRed = redEntries.length > 0;
+            const _title = autoAuditPushTitle(_aaAccum.pass || {}, redEntries, _aaAccum.otherFailN || 0, hasRed ? '🚨' : '🤖');
+            if (_title) {
+              let body = '正常 ' + (_aaAccum.passN || 0) + ' · 异常 ' + (_aaAccum.abnPassN || 0) + ' · 留人工 ' + (_aaAccum.skipN || 0);
+              if ((_aaAccum.lines || []).length) {body += '\n' + _aaAccum.lines.join('\n');}
+              pushAutoAuditNotify({ title: _title, body, level: hasRed ? 'critical' : 'active' });
+              autoAuditLogAdd({ normal: _aaAccum.passN || 0, abnormal: _aaAccum.abnPassN || 0, skipped: [], audited: [] });
+            }
+            aaClear();
+          }
+        } catch (e) {dbg('续跑批审推送结算异常:', e);}
       }
 
       const _originWG = String(queue.originWG || '');
