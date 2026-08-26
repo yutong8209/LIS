@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.20
+// @version      8.8.21
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19531,16 +19531,8 @@ window.addEventListener('keydown',function(e){
     if (wasEnabled && (!_autoAuditMute || reason === '到期')) {
       showToast(reason === '到期' ? '🤖 自动审核已到期，自动停止' : '🤖 自动审核已关闭', 'success');
     }
-    // 8.8.12: 停止事件 → 手机推送（Bark）。只发状态，无任何业务明细；同内容 60s 去重防双触发
-    // 8.8.14: 停止事件仍只发状态（不涉标本明细），隐私口径不变
-    // 8.8.18: 通知模式 off 时不推（连停止事件也不推）；blocked/all 都推状态类推送
-    if (wasEnabled && autoAuditNotifyMode() !== 'off') {
-      pushAutoAuditNotify({
-        title: reason === '到期' ? '⏰ 自动审核已停止' : '🛑 自动审核已关闭',
-        body: reason === '到期' ? '审核时长已到，自动停止（如需继续请重新开启）' : '自动审核已被手动关闭',
-        level: 'active'
-      });
-    }
+    // 8.8.21: 停止/关闭不再发手机推送（原 ⏰/🛑 状态推送已移除）——
+    // 关闭是用户本机主动动作，界面已有 toast 与按钮状态；减少无谓打扰与一次云端转发
   }
 
   // ==================== 8.8.12: 自动审核关键事件 → 手机推送（Bark → iPhone，Apple Watch 自动镜像） ====================
@@ -19548,7 +19540,8 @@ window.addEventListener('keydown',function(e){
   // 隐私红线：正文只含「聚合计数 + 标本异常摘要（留人工与通过自动审核的异常标本同样列出：
   // 标本号/接收时间 + 项目名/数值/方向标记/参考范围）」。
   // 8.8.14: 用户已确认标本号与接收时间不属于病人隐私，可带；姓名、住院号、床号、科室等身份信息绝不含（不出内网）。
-  // 频率控制：关键事件才推（有审核动作的一轮小结 / 危急红线留人工 / 停止事件），同内容 60s 去重防刷屏。
+  // 频率控制：关键事件才推（有审核动作的一轮小结 / 危急红线留人工），同内容 60s 去重防刷屏。
+  // 8.8.21: 停止/关闭事件不再推送。
   let _notifyBarkTimer = null;
   let _notifyBarkLast = { key: '', t: 0 };
   function pushAutoAuditNotify(payload) {

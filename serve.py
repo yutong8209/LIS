@@ -150,7 +150,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         # 8.8.20: 推送链路状态（userscript 自动审核设置界面实时展示）。只暴露配置与否/开关/最近结果，绝不含 bark_key
+        # 8.8.21: GET 同样走来源白名单 —— last.title 含红线例数等聚合信息，不给任意网页跨源读取
         if path == '/notify_status':
+            if not self._origin_allowed():
+                print(f'[{time.strftime("%H:%M:%S")}] [security] 拒绝非白名单 Origin 的 GET {path}: {self.headers.get("Origin")}')
+                self._reject_origin()
+                return
             cfg = _load_notify_config()
             key = (cfg.get('bark_key') or '').strip()
             body = json.dumps({
