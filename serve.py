@@ -61,6 +61,16 @@ _load_cmd()
 NOTIFY_CONFIG_FILE = os.path.join(ROOT, 'notify_config.json')
 BARK_PUSH_URL = 'https://api.day.app/push'
 _NOTIFY_LEVELS = {'active', 'passive', 'timeSensitive', 'critical'}
+# 最近一次 /notify 处理结果（供 userscript 设置界面 GET /notify_status 实时展示；不含 bark_key 本身）
+_notify_last = None
+# 浏览器来源白名单：只有 LIS 页面（userscript）可以触发推送/写入统计与指令；
+# 无 Origin 的请求视为本机脚本（curl、SwiftBar shell、test_bark_push.sh）放行。
+# 其它网页一律 403 —— 浏览器跨源 POST 无法伪造/省略 Origin，可防任意网页 drive-by
+# 静默调 /notify 向手机发 critical 推送（穿透勿扰）轰炸，或伪造菜单栏读数/指令。
+NOTIFY_ALLOWED_ORIGINS = {
+    'http://10.0.29.100',
+    'http://192.168.31.111:9111',
+}
 
 
 def _load_notify_config():
@@ -74,6 +84,7 @@ def _load_notify_config():
 
 def _notify_bark(key, title, body, level):
     """后台线程转发到 Bark 云端 → APNs → iPhone（Apple Watch 镜像）。失败仅打印，不阻塞 serve。"""
+    global _notify_last
     if level not in _NOTIFY_LEVELS:
         level = 'active'
     payload = json.dumps({
@@ -90,8 +101,10 @@ def _notify_bark(key, title, body, level):
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             print(f'[{time.strftime("%H:%M:%S")}] Bark 推送成功 [{level}] {title} - {body}')
+            _notify_last = {'ts': time.time(), 'ok': True, 'title': title[:60], 'detail': f'Bark 转发成功 [{level}]'}
     except Exception as e:
         print(f'[{time.strftime("%H:%M:%S")}] Bark 推送失败: {e}')
+        _notify_last = {'ts': time.time(), 'ok': False, 'title': title[:60], 'detail': str(e)[:120]}
 
 
 ALLOWED = {
@@ -102,6 +115,18 @@ ALLOWED = {
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    def _origin_allowed(self):
+        """POST 来源白名单：LIS 页面 Origin 放行；无 Origin（curl/SwiftBar 等本机脚本）放行；其余 403。
+        浏览器对跨源 POST 会强制附加真实 Origin 且 JS 无法伪造，故可拦截其它网页的 drive-by 滥用。"""
+        origin = (self.headers.get('Origin') or '').strip().rstrip('/').lower()
+        return (not origin) or origin in NOTIFY_ALLOWED_ORIGINS
+
+    def _reject_origin(self):
+        self.send_response(403)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(b'Origin not allowed')
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -116,6 +141,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == '/stats':
             with _stats_lock:
                 body = json.dumps(_stats_data, ensure_ascii=False).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        # 8.8.20: 推送链路状态（userscript 自动审核设置界面实时展示）。只暴露配置与否/开关/最近结果，绝不含 bark_key
+        if path == '/notify_status':
+            cfg = _load_notify_config()
+            key = (cfg.get('bark_key') or '').strip()
+            body = json.dumps({
+                'configured': bool(key),
+                'enabled': bool(cfg.get('enabled', True)),
+                'last': _notify_last,
+                'ts': int(time.time() * 1000),
+            }, ensure_ascii=False).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -173,8 +216,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(str(e).encode())
 
     def do_POST(self):
-        global _stats_data, _cmd_data
+        global _stats_data, _cmd_data, _notify_last
         path = unquote(urlparse(self.path).path)
+        # 8.8.20: 来源白名单 —— 防其它网页 drive-by 静默调 /notify 给手机发推送（或伪造 /stats、/cmd）
+        if not self._origin_allowed():
+            print(f'[{time.strftime("%H:%M:%S")}] [security] 拒绝非白名单 Origin 的 POST {path}: {self.headers.get("Origin")}')
+            self._reject_origin()
+            return
         if path == '/stats':
             try:
                 length = int(self.headers.get('Content-Length', 0))
@@ -264,6 +312,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not key or not cfg.get('enabled', True):
                     # 未配置 Bark key：静默丢弃（不打扰用户），打印提示便于排查
                     print(f'[{time.strftime("%H:%M:%S")}] [notify] 未配置 bark_key（{NOTIFY_CONFIG_FILE}），忽略推送: {title} - {body}')
+                    _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': '未配置 bark_key 或 enabled=false，已忽略'}
                     accepted = False
                 else:
                     threading.Thread(target=_notify_bark, args=(key, title, body, level), daemon=True).start()

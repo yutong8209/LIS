@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.19
+// @version      8.8.20
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19968,12 +19968,13 @@ window.addEventListener('keydown',function(e){
         } else if (_notifyMode === 'blocked') {
           // 只推送未成功自动审核的标本：有留人工才推；全部通过自动审核则不打扰
           if (skipped.length > 0) {
+            // 8.8.20: 红线 critical 同样按标本展开异常明细（此前 critical 反而没有明细，与非红线/all 模式不一致）
+            const abnLines = autoAuditAbnSpecimenSummary(skipped, redLineN > 0 ? 8 : 6);
+            let _b2 = body;
+            if (abnLines.length) {_b2 += '\n' + abnLines.join('\n');}
             if (redLineN > 0) {
-              pushAutoAuditNotify({ title: '🚨 自动审核：危急红线 ' + redLineN + ' 例留人工', body, level: 'critical' });
+              pushAutoAuditNotify({ title: '🚨 自动审核：危急红线 ' + redLineN + ' 例留人工', body: _b2, level: 'critical' });
             } else {
-              const abnLines = autoAuditAbnSpecimenSummary(skipped, 6);
-              let _b2 = body;
-              if (abnLines.length) {_b2 += '\n' + abnLines.join('\n');}
               pushAutoAuditNotify({ title: '⚠️ 自动审核：' + skipped.length + ' 例留人工', body: _b2, level: 'active' });
             }
           }
@@ -20236,6 +20237,7 @@ window.addEventListener('keydown',function(e){
               <label style="cursor:pointer"><input type="radio" name="lis-aa-notify" value="blocked" ${autoAuditNotifyMode() === 'blocked' ? 'checked' : ''}> 只推送未成功的标本</label>
               <label style="cursor:pointer"><input type="radio" name="lis-aa-notify" value="off" ${autoAuditNotifyMode() === 'off' ? 'checked' : ''}> 不推送</label>
             </div>
+            <div id="lis-aa-push-status" style="margin-top:8px;padding:6px 10px;background:#f6f8fa;border:1px solid #e3e8ee;border-radius:4px;color:#555;font-size:12px;line-height:1.7">⏳ 正在获取推送状态…</div>
             <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。</div>
           </div>
           <div class="ab-section" style="margin-top:10px">
@@ -20293,8 +20295,50 @@ window.addEventListener('keydown',function(e){
       box.innerHTML = '🎯 当前审核范围：' + parts.join('　') + (scope ? ' <span style="color:#0d6655;font-weight:700">（开启时固定）</span>' : '');
     };
     renderScope();
-    // 8.5.70: 弹窗只显示审核范围（今日记录已由头部 🕘 查看记录按钮承担），5s 刷新范围
-    const liveTimer = setInterval(() => {renderScope();}, 5000);
+    // 8.8.20: 实时推送状态（serve.py 在线 + Bark 配置 + 最近一次推送结果），与范围一样每 5s 刷新
+    let _pushStatusFetching = false;
+    const renderPushStatus = async () => {
+      const box = document.getElementById('lis-aa-push-status');
+      if (!box || _pushStatusFetching) {return;}
+      _pushStatusFetching = true;
+      const _paint = (html, bg, bd) => {
+        const b = document.getElementById('lis-aa-push-status');
+        if (!b) {return;} // 弹窗已关闭
+        b.innerHTML = html;
+        if (bg) {b.style.background = bg;}
+        if (bd) {b.style.borderColor = bd;}
+      };
+      try {
+        const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const tmr = ctl ? setTimeout(() => ctl.abort(), 2500) : null;
+        const resp = await fetch('http://127.0.0.1:8765/notify_status', ctl ? {signal: ctl.signal} : {});
+        if (tmr) {clearTimeout(tmr);}
+        const d = await resp.json();
+        if (!d || (!d.configured && !d.enabled)) {
+          // 未配置 bark_key / enabled=false：serve 在线但推送会被静默丢弃，提示配置方法
+          _paint('⚠️ <b>尚未启用推送</b>：把 notify_config.example.json 复制为 ~/脚本/<b>notify_config.json</b> 并填入 iPhone 的 Bark 设备码（见《Bark推送配置.md》）', '#fff8e1', '#f0d58a');
+        } else if (!d.enabled) {
+          _paint('⏸ Bark 已配置，但 notify_config.json 里 <b>enabled=false</b>，推送整体关闭中', '#fff8e1', '#f0d58a');
+        } else {
+          const last = d.last;
+          const lastTxt = last
+            ? ('最近一次：' + pushShortTime(new Date((last.ts || 0) * 1000)) + ' ' + (last.ok ? '✅ 成功「' : '❌ 失败「') + esc(String(last.title || '')) + '」' + (last.ok ? '' : '<br>原因：' + esc(String(last.detail || ''))))
+            : '暂无推送记录（开启自动审核跑一轮后，这里显示最近一次结果）';
+          _paint(
+            (last && !last.ok ? '⚠️ <b>Bark 已配置，但最近一次推送失败</b><br>' + lastTxt : '✅ <b>推送链路正常</b>（本机 serve.py 在线 · Bark 已配置）<br>' + lastTxt),
+            last && !last.ok ? '#fff8e1' : '#eef7f5',
+            last && !last.ok ? '#f0d58a' : '#bfe3dd'
+          );
+        }
+      } catch (e) {
+        _paint('❌ <b>本机推送服务未运行</b>：双击 start_lis_menubar.command 启动 serve.py 后这里自动变绿', '#fdecea', '#f5c6cb');
+      } finally {
+        _pushStatusFetching = false;
+      }
+    };
+    renderPushStatus();
+    // 8.5.70: 弹窗只显示审核范围（今日记录已由头部 🕘 查看记录按钮承担），5s 刷新范围与推送状态
+    const liveTimer = setInterval(() => {renderScope(); renderPushStatus();}, 5000);
 
     const close = () => {clearInterval(liveTimer); dlg.remove();};
     document.getElementById('lis-aa-close').addEventListener('click', close);
