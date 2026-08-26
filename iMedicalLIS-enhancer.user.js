@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.21
+// @version      8.8.22
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19538,8 +19538,9 @@ window.addEventListener('keydown',function(e){
   // ==================== 8.8.12: 自动审核关键事件 → 手机推送（Bark → iPhone，Apple Watch 自动镜像） ====================
   // 通道：本地 serve.py /notify → https://api.day.app/push（Bark 云端）→ APNs → iPhone 通知中心。
   // 隐私红线：正文只含「聚合计数 + 标本异常摘要（留人工与通过自动审核的异常标本同样列出：
-  // 标本号/接收时间 + 项目名/数值/方向标记/参考范围）」。
-  // 8.8.14: 用户已确认标本号与接收时间不属于病人隐私，可带；姓名、住院号、床号、科室等身份信息绝不含（不出内网）。
+  // 流水号/接收时间 + 项目名/数值/方向标记/参考范围）」。
+  // 8.8.14: 用户已确认标本标识与接收时间不属于病人隐私，可带；8.8.22: 标本头改用流水号（EpisodeNo，检验号兜底）。
+  //   姓名、住院号、床号、科室等身份信息绝不含（不出内网）。
   // 频率控制：关键事件才推（有审核动作的一轮小结 / 危急红线留人工），同内容 60s 去重防刷屏。
   // 8.8.21: 停止/关闭事件不再推送。
   let _notifyBarkTimer = null;
@@ -19644,8 +19645,10 @@ window.addEventListener('keydown',function(e){
       });
       if (!abn.length) {return;}
       const labno = String(s.labno || s.Labno || '').trim();
+      // 8.8.22: 标本头改用流水号（EpisodeNo，与工作台表格/详情面板一致，便于按管找标本）；无流水号回退检验号
+      const seq = String(s.seq || s.EpisodeNo || s.episodeNo || '').trim();
       const tm = pushShortTime(s.acceptDT || s.AcceptDT || '');
-      lines.push(['标本' + labno, tm].filter(Boolean).join(' ') || '标本');
+      lines.push([seq ? '流水' + seq : ('标本' + labno), tm].filter(Boolean).join(' ') || '标本');
       if (lines.length >= maxLines) {return;}
       const segs = abn.slice(0, 6).map(it => {
         const st = it.s || it.status || '';
@@ -19875,8 +19878,8 @@ window.addEventListener('keydown',function(e){
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
               const _row = _rowByDR.get(String(it.reportDR)) || it.row || {};
               const _si = auditRecordSpecInfo(it.reportDR, _row);
-              // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）
-              audited.push({ n: it.name || '', l: it.labno || '', labno: it.labno || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn, items: _si.items, acceptDT: _row.AcceptDT || _row.acceptDT || '' });
+              // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq
+              audited.push({ n: it.name || '', l: it.labno || '', labno: it.labno || '', seq: _row.EpisodeNo || _row.episodeNo || '', d: String(it.reportDR || ''), t: 'normal', test: _si.test, abn: _si.abn, items: _si.items, acceptDT: _row.AcceptDT || _row.acceptDT || '' });
             }
           });
           (q.failed || []).forEach(it => autoAuditSkipOnce(skipped, it, it.reason || '批量审核失败'));
@@ -19908,8 +19911,8 @@ window.addEventListener('keydown',function(e){
           if (ok) {
             nAbnormal++;
             if (audited.length < AUTO_AUDIT_LOG_DETAIL_MAX) {
-              // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）
-              audited.push({ n: r.PatName || '', l: r.Labno || '', labno: r.Labno || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn, items: _preSI.items, acceptDT: r.AcceptDT || r.acceptDT || '' });
+              // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq
+              audited.push({ n: r.PatName || '', l: r.Labno || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', d: String(r.ReportDR || ''), t: 'abnormal', test: _preSI.test, abn: _preSI.abn, items: _preSI.items, acceptDT: r.AcceptDT || r.acceptDT || '' });
             }
           }
           else {skipped.push({ name: r.PatName, labno: r.Labno, reason: '审核未确认成功（留人工/下轮重试）' });}
@@ -20004,8 +20007,9 @@ window.addEventListener('keydown',function(e){
     _autoAuditSkipSeen[key] = reason;
     // 8.5.72: 跳过标本也采集项目组合 + 异常项（危急/堵孔/传染病等需人工关注的要有信息）
     const _si = auditRecordSpecInfo(r.ReportDR || r.reportDR, r);
-    // 8.8.14: 一并携带接收时间（报告时间语境，与工作台卡片一致）——用户已确认标本号/时间可进推送
-    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
+    // 8.8.14: 一并携带接收时间（报告时间语境，与工作台卡片一致）——用户已确认标本标识/时间可进推送
+    // 8.8.22: 一并携带流水号 EpisodeNo（推送标本头优先用流水号）
+    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', seq: r.EpisodeNo || r.episodeNo || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
   }
 
   // 8.5.76: 结果是否为负值（如 -1.3）——任何仪器/项目出现负值结果即视为不可自动审核，留人工
