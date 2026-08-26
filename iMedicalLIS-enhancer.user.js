@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.25
+// @version      8.8.26
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -24,7 +24,8 @@
        🔒 隐私声明
        - 业务数据仅在本地浏览器内处理，不向公网上传检验结果
        - Bark 手机推送（可选功能）只含去标识的聚合计数与异常项目名/数值/参考范围，
-         可带检验号（标本号）与接收时间；绝不携带姓名、住院号、床号、科室等身份信息
+         可带流水号（检验号兜底）与接收时间；绝不携带姓名、住院号、床号、科室等身份信息；
+         可选端到端加密开启后，Bark 云与 Apple 仅见密文
        - 仅与本院 LIS 内网通信；脚本更新/SheetJS 走本机 localhost:8765
        - 密码：HTTP 内网无 crypto.subtle 时用 base64 可逆编码存 localStorage
          （防顺手扫一眼，不能防读脚本的攻击者）。HTTPS 下可升为 AES-GCM V2
@@ -19749,6 +19750,9 @@ window.addEventListener('keydown',function(e){
   // 注：多标签同时开自动审核时补报归因可能错位（现状单机单标签，风险可接受）。
   let _aaAccum = null;
   let _aaFlushTimer = null;
+  // 8.8.26: 页面会话标记——区分「本页面正在进行中的轮次」与「上次刷新遗留的残骸」，
+  // 防止轮次中途 keepWorkbenchOnTop 重开工作台时把活轮次误当历史补报（双推 bug）
+  const _aaSessId = Math.random().toString(36).slice(2, 10);
   function _aaAccumLoad() {
     try {
       const raw = localStorage.getItem(K.autoAuditRound);
@@ -19769,7 +19773,7 @@ window.addEventListener('keydown',function(e){
   function aaRecordEvent(kind, entry) {
     try {
       if (!_aaAccum) {
-        _aaAccum = { ts: Date.now(), passN: 0, abnPassN: 0, skipN: 0, pass: {}, redCats: {}, otherFailN: 0, lines: [] };
+        _aaAccum = { ts: Date.now(), sess: _aaSessId, passN: 0, abnPassN: 0, skipN: 0, pass: {}, redCats: {}, otherFailN: 0, lines: [] };
       }
       const mn = String((entry && (entry.mn || entry._mn)) || '');
       if (kind === '正常' || kind === '异常') {
@@ -19798,11 +19802,16 @@ window.addEventListener('keydown',function(e){
   window.addEventListener('pagehide', () => {if (_aaAccum) {_aaAccumSave();}});
   // 初始化时：发现上次被整页刷新打断的轮次 → 补报一条推送
   function aaRecoverIfInterrupted() {
+    // 8.8.26: 三道守卫——①本轮正在跑（工作台重开场景）不补报，等它自己收尾；
+    // ②残留累积器属于本页面会话 = 活轮次，同样不动；③超过 15 分钟的陈旧残骸静默丢弃
+    if (_autoAuditRunning) {return;}
     _aaAccumLoad();
     if (!_aaAccum) {return;}
+    if (_aaAccum.sess === _aaSessId) {return;} // 本页面的活轮次，保留给正常收尾
     const a = _aaAccum;
     _aaAccum = null; // 先取走再发，防重复补报
     try {localStorage.removeItem(K.autoAuditRound);} catch (e) {}
+    if (Date.now() - (a.ts || 0) > 15 * 60 * 1000) {return;} // 陈旧残骸：丢弃不打扰
     try {
       const redEntries = Object.entries(a.redCats || {});
       const hasRed = redEntries.length > 0;
@@ -19971,6 +19980,18 @@ window.addEventListener('keydown',function(e){
         if (Date.now() - (_lastDataHealthLogTs || 0) > 10 * 60 * 1000) {
           _lastDataHealthLogTs = Date.now();
           autoAuditLogAdd({ normal: 0, abnormal: 0, skipped: skipped.slice(), audited: [] });
+          // 8.8.26: 暂停也推一条（同样 10 分钟节流）——夜间整夜停转手机不再零感知；
+          // 且本轮已被拦下的红线标本（在 health 检查前记录、下轮会被去重挡住）借此获得唯一一次曝光，
+          // 否则它们永远进不了任何推送
+          try {
+            const _pl = autoAuditAbnSpecimenSummary(skipped.filter(s => s.ReportDR !== 'data-health'), 6);
+            let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
+            if (skipped.length) {_pb += '\n当前拦下 ' + skipped.length + ' 例待人工';}
+            if (_pl.length) {_pb += '\n' + _pl.join('\n');}
+            pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'active' });
+          } catch (e) {dbg('暂停推送异常:', e);}
+          // 本轮到此中止：已记录的事件随暂停推送一并曝光，清空累积器防止与下轮混算
+          aaClear();
         }
         return;
       }
