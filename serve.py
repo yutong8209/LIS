@@ -248,8 +248,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(str(e).encode())
         elif path == '/notify':
-            # 自动审核关键事件 → Bark 推送。userscript 只发聚合计数（正常/异常/留人工），
-            # 绝不携带患者姓名、标本号、检验结果等明细（隐私红线：业务数据不出内网）。
+            # 自动审核关键事件 → Bark 推送。userscript 只发去标识摘要：聚合计数（正常/异常/留人工）、
+            # 红线类别例数、按标本展开的异常项（标本号 + 接收时间 + 项目名/数值/方向标记/参考范围，
+            # 8.8.14 起用户确认标本号与接收时间不属于病人隐私可带）。
+            # 绝不含姓名/住院号/床号/科室/ReportDR 等身份信息（隐私红线：身份信息不出内网）。
             try:
                 length = int(self.headers.get('Content-Length', 0))
                 raw = self.rfile.read(length) if length else b'{}'

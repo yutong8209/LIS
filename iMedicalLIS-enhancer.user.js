@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.17
+// @version      8.8.18
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19563,14 +19563,36 @@ window.addEventListener('keydown',function(e){
   }
 
   // 8.8.13: 异常项目状态 → 推送短标记。8.8.16: 用彩色箭头；8.8.17: 升高红🔺、降低蓝🔽。只用于摘要正文。
+  // 8.8.18: 危急值用 🚨 前缀重点标识，且方向仍给箭头（HH/LL 或参考范围比较推断升/降）。
   function autoAuditItemMark(st) {
     if (!st || st === 'NORMAL') {return '';}
-    if (st === 'CRITICAL') {return '危急';}
+    if (st === 'CRITICAL') {return '🚨';} // 8.8.18: 危急值前缀固定红盾；方向箭头由 summary 根据该值另外拼
     if (st === 'HIGH') {return '🔺';}
     if (st === 'LOW') {return '🔽';}
     if (st === 'ZERO') {return '0值';}
     if (st === 'UNCERTAIN') {return '待定';}
     return '异';
+  }
+  // 8.8.18: 危急值的方向（升/降）→ 用两个不同箭头（红升/蓝降，与普通异常一致）。
+  // 危急标签本身的 HH/LL 没被普通 HIGH/LOW 覆盖，需从这里还原：优先看原生危急 flag，
+  // 再退回「数值 vs 参考范围」比较。返回 '🔺' / '🔽' 或 ''（方向不明）。
+  function criticalDirectionArrow(it) {
+    if (!it) {return '';}
+    const flag = String(it.AbFlag || it.CriticalFlag || it.CrisisFlag || it.DangerFlag || it.PanicFlag || '').toUpperCase().trim();
+    if (flag === 'HH' || flag.indexOf('H') !== -1) {return '🔺';}
+    if (flag === 'LL' || flag.indexOf('L') !== -1) {return '🔽';}
+    // 无方向 flag（纯 CRITICAL/PANIC）：退回数值 vs 参考范围比较
+    const val = parseFloat(it.r);
+    if (isNaN(val)) {return '';}
+    const f = String(it.f || '').replace(/[()[\]]/g, '');
+    const m = /([-+]?\d+(?:\.\d+)?)\s*[-~—~]\s*([-+]?\d+(?:\.\d+)?)/.exec(f);
+    if (!m) {return '';}
+    const lo = parseFloat(m[1]);
+    const hi = parseFloat(m[2]);
+    if (isNaN(lo) || isNaN(hi)) {return '';}
+    if (val > hi) {return '🔺';}
+    if (val < lo) {return '🔽';}
+    return '';
   }
 
   // 8.8.14: 接收时间 → 推送短时间。今天只显 HH:mm，跨天显 MM-DD HH:mm（用于标本定位，不涉隐私）。
@@ -19601,6 +19623,8 @@ window.addEventListener('keydown',function(e){
   // 8.8.15: 不显示单位，每个异常项均附参考范围帮助判断（用户要求）。
   // 8.8.17: 通过自动审核的异常标本与留人工标本同样列出异常值（呈现一致，仅推送级别不同）；
   //         标记放数值与参考范围中间：数值 🔺/🔽 (参考范围)。
+  // 8.8.18: 危急值重点标识——前缀 🚨 红盾 + 方向箭头（升🔺/降🔽）+「危急」字样；
+  //         上升红🔺、下降蓝🔽（两个箭头区分方向）。普通异常保持 🔺红/🔽蓝，无 🚨。
   // 格式：每个标本一行头「标本号 · 时间」，下一行罗列其异常项目（项目名/数值/方向标记/参考范围）。
   // 仍绝不含：姓名/住院号/床号/科室。最多 maxLines 行。
   function autoAuditAbnSpecimenSummary(specimens, maxLines) {
@@ -19619,7 +19643,25 @@ window.addEventListener('keydown',function(e){
       if (lines.length >= maxLines) {return;}
       const segs = abn.slice(0, 6).map(it => {
         const st = it.s || it.status || '';
-        const mk = autoAuditItemMark(st);
+        let mk = autoAuditItemMark(st);
+        // 8.8.18: 危急值重点标识——前缀 🚨，紧跟方向箭头（升/降），再补「危急」字样强调
+        if (st === 'CRITICAL') {
+          let critical = '';
+          const dir = criticalDirectionArrow(it);
+          if (dir) {critical += ' ' + dir;}
+          critical += ' 危急';
+          // 项目名前加红盾：🚨 项目名 数值 🔺/🔽 危急 (参考范围)
+          let seg = '🚨 ' + it.n;
+          const val = String(it.r !== undefined && it.r !== null ? it.r : '').trim();
+          if (val) {seg += ' ' + val;}
+          seg += critical;
+          if (it.f) {
+            let f = String(it.f);
+            if (f.length > 24) {f = f.slice(0, 24) + '…';}
+            seg += ' (' + f + ')';
+          }
+          return seg;
+        }
         let seg = it.n;
         const val = String(it.r !== undefined && it.r !== null ? it.r : '').trim();
         if (val) {seg += ' ' + val;}
