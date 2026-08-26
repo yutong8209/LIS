@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.15
+// @version      8.8.16
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19561,12 +19561,12 @@ window.addEventListener('keydown',function(e){
     return /危急值|含负值|梅毒|丙肝|艾滋|心肌标志物|疑似堵孔/.test(String(reason));
   }
 
-  // 8.8.13: 异常项目状态 → 推送短标记（危急/↑/↓/0值/待定/异）。只用于摘要正文。
+  // 8.8.13: 异常项目状态 → 推送短标记。8.8.16: 升高/降低用彩色箭头 emoji（🔺/🔻）更直观。只用于摘要正文。
   function autoAuditItemMark(st) {
     if (!st || st === 'NORMAL') {return '';}
     if (st === 'CRITICAL') {return '危急';}
-    if (st === 'HIGH') {return '↑';}
-    if (st === 'LOW') {return '↓';}
+    if (st === 'HIGH') {return '🔺';}
+    if (st === 'LOW') {return '🔻';}
     if (st === 'ZERO') {return '0值';}
     if (st === 'UNCERTAIN') {return '待定';}
     return '异';
@@ -19887,6 +19887,8 @@ window.addEventListener('keydown',function(e){
         // 8.8.13: 本轮有审核动作 → 手机推送关键事件。
         // 正文 = 计数 + 红线类别分布（若有）+ 留人工标本异常摘要。
         // 8.8.14: 摘要按标本展开（标本号 + 接收时间 + 异常项目名/数值/参考范围/方向）。
+        // 8.8.16: 推送分级——本轮标本全部能正常通过自动审核 → 普通提醒(active)；
+        // 有无法通过自动审核的标本（危急值/堵孔0值/传染病阳性/心肌标志物/含负值等红线）→ 重要提醒(critical+🚨，穿透勿扰)。
         // 隐私红线：用户已确认标本号与接收时间可进推送；姓名/住院号/床号/科室等身份信息绝不含。
         const redLineN = skipped.filter(s => isAutoAuditRedLineReason(s.reason)).length;
         const abnLines = autoAuditSkippedAbnSummary(skipped, redLineN > 0 ? 8 : 6);
@@ -19897,7 +19899,7 @@ window.addEventListener('keydown',function(e){
         }
         if (abnLines.length) {body += '\n' + abnLines.join('\n');}
         if (redLineN > 0) {
-          pushAutoAuditNotify({ title: '⚠️ 自动审核：危急红线 ' + redLineN + ' 例留人工', body, level: 'critical' });
+          pushAutoAuditNotify({ title: '🚨 自动审核：危急红线 ' + redLineN + ' 例留人工', body, level: 'critical' });
         } else {
           pushAutoAuditNotify({ title: '🤖 自动审核完成一轮', body, level: 'active' });
         }
