@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.13
+// @version      8.8.14
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19520,6 +19520,7 @@ window.addEventListener('keydown',function(e){
       showToast(reason === '到期' ? '🤖 自动审核已到期，自动停止' : '🤖 自动审核已关闭', 'success');
     }
     // 8.8.12: 停止事件 → 手机推送（Bark）。只发状态，无任何业务明细；同内容 60s 去重防双触发
+    // 8.8.14: 停止事件仍只发状态（不涉标本明细），隐私口径不变
     if (wasEnabled) {
       pushAutoAuditNotify({
         title: reason === '到期' ? '⏰ 自动审核已停止' : '🛑 自动审核已关闭',
@@ -19531,8 +19532,8 @@ window.addEventListener('keydown',function(e){
 
   // ==================== 8.8.12: 自动审核关键事件 → 手机推送（Bark → iPhone，Apple Watch 自动镜像） ====================
   // 通道：本地 serve.py /notify → https://api.day.app/push（Bark 云端）→ APNs → iPhone 通知中心。
-  // 隐私红线：正文只含「聚合计数 + 去标识异常项目名/数值/单位/方向（危急项附参考范围）」，
-  // 绝不携带患者姓名、标本号、住院号、床号等身份信息（业务身份数据不出内网）。
+  // 隐私红线：正文只含「聚合计数 + 留人工标本异常摘要（标本号/接收时间 + 项目名/数值/单位/方向，危急项附参考范围）」。
+  // 8.8.14: 用户已确认标本号与接收时间不属于病人隐私，可带；姓名、住院号、床号、科室等身份信息绝不含（不出内网）。
   // 频率控制：关键事件才推（有审核动作的一轮小结 / 危急红线留人工 / 停止事件），同内容 60s 去重防刷屏。
   let _notifyBarkTimer = null;
   let _notifyBarkLast = { key: '', t: 0 };
@@ -19560,7 +19561,7 @@ window.addEventListener('keydown',function(e){
     return /危急值|含负值|梅毒|丙肝|艾滋|心肌标志物|疑似堵孔/.test(String(reason));
   }
 
-  // 8.8.13: 异常项目状态 → 推送短标记（危急/↑/↓/0值/待定/异）。只用于去标识摘要。
+  // 8.8.13: 异常项目状态 → 推送短标记（危急/↑/↓/0值/待定/异）。只用于摘要正文。
   function autoAuditItemMark(st) {
     if (!st || st === 'NORMAL') {return '';}
     if (st === 'CRITICAL') {return '危急';}
@@ -19571,44 +19572,65 @@ window.addEventListener('keydown',function(e){
     return '异';
   }
 
-  // 8.8.13: 留人工标本的异常项目 → 去标识聚合摘要（推送正文用）。
-  // 隐私红线：只取「项目名/数值/单位/参考范围/状态标记」，姓名、标本号、住院号、
-  // 床号、ReportDR 等身份字段一律不进推送；跨标本同项目同值合并计次；最多 maxLines 行。
+  // 8.8.14: 接收时间 → 推送短时间。今天只显 HH:mm，跨天显 MM-DD HH:mm（用于标本定位，不涉隐私）。
+  function pushShortTime(dt) {
+    if (!dt) {return '';}
+    let d = null;
+    if (dt instanceof Date && !isNaN(dt.getTime())) {d = dt;}
+    else {
+      const s = String(dt).trim();
+      const m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::\d{1,2})?)?/.exec(s);
+      if (!m) {return s.slice(0, 16);}
+      d = new Date(
+        Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+        m[4] === undefined ? 0 : Number(m[4]),
+        m[5] === undefined ? 0 : Number(m[5])
+      );
+      if (isNaN(d.getTime())) {return s.slice(0, 16);}
+    }
+    const pad = n => String(n).padStart(2, '0');
+    const hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    return sameDay ? hm : pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + hm;
+  }
+
+  // 8.8.14: 留人工标本的异常项目 → 推送摘要（按标本展开，手机端可直接定位标本）。
+  // 用户已确认：标本号、接收时间（报告时间语境，工作台卡片同一时间）不属于病人隐私，可进推送；
+  // 格式：每个标本一行头「标本号 · 时间」，下一行罗列其异常项目（项目名/数值/单位/方向，
+  // 危急项附参考范围）。仍绝不含：姓名/住院号/床号/科室。最多 maxLines 行。
   function autoAuditSkippedAbnSummary(skipped, maxLines) {
-    const map = new Map(); // key → {n,val,u,mk,f,count}
-    (skipped || []).forEach(s => {
-      const list = (s && (s.items || s.abn)) || [];
-      list.forEach(it => {
-        const st = it.s || it.status || '';
-        if (!it.n || !st || st === 'NORMAL') {return;}
-        const val = String(it.r !== undefined && it.r !== null ? it.r : '').trim();
-        const u = it.u || '';
-        const mk = autoAuditItemMark(st);
-        const key = it.n + '|' + val + '|' + u + '|' + mk;
-        const e = map.get(key);
-        if (e) {e.count++;}
-        else {
-          // 危急项附参考范围帮助判断（仅危急项，压缩长度避免长范围刷屏）
-          let f = '';
-          if (st === 'CRITICAL' && it.f) {
-            f = String(it.f);
-            if (f.length > 24) {f = f.slice(0, 24) + '…';}
-          }
-          map.set(key, { n: it.n, val, u, mk, f, count: 1 });
-        }
-      });
-    });
     const lines = [];
-    map.forEach(e => {
-      let line = e.n;
-      if (e.val) {line += ' ' + e.val;}
-      if (e.u) {line += ' ' + e.u;}
-      line += ' ' + e.mk;
-      if (e.f) {line += '(' + e.f + ')';}
-      if (e.count > 1) {line += ' ×' + e.count;}
-      lines.push(line);
+    (skipped || []).forEach(s => {
+      if (lines.length >= maxLines) {return;}
+      const list = (s && (s.items || s.abn)) || [];
+      const abn = list.filter(it => {
+        const st = it.s || it.status || '';
+        return it.n && st && st !== 'NORMAL';
+      });
+      if (!abn.length) {return;}
+      const labno = String(s.labno || s.Labno || '').trim();
+      const tm = pushShortTime(s.acceptDT || s.AcceptDT || '');
+      lines.push(['标本' + labno, tm].filter(Boolean).join(' ') || '标本');
+      if (lines.length >= maxLines) {return;}
+      const segs = abn.slice(0, 6).map(it => {
+        const st = it.s || it.status || '';
+        const mk = autoAuditItemMark(st);
+        let seg = it.n;
+        const val = String(it.r !== undefined && it.r !== null ? it.r : '').trim();
+        if (val) {seg += ' ' + val;}
+        if (it.u) {seg += ' ' + it.u;}
+        seg += ' ' + mk;
+        // 危急项附参考范围帮助判断（仅危急项，压缩长度避免长范围刷屏）
+        if (st === 'CRITICAL' && it.f) {
+          let f = String(it.f);
+          if (f.length > 24) {f = f.slice(0, 24) + '…';}
+          seg += '(' + f + ')';
+        }
+        return seg;
+      });
+      lines.push(segs.join(' · ') + (abn.length > 6 ? ' 等' + abn.length + '项' : ''));
     });
-    if (lines.length > maxLines) {lines.length = maxLines;}
     return lines;
   }
 
@@ -19863,8 +19885,9 @@ window.addEventListener('keydown',function(e){
           nNormal + nAbnormal > 0 ? 'success' : 'info'
         );
         // 8.8.13: 本轮有审核动作 → 手机推送关键事件。
-        // 正文 = 计数 + 红线类别分布（若有）+ 去标识异常项目摘要（项目名/数值/单位/方向，
-        // 危急项附参考范围）。隐私红线：绝不含姓名/标本号/住院号/床号等身份信息。
+        // 正文 = 计数 + 红线类别分布（若有）+ 留人工标本异常摘要。
+        // 8.8.14: 摘要按标本展开（标本号 + 接收时间 + 异常项目名/数值/单位/方向，危急项附参考范围）。
+        // 隐私红线：用户已确认标本号与接收时间可进推送；姓名/住院号/床号/科室等身份信息绝不含。
         const redLineN = skipped.filter(s => isAutoAuditRedLineReason(s.reason)).length;
         const abnLines = autoAuditSkippedAbnSummary(skipped, redLineN > 0 ? 8 : 6);
         let body = '正常 ' + nNormal + ' · 异常 ' + nAbnormal + ' · 留人工 ' + skipped.length;
@@ -19872,7 +19895,7 @@ window.addEventListener('keydown',function(e){
           const brk = autoAuditRedLineBreakdown(skipped);
           if (brk) {body += '\n' + brk;}
         }
-        if (abnLines.length) {body += '\n' + abnLines.join(' · ');}
+        if (abnLines.length) {body += '\n' + abnLines.join('\n');}
         if (redLineN > 0) {
           pushAutoAuditNotify({ title: '⚠️ 自动审核：危急红线 ' + redLineN + ' 例留人工', body, level: 'critical' });
         } else {
@@ -19900,7 +19923,8 @@ window.addEventListener('keydown',function(e){
     _autoAuditSkipSeen[key] = reason;
     // 8.5.72: 跳过标本也采集项目组合 + 异常项（危急/堵孔/传染病等需人工关注的要有信息）
     const _si = auditRecordSpecInfo(r.ReportDR || r.reportDR, r);
-    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
+    // 8.8.14: 一并携带接收时间（报告时间语境，与工作台卡片一致）——用户已确认标本号/时间可进推送
+    skipped.push({ reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items });
   }
 
   // 8.5.76: 结果是否为负值（如 -1.3）——任何仪器/项目出现负值结果即视为不可自动审核，留人工
