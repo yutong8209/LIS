@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.28
+// @version      8.8.29
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20511,7 +20511,7 @@ window.addEventListener('keydown',function(e){
           <div style="display:${enabled ? 'block' : 'none'}" id="lis-aa-running">
             <div style="margin:6px 0;padding:8px 12px;background:#eef7f5;border:1px solid #bfe3dd;border-radius:4px;color:#0d6655;font-weight:600;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
               <span>⏳ 自动审核进行中 · 剩余 <b id="lis-aa-running-remain">${remain ? remain.replace('🤖自动审核 ', '') : '—'}</b></span>
-              <span id="lis-aa-running-badge">${autoAuditNotifyModeBadgeHTML(curNotifyMode)}</span>
+              <span id="lis-aa-running-badge">${autoAuditNotifyModeBadgeHTML(curNotifyMode)} <span style="color:#0d6655;font-weight:700">（开启时固定）</span></span>
             </div>
           </div>
           <div class="ab-section" style="margin-top:8px">
@@ -20522,13 +20522,14 @@ window.addEventListener('keydown',function(e){
           <div class="ab-section" style="margin-top:10px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
               <label style="font-weight:600">📲 通知推送</label>
-              <span id="lis-aa-active-badge">${autoAuditNotifyModeBadgeHTML(curNotifyMode)}</span>
+              <span style="font-size:12px;color:#666">当前生效：${autoAuditNotifyModeBadgeHTML(curNotifyMode)}</span>
             </div>
             <div id="lis-aa-notify-opts" style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 10px;background:#fafbfc;border:1px solid #e1e4e8;border-radius:4px">
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="all" ${curNotifyMode === 'all' ? 'checked' : ''}> 📲 推送所有（成功+未成功标本）</label>
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="blocked" ${curNotifyMode === 'blocked' ? 'checked' : ''}> ⚠️ 只推送未成功的标本</label>
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="off" ${curNotifyMode === 'off' ? 'checked' : ''}> 🔕 不推送</label>
             </div>
+            <div id="lis-aa-notify-edit-hint" style="display:none;margin-top:4px;color:#d9534f;font-size:11px;font-weight:600"></div>
             <div id="lis-aa-push-status" style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border:1px solid #e3e8ee;border-radius:4px;color:#555;font-size:12px;line-height:1.7">⏳ 正在获取推送状态…</div>
             <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。</div>
           </div>
@@ -20544,19 +20545,22 @@ window.addEventListener('keydown',function(e){
     document.body.appendChild(dlg);
     dlg.classList.add('show');
 
-    // 8.8.28: 单选框即时切换联动
-    const updateDialogNotifyBadge = () => {
+    // 8.8.29: 单选框切换提示（保持当前生效策略不变，提示点击更新后生效）
+    const hintBox = document.getElementById('lis-aa-notify-edit-hint');
+    const onRadioChange = () => {
       const sel = document.querySelector('#lis-aa-notify-opts input[name="lis-aa-notify"]:checked');
-      const curMode = (sel && sel.value) || 'all';
-      const badgeSpan = document.getElementById('lis-aa-running-badge');
-      if (badgeSpan) {badgeSpan.innerHTML = autoAuditNotifyModeBadgeHTML(curMode);}
-      const activeBadge = document.getElementById('lis-aa-active-badge');
-      if (activeBadge) {activeBadge.innerHTML = autoAuditNotifyModeBadgeHTML(curMode);}
-      const statusModeSpan = document.getElementById('lis-aa-status-modetxt');
-      if (statusModeSpan) {statusModeSpan.innerHTML = autoAuditNotifyModeBadgeHTML(curMode);}
+      const chosen = (sel && sel.value) || 'all';
+      if (hintBox) {
+        if (chosen !== curNotifyMode && enabled) {
+          hintBox.style.display = 'block';
+          hintBox.textContent = 'ℹ️ 已选择「' + autoAuditNotifyModeText(chosen) + '」，点击下方「✅ 更新并继续」后正式固化生效。';
+        } else {
+          hintBox.style.display = 'none';
+        }
+      }
     };
     document.querySelectorAll('#lis-aa-notify-opts input[name="lis-aa-notify"]').forEach(radio => {
-      radio.addEventListener('change', updateDialogNotifyBadge);
+      radio.addEventListener('change', onRadioChange);
     });
 
     // 8.5.64: 当前审核范围（工作组 + 勾选仪器；全选只显示「全选」）——与 rowPassWSMachineFilter 语义一致
@@ -20610,9 +20614,8 @@ window.addEventListener('keydown',function(e){
       const _paint = (html, bg, bd) => {
         const b = document.getElementById('lis-aa-push-status');
         if (!b) {return;} // 弹窗已关闭
-        const curRadio = document.querySelector('#lis-aa-notify-opts input[name="lis-aa-notify"]:checked');
-        const modeBadge = autoAuditNotifyModeBadgeHTML(curRadio ? curRadio.value : autoAuditNotifyMode());
-        const header = `<div style="margin-bottom:6px;padding-bottom:5px;border-bottom:1px dashed rgba(0,0,0,0.1);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px"><span><b>当前推送策略：</b><span id="lis-aa-status-modetxt">${modeBadge}</span></span></div>`;
+        const fixedBadge = autoAuditNotifyModeBadgeHTML(autoAuditNotifyMode());
+        const header = `<div style="margin-bottom:6px;padding-bottom:5px;border-bottom:1px dashed rgba(0,0,0,0.1);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px"><span><b>当前生效推送策略：</b><span id="lis-aa-status-modetxt">${fixedBadge}</span></span></div>`;
         b.innerHTML = header + html;
         if (bg) {b.style.background = bg;}
         if (bd) {b.style.borderColor = bd;}
