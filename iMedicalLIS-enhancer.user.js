@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.29
+// @version      8.8.30
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10690,17 +10690,11 @@ window.addEventListener('keydown',function(e){
             acceptDT: specimen.AcceptDT || specimen.acceptDT || ''
           };
           aaRecordEvent('异常', _entry);
-          _aaAccumLoad();
-          if (_aaAccum && (_aaAccum.passN > 0 || _aaAccum.abnPassN > 0)) {
-            const redEntries = Object.entries(_aaAccum.redCats || {});
-            const hasRed = redEntries.length > 0;
-            const _title = autoAuditPushTitle(_aaAccum.pass || {}, redEntries, _aaAccum.otherFailN || 0, hasRed ? '🚨' : '🤖');
-            if (_title) {
-              let body = '正常 ' + (_aaAccum.passN || 0) + ' · 异常 ' + (_aaAccum.abnPassN || 0) + ' · 留人工 ' + (_aaAccum.skipN || 0);
-              if ((_aaAccum.lines || []).length) {body += '\n' + _aaAccum.lines.join('\n');}
-              pushAutoAuditNotify({ title: _title, body, level: hasRed ? 'critical' : 'active' });
-              autoAuditLogAdd({ normal: _aaAccum.passN || 0, abnormal: _aaAccum.abnPassN || 0, skipped: [], audited: [] });
-            }
+          // 8.8.30: 结算统一走 aaSettleAccum；优先用内存累积器（storage 可能落后 ≤1s 或为空，
+          // 直接 _aaAccumLoad() 会覆盖/吞掉最新事件造成漏报）
+          if (!_aaAccum) {_aaAccumLoad();}
+          if (_aaAccum) {
+            aaSettleAccum(_aaAccum);
             aaClear();
           }
         } catch (e) {dbg('跨组异常审核推送异常:', e);}
@@ -19453,17 +19447,10 @@ window.addEventListener('keydown',function(e){
       // 8.8.27: 若本批审为切组独立续跑（无外层 autoAuditTick 正在等待），在结束或切回原组前主动触发推送与日志结算
       if (queue._autoMode && !_autoAuditRunning && (successCount > 0 || failCount > 0 || skipCount > 0)) {
         try {
-          _aaAccumLoad();
-          if (_aaAccum && (_aaAccum.passN > 0 || _aaAccum.abnPassN > 0 || _aaAccum.skipN > 0)) {
-            const redEntries = Object.entries(_aaAccum.redCats || {});
-            const hasRed = redEntries.length > 0;
-            const _title = autoAuditPushTitle(_aaAccum.pass || {}, redEntries, _aaAccum.otherFailN || 0, hasRed ? '🚨' : '🤖');
-            if (_title) {
-              let body = '正常 ' + (_aaAccum.passN || 0) + ' · 异常 ' + (_aaAccum.abnPassN || 0) + ' · 留人工 ' + (_aaAccum.skipN || 0);
-              if ((_aaAccum.lines || []).length) {body += '\n' + _aaAccum.lines.join('\n');}
-              pushAutoAuditNotify({ title: _title, body, level: hasRed ? 'critical' : 'active' });
-              autoAuditLogAdd({ normal: _aaAccum.passN || 0, abnormal: _aaAccum.abnPassN || 0, skipped: [], audited: [] });
-            }
+          // 8.8.30: 统一走 aaSettleAccum（快照模式生效 + 最终态矫正）；优先用内存累积器防读盘吞事件
+          if (!_aaAccum) {_aaAccumLoad();}
+          if (_aaAccum) {
+            aaSettleAccum(_aaAccum);
             aaClear();
           }
         } catch (e) {dbg('续跑批审推送结算异常:', e);}
@@ -19865,21 +19852,59 @@ window.addEventListener('keydown',function(e){
     return (emoji ? emoji + ' ' : '') + out;
   }
 
-  // ---- 8.8.25: 轮次统计增量持久化（跨组审核触发整页刷新时，被中断轮次的推送不再丢失）----
+  // ---- 8.8.30: 轮次统计增量持久化（跨组审核触发整页刷新时，被中断轮次的推送不再丢失）----
   // 背景：跨组/会话失效保护会 hardReloadPageForWS() 整页刷新——审核请求已发出（标本审掉了），
   // 但内存里的本轮计数与未发出的推送一起消失；刷新回来后下一轮无标本可审、静默空转，推送永久丢失。
-  // 机制：每个标本审过/跳过立刻累计进内存并节流写 localStorage；pagehide 时同步落盘；
+  // 机制：每个标本审过/跳过立刻写入内存事件列表并节流写 localStorage；pagehide 时同步落盘；
   // 正常走完的轮次发出推送后清空。下次初始化若发现残留累积器 → 组装一条「补报」推送。
+  // 8.8.30 累积器 v3：
+  //   - 存「事件列表」而非增量计数器——结算时同标本取最后一次事件为最终态，
+  //     修复旧版「主循环记失败、补审救回又记成功 → 双计/误报失败」的双通道叠加问题；
+  //   - ts 每次事件刷新——旧版只在创建时写一次，超过 15 分钟的长轮次被打断会被当陈旧残骸丢弃；
+  //   - 创建时快照推送模式 mode（all/blocked/off）——补报与续跑结算沿用快照，off 不再漏网打扰。
   // 注：多标签同时开自动审核时补报归因可能错位（现状单机单标签，风险可接受）。
   let _aaAccum = null;
   let _aaFlushTimer = null;
+  const AA_EV_MAX = 600; // 单轮事件上限（超出丢最旧，量级远大于单轮真实标本数，仅作保险）
   // 8.8.26: 页面会话标记——区分「本页面正在进行中的轮次」与「上次刷新遗留的残骸」，
   // 防止轮次中途 keepWorkbenchOnTop 重开工作台时把活轮次误当历史补报（双推 bug）
   const _aaSessId = Math.random().toString(36).slice(2, 10);
+  function _aaNewAccum() {
+    return { v: 3, ts: Date.now(), sess: _aaSessId, mode: autoAuditNotifyMode(), seq: 0, ev: [] };
+  }
+  // 读入持久化累积器并规范化（v3 新形态 / v2 旧计数器形态兼容）
+  function _aaNormAccum(raw) {
+    if (!raw || typeof raw !== 'object') {return null;}
+    const _modeOk = m => m === 'all' || m === 'blocked' || m === 'off';
+    if (Array.isArray(raw.ev)) {
+      return {
+        v: 3,
+        ts: Number(raw.ts) || Date.now(),
+        sess: String(raw.sess || ''),
+        mode: _modeOk(raw.mode) ? raw.mode : autoAuditNotifyMode(),
+        seq: Number(raw.seq) || raw.ev.length,
+        ev: raw.ev.filter(r => r && r.id !== undefined)
+      };
+    }
+    // v2 兼容（8.8.25~8.8.29 升级前遗留）：只有聚合计数，无法做最终态矫正，按计数器直算
+    return {
+      v: 2,
+      ts: Number(raw.ts) || Date.now(),
+      sess: String(raw.sess || ''),
+      mode: _modeOk(raw.mode) ? raw.mode : autoAuditNotifyMode(),
+      passN: Number(raw.passN) || 0,
+      abnPassN: Number(raw.abnPassN) || 0,
+      skipN: Number(raw.skipN) || 0,
+      pass: raw.pass || {},
+      redCats: raw.redCats || {},
+      otherFailN: Number(raw.otherFailN) || 0,
+      lines: Array.isArray(raw.lines) ? raw.lines.slice(0, 60) : []
+    };
+  }
   function _aaAccumLoad() {
     try {
       const raw = localStorage.getItem(K.autoAuditRound);
-      _aaAccum = raw ? JSON.parse(raw) : null;
+      _aaAccum = raw ? _aaNormAccum(JSON.parse(raw)) : null;
     } catch (e) {_aaAccum = null;}
   }
   function _aaAccumSave() {
@@ -19892,27 +19917,27 @@ window.addEventListener('keydown',function(e){
     if (_aaFlushTimer) {return;}
     _aaFlushTimer = setTimeout(() => {_aaFlushTimer = null; _aaAccumSave();}, 1000);
   }
-  // kind: '正常' | '异常' | '留人工'；entry 为与 audited/skipped 同构的标本对象
+  // kind: '正常' | '异常' | '留人工'；entry 为与 audited/skipped 同构的标本对象。
+  // 8.8.30: 事件只追加不聚合——同一标本同轮可被「批内直记 + tick 结算回记」两条通道记录，
+  // 计数器式累加会在补报/续跑结算时翻倍；改为结算期去重（同标本取最后一次事件）后天然幂等。
+  let _aaAnonSeq = 0;
   function aaRecordEvent(kind, entry) {
     try {
       if (!_aaAccum) {
-        _aaAccum = { ts: Date.now(), sess: _aaSessId, passN: 0, abnPassN: 0, skipN: 0, pass: {}, redCats: {}, otherFailN: 0, lines: [] };
+        _aaAccum = _aaNewAccum();
+      } else if (_aaAccum.v !== 3) {
+        // v2 遗留残骸混入活事件（罕见：升级后未刷新的旧页面）：先按旧计数结算再开新累积器
+        try {aaSettleAccum(_aaAccum);} catch (e2) {}
+        _aaAccum = _aaNewAccum();
       }
-      const mn = String((entry && (entry.mn || entry._mn)) || '');
-      if (kind === '正常' || kind === '异常') {
-        const k = mn + '|' + kind;
-        _aaAccum.pass[k] = (_aaAccum.pass[k] || 0) + 1;
-        if (kind === '正常') {_aaAccum.passN++;} else {_aaAccum.abnPassN++;}
-      } else {
-        _aaAccum.skipN++;
-        const cat = autoAuditReasonCat(entry && entry.reason);
-        if (cat) {_aaAccum.redCats[cat] = (_aaAccum.redCats[cat] || 0) + 1;} else {_aaAccum.otherFailN++;}
-      }
-      if (_aaAccum.lines.length < 60) {
-        autoAuditAbnSpecimenSummary([entry || {}], 4).forEach(l => {
-          if (_aaAccum.lines.length < 60) {_aaAccum.lines.push(l);}
-        });
-      }
+      const e = entry || {};
+      // 幂等键：优先 ReportDR；无标识事件给随机 id 保量不合并
+      let id = String(e.reportDR || e.d || e.labno || e.l || '');
+      if (!id) {id = '#anon' + (++_aaAnonSeq);}
+      _aaAccum.seq = (_aaAccum.seq || 0) + 1;
+      _aaAccum.ev.push({id, k: kind === '正常' ? 'n' : (kind === '异常' ? 'a' : 's'), mn: String(e.mn || e._mn || ''), seq: _aaAccum.seq, e});
+      if (_aaAccum.ev.length > AA_EV_MAX) {_aaAccum.ev.splice(0, _aaAccum.ev.length - AA_EV_MAX);}
+      _aaAccum.ts = Date.now(); // 每次事件刷新时间戳：长轮次（>15 分钟）被打断不再被当陈旧残骸丢弃
       _aaAccumSchedule();
     } catch (e) {dbg('轮次统计记录异常:', e);}
   }
@@ -19921,12 +19946,86 @@ window.addEventListener('keydown',function(e){
     try {localStorage.removeItem(K.autoAuditRound);} catch (e) {}
     if (_aaFlushTimer) {clearTimeout(_aaFlushTimer); _aaFlushTimer = null;}
   }
+  // ---- 8.8.30: 统一结算：由累积器还原最终态 → 落日志 → 按推送模式快照发推送。返回是否已推送。----
+  // 复用三处（跨组独立异常审核、独立续跑批审收尾、整页刷新补报），修复：
+  //   1) 补报/结算完全无视 notifyMode——off 也推手机、blocked 全通过也推、emoji 与主路径不一致；
+  //   2) 结算只落 skipped:[] —— 「查看记录」与推送内容脱节；
+  //   3) 主循环记失败 + 补审救回又记成功的同标本双计/误报失败（v3 最终态矫正）。
+  function aaSettleAccum(a, opts) {
+    opts = opts || {};
+    try {
+      a = a || {};
+      const m = a.mode || 'all';
+      let passN = 0, abnPassN = 0, skipN = 0, otherFailN = 0;
+      const passByMn = {}, redCats = {}, skips = [], auds = [];
+      let lines = [];
+      if (a.v === 3 && Array.isArray(a.ev)) {
+        const last = {}, order = [];
+        a.ev.forEach(rec => {if (!(rec.id in last)) {order.push(rec.id);} last[rec.id] = rec;}); // 同标本最后一事件为最终态
+        order.forEach(id => {
+          const rec = last[id];
+          const e = rec.e || {};
+          if (rec.k === 'n') {
+            const kk = (rec.mn || '') + '|正常';
+            passByMn[kk] = (passByMn[kk] || 0) + 1;
+            passN++;
+            auds.push(e);
+          } else if (rec.k === 'a') {
+            const kk = (rec.mn || '') + '|异常';
+            passByMn[kk] = (passByMn[kk] || 0) + 1;
+            abnPassN++;
+            auds.push(e);
+          } else {
+            skipN++;
+            const cat = autoAuditReasonCat(e.reason);
+            if (cat) {redCats[cat] = (redCats[cat] || 0) + 1;} else {otherFailN++;}
+            skips.push(e);
+          }
+        });
+        order.forEach(id => {
+          if (lines.length >= 60) {return;}
+          autoAuditAbnSpecimenSummary([(last[id].e || {})], 60 - lines.length).forEach(l => {
+            if (lines.length < 60) {lines.push(l);}
+          });
+        });
+      } else {
+        // v2 遗留形态：沿用旧聚合计数（无法做最终态矫正与明细，仅保证不低于旧版行为）
+        passN = Number(a.passN) || 0;
+        abnPassN = Number(a.abnPassN) || 0;
+        skipN = Number(a.skipN) || 0;
+        otherFailN = Number(a.otherFailN) || 0;
+        Object.keys(a.pass || {}).forEach(k => {passByMn[k] = a.pass[k];});
+        Object.keys(a.redCats || {}).forEach(k => {redCats[k] = a.redCats[k];});
+        lines = Array.isArray(a.lines) ? a.lines.slice(0, 60) : [];
+      }
+      if (passN + abnPassN + skipN <= 0) {return false;} // 空转轮次：不落日志也不推送
+      const redEntries = Object.entries(redCats);
+      const hasRed = redEntries.length > 0;
+      const emoji = hasRed ? '🚨' : (m === 'blocked' ? '⚠️' : '🤖');
+      const title0 = autoAuditPushTitle(passByMn, redEntries, otherFailN, emoji);
+      // 日志总是落（off/blocked 不推也要有记录），明细截断口径与实时轮一致
+      try {autoAuditLogAdd({normal: passN, abnormal: abnPassN, skipped: skips.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX), audited: auds.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX)});} catch (e) {}
+      // 推送模式快照语义（8.8.29 固化的策略在此生效）：all=有动作即推；blocked=只有未成功才推；off=不推
+      const shouldPush = m === 'all' ? true : (m === 'blocked' ? skipN > 0 : false);
+      if (!shouldPush || !title0) {return false;}
+      const title = title0 + (opts.suffix ? opts.suffix : '');
+      let body = '正常 ' + passN + ' · 异常 ' + abnPassN + ' · 留人工 ' + skipN;
+      if (hasRed) {
+        const brk = autoAuditRedLineBreakdown(skips);
+        if (brk) {body += '\n' + brk;}
+      }
+      if (lines.length) {body += '\n' + lines.join('\n');}
+      if (opts.note) {body += '\n' + opts.note;}
+      pushAutoAuditNotify({title, body, level: hasRed ? 'critical' : 'active'});
+      return true;
+    } catch (e) {dbg('累积器结算异常:', e); return false;}
+  }
   // 页面卸载前同步落盘（location.reload / 关闭标签都触发 pagehide）
   window.addEventListener('pagehide', () => {if (_aaAccum) {_aaAccumSave();}});
   // 初始化时：发现上次被整页刷新打断的轮次 → 补报一条推送
   function aaRecoverIfInterrupted() {
     // 8.8.26: 三道守卫——①本轮正在跑（工作台重开场景）不补报，等它自己收尾；
-    // ②残留累积器属于本页面会话 = 活轮次，同样不动；③超过 15 分钟的陈旧残骸静默丢弃
+    // ②残留累积器属于本页面会话 = 活轮次，同样不动；③超过 15 分钟无新事件的陈旧残骸静默丢弃
     if (_autoAuditRunning) {return;}
     _aaAccumLoad();
     if (!_aaAccum) {return;}
@@ -19934,16 +20033,9 @@ window.addEventListener('keydown',function(e){
     const a = _aaAccum;
     _aaAccum = null; // 先取走再发，防重复补报
     try {localStorage.removeItem(K.autoAuditRound);} catch (e) {}
-    if (Date.now() - (a.ts || 0) > 15 * 60 * 1000) {return;} // 陈旧残骸：丢弃不打扰
-    try {
-      const redEntries = Object.entries(a.redCats || {});
-      const hasRed = redEntries.length > 0;
-      const title = autoAuditPushTitle(a.pass || {}, redEntries, a.otherFailN || 0, hasRed ? '🚨' : '🤖');
-      if (!title) {return;}
-      let body = '正常 ' + (a.passN || 0) + ' · 异常 ' + (a.abnPassN || 0) + ' · 留人工 ' + (a.skipN || 0) + '\n（上一轮被页面刷新打断，此为补报）';
-      if ((a.lines || []).length) {body += '\n' + a.lines.join('\n');}
-      pushAutoAuditNotify({ title: title + '（补报）', body, level: hasRed ? 'critical' : 'active' });
-    } catch (e) {dbg('轮次补报异常:', e);}
+    if (Date.now() - (a.ts || 0) > 15 * 60 * 1000) {return;} // 陈旧残骸：ts 已随每次事件刷新，这里判的是「最后一次活动」
+    // 8.8.30: 结算统一走 aaSettleAccum——遵循快照推送模式（off 只落日志不推送）、标题带最终态统计
+    aaSettleAccum(a, {suffix: '（补报）', note: '（上一轮被页面刷新打断，此为补报）'});
   }
 
   function startAutoAuditTimers() {
