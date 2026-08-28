@@ -4,7 +4,7 @@
 # ↓↓↓ 按实际情况改这两行 ↓↓↓
 WIN_USER="Administrator"      # nginx Windows 电脑的登录用户名
 WIN_HOST="192.168.31.111"     # nginx 电脑的内网 IP（就是篡改猴更新地址里的那台）
-WIN_DIR="C:/lis-tools"        # nginx 静态目录（与 nginx.conf 里的 alias 保持一致）
+WIN_DIR="D:/nginx-1.31.2/lis-tools"   # nginx 静态目录（与 nginx.conf 里的 alias 保持一致）
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "==> 同步 3 个文件 → $WIN_USER@$WIN_HOST:$WIN_DIR/"
