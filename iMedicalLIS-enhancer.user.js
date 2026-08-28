@@ -1,19 +1,19 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.34
+// @version      8.8.35
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
 // @grant        GM_addStyle
 // @grant        unsafeWindow
-// @updateURL    http://localhost:8765/iMedicalLIS-enhancer.user.js
-// @downloadURL  http://localhost:8765/iMedicalLIS-enhancer.user.js
+// @updateURL    http://192.168.31.111:9111/lis-tools/iMedicalLIS-enhancer.user.js
+// @downloadURL  http://192.168.31.111:9111/lis-tools/iMedicalLIS-enhancer.user.js
 // @run-at       document-idle
 // @noframes     false
-// @require      http://localhost:8765/vendor/xlsx.full.min.js
-// @require      http://localhost:8765/vendor/jszip.min.js
+// @require      http://192.168.31.111:9111/lis-tools/vendor/xlsx.full.min.js
+// @require      http://192.168.31.111:9111/lis-tools/vendor/jszip.min.js
 
 // ==/UserScript==
 
@@ -26,7 +26,7 @@
        - Bark 手机推送（可选功能）只含去标识的聚合计数与异常项目名/数值/参考范围，
          可带流水号（检验号兜底）与接收时间；绝不携带姓名、住院号、床号、科室等身份信息；
          可选端到端加密开启后，Bark 云与 Apple 仅见密文
-       - 仅与本院 LIS 内网通信；脚本更新/SheetJS 走本机 localhost:8765
+       - 仅与本院 LIS 内网通信；脚本更新/SheetJS 走科室 nginx 源（192.168.31.111:9111/lis-tools/），与 LIS 同源
        - 密码：HTTP 内网无 crypto.subtle 时用 base64 可逆编码存 localStorage
          （防顺手扫一眼，不能防读脚本的攻击者）。HTTPS 下可升为 AES-GCM V2
        - 请勿在共享电脑勾选「记住密码」；可用设置清除已存密码
@@ -85,8 +85,9 @@
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
   const WS_REOPEN_KEY = 'LIS_WS_ReopenAfterReload';
-  // 质控 Excel/ZIP 依赖本地 serve（@require 可能因未启动服务失败，导出时再补拉）
-  const VENDOR_BASE = 'http://127.0.0.1:8765/vendor';
+  // 质控 Excel/ZIP 依赖 vendor（@require 失败时导出再补拉）——8.8.35 起主源为科室 nginx
+  // （与 LIS 同源免 CORS，两台 Windows 机无需再各自跑 serve），本机 8765 仍作第二兜底（Mac 菜单栏/推送用）
+  const VENDOR_BASE = 'http://192.168.31.111:9111/lis-tools/vendor';
   const AUDIT_QUEUE_LOCK_TTL = 45000;
   // 批审单条硬超时（秒审 / 需 CA）；超时后二次校验，仍无果则跳过/重试，避免整批卡死
   // 秒审 / 首条 CA 后确认都宜短：真漏审靠队尾重试+补审，不靠首条空等十几秒
@@ -5577,7 +5578,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return null;
   }
 
-  // 从本机 serve 拉取 vendor 脚本并 eval（@require 失败时的兜底）
+  // 从 vendor 源拉取脚本并 eval（@require 失败时的兜底）。8.8.35: 先试科室 nginx 源，再试本机 serve
   async function qeLoadVendorScript(fileName, globalName) {
     if (qeGetGlobal(globalName)) {return true;}
     const urls = [VENDOR_BASE + '/' + fileName, 'http://127.0.0.1:8765/vendor/' + fileName];
