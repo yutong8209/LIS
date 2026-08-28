@@ -1,12 +1,11 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
 
 echo =========================================
-echo   iMedicalLIS è„šæœ¬æœåŠ¡å™¨ â€”â€” åå°å¯åŠ¨
+echo   iMedicalLIS ½Å±¾·şÎñÆ÷ ¡ª¡ª ºóÌ¨Æô¶¯
 echo =========================================
-echo   çª—å£æœ€å°åŒ–åˆ°ä»»åŠ¡æ ï¼ˆæ ‡é¢˜ LIS-serveï¼‰ï¼Œæ—¥å¿—å†™å…¥ serve.log
-echo   åœæ­¢ï¼šåŒå‡» stop_serve.batï¼Œæˆ–ç›´æ¥å…³æ‰é‚£ä¸ªæœ€å°åŒ–çª—å£
+echo   ´°¿Ú×îĞ¡»¯µ½ÈÎÎñÀ¸£¨±êÌâ LIS-serve£©£¬ÈÕÖ¾Ğ´Èë serve.log
+echo   Í£Ö¹£ºË«»÷ stop_serve.bat£¬»òÖ±½Ó¹ØµôÄÇ¸ö×îĞ¡»¯´°¿Ú
 echo =========================================
 echo.
 
@@ -15,25 +14,25 @@ where python >nul 2>&1 && set PY=python
 if not defined PY (where python3 >nul 2>&1 && set PY=python3)
 if not defined PY (where py >nul 2>&1 && set PY=py -3)
 if not defined PY (
-  echo [é”™è¯¯] æœªæ‰¾åˆ° Pythonã€‚
-  echo è¯·å…ˆå®‰è£… Python 3: https://www.python.org/downloads/
-  echo å®‰è£…æ—¶å‹¾é€‰ "Add python.exe to PATH"
+  echo [´íÎó] Î´ÕÒµ½ Python¡£
+  echo ÇëÏÈ°²×° Python 3: https://www.python.org/downloads/
+  echo °²×°Ê±¹´Ñ¡ "Add python.exe to PATH"
   echo.
   pause
   exit /b 1
 )
 
-rem æœ€å°åŒ–çª—å£åå°è¿è¡Œ serve.pyï¼Œè¾“å‡ºé‡å®šå‘åˆ° serve.logï¼ˆè¦†ç›–æ—§æ—¥å¿—ï¼‰
+rem ×îĞ¡»¯´°¿ÚºóÌ¨ÔËĞĞ serve.py£¬Êä³öÖØ¶¨Ïòµ½ serve.log£¨¸²¸Ç¾ÉÈÕÖ¾£©
 start "LIS-serve" /min cmd /c "%PY% serve.py > serve.log 2>&1"
 
-rem ç­‰ 2 ç§’æŠŠå¯åŠ¨æ¨ªå¹…è½è¿›æ—¥å¿—ï¼Œå›æ˜¾ç»™ç”¨æˆ·ï¼ˆè‹¥ Python æ˜¯å•†åº—å‡å ä½ç¬¦ï¼Œ
-rem è¿™é‡Œä¼šç›´æ¥çœ‹åˆ° "Python was not found..." ä¸€ç±»æŠ¥é”™ï¼‰
+rem µÈ 2 Ãë°ÑÆô¶¯ºá·ùÂä½øÈÕÖ¾£¬»ØÏÔ¸øÓÃ»§£¨Èô Python ÊÇÉÌµê¼ÙÕ¼Î»·û£¬
+rem ÕâÀï»áÖ±½Ó¿´µ½ "Python was not found..." Ò»Àà±¨´í£©
 timeout /t 2 >nul
-echo --- serve.log å¼€å¤´ ---
+echo --- serve.log ¿ªÍ· ---
 type serve.log
 echo -----------------------
 echo.
-echo å·²å°è¯•åå°å¯åŠ¨ã€‚éªŒè¯ï¼šæµè§ˆå™¨æ‰“å¼€ http://localhost:8765/iMedicalLIS-enhancer.user.js
-echo èƒ½çœ‹åˆ°è„šæœ¬æºç å³ä¸ºæˆåŠŸï¼›åœæ­¢è¯·åŒå‡» stop_serve.batã€‚
+echo ÒÑ³¢ÊÔºóÌ¨Æô¶¯¡£ÑéÖ¤£ºä¯ÀÀÆ÷´ò¿ª http://localhost:8765/iMedicalLIS-enhancer.user.js
+echo ÄÜ¿´µ½½Å±¾Ô´Âë¼´Îª³É¹¦£»Í£Ö¹ÇëË«»÷ stop_serve.bat¡£
 echo.
 pause

@@ -137,6 +137,8 @@ SheetJS: http://localhost:8765/vendor/xlsx.full.min.js
 
 ⚠️ 注意区分「闪退」和「后台运行」：`start_serve.bat` 是**前台服务**，成功时窗口会**一直开着**显示横幅；如果双击后窗口一闪而过，说明有报错（最常见是未装 Python 或商店假 python），请按住 **Shift + 右键**脚本文件夹 →「在此处打开 PowerShell 窗口」→ 手动运行 `python serve.py` 查看具体错误。
 
+⚠️ **bat 编码说明**：所有 `.bat` 均为 **GBK 编码 + CRLF 换行**（中文版 cmd 原生格式）。若用编辑器修改后**另存为 UTF-8，会重现「'xxx' 不是内部或外部命令」式乱码报错**（cmd 按 GBK 解析 UTF-8 中文字节会错位）。改完 bat 请保持 ANSI/GBK 编码保存。
+
 ### 3.2 安装 Tampermonkey 与脚本
 
 1. Edge / Chrome 安装扩展 **Tampermonkey**  

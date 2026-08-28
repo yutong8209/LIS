@@ -1,16 +1,15 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
 
 echo =========================================
-echo   iMedicalLIS è„šæœ¬æœåŠ¡å™¨ï¼ˆå«è´¨æ§ä¾èµ–ï¼‰
+echo   iMedicalLIS ½Å±¾·şÎñÆ÷£¨º¬ÖÊ¿ØÒÀÀµ£©
 echo =========================================
-echo   åœ°å€:     http://localhost:8765/
-echo   è„šæœ¬:     http://localhost:8765/iMedicalLIS-enhancer.user.js
+echo   µØÖ·:     http://localhost:8765/
+echo   ½Å±¾:     http://localhost:8765/iMedicalLIS-enhancer.user.js
 echo   SheetJS:  http://localhost:8765/vendor/xlsx.full.min.js
 echo.
-echo   ç”¨é€”: Tampermonkey æ›´æ–°è„šæœ¬ + è´¨æ§å¯¼å‡º Excel
-echo   å…³é—­æœ¬çª—å£å³åœæ­¢æœåŠ¡
+echo   ÓÃÍ¾: Tampermonkey ¸üĞÂ½Å±¾ + ÖÊ¿Øµ¼³ö Excel
+echo   ¹Ø±Õ±¾´°¿Ú¼´Í£Ö¹·şÎñ
 echo =========================================
 echo.
 
@@ -32,9 +31,9 @@ if %errorlevel%==0 (
   goto :end
 )
 
-echo [é”™è¯¯] æœªæ‰¾åˆ° Pythonã€‚
-echo è¯·å…ˆå®‰è£… Python 3: https://www.python.org/downloads/
-echo å®‰è£…æ—¶å‹¾é€‰ "Add python.exe to PATH"
+echo [´íÎó] Î´ÕÒµ½ Python¡£
+echo ÇëÏÈ°²×° Python 3: https://www.python.org/downloads/
+echo °²×°Ê±¹´Ñ¡ "Add python.exe to PATH"
 echo.
 pause
 exit /b 1
