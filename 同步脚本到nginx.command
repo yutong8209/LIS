@@ -1,9 +1,13 @@
 #!/bin/bash
-# 同步脚本到 nginx 机（科室电脑）：userscript + vendor → C:\lis-tools\
-# 前提：nginx 那台 Windows 已开启 OpenSSH 服务器（开启方法见脚本末尾的错误提示）
-# ↓↓↓ 按实际情况改这两行 ↓↓↓
-WIN_USER="Administrator"      # nginx Windows 电脑的登录用户名
-WIN_HOST="192.168.31.111"     # nginx 电脑的内网 IP（就是篡改猴更新地址里的那台）
+# 同步脚本到 nginx 网关机：userscript + vendor → nginx 那台电脑的 D:\nginx-1.31.2\lis-tools\
+#
+# ⚠️ 目标是「装 nginx 的那台网关电脑」（192.168.31.111，监听 9111 的那台），
+#    不是装篡改猴的两台客户端（LIS_Office@.251 / lenovo@.32）——客户端会自动从 nginx 拉更新，不用推。
+#
+# 前提：nginx 网关机已开启 OpenSSH 服务器（开启方法见脚本末尾的错误提示）
+# ❗❗ 按实际情况改下面这行：nginx 网关机的 Windows 登录用户名 ❗❗
+WIN_USER="这里填nginx机的用户名"
+WIN_HOST="192.168.31.111"     # nginx 网关机 IP（= 篡改猴更新地址里的那台）
 WIN_DIR="D:/nginx-1.31.2/lis-tools"   # nginx 静态目录（与 nginx.conf 里的 alias 保持一致）
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
