@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.32
+// @version      8.8.33
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20105,6 +20105,33 @@ window.addEventListener('keydown',function(e){
     return { test, abn, items };
   }
 
+  // 8.8.33: 红线扫描收敛为单次遍历（负值/传染病阳性/心肌标志物共用）——
+  // 供 tick 预过滤与数据健康暂停推送两处复用。返回:
+  //   neg: 含负值 DR 集 / inf: 传染病阳性 DR 集 / card: 心肌拦截 Map(dr→原因)
+  //   map: dr → 红线原因汇总（首因优先，不受 skipSeen 去重影响）
+  function _aaScanRedLines(list) {
+    const neg = new Set(), inf = new Set(), card = new Map(), map = new Map();
+    (list || []).forEach(r => {
+      const lv = getLiveClassification(r.ReportDR);
+      if (!lv) {return;}
+      const dr = String(r.ReportDR);
+      if ((lv.items || []).some(it => isNegativeResultValue(it))) {
+        neg.add(dr);
+        if (!map.has(dr)) {map.set(dr, '含负值结果，需人工审核');}
+      }
+      if ((lv.items || []).some(it => isAutoAuditInfectionItem(it) && isPositiveResult(it.result, it.preResult || it))) {
+        inf.add(dr);
+        if (!map.has(dr)) {map.set(dr, '梅毒/丙肝/艾滋项目阳性，需人工审核');}
+      }
+      const reason = cardiacMarkerBlockReason(lv.items || [], lv.row || r);
+      if (reason) {
+        card.set(dr, reason);
+        if (!map.has(dr)) {map.set(dr, reason);}
+      }
+    });
+    return {neg, inf, card, map};
+  }
+
   // 主循环：每轮 = [正常批量] + [异常逐条(安全门)] + 日志/小结
   async function autoAuditTick() {
     if (!autoAuditEnabled()) {return;}
@@ -20123,6 +20150,51 @@ window.addEventListener('keydown',function(e){
         try {await loadWSData();} catch (e) {}
         if (!wsData.length) {return;}
       }
+      // 8.8.33: 数据健康预检前移 + 临界先补刷一次——
+      // 长批审期间 WS 周期刷新被停止，批审刚结束时 lastFullSuccessAt 必然超过 60s 门槛，
+      // 旧逻辑此时直接判暂停 → 发「⚠️ 自动审核暂停」推送，但下一轮周期刷新补上后又继续审了，
+      // 造成「推送说暂停、实际在继续」的假暂停。现在判暂停前先强制补一次全量刷新，
+      // 刷新后仍不健康（真断流/会话失效）才落日志、按推送模式发暂停、中止本轮。
+      const _healthStale = () =>
+        _wsDataHealth.failed || _wsDataHealth.partial || !_wsDataHealth.lastFullSuccessAt ||
+        Date.now() - _wsDataHealth.lastFullSuccessAt > AUTO_AUDIT_DATA_MAX_AGE;
+      if (_healthStale()) {
+        try {await loadWSData({force: true});} catch (e) {dbg('自动审核健康预检刷新失败:', e);}
+      }
+      if (_healthStale()) {
+        // 真暂停：红线从当前数据现扫（Map 语义，不受 skipSeen 去重影响，连续暂停每轮明细都完整）
+        const _cand = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
+        const _rl = _aaScanRedLines(_cand);
+        const _realSpecs = [];
+        _rl.map.forEach((reason, dr) => {
+          const r = findWSSpecimenByReportDR(dr) || {};
+          const _si = auditRecordSpecInfo(dr, r);
+          _realSpecs.push({reportDR: String(dr), name: r.PatName || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items});
+        });
+        // 8.5.82: 暂停必须落日志（夜间整夜停转时「查看记录」要与正常空转可区分）；10 分钟节流防刷屏
+        if (Date.now() - (_lastDataHealthLogTs || 0) > 10 * 60 * 1000) {
+          _lastDataHealthLogTs = Date.now();
+          const _logSkips = _realSpecs.slice();
+          _logSkips.push({reportDR: 'data-health', name: '工作台', reason: '工作台数据未确认最新，自动审核暂停'});
+          autoAuditLogAdd({ normal: 0, abnormal: 0, skipped: _logSkips, audited: [] });
+          // 8.8.26/8.8.31: 暂停也推一条（同样 10 分钟节流），遵循推送模式：off 不推；
+          // blocked 仅真实拦下 >0 才推；all 照旧。计数取真实红线，哨兵只落日志不进推送计数。
+          try {
+            const _nm = autoAuditNotifyMode();
+            if (_nm !== 'off' && (_nm !== 'blocked' || _realSpecs.length > 0)) {
+              const _pl = autoAuditAbnSpecimenSummary(_realSpecs, 6);
+              let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
+              if (_realSpecs.length) {_pb += '\n当前拦下 ' + _realSpecs.length + ' 例待人工';}
+              if (_pl.length) {_pb += '\n' + _pl.join('\n');}
+              pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'active' });
+            }
+          } catch (e) {dbg('暂停推送异常:', e);}
+        }
+        // 本轮到此中止：清空累积器防止与下轮混算（红线明细已随暂停推送曝光；off/blocked
+        // 不发暂停推送时同样清空——off 语义本就不推，blocked 的通过类事件按语义不打扰）
+        aaClear();
+        return;
+      }
       // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义
       const candidates = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
       let normals = candidates.filter(r => getWSAuditBucket(r) === 'normal');
@@ -20134,100 +20206,33 @@ window.addEventListener('keydown',function(e){
       const audited = []; // 8.5.61: 本轮审核成功的样本明细 {n,l,d,t}（供记录查看器检索）
       // 8.8.24: 推送标题统计「机器|正常|异常 → 例数」——独立于 audited 的 50 条明细上限，保证计数完整
       const _passByMn = {};
-      // 8.5.76: 负值红线 —— 含负值结果（如 -1.3）的标本一律不进自动审核（无论正常/异常分类），留人工
-      const negDRs = new Set();
-      // 8.8.31: dr → 红线原因汇总（不受 skipSeen 去重影响）——供数据健康暂停推送统计真实拦下数与明细
-      const _redLineReasonMap = new Map();
-      candidates.forEach(r => {
-        const lv = getLiveClassification(r.ReportDR);
-        if (lv && (lv.items || []).some(it => isNegativeResultValue(it))) {negDRs.add(String(r.ReportDR));}
-      });
+      // 8.5.76/8.5.82/8.6.2: 三类红线预过滤——8.8.33 起扫描收敛为 _aaScanRedLines 单次遍历，
+      // 负值/传染病阳性/心肌标志物各自取集，_redLineReasonMap 同时供暂停推送取真实明细
+      const _rl = _aaScanRedLines(candidates);
+      const negDRs = _rl.neg;
+      const infPosDRs = _rl.inf;
+      const cardiacDRs = _rl.card;
+      const _redLineReasonMap = _rl.map;
       negDRs.forEach(dr => {
-        if (!_redLineReasonMap.has(dr)) {_redLineReasonMap.set(dr, '含负值结果，需人工审核');}
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, '含负值结果，需人工审核');
       });
       if (negDRs.size) {
         normals = normals.filter(r => !negDRs.has(String(r.ReportDR)));
         abnormals = abnormals.filter(r => !negDRs.has(String(r.ReportDR)));
       }
-      // 8.5.82: 传染病阳性红线 —— 正常批量路径同样拦截。分类器对 RefRanges 缺失的 S/CO 数值结果
-      // 会判 NORMAL（classifyResultItem 无参考文本兜底），而 isPositiveResult 有 S/CO>1 判阳兜底，
-      // 二者口径不一致时梅毒/丙肝/HIV 标本可能混入 normals 被夜间自动审掉——这里按红线函数兜底，
-      // 宁可人审，不可漏放（与 abnormal 段 autoAuditAbnormalGate 的 infPos 拦截对齐）
-      const infPosDRs = new Set();
-      candidates.forEach(r => {
-        const lv = getLiveClassification(r.ReportDR);
-        if (lv && (lv.items || []).some(it => isAutoAuditInfectionItem(it) && isPositiveResult(it.result, it.preResult || it))) {
-          infPosDRs.add(String(r.ReportDR));
-        }
-      });
       infPosDRs.forEach(dr => {
-        if (!_redLineReasonMap.has(dr)) {_redLineReasonMap.set(dr, '梅毒/丙肝/艾滋项目阳性，需人工审核');}
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, '梅毒/丙肝/艾滋项目阳性，需人工审核');
       });
       if (infPosDRs.size) {
         normals = normals.filter(r => !infPosDRs.has(String(r.ReportDR)));
         abnormals = abnormals.filter(r => !infPosDRs.has(String(r.ReportDR)));
       }
-      // 8.6.2: 心肌损伤标志物红线（cTnI/CK-MB/MYO 达危急拦截线才拦，含 normal 路径——
-      // 这三个项目无危急值配置，显著升高只是 ABNORMAL 会被异常安全门放行；轻度升高放行自动审；
-      // 数值判定不依赖 RefRanges，参考范围缺失也不会漏）。CK-MB 仅限 DXI 机器，防误伤生化心肌酶谱
-      const cardiacDRs = new Map(); // dr -> 拦截原因
-      candidates.forEach(r => {
-        const lv = getLiveClassification(r.ReportDR);
-        if (!lv) {return;}
-        const reason = cardiacMarkerBlockReason(lv.items || [], lv.row || r);
-        if (reason) {cardiacDRs.set(String(r.ReportDR), reason);}
-      });
       cardiacDRs.forEach((reason, dr) => {
-        if (!_redLineReasonMap.has(dr)) {_redLineReasonMap.set(dr, reason);}
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, reason);
       });
       if (cardiacDRs.size) {
         normals = normals.filter(r => !cardiacDRs.has(String(r.ReportDR)));
         abnormals = abnormals.filter(r => !cardiacDRs.has(String(r.ReportDR)));
-      }
-      if (
-        _wsDataHealth.failed ||
-        _wsDataHealth.partial ||
-        !_wsDataHealth.lastFullSuccessAt ||
-        Date.now() - _wsDataHealth.lastFullSuccessAt > AUTO_AUDIT_DATA_MAX_AGE
-      ) {
-        autoAuditSkipOnce(skipped, { ReportDR: 'data-health', PatName: '工作台' }, '工作台数据未确认最新，自动审核暂停');
-        // 8.5.82: 数据不健康的暂停必须落日志——此前 return 跳过下方 autoAuditLogAdd，
-        // 夜间会话过期导致整夜暂停时「查看记录」一片空白，与正常空转无法区分。
-        // 10 分钟记一条，避免每 30s 轮询刷屏
-        if (Date.now() - (_lastDataHealthLogTs || 0) > 10 * 60 * 1000) {
-          _lastDataHealthLogTs = Date.now();
-          autoAuditLogAdd({ normal: 0, abnormal: 0, skipped: skipped.slice(), audited: [] });
-          // 8.8.26: 暂停也推一条（同样 10 分钟节流）——夜间整夜停转手机不再零感知；
-          // 且本轮已被拦下的红线标本（在 health 检查前记录、下轮会被去重挡住）借此获得曝光，
-          // 否则它们永远进不了任何推送。
-          // 8.8.31: ①真实拦下数改取 _redLineReasonMap（不受 skipSeen 去重影响，连续暂停期间每条推送都带准确
-          //   计数与明细；修复旧版把哨兵「data-health」占位标本也数进去——无红线时误显「拦下 1 例待人工」
-          //   但工作台里根本找不到这条标本）；②遵循推送模式：off 不推暂停；blocked 仅真实拦下 >0 才推；
-          //   all 照旧每 10 分钟一条。
-          try {
-            const _nm = autoAuditNotifyMode();
-            const _realSpecs = [];
-            _redLineReasonMap.forEach((reason, dr) => {
-              const r = findWSSpecimenByReportDR(dr) || {};
-              const _si = auditRecordSpecInfo(dr, r);
-              _realSpecs.push({reportDR: String(dr), name: r.PatName || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items});
-            });
-            if (_nm !== 'off' && (_nm !== 'blocked' || _realSpecs.length > 0)) {
-              const _pl = autoAuditAbnSpecimenSummary(_realSpecs, 6);
-              let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
-              if (_realSpecs.length) {_pb += '\n当前拦下 ' + _realSpecs.length + ' 例待人工';}
-              if (_pl.length) {_pb += '\n' + _pl.join('\n');}
-              pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'active' });
-            }
-          } catch (e) {dbg('暂停推送异常:', e);}
-          // 本轮到此中止：清空累积器防止与下轮混算（红线事件已随 _realSpecs 曝光；off/blocked
-          // 不发暂停推送时同样清空——off 语义本就不推，blocked 的通过类事件按语义不打扰）
-          aaClear();
-        }
-        return;
       }
 
       // 1) 正常标本：批量审核（统计从 queue.done/failed/skipped 读取）
