@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.30
+// @version      8.8.31
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20136,11 +20136,14 @@ window.addEventListener('keydown',function(e){
       const _passByMn = {};
       // 8.5.76: 负值红线 —— 含负值结果（如 -1.3）的标本一律不进自动审核（无论正常/异常分类），留人工
       const negDRs = new Set();
+      // 8.8.31: dr → 红线原因汇总（不受 skipSeen 去重影响）——供数据健康暂停推送统计真实拦下数与明细
+      const _redLineReasonMap = new Map();
       candidates.forEach(r => {
         const lv = getLiveClassification(r.ReportDR);
         if (lv && (lv.items || []).some(it => isNegativeResultValue(it))) {negDRs.add(String(r.ReportDR));}
       });
       negDRs.forEach(dr => {
+        if (!_redLineReasonMap.has(dr)) {_redLineReasonMap.set(dr, '含负值结果，需人工审核');}
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, '含负值结果，需人工审核');
       });
       if (negDRs.size) {
@@ -20159,6 +20162,7 @@ window.addEventListener('keydown',function(e){
         }
       });
       infPosDRs.forEach(dr => {
+        if (!_redLineReasonMap.has(dr)) {_redLineReasonMap.set(dr, '梅毒/丙肝/艾滋项目阳性，需人工审核');}
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, '梅毒/丙肝/艾滋项目阳性，需人工审核');
       });
       if (infPosDRs.size) {
@@ -20176,6 +20180,7 @@ window.addEventListener('keydown',function(e){
         if (reason) {cardiacDRs.set(String(r.ReportDR), reason);}
       });
       cardiacDRs.forEach((reason, dr) => {
+        if (!_redLineReasonMap.has(dr)) {_redLineReasonMap.set(dr, reason);}
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, reason);
       });
       if (cardiacDRs.size) {
@@ -20196,16 +20201,30 @@ window.addEventListener('keydown',function(e){
           _lastDataHealthLogTs = Date.now();
           autoAuditLogAdd({ normal: 0, abnormal: 0, skipped: skipped.slice(), audited: [] });
           // 8.8.26: 暂停也推一条（同样 10 分钟节流）——夜间整夜停转手机不再零感知；
-          // 且本轮已被拦下的红线标本（在 health 检查前记录、下轮会被去重挡住）借此获得唯一一次曝光，
-          // 否则它们永远进不了任何推送
+          // 且本轮已被拦下的红线标本（在 health 检查前记录、下轮会被去重挡住）借此获得曝光，
+          // 否则它们永远进不了任何推送。
+          // 8.8.31: ①真实拦下数改取 _redLineReasonMap（不受 skipSeen 去重影响，连续暂停期间每条推送都带准确
+          //   计数与明细；修复旧版把哨兵「data-health」占位标本也数进去——无红线时误显「拦下 1 例待人工」
+          //   但工作台里根本找不到这条标本）；②遵循推送模式：off 不推暂停；blocked 仅真实拦下 >0 才推；
+          //   all 照旧每 10 分钟一条。
           try {
-            const _pl = autoAuditAbnSpecimenSummary(skipped.filter(s => s.ReportDR !== 'data-health'), 6);
-            let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
-            if (skipped.length) {_pb += '\n当前拦下 ' + skipped.length + ' 例待人工';}
-            if (_pl.length) {_pb += '\n' + _pl.join('\n');}
-            pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'active' });
+            const _nm = autoAuditNotifyMode();
+            const _realSpecs = [];
+            _redLineReasonMap.forEach((reason, dr) => {
+              const r = findWSSpecimenByReportDR(dr) || {};
+              const _si = auditRecordSpecInfo(dr, r);
+              _realSpecs.push({reportDR: String(dr), name: r.PatName || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items});
+            });
+            if (_nm !== 'off' && (_nm !== 'blocked' || _realSpecs.length > 0)) {
+              const _pl = autoAuditAbnSpecimenSummary(_realSpecs, 6);
+              let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
+              if (_realSpecs.length) {_pb += '\n当前拦下 ' + _realSpecs.length + ' 例待人工';}
+              if (_pl.length) {_pb += '\n' + _pl.join('\n');}
+              pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'active' });
+            }
           } catch (e) {dbg('暂停推送异常:', e);}
-          // 本轮到此中止：已记录的事件随暂停推送一并曝光，清空累积器防止与下轮混算
+          // 本轮到此中止：清空累积器防止与下轮混算（红线事件已随 _realSpecs 曝光；off/blocked
+          // 不发暂停推送时同样清空——off 语义本就不推，blocked 的通过类事件按语义不打扰）
           aaClear();
         }
         return;
