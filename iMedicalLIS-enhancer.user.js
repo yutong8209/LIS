@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.31
+// @version      8.8.32
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20754,7 +20754,15 @@ window.addEventListener('keydown',function(e){
           );
         }
       } catch (e) {
-        _paint('❌ <b>本机推送服务未运行</b>：双击 start_lis_menubar.command 启动 serve.py 后这里自动变绿', '#fdecea', '#f5c6cb');
+        // 8.8.32: 启动提示按操作系统自适应——.command 是 macOS 双击脚本，Windows 上不存在，
+        // Windows 整包对应 start_serve.bat（见《Windows安装-含质控.md》）
+        const _isWin = /Windows/i.test(navigator.userAgent || '');
+        _paint(
+          '❌ <b>本机推送服务未运行</b>：' + (_isWin
+            ? '双击 <b>start_serve.bat</b>'
+            : '双击 <b>start_lis_menubar.command</b>') + ' 启动 serve.py 后这里自动变绿',
+          '#fdecea', '#f5c6cb'
+        );
       } finally {
         _pushStatusFetching = false;
       }
