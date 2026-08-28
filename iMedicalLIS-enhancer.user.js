@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.33
+// @version      8.8.34
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -79,7 +79,8 @@
     wsIgnore: 'LIS_WSIgnore', // 8.5.33: 待排/采集标本忽略列表（忽略后不计入任何统计）
     autoAudit: 'LIS_AutoAudit_Persist', // 8.5.58: 自动审核状态（开启/到期时间/时长/规则）
     autoAuditLog: 'LIS_AutoAuditLog', // 8.5.58: 自动审核日志（环形上限 500）
-    autoAuditRound: 'LIS_AutoAuditRoundAccum' // 8.8.25: 进行中的一轮统计（页面被整页刷新后补报推送，防丢）
+    autoAuditRound: 'LIS_AutoAuditRoundAccum', // 8.8.25: 进行中的一轮统计（页面被整页刷新后补报推送，防丢）
+    notifyRetryQueue: 'LIS_NotifyRetryQueue' // 8.8.34: 推送发送失败的待补发队列（serve 未运行/网络瞬断不再丢推送）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -19502,6 +19503,7 @@ window.addEventListener('keydown',function(e){
   var _autoAudit = null; // { enabled, until, durationMin, rules }
   var _autoAuditMute = false; // 自动审核期间静默非 error toast
   var _lastDataHealthLogTs = 0; // 8.5.82: 数据不健康暂停的最近一次落日志时间（10 分钟一条防刷屏）
+  var _lastHealthForceTs = 0; // 8.8.34: 健康预检强刷的最近一次时间（2 分钟一次，防故障期间每 tick 全量拉取）
   var _autoAuditRunning = false; // 防重入
   var _autoAuditCancelRequested = false; // 停止时阻止自动队列继续取下一条
   var _autoAuditTimer = null; // 30s 兜底轮询
@@ -19655,22 +19657,80 @@ window.addEventListener('keydown',function(e){
   //   姓名、住院号、床号、科室等身份信息绝不含（不出内网）。
   // 频率控制：关键事件才推（有审核动作的一轮小结 / 危急红线留人工），同内容 60s 去重防刷屏。
   // 8.8.21: 停止/关闭事件不再推送。
+  // 8.8.34: 修复推送丢失三件套——
+  //   ① fetch 此前 fire-and-forget（不查 resp.ok、.catch 吞错，serve 未运行/网络失败/Bark 未配置均无感知），
+  //      现在检查响应；失败进重试队列（localStorage 落盘），由 30s 泵补发，最多保留 2 小时；
+  //   ② 去重键加入 nonce（结算方传入「轮次时间:事件数」）——此前纯文案去重会把
+  //      「内容不同但聚合同文」的合法轮次（连审同机器单个正常标本）静默吞掉且累积器已清无法补发；
+  //   ③ serve.py /notify 返回 accepted=false（未配置 Bark）视为永久失败：不重试，只留调试日志。
   let _notifyBarkLast = { key: '', t: 0 };
-  function pushAutoAuditNotify(payload) {
-    const key = (payload.title || '') + '|' + (payload.body || '') + '|' + (payload.level || '');
-    const now = Date.now();
-    if (_notifyBarkLast.key === key && now - _notifyBarkLast.t < 60 * 1000) {return;} // 60s 同内容去重
-    _notifyBarkLast = { key, t: now };
-    // 8.8.25: 立即发送（keepalive 保证页面刷新时在途请求仍可完成）——
-    // 此前的 500ms setTimeout 防抖在整页刷新场景会把已入队的推送整个丢掉
+  const AA_RETRY_MAX = 30; // 重试队列上限（超出丢最旧；量级远大于真实轮次推送频率）
+  const AA_RETRY_MAX_AGE = 2 * 60 * 60 * 1000; // 队列最长保留 2 小时（超龄丢弃：暂停类推送过期已无意义）
+  let _notifyRetryQueue = (() => {
+    try {const raw = JSON.parse(localStorage.getItem(K.notifyRetryQueue) || '[]'); return Array.isArray(raw) ? raw : [];} catch (e) {return [];}
+  })();
+  let _notifyRetryTimer = null;
+  function _notifyRetrySave() {
+    try {localStorage.setItem(K.notifyRetryQueue, JSON.stringify(_notifyRetryQueue));} catch (e) {}
+  }
+  function _notifySend(p) {
+    // 发送单条推送并检查结果：网络错误 / 非 2xx / accepted=false 均返回 false
+    return new Promise(resolve => {
+      let settled = false;
+      const done = ok => {if (!settled) {settled = true; resolve(!!ok);}};
+      try {
+        const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const tmr = ctl ? setTimeout(() => {try {ctl.abort();} catch (e) {}}, 8000) : null;
+        fetch('http://127.0.0.1:8765/notify', {
+          method: 'POST',
+          headers: {'Content-Type': 'text/plain'}, // text/plain 免 CORS 预检
+          body: JSON.stringify(p),
+          keepalive: true, // 页面刷新时在途请求仍可完成（8.8.25）
+          signal: ctl ? ctl.signal : undefined
+        }).then(resp => {
+          if (tmr) {clearTimeout(tmr);}
+          resp.json().then(d => done(resp.ok && (!d || d.accepted !== false))).catch(() => done(resp.ok));
+        }).catch(() => {if (tmr) {clearTimeout(tmr);} done(false);});
+        setTimeout(() => done(false), 9000); // 响应兜底超时（abort/网络挂起）
+      } catch (e) {done(false);}
+    });
+  }
+  function _flushNotifyRetry() {
+    if (_notifyRetryTimer || !_notifyRetryQueue.length) {return;}
+    _notifyRetryTimer = setTimeout(async () => {
+      _notifyRetryTimer = null;
+      const now = Date.now();
+      const batch = _notifyRetryQueue.filter(it => it && it.p && now - (it.t || 0) <= AA_RETRY_MAX_AGE);
+      const remain = [];
+      for (const it of batch) {
+        if (!(await _notifySend(it.p))) {remain.push(it);}
+      }
+      if (remain.length !== _notifyRetryQueue.length) {
+        _notifyRetryQueue = remain;
+        _notifyRetrySave();
+      }
+      if (_notifyRetryQueue.length) {_flushNotifyRetry();} // 仍有残余 → 30s 后继续补发
+    }, 30000);
+  }
+  function _notifyRetryEnqueue(p) {
     try {
-      fetch('http://127.0.0.1:8765/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' }, // text/plain 免 CORS 预检
-        body: JSON.stringify(payload),
-        keepalive: true
-      }).catch(() => {});
+      const sig = (p.title || '') + '|' + (p.body || '');
+      if (_notifyRetryQueue.some(it => it && it.p && (it.p.title || '') + '|' + (it.p.body || '') === sig)) {return;} // 同内容已在队列
+      _notifyRetryQueue.push({t: Date.now(), p});
+      if (_notifyRetryQueue.length > AA_RETRY_MAX) {_notifyRetryQueue.splice(0, _notifyRetryQueue.length - AA_RETRY_MAX);}
+      _notifyRetrySave();
     } catch (e) {}
+    _flushNotifyRetry();
+  }
+  _flushNotifyRetry(); // 启动时若上次遗留待补发队列，30s 泵自动接续
+  function pushAutoAuditNotify(payload) {
+    const p = payload || {};
+    const key = [p.title || '', p.body || '', p.level || '', p.nonce || ''].join('|');
+    const now = Date.now();
+    if (_notifyBarkLast.key === key && now - _notifyBarkLast.t < 60 * 1000) {return;} // 60s 同内容去重（nonce 随轮次变化，正常轮次不受影响）
+    _notifyBarkLast = { key, t: now };
+    const send = {title: p.title || '', body: p.body || '', level: p.level || 'active'};
+    _notifySend(send).then(ok => {if (!ok) {_notifyRetryEnqueue(send);}});
   }
   // 危急红线原因判定：这些标本被拦下留人工，属于必须立即知道的关键事件
   // （危急值 / 负值 / 传染病阳性 / 心肌标志物达拦截线 / 疑似堵孔）
@@ -20016,7 +20076,9 @@ window.addEventListener('keydown',function(e){
       }
       if (lines.length) {body += '\n' + lines.join('\n');}
       if (opts.note) {body += '\n' + opts.note;}
-      pushAutoAuditNotify({title, body, level: hasRed ? 'critical' : 'active'});
+      // 8.8.34: nonce = 轮次时间:事件数——两轮聚合计数相同（连审同机器单个正常标本）时文案完全一致，
+      // 纯文案去重会把第二轮静默吞掉；nonce 随轮次变化保证不同轮次各推一条，同一累积器重复结算仍被去重
+      pushAutoAuditNotify({title, body, level: hasRed ? 'critical' : 'active', nonce: (a.ts || 0) + ':' + (a.seq || 0)});
       return true;
     } catch (e) {dbg('累积器结算异常:', e); return false;}
   }
@@ -20027,7 +20089,9 @@ window.addEventListener('keydown',function(e){
     // 8.8.26: 三道守卫——①本轮正在跑（工作台重开场景）不补报，等它自己收尾；
     // ②残留累积器属于本页面会话 = 活轮次，同样不动；③超过 15 分钟无新事件的陈旧残骸静默丢弃
     if (_autoAuditRunning) {return;}
-    _aaAccumLoad();
+    // 8.8.34: 内存优先（与 8.8.30 在 10693/19450 两处的处理一致）——落盘是 1s 节流异步的，
+    // 无条件读盘会用旧对象覆盖最后一批尚未落盘的内存事件
+    if (!_aaAccum) {_aaAccumLoad();}
     if (!_aaAccum) {return;}
     if (_aaAccum.sess === _aaSessId) {return;} // 本页面的活轮次，保留给正常收尾
     const a = _aaAccum;
@@ -20159,7 +20223,12 @@ window.addEventListener('keydown',function(e){
         _wsDataHealth.failed || _wsDataHealth.partial || !_wsDataHealth.lastFullSuccessAt ||
         Date.now() - _wsDataHealth.lastFullSuccessAt > AUTO_AUDIT_DATA_MAX_AGE;
       if (_healthStale()) {
-        try {await loadWSData({force: true});} catch (e) {dbg('自动审核健康预检刷新失败:', e);}
+        // 8.8.34: 强刷节流（2 分钟一次）——仪器持续加载失败时 partial 恒置位，旧逻辑每个 tick（30s）
+        // 都会对 LIS 做全工作组强制拉取，故障期间形成固定频率轮询压力；节流后未强刷的 tick 走下方真暂停分支
+        if (Date.now() - _lastHealthForceTs > 2 * 60 * 1000) {
+          _lastHealthForceTs = Date.now();
+          try {await loadWSData({force: true});} catch (e) {dbg('自动审核健康预检刷新失败:', e);}
+        }
       }
       if (_healthStale()) {
         // 真暂停：红线从当前数据现扫（Map 语义，不受 skipSeen 去重影响，连续暂停每轮明细都完整）
@@ -20742,8 +20811,9 @@ window.addEventListener('keydown',function(e){
         const resp = await fetch('http://127.0.0.1:8765/notify_status', ctl ? {signal: ctl.signal} : {});
         if (tmr) {clearTimeout(tmr);}
         const d = await resp.json();
-        if (!d || (!d.configured && !d.enabled)) {
-          // 未配置 bark_key / enabled=false：serve 在线但推送会被静默丢弃，提示配置方法
+        if (!d || !d.configured) {
+          // 8.8.34: 未配置 bark_key 单独判（此前 && 写反：enabled 默认 true，未配置时两条件都不成立，
+          // 走到 else 分支显示「✅ 已配置」假绿灯，而 serve 实际会静默丢弃每次推送）
           _paint('⚠️ <b>尚未启用推送</b>：把 notify_config.example.json 复制为 ~/脚本/<b>notify_config.json</b> 并填入 iPhone 的 Bark 设备码（见《Bark推送配置.md》）', '#fff8e1', '#f0d58a');
         } else if (!d.enabled) {
           _paint('⏸ Bark 已配置，但 notify_config.json 里 <b>enabled=false</b>，推送整体关闭中', '#fff8e1', '#f0d58a');

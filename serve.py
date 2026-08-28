@@ -122,13 +122,21 @@ def _notify_bark(key, title, body, level):
         headers={'Content-Type': 'application/json; charset=utf-8'},
         method='POST',
     )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            print(f'[{time.strftime("%H:%M:%S")}] Bark 推送成功 [{level}] {log_tail}')
-            _notify_last = {'ts': time.time(), 'ok': True, 'title': str(title)[:60], 'detail': f'Bark 转发成功 [{level}]' + ('（密文）' if enc_payload else '')}
-    except Exception as e:
-        print(f'[{time.strftime("%H:%M:%S")}] Bark 推送失败: {e}')
-        _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': str(e)[:120]}
+    # 8.8.34: 失败重试（最多 3 次，线性退避 1s/2s）——此前单次尝试，Bark 云瞬断即丢推送，
+    # 且 userscript 旧版不读响应，两端都不可观测。Request 对象可复用（data 不变）。
+    last_err = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                print(f'[{time.strftime("%H:%M:%S")}] Bark 推送成功 [{level}] {log_tail}')
+                _notify_last = {'ts': time.time(), 'ok': True, 'title': str(title)[:60], 'detail': f'Bark 转发成功 [{level}]' + ('（密文）' if enc_payload else '')}
+                return
+        except Exception as e:
+            last_err = e
+            print(f'[{time.strftime("%H:%M:%S")}] Bark 推送失败（第 {attempt + 1}/3 次）: {e}')
+            if attempt < 2:
+                time.sleep(1 + attempt)
+    _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': str(last_err)[:120]}
 
 
 # ── Bark 推送加密（纯 Python AES-128/256-CBC + PKCS7，零第三方依赖）──────────
@@ -294,6 +302,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         # 菜单栏统计读取
         if path == '/stats':
+            # 8.8.34: 补来源白名单（与 8.8.21 的 /notify_status 对齐）——stats 含各机器待审/异常计数，
+            # 虽只是聚合数字，也不应给任意网页跨源读取
+            if not self._origin_allowed():
+                print(f'[{time.strftime("%H:%M:%S")}] [security] 拒绝非白名单 Origin 的 GET {path}: {self.headers.get("Origin")}')
+                self._reject_origin()
+                return
             with _stats_lock:
                 body = json.dumps(_stats_data, ensure_ascii=False).encode('utf-8')
             self.send_response(200)
@@ -329,6 +343,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         # 菜单栏指令读取（SwiftBar 点击 → 通知 userscript 切分类）
         if path == '/cmd':
+            # 8.8.34: 补来源白名单（与 8.8.21 口径一致）——指令内容（目标分类标签）公开可读虽无害，
+            # 但白名单口径应统一，防任意网页探测本服务在线状态
+            if not self._origin_allowed():
+                print(f'[{time.strftime("%H:%M:%S")}] [security] 拒绝非白名单 Origin 的 GET {path}: {self.headers.get("Origin")}')
+                self._reject_origin()
+                return
             with _cmd_lock:
                 body = json.dumps(_cmd_data, ensure_ascii=False).encode('utf-8')
             self.send_response(200)
