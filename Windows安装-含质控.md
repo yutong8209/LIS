@@ -127,6 +127,16 @@ SheetJS: http://localhost:8765/vendor/xlsx.full.min.js
 
 可把 `start_serve.bat` 放到「启动」文件夹，开机自动开。
 
+#### 3.1.1 后台启动 / 停止（8.8.32 起新增）
+
+不想让控制台窗口一直占着，可以：
+
+- **后台启动**：双击 **`start_serve_bg.bat`** —— serve.py 在**最小化窗口**里运行（任务栏标题 `LIS-serve`），日志写入脚本目录的 `serve.log`。启动后它会把日志开头回显一遍，若 Python 没装好（如商店假占位符）会直接看到报错
+- **停止**：双击 **`stop_serve.bat`**（按 8765 端口找到进程结束），或右键任务栏 `LIS-serve` 窗口关闭
+- **判断是否在运行**：浏览器打开 http://localhost:8765/iMedicalLIS-enhancer.user.js 能看到脚本源码即在线
+
+⚠️ 注意区分「闪退」和「后台运行」：`start_serve.bat` 是**前台服务**，成功时窗口会**一直开着**显示横幅；如果双击后窗口一闪而过，说明有报错（最常见是未装 Python 或商店假 python），请按住 **Shift + 右键**脚本文件夹 →「在此处打开 PowerShell 窗口」→ 手动运行 `python serve.py` 查看具体错误。
+
 ### 3.2 安装 Tampermonkey 与脚本
 
 1. Edge / Chrome 安装扩展 **Tampermonkey**  
