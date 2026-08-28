@@ -22,17 +22,27 @@ if not defined PY (
   exit /b 1
 )
 
-rem 最小化窗口后台运行 serve.py，输出重定向到 serve.log（覆盖旧日志）
+rem PYTHONUNBUFFERED=1：Python 输出重定向到文件时默认块缓冲，启动横幅会长期压在
+rem 缓冲区里不落盘，serve.log 看起来是"空的"（实际服务可能正在正常运行）。
+rem 设为无缓冲后日志实时可见，报错也当场可读。
+set PYTHONUNBUFFERED=1
+
 start "LIS-serve" /min cmd /c "%PY% serve.py > serve.log 2>&1"
 
-rem 等 2 秒把启动横幅落进日志，回显给用户（若 Python 是商店假占位符，
-rem 这里会直接看到 "Python was not found..." 一类报错）
 timeout /t 2 >nul
-echo --- serve.log 开头 ---
-type serve.log
-echo -----------------------
+echo --- 运行状态自检 ---
+netstat -ano | findstr ":8765" | findstr "LISTENING" >nul
+if %errorlevel%==0 (
+  echo [OK] 8765 端口监听中，serve.py 已在后台运行。
+) else (
+  echo [未监听] serve 未就绪或启动失败，见下方日志。
+)
 echo.
-echo 已尝试后台启动。验证：浏览器打开 http://localhost:8765/iMedicalLIS-enhancer.user.js
-echo 能看到脚本源码即为成功；停止请双击 stop_serve.bat。
+echo --- serve.log ---
+type serve.log 2>nul
+echo -------------------
+echo.
+echo 验证：浏览器（建议无痕窗口）打开 http://localhost:8765/iMedicalLIS-enhancer.user.js
+echo 停止请双击 stop_serve.bat。
 echo.
 pause
