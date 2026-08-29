@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.2
+// @version      8.9.3
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -18490,8 +18490,10 @@ window.addEventListener('keydown',function(e){
           dbg('自动批审：工作台数据未确认最新，暂停队列（剩余条目已保存）');
           if (!_autoAuditMute) {showToast('工作台数据未确认最新，自动批审已暂停，数据恢复后自动续审', 'warning');}
           // 8.9.1: 批审中暂停事件进时间线（与数据健康恢复的 resume 配对）
+          // 8.9.3: 不置 _pendingResumeNotice——批审暂停从不发暂停推送，恢复也就不需要推送，
+          // 时间线记 ⏸→▶ 一对即可
           _aaInDataPause = true;
-          _pendingResumeNotice = true;
+          try {sessionStorage.setItem(AA_DATA_PAUSE_KEY, '1');} catch (e) {}
           aaStateEventAdd('pause', '批审中数据未确认最新，队列已保存，数据恢复后自动续审');
           saveAuditQueueNow(queue);
           break;
@@ -19027,6 +19029,9 @@ window.addEventListener('keydown',function(e){
   var _pendingResumeNotice = false; // 8.8.36: 断流暂停已推送 → 待数据恢复后补一条「已恢复」推送（一次性，到期/手动关闭时清除）
   var _aaInDataPause = false; // 8.9.1: 数据健康暂停期间置位，恢复时配对记「恢复」事件（含未推送过的暂停也配对）
   var _aaStaleTickCnt = 0; // 8.9.2: 数据健康连续不健康的 tick 计数（连续 3 个 → 自动整页刷新升级）
+  // 8.9.3: sessionStorage 标记——暂停标记跨整页刷新存续供恢复配对；「已整页刷新过」标记闸住 critical 暂停推送
+  const AA_DATA_PAUSE_KEY = 'LIS_AA_DataPause';
+  const AA_STALE_RELOAD_KEY = 'LIS_AA_StaleReloadTried';
   var _autoAuditRunning = false; // 防重入
   var _autoAuditCancelRequested = false; // 停止时阻止自动队列继续取下一条
   var _autoAuditTimer = null; // 30s 兜底轮询
@@ -19183,6 +19188,8 @@ window.addEventListener('keydown',function(e){
     } else {
       _pendingResumeNotice = false;
     }
+    // 8.9.3: 手动关闭/到期时清掉跨刷新的暂停标记，防止下次开启首个健康 tick 误报「已恢复」
+    try {sessionStorage.removeItem(AA_DATA_PAUSE_KEY);} catch (e) {}
   }
 
   // ==================== 8.8.12: 自动审核关键事件 → 手机推送（Bark → iPhone，Apple Watch 自动镜像） ====================
@@ -19789,14 +19796,17 @@ window.addEventListener('keydown',function(e){
               ? '部分仪器/工作组加载失败'
               : '数据超过 ' + Math.round(AUTO_AUDIT_DATA_MAX_AGE / 1000) + ' 秒未刷新成功';
         _aaInDataPause = true;
-        _pendingResumeNotice = true;
+        try {sessionStorage.setItem(AA_DATA_PAUSE_KEY, '1');} catch (e) {} // 8.9.3: 跨整页刷新存续，供恢复配对
         aaStateEventAdd('pause', '工作台数据未确认最新（' + _ph + '），自动审核暂停，恢复后自动继续');
-        // 8.9.2: 持续断流自动升级——连续 3 个 tick（约 90 秒+）数据仍不健康，自动执行浏览器级
-        // 整页刷新（实测能恢复会话与工作台状态）；5 分钟节流防 LIS 故障期间的刷新循环
+        // 8.9.3: 先自愈后打扰——整页刷新会清掉 CA 认证（下次审核脚本会自动重登，代价可接受），
+        // 但夜间 critical 推送会吵醒人，代价更高。顺序改为：连续 2 个 tick（约 30-60 秒）仍不健康
+        // 就自动整页刷新；刷新过（15 分钟内）仍不健康才发 critical 暂停推送。刷新自愈的情况全程静音，
+        // 只在时间线里留 ⏸→▶ 记录
         _aaStaleTickCnt++;
-        if (_aaStaleTickCnt >= 3 && autoHardReloadAllowed()) {
+        if (_aaStaleTickCnt >= 2 && autoHardReloadAllowed()) {
           _aaStaleTickCnt = 0;
-          aaStateEventAdd('pause', '数据连续多个周期未恢复，已自动执行整页刷新尝试恢复');
+          try {sessionStorage.setItem(AA_STALE_RELOAD_KEY, String(Date.now()));} catch (e) {}
+          aaStateEventAdd('pause', '数据连续未恢复，已自动执行整页刷新尝试恢复（恢复则不推送打扰）');
           hardReloadPageForWS('工作台数据持续未恢复，正在自动整页刷新…');
           return;
         }
@@ -19810,7 +19820,10 @@ window.addEventListener('keydown',function(e){
           _realSpecs.push({reportDR: String(dr), name: r.PatName || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items});
         });
         // 8.5.82: 暂停必须落日志（夜间整夜停转时「查看记录」要与正常空转可区分）；10 分钟节流防刷屏
-        if (Date.now() - (_lastDataHealthLogTs || 0) > 10 * 60 * 1000) {
+        // 8.9.3: critical 推送加一道闸——只在「已整页刷新过（15 分钟内）仍不健康」后才发，
+        // 可自愈的瞬断不再半夜吵人（时间线里始终有记录）
+        const _reloadTried = (() => {try {return !!sessionStorage.getItem(AA_STALE_RELOAD_KEY);} catch (e) {return false;}})();
+        if (_reloadTried && Date.now() - (_lastDataHealthLogTs || 0) > 10 * 60 * 1000) {
           _lastDataHealthLogTs = Date.now();
           const _logSkips = _realSpecs.slice();
           _logSkips.push({reportDR: 'data-health', name: '工作台', reason: '工作台数据未确认最新，自动审核暂停'});
@@ -19833,13 +19846,22 @@ window.addEventListener('keydown',function(e){
       }
       // 8.8.36: 断流恢复闭环——数据健康恢复后补一条普通推送（与 critical 暂停推送配对，
       // 半夜被吵醒过就知道它自己缓过来了，不用爬起来看）
-      // 8.9.1: 恢复事件同时进「查看记录」时间线（_aaInDataPause 覆盖未触发推送的暂停场景）
+      // 8.9.1: 恢复事件同时进「查看记录」时间线
+      // 8.9.3: 暂停标记跨整页刷新存续（sessionStorage）——自动刷新自愈的暂停也配对记「恢复」；
+      // 恢复推送只在暂停推送真发过时才补（自愈场景全程静音，时间线留 ⏸→▶ 即可）
       _aaStaleTickCnt = 0; // 8.9.2: 数据恢复，连续断流计数清零
-      if (_pendingResumeNotice || _aaInDataPause) {
+      let _hadPauseFlag = false;
+      try {
+        if (sessionStorage.getItem(AA_DATA_PAUSE_KEY) === '1') {_hadPauseFlag = true; sessionStorage.removeItem(AA_DATA_PAUSE_KEY);}
+      } catch (e) {}
+      const _resumePushPending = _pendingResumeNotice;
+      if (_resumePushPending || _aaInDataPause || _hadPauseFlag) {
         _pendingResumeNotice = false;
         _aaInDataPause = false;
-        aaStateEventAdd('resume', '工作台数据已恢复最新，自动审核继续');
-        try {pushAutoAuditNotify({title: '✅ 自动审核已恢复', body: '工作台数据已恢复最新，自动审核继续', level: 'active'});} catch (e) {}
+        aaStateEventAdd('resume', _resumePushPending ? '工作台数据已恢复最新，自动审核继续' : '工作台数据已恢复最新（整页刷新自愈，未推送打扰）');
+        if (_resumePushPending) {
+          try {pushAutoAuditNotify({title: '✅ 自动审核已恢复', body: '工作台数据已恢复最新，自动审核继续', level: 'active'});} catch (e) {}
+        }
       }
       // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义
       const candidates = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
