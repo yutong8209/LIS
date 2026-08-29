@@ -1,0 +1,17 @@
+#!/bin/bash
+# post-commit：commit 涉及 userscript / vendor 时，后台自动同步到科室 nginx（fire-and-forget，不阻塞提交）
+# 日志：.cache/nginx_sync.log；手动补跑：bash hooks/sync-to-nginx.sh
+# 逃生口：LIS_NO_SYNC=1 git commit ... 跳过本次自动同步
+[ "${LIS_NO_SYNC:-0}" = "1" ] && exit 0
+
+DIR="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -z "$DIR" ] && exit 0
+
+files="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || git show --name-only --format= HEAD 2>/dev/null)"
+case "$files" in
+  *iMedicalLIS-enhancer.user.js*|*vendor/*) ;;
+  *) exit 0 ;;  # 本次提交不涉及脚本文件，无需同步
+esac
+
+nohup bash "$DIR/hooks/sync-to-nginx.sh" >/dev/null 2>&1 &
+exit 0
