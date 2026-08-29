@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.0
+// @version      8.9.1
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -80,6 +80,7 @@
     autoAudit: 'LIS_AutoAudit_Persist', // 8.5.58: 自动审核状态（开启/到期时间/时长/规则）
     autoAuditLog: 'LIS_AutoAuditLog', // 8.5.58: 自动审核日志（环形上限 500）
     autoAuditRound: 'LIS_AutoAuditRoundAccum', // 8.8.25: 进行中的一轮统计（页面被整页刷新后补报推送，防丢）
+    autoAuditStateLog: 'LIS_AutoAuditStateLog', // 8.9.1: 自动审核运行状态事件（暂停/恢复/开启/关闭/到期，环形上限 100）
     notifyRetryQueue: 'LIS_NotifyRetryQueue' // 8.8.34: 推送发送失败的待补发队列（serve 未运行/网络瞬断不再丢推送）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
@@ -870,6 +871,16 @@
 .aal-summary-item.skip{color:#b45309}
 .aal-date-divider{font-size:11px;font-weight:700;color:#64748b;padding:7px 4px 4px;margin-top:5px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.3px}
 .aal-date-divider::after{content:'';flex:1;height:1px;background:#e2e8f0}
+/* 8.9.1: 运行状态时间线（暂停/恢复/开启/关闭/到期） */
+.aal-state-row{display:flex;align-items:baseline;gap:9px;padding:6px 12px;background:#fff;border:1px solid #eef2f7;border-radius:6px;margin-bottom:4px;font-size:12px;color:#475569}
+.aal-state-badge{flex:0 0 auto;display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.25}
+.aal-state-badge.pause{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.aal-state-badge.resume{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
+.aal-state-badge.start{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.aal-state-badge.stop{background:#f8fafc;color:#475569;border:1px solid #e2e8f0}
+.aal-state-badge.expire{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+.aal-state-time{flex:0 0 auto;color:#94a3b8;font-variant-numeric:tabular-nums}
+.aal-state-reason{flex:1;min-width:0;word-break:break-all}
 .aal-card{background:#fff;border:1px solid #e2e8f0;border-radius:7px;margin-bottom:6px;box-shadow:0 1px 2px rgba(0,0,0,.03);transition:border-color .15s,box-shadow .15s;overflow:hidden}
 .aal-card:hover{border-color:#cbd5e1;box-shadow:0 2px 7px rgba(0,0,0,.05)}
 .aal-card.open{border-color:#14b8a6;box-shadow:0 3px 10px rgba(20,184,166,.1)}
@@ -18452,6 +18463,10 @@ window.addEventListener('keydown',function(e){
         if (queue._autoMode && (_wsDataHealth.failed || _wsDataHealth.partial)) {
           dbg('自动批审：工作台数据未确认最新，暂停队列（剩余条目已保存）');
           if (!_autoAuditMute) {showToast('工作台数据未确认最新，自动批审已暂停，数据恢复后自动续审', 'warning');}
+          // 8.9.1: 批审中暂停事件进时间线（与数据健康恢复的 resume 配对）
+          _aaInDataPause = true;
+          _pendingResumeNotice = true;
+          aaStateEventAdd('pause', '批审中数据未确认最新，队列已保存，数据恢复后自动续审');
           saveAuditQueueNow(queue);
           break;
         }
@@ -18984,6 +18999,7 @@ window.addEventListener('keydown',function(e){
   var _lastDataHealthLogTs = 0; // 8.5.82: 数据不健康暂停的最近一次落日志时间（10 分钟一条防刷屏）
   var _lastHealthForceTs = 0; // 8.8.34: 健康预检强刷的最近一次时间（2 分钟一次，防故障期间每 tick 全量拉取）
   var _pendingResumeNotice = false; // 8.8.36: 断流暂停已推送 → 待数据恢复后补一条「已恢复」推送（一次性，到期/手动关闭时清除）
+  var _aaInDataPause = false; // 8.9.1: 数据健康暂停期间置位，恢复时配对记「恢复」事件（含未推送过的暂停也配对）
   var _autoAuditRunning = false; // 防重入
   var _autoAuditCancelRequested = false; // 停止时阻止自动队列继续取下一条
   var _autoAuditTimer = null; // 30s 兜底轮询
@@ -19098,6 +19114,7 @@ window.addEventListener('keydown',function(e){
     startAutoAuditTimers();
     renderAutoAuditButtonState();
     updateWSFooter();
+    aaStateEventAdd('start', '手动开启自动审核，时长 ' + dur + ' 分钟，审核范围已按开启时勾选固定');
     showToast('🤖 自动审核已开启（' + dur + ' 分钟），审核范围已固定为开启时的勾选', 'success');
     // 立即触发一轮（不等 30s 兜底）
     scheduleAutoAuditCycle();
@@ -19120,6 +19137,10 @@ window.addEventListener('keydown',function(e){
     stopAutoAuditTimers();
     renderAutoAuditButtonState();
     updateWSFooter();
+    // 8.9.1: 关闭/到期事件进「查看记录」时间线
+    if (wasEnabled) {
+      aaStateEventAdd(reason === '到期' ? 'expire' : 'stop', reason === '到期' ? '设定时长已到，自动审核到期停止' : '手动关闭自动审核');
+    }
     // 8.5.82: 到期停止属于用户必须知道的状态变化，不受 mute 静默（mute 只静默常规流水提示）——
     // 此前到期 toast 被 mute 吞掉，用户回来看不到任何「为何停了」的提示
     if (wasEnabled && (!_autoAuditMute || reason === '到期')) {
@@ -19623,6 +19644,8 @@ window.addEventListener('keydown',function(e){
       renderAutoAuditButtonState();
       updateWSFooter();
       const min = Math.max(1, Math.ceil(autoAuditRemainMs() / 60000));
+      // 8.9.1: 页面刷新/重开工作台后的自动恢复进时间线（同事件 15 分钟去重防连发）
+      aaStateEventAdd('resume', '页面刷新/工作台重开，自动审核按剩余时长恢复运行（约 ' + min + ' 分钟）');
       showToast('🤖 自动审核已恢复，剩余约 ' + min + ' 分钟', 'info');
     }
   }
@@ -19728,6 +19751,19 @@ window.addEventListener('keydown',function(e){
         }
       }
       if (_healthStale()) {
+        // 8.9.1: 暂停事件进「查看记录」时间线（同事件 15 分钟去重），并配对恢复推送/记录。
+        // 原因文案必须固定（不写动态秒数），否则去重永远不命中、暂停期间每 tick 刷一条；
+        // 断流时长看时间线里「暂停→恢复」的时间差即可
+        const _ph = !_wsDataHealth.lastFullSuccessAt
+          ? '尚无成功全量加载'
+          : _wsDataHealth.failed
+            ? '数据加载失败'
+            : _wsDataHealth.partial
+              ? '部分仪器/工作组加载失败'
+              : '数据超过 ' + Math.round(AUTO_AUDIT_DATA_MAX_AGE / 1000) + ' 秒未刷新成功';
+        _aaInDataPause = true;
+        _pendingResumeNotice = true;
+        aaStateEventAdd('pause', '工作台数据未确认最新（' + _ph + '），自动审核暂停，恢复后自动继续');
         // 真暂停：红线从当前数据现扫（Map 语义，不受 skipSeen 去重影响，连续暂停每轮明细都完整）
         const _cand = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
         const _rl = _aaScanRedLines(_cand);
@@ -19761,8 +19797,11 @@ window.addEventListener('keydown',function(e){
       }
       // 8.8.36: 断流恢复闭环——数据健康恢复后补一条普通推送（与 critical 暂停推送配对，
       // 半夜被吵醒过就知道它自己缓过来了，不用爬起来看）
-      if (_pendingResumeNotice) {
+      // 8.9.1: 恢复事件同时进「查看记录」时间线（_aaInDataPause 覆盖未触发推送的暂停场景）
+      if (_pendingResumeNotice || _aaInDataPause) {
         _pendingResumeNotice = false;
+        _aaInDataPause = false;
+        aaStateEventAdd('resume', '工作台数据已恢复最新，自动审核继续');
         try {pushAutoAuditNotify({title: '✅ 自动审核已恢复', body: '工作台数据已恢复最新，自动审核继续', level: 'active'});} catch (e) {}
       }
       // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义
@@ -20088,6 +20127,21 @@ window.addEventListener('keydown',function(e){
       }
     } catch (e) {}
   }
+  // 8.9.1: 自动审核运行状态事件（暂停/恢复/开启/关闭/到期）——独立时间线，供「查看记录」顶部展示。
+  // 环形上限 100 条；同事件+同原因 15 分钟内去重（暂停持续期间每个 tick 都会进暂停分支，防刷屏，
+  // 页面刷新后重进同一暂停也不会瞬间堆多条）
+  function aaStateEventAdd(ev, reason) {
+    try {
+      let log = [];
+      try {log = JSON.parse(localStorage.getItem(K.autoAuditStateLog) || '[]');} catch (e) {}
+      const last = log[log.length - 1];
+      if (last && last.ev === ev && (last.reason || '') === (reason || '') && Date.now() - (last.t || 0) < 15 * 60 * 1000) {return;}
+      log.push({t: Date.now(), ev, reason: String(reason || '')});
+      if (log.length > 100) {log = log.slice(log.length - 100);}
+      try {localStorage.setItem(K.autoAuditStateLog, JSON.stringify(log));} catch (e2) {}
+    } catch (e) {}
+  }
+
   function autoAuditLogAdd(entry) {
     try {
       let log = [];
@@ -20416,6 +20470,7 @@ window.addEventListener('keydown',function(e){
             <input id="lis-aal-search" placeholder="🔍 搜索姓名 / 检验号 / 组合项目 / 异常指标 / 原因…">
           </div>
           <div id="lis-aal-summary"></div>
+          <div id="lis-aal-states"></div>
           <div id="lis-aal-list" style="max-height:64vh;overflow-y:auto"></div>
         </div>
       </div>`;
@@ -20622,6 +20677,48 @@ window.addEventListener('keydown',function(e){
             </div>`;
         } else {
           sumBox.innerHTML = '';
+        }
+      }
+
+      // 8.9.1: 运行状态时间线（暂停/恢复/开启/关闭/到期）——按同一日期范围过滤，独立于标本记录展示，
+      // 「推送说暂停、过去看已恢复」这类疑问直接在这里对时间
+      const stateBox = document.getElementById('lis-aal-states');
+      if (stateBox) {
+        let stLog = [];
+        try {stLog = JSON.parse(localStorage.getItem(K.autoAuditStateLog) || '[]');} catch (err) {}
+        const _evMeta = {
+          pause: {icon: '⏸', cls: 'pause', label: '暂停'},
+          resume: {icon: '▶', cls: 'resume', label: '恢复'},
+          start: {icon: '🤖', cls: 'start', label: '开启'},
+          stop: {icon: '🛑', cls: 'stop', label: '关闭'},
+          expire: {icon: '⏰', cls: 'expire', label: '到期'}
+        };
+        const _todayD = fmtDay(now);
+        const _yestD = fmtDay(new Date(now.getTime() - 86400000));
+        const states = stLog
+          .filter(e => !minDay || fmtDay(new Date(e.t || 0)) >= minDay)
+          .slice(-50)
+          .reverse();
+        if (states.length) {
+          stateBox.innerHTML =
+            '<div class="aal-date-divider">⚙️ 运行状态（暂停 / 恢复 / 开关）</div>' +
+            states.map(e => {
+              const m = _evMeta[e.ev] || {icon: '•', cls: 'stop', label: String(e.ev || '')};
+              const d = new Date(e.t || 0);
+              const tstr =
+                String(d.getHours()).padStart(2, '0') + ':' +
+                String(d.getMinutes()).padStart(2, '0') + ':' +
+                String(d.getSeconds()).padStart(2, '0');
+              const dstr = fmtDay(d);
+              const dayPre = dstr === _todayD ? '' : dstr === _yestD ? '[昨天] ' : '[' + dstr + '] ';
+              return (
+                '<div class="aal-state-row"><span class="aal-state-badge ' + m.cls + '">' + m.icon + ' ' + m.label + '</span>' +
+                '<span class="aal-state-time">🕘 ' + esc(dayPre + tstr) + '</span>' +
+                '<span class="aal-state-reason">' + esc(e.reason || '') + '</span></div>'
+              );
+            }).join('');
+        } else {
+          stateBox.innerHTML = '';
         }
       }
 
