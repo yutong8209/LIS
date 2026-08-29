@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.3
+// @version      8.9.4
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6536,6 +6536,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   // 已审标本“复活”（幽灵卡，甚至被自动审核二次复审）。applyResults 据此过滤；
   // 条目在全量快照确认服务端也不再返回后才清除。
   const _wsLocalRemoved = new Set();
+
+  // 8.9.4: 批审成功后同步内存行状态为已审——批审期间 WS 周期刷新已停止，条目 requeue 重试时
+  // 「Status=3 跳过」检查读的是批审开始时的旧 wsData，拦不住对已审标本的再次 ReportSave
+  function markSpecimenAuditedInMem(reportDR) {
+    try {
+      const r = wsData.find(x => String(x.ReportDR) === String(reportDR));
+      if (r) {r.Status = '3'; r.ReportStatus = '3';}
+    } catch (e) {}
+  }
   let wsMachines = []; // 当前加载的仪器列表
   let wsActiveMachine = ''; // 当前选中的仪器 DR, ''=全部
   let wsActiveWG = ''; // 当前选中的工作组 DR, ''=全部工作组
@@ -7400,7 +7409,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         if (_wsLocalRemoved.size) {
           if (!partial) {
             const _serverDRs = new Set(allData.map(r => String(r.ReportDR)));
-            for (const dr of _wsLocalRemoved) {if (!_serverDRs.has(dr)) {_wsLocalRemoved.delete(dr);}}
+            for (const dr of _wsLocalRemoved) {
+              if (!_serverDRs.has(dr)) {_wsLocalRemoved.delete(dr); continue;}
+              // 8.9.4: 服务端快照里该行已是终审状态 → 本地隐藏使命完成，恢复展示（真实已审态，
+              // 不会再进待审队列）；否则按日期全状态查询时该行会被隐藏一整天
+              const _srow = allData.find(r => String(r.ReportDR) === dr);
+              const _sst = String((_srow && (_srow.Status || _srow.ReportStatus)) || '');
+              if (_sst === '3' || _sst === '4') {_wsLocalRemoved.delete(dr);}
+            }
           }
           const _removedCnt = allData.length;
           allData = allData.filter(r => !_wsLocalRemoved.has(String(r.ReportDR)));
@@ -7578,8 +7594,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       // 软刷新成功拿到数据 → 正常继续
       if (result && result.ok && !empty && !err) {
         // 8.9.2: 「成功」但健康仍是 failed/partial → 拿到的数据不可信（部分仪器失败/数据过期），
-        // 正是「点了刷新只报一串黄字警告、计数还是旧的」的场景——整页刷新兜底（5 分钟节流）
-        if ((_wsDataHealth.failed || _wsDataHealth.partial) && autoHardReloadAllowed()) {
+        // 正是「点了刷新只报一串黄字警告、计数还是旧的」的场景——整页刷新兜底
+        // 8.9.4: ↻ 是用户明确意图，不受自动整页刷新的 5 分钟节流限制
+        if (_wsDataHealth.failed || _wsDataHealth.partial) {
           hardReloadPageForWS('刷新后仍有仪器/工作组加载失败，数据可能不是最新，正在整页刷新恢复…');
           return;
         }
@@ -11491,12 +11508,29 @@ window.addEventListener('keydown',function(e){
         clearAuditQueue();
         return;
       }
-      delete freshQueue.pausedForSwitch;
-      saveAuditQueueNow(freshQueue);
+      // 8.9.4: 跨整页刷新后 CA 会话必然失效，清掉工作组 CA 缓存——否则恢复的首条走秒审快路径
+      // 必失败一次（requeue 浪费一轮），下一条才回退慢路径弹 CA 重登
+      freshQueue.caReadyByWg = {};
+      // 8.9.4: pausedForSwitch 由 continueAuditQueue 在拿到队列锁后才清（见其开头）——拿锁失败
+      //（如刷新后残留锁未过期）时标记仍在，据此自动重试直到接手成功（60s > 锁 TTL 45s）
       continueAuditQueue(freshQueue).catch(e => {
         dbg('续跑批审队列失败:', e);
         showToast('续跑批审失败: ' + e.message, 'error');
       });
+      const _recheckResume = n => {
+        if (n <= 0) {return;}
+        setTimeout(() => {
+          // 有别的审核在进行：不打断也不弹「正在审核中」，静默延后重试
+          if (_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress) {_recheckResume(n - 1); return;}
+          const q2 = loadAuditQueue();
+          if (q2 && q2.pausedForSwitch && q2.items && q2.items.length - (q2.current || 0) > 0) {
+            dbg('续跑批审: 队列锁未就绪，3s 后重试');
+            continueAuditQueue(q2).catch(() => {});
+            _recheckResume(n - 1);
+          }
+        }, 3000);
+      };
+      _recheckResume(20);
     }, delayMs);
   }
 
@@ -18271,6 +18305,12 @@ window.addEventListener('keydown',function(e){
       releaseAuditLock(auditLockId);
       return;
     }
+    // 8.9.4: 停止标志前移到任何 await 之前——旧位置在 ensureBatchAuthAndCAReady/队列准备等多个
+    // await 之后，进度条⏹已可点击的窗口内点停止会被这里的重置吞掉
+    _batchAbort = false;
+    // 8.9.4: 切组暂停标记在真正拿到队列锁之后才清——此前 runAuditQueueResume 在拿锁前就清并落盘，
+    // 锁被残留占用导致接手失败时，队列既丢了 pausedForSwitch 又没人再重试（孤儿队列）
+    if (queue.pausedForSwitch) {delete queue.pausedForSwitch; saveAuditQueueNow(queue);}
     if (_abnormalAuditInProgress) {
       showToast('正在审核异常标本中，请稍候', 'warning');
       releaseAuditLock(auditLockId);
@@ -18383,11 +18423,11 @@ window.addEventListener('keydown',function(e){
         skipCount = queue.skipped.length;
       let totalCount = queue.items.length;
       let queuePausedForSwitch = false;
+      let queuePausedForData = false; // 8.9.4: 数据健康暂停（区别于切组暂停，补审轮须跳过）
       let batchLastMdr = '';
       let batchListFresh = false;
       let batchSkipSelect = false;
       queue.caReadyByWg = queue.caReadyByWg || {};
-      _batchAbort = false;
 
       // 批审前对齐原生 ReportSave 的审核用户 + CA Ukey，避免每条重弹/空等
       const prereq = await ensureBatchAuthAndCAReady(iframeWin, {
@@ -18401,6 +18441,12 @@ window.addEventListener('keydown',function(e){
       let batchCAReady = !!(queue.caReadyByWg[resolveCurrentWG()] || prereq.caReady || isCASessionReady(iframeWin));
       if (batchCAReady) {queue.caReadyByWg[resolveCurrentWG()] = true;}
       dbg('批审前置: caReady=', batchCAReady, 'caUser=', prereq.caUser, getReportCAUserDR(iframeWin));
+      // 8.9.4: 前置失败（审核登录密码未存 / CA 账号未配置）不再让整队逐条慢失败——此前 ok:false 被
+      // 无视，每条走满超时×4 次重试才进 failed，自动模式下 warning 还会被 mute 吞掉。直接中止，
+      // 队列已持久化，补齐账号后重新批审即可
+      if (prereq && prereq.ok === false) {
+        throw new Error('批审前置失败：' + (prereq.reason || '审核登录/CA 未就绪') + '（检查🔑设置中的账号密码后重试，队列已保留）');
+      }
 
       if (queue.current < queue.items.length - 1) {
         const remaining = queue.items.splice(queue.current);
@@ -18495,6 +18541,7 @@ window.addEventListener('keydown',function(e){
           _aaInDataPause = true;
           try {sessionStorage.setItem(AA_DATA_PAUSE_KEY, '1');} catch (e) {}
           aaStateEventAdd('pause', '批审中数据未确认最新，队列已保存，数据恢复后自动续审');
+          queuePausedForData = true; // 8.9.4: 补审轮跳过，别在不健康数据上继续逐条重试
           saveAuditQueueNow(queue);
           break;
         }
@@ -18669,6 +18716,9 @@ window.addEventListener('keydown',function(e){
             if (_batchCrossGroup) {
               if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
               queue.pausedForSwitch = true;
+              // 8.9.4: 回退 current——逐条 finally 会无条件 current++，不回退会把当前未处理条
+              // 静默跳过（恢复后从下一条继续，该条既不在 done 也不在 failed，真漏审且无计数）
+              queue.current = Math.max(0, queue.current - 1);
               saveAuditQueueNow(queue);
               const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
               const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
@@ -18826,6 +18876,7 @@ window.addEventListener('keydown',function(e){
           } else if (auditResult) {
             closeNativeAuditSuccessMessage(iframeWin);
             queue.done.push(item);
+            markSpecimenAuditedInMem(item.reportDR); // 8.9.4
             _aaRecordQueueItem('正常', item);
             successCount++;
             batchCAReady = true;
@@ -18855,6 +18906,7 @@ window.addEventListener('keydown',function(e){
               dbg('批审延迟校验成功:', item.reportDR);
               auditResult = true;
               queue.done.push(item);
+              markSpecimenAuditedInMem(item.reportDR); // 8.9.4
               _aaRecordQueueItem('正常', item);
               successCount++;
               batchCAReady = true;
@@ -18893,7 +18945,8 @@ window.addEventListener('keydown',function(e){
       }
 
       // 主循环结束后：对 failed + skipped(未确认类) 再补审一轮，目标是列表里不留未审
-      if (!queuePausedForSwitch && !_batchAbort) {
+      // 8.9.4: 数据健康暂停时不补审——别在未确认最新的数据上继续逐条重试（与「数据恢复后自动续审」一致）
+      if (!queuePausedForSwitch && !queuePausedForData && !_batchAbort) {
         const salvage = [];
         (queue.failed || []).forEach(f => salvage.push(f));
         (queue.skipped || []).forEach(s => {
@@ -18927,6 +18980,7 @@ window.addEventListener('keydown',function(e){
               successCount++;
               failCount = Math.max(0, failCount - 1);
               queue.done.push(it);
+              markSpecimenAuditedInMem(it.reportDR); // 8.9.4
               _aaRecordQueueItem('正常', it);
               batchCAReady = true;
               if (it.wg) {queue.caReadyByWg[it.wg] = true;}
@@ -19030,8 +19084,11 @@ window.addEventListener('keydown',function(e){
   var _aaInDataPause = false; // 8.9.1: 数据健康暂停期间置位，恢复时配对记「恢复」事件（含未推送过的暂停也配对）
   var _aaStaleTickCnt = 0; // 8.9.2: 数据健康连续不健康的 tick 计数（连续 3 个 → 自动整页刷新升级）
   // 8.9.3: sessionStorage 标记——暂停标记跨整页刷新存续供恢复配对；「已整页刷新过」标记闸住 critical 暂停推送
+  // 8.9.4: AA_DATA_PAUSE_KEY 值 '1'=暂停未推送 / '2'=暂停且 critical 已推送（恢复推送欠账跨刷新存续）；
+  //        AA_PAUSE_NOTIFY_TS 记上次暂停推送时间（节流跨刷新，防反复刷新后重复轰炸）
   const AA_DATA_PAUSE_KEY = 'LIS_AA_DataPause';
   const AA_STALE_RELOAD_KEY = 'LIS_AA_StaleReloadTried';
+  const AA_PAUSE_NOTIFY_TS = 'LIS_AA_PauseNotifyTs';
   var _autoAuditRunning = false; // 防重入
   var _autoAuditCancelRequested = false; // 停止时阻止自动队列继续取下一条
   var _autoAuditTimer = null; // 30s 兜底轮询
@@ -19143,6 +19200,13 @@ window.addEventListener('keydown',function(e){
       scope: captureAuditScopeSnapshot()
     };
     saveAutoAuditState();
+    // 8.9.4: 清残留断流标记——到期+页面刷新路径不经 stopAutoAudit（loadAutoAuditState 直接置 disabled），
+    // 标记会残留同标签，导致重开后的断流期跳过自动自愈刷新
+    try {
+      sessionStorage.removeItem(AA_DATA_PAUSE_KEY);
+      sessionStorage.removeItem(AA_STALE_RELOAD_KEY);
+      sessionStorage.removeItem(AA_PAUSE_NOTIFY_TS);
+    } catch (e) {}
     startAutoAuditTimers();
     renderAutoAuditButtonState();
     updateWSFooter();
@@ -19189,7 +19253,15 @@ window.addEventListener('keydown',function(e){
       _pendingResumeNotice = false;
     }
     // 8.9.3: 手动关闭/到期时清掉跨刷新的暂停标记，防止下次开启首个健康 tick 误报「已恢复」
-    try {sessionStorage.removeItem(AA_DATA_PAUSE_KEY);} catch (e) {}
+    // 8.9.4: 一并清「已整页刷新过」/推送节流标记，并复位内存状态机——下次开启是全新断流期
+    //（到期+页面刷新路径不经本函数的分支也要防：loadAutoAuditState 会直接把 enabled 置 false）
+    _aaInDataPause = false;
+    _aaStaleTickCnt = 0;
+    try {
+      sessionStorage.removeItem(AA_DATA_PAUSE_KEY);
+      sessionStorage.removeItem(AA_STALE_RELOAD_KEY);
+      sessionStorage.removeItem(AA_PAUSE_NOTIFY_TS);
+    } catch (e) {}
   }
 
   // ==================== 8.8.12: 自动审核关键事件 → 手机推送（Bark → iPhone，Apple Watch 自动镜像） ====================
@@ -19210,7 +19282,12 @@ window.addEventListener('keydown',function(e){
   const AA_RETRY_MAX = 30; // 重试队列上限（超出丢最旧；量级远大于真实轮次推送频率）
   const AA_RETRY_MAX_AGE = 2 * 60 * 60 * 1000; // 队列最长保留 2 小时（超龄丢弃：暂停类推送过期已无意义）
   let _notifyRetryQueue = (() => {
-    try {const raw = JSON.parse(localStorage.getItem(K.notifyRetryQueue) || '[]'); return Array.isArray(raw) ? raw : [];} catch (e) {return [];}
+    try {
+      const raw = JSON.parse(localStorage.getItem(K.notifyRetryQueue) || '[]');
+      if (!Array.isArray(raw)) {return [];}
+      raw.forEach(it => {if (it) {delete it.f;}}); // 8.9.4: 「在发」标记不跨页面存续，刷新后照常补发
+      return raw;
+    } catch (e) {return [];}
   })();
   let _notifyRetryTimer = null;
   function _notifyRetrySave() {
@@ -19238,27 +19315,42 @@ window.addEventListener('keydown',function(e){
       } catch (e) {done(false);}
     });
   }
+  let _notifyPumpRunning = false; // 8.9.4: 泵运行中标志——长批发送（每条最长 9s）期间 timer 已置空，
+  // 无此标志时新入队会叠出第二个并发泵，两泵取走/回填交错会扩大丢失窗口
   function _flushNotifyRetry() {
-    if (_notifyRetryTimer || !_notifyRetryQueue.length) {return;}
+    if (_notifyRetryTimer || _notifyPumpRunning || !_notifyRetryQueue.length) {return;}
     _notifyRetryTimer = setTimeout(async () => {
       _notifyRetryTimer = null;
       const now = Date.now();
-      // 8.9.0: 先把到期项同步从队列取走，再逐条 await 发送。发送期间 _notifyRetryEnqueue
-      // 可能推入新失败项；若发送完才用旧快照整体覆盖队列，期间入队的新推送会被静默丢弃
-      //（8.8.34「推送丢失」修复残留缺口：夜间 serve 掉线时关键推送会永久丢）。
+      // 8.9.4: 到期项标记「在发」但保留在队列里（发送成功才移除）——此前「先取走后发送」，
+      // 每条最长 9s 的发送窗口内整页刷新/关标签会让整批未送达推送无痕迹丢失（断流时恰高发）
       const batch = [];
       const remain = [];
       for (const it of _notifyRetryQueue) {
-        if (it && it.p && now - (it.t || 0) <= AA_RETRY_MAX_AGE) {batch.push(it);}
-        else {remain.push(it);} // 超龄条目直接丢弃
+        if (!it || !it.p) {continue;} // 脏数据防御
+        if (it.f) {remain.push(it); continue;} // 在发中：留在队列
+        if (now - (it.t || 0) > AA_RETRY_MAX_AGE) {continue;} // 超龄直接丢弃
+        batch.push(it);
+        remain.push(it);
       }
+      batch.forEach(it => {it.f = 1;});
       _notifyRetryQueue = remain;
-      _notifyRetrySave();
-      for (const it of batch) {
-        if (!(await _notifySend(it.p))) {_notifyRetryQueue.push(it);} // 失败取回原条目（保留原时间戳，下轮超龄自然过期）
+      _notifyRetrySave(); // 标记后立即落盘：此刻卸页，队列仍完整含在发项
+      if (!batch.length) {return;}
+      _notifyPumpRunning = true;
+      try {
+        for (const it of batch) {
+          if (await _notifySend(it.p)) {
+            _notifyRetryQueue = _notifyRetryQueue.filter(x => x !== it);
+          } else {
+            delete it.f; // 失败：解除在发标记，保留原时间戳，下轮 30s 后重试，超龄自然过期
+          }
+        }
+        _notifyRetrySave();
+      } finally {
+        _notifyPumpRunning = false;
       }
-      if (batch.length) {_notifyRetrySave();}
-      if (_notifyRetryQueue.length) {_flushNotifyRetry();} // 仍有残余 → 30s 后继续补发
+      if (_notifyRetryQueue.some(it => it && it.p && !it.f)) {_flushNotifyRetry();} // 仍有未发项 → 30s 后继续
     }, 30000);
   }
   function _notifyRetryEnqueue(p, sigKey) {
@@ -19635,7 +19727,11 @@ window.addEventListener('keydown',function(e){
     } catch (e) {dbg('累积器结算异常:', e); return false;}
   }
   // 页面卸载前同步落盘（location.reload / 关闭标签都触发 pagehide）
-  window.addEventListener('pagehide', () => {if (_aaAccum) {_aaAccumSave();}});
+  // 8.9.4: 同时释放本页持有的批审队列锁——残留锁会让刷新后 1.5s 的队列恢复在 45s TTL 内拿锁必败
+  window.addEventListener('pagehide', () => {
+    if (_aaAccum) {_aaAccumSave();}
+    try {releaseQueueLock();} catch (e) {}
+  });
   // 初始化时：发现上次被整页刷新打断的轮次 → 补报一条推送
   function aaRecoverIfInterrupted() {
     // 8.8.26: 三道守卫——①本轮正在跑（工作台重开场景）不补报，等它自己收尾；
@@ -19800,10 +19896,15 @@ window.addEventListener('keydown',function(e){
         aaStateEventAdd('pause', '工作台数据未确认最新（' + _ph + '），自动审核暂停，恢复后自动继续');
         // 8.9.3: 先自愈后打扰——整页刷新会清掉 CA 认证（下次审核脚本会自动重登，代价可接受），
         // 但夜间 critical 推送会吵醒人，代价更高。顺序改为：连续 2 个 tick（约 30-60 秒）仍不健康
-        // 就自动整页刷新；刷新过（15 分钟内）仍不健康才发 critical 暂停推送。刷新自愈的情况全程静音，
+        // 就自动整页刷新；本断流期刷新过仍不健康才发 critical 暂停推送。刷新自愈的情况全程静音，
         // 只在时间线里留 ⏸→▶ 记录
         _aaStaleTickCnt++;
-        if (_aaStaleTickCnt >= 2 && autoHardReloadAllowed()) {
+        let _reloadTried = false;
+        try {_reloadTried = !!sessionStorage.getItem(AA_STALE_RELOAD_KEY);} catch (e) {}
+        // 8.9.4: 每个断流期只自动整页刷新一次——若首刷没能恢复（如某台仪器慢性故障导致 partial 恒置位），
+        // 不再每 5 分钟反复刷新反复烧 CA 认证，转为 10 分钟一条的 critical 提醒；
+        // 恢复后由 resume 块清除标记，下个断流期重新获得一次自动刷新机会
+        if (_aaStaleTickCnt >= 2 && !_reloadTried && autoHardReloadAllowed()) {
           _aaStaleTickCnt = 0;
           try {sessionStorage.setItem(AA_STALE_RELOAD_KEY, String(Date.now()));} catch (e) {}
           aaStateEventAdd('pause', '数据连续未恢复，已自动执行整页刷新尝试恢复（恢复则不推送打扰）');
@@ -19820,11 +19921,14 @@ window.addEventListener('keydown',function(e){
           _realSpecs.push({reportDR: String(dr), name: r.PatName || '', labno: r.Labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items});
         });
         // 8.5.82: 暂停必须落日志（夜间整夜停转时「查看记录」要与正常空转可区分）；10 分钟节流防刷屏
-        // 8.9.3: critical 推送加一道闸——只在「已整页刷新过（15 分钟内）仍不健康」后才发，
+        // 8.9.3: critical 推送加一道闸——只在「本断流期已整页刷新过仍不健康」后才发，
         // 可自愈的瞬断不再半夜吵人（时间线里始终有记录）
-        const _reloadTried = (() => {try {return !!sessionStorage.getItem(AA_STALE_RELOAD_KEY);} catch (e) {return false;}})();
-        if (_reloadTried && Date.now() - (_lastDataHealthLogTs || 0) > 10 * 60 * 1000) {
+        // 8.9.4: 节流时间戳落 sessionStorage——此前内存变量刷新即归零，长断流+反复刷新会重复轰炸
+        let _lastNotifyTs = _lastDataHealthLogTs || 0;
+        try {_lastNotifyTs = Math.max(_lastNotifyTs, Number(sessionStorage.getItem(AA_PAUSE_NOTIFY_TS) || 0));} catch (e) {}
+        if (_reloadTried && Date.now() - _lastNotifyTs > 10 * 60 * 1000) {
           _lastDataHealthLogTs = Date.now();
+          try {sessionStorage.setItem(AA_PAUSE_NOTIFY_TS, String(_lastDataHealthLogTs));} catch (e) {}
           const _logSkips = _realSpecs.slice();
           _logSkips.push({reportDR: 'data-health', name: '工作台', reason: '工作台数据未确认最新，自动审核暂停'});
           autoAuditLogAdd({ normal: 0, abnormal: 0, skipped: _logSkips, audited: [] });
@@ -19837,6 +19941,8 @@ window.addEventListener('keydown',function(e){
             if (_pl.length) {_pb += '\n' + _pl.join('\n');}
             pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'critical' });
             _pendingResumeNotice = true;
+            // 8.9.4: 暂停标记升级为「已推送」——恢复推送欠账跨整页刷新存续，半夜被吵醒的人等得到解除通知
+            try {sessionStorage.setItem(AA_DATA_PAUSE_KEY, '2');} catch (e) {}
           } catch (e) {dbg('暂停推送异常:', e);}
         }
         // 本轮到此中止：清空累积器防止与下轮混算（红线明细已随暂停推送曝光；off/blocked
@@ -19851,13 +19957,19 @@ window.addEventListener('keydown',function(e){
       // 恢复推送只在暂停推送真发过时才补（自愈场景全程静音，时间线留 ⏸→▶ 即可）
       _aaStaleTickCnt = 0; // 8.9.2: 数据恢复，连续断流计数清零
       let _hadPauseFlag = false;
+      let _pauseHadPush = false;
       try {
-        if (sessionStorage.getItem(AA_DATA_PAUSE_KEY) === '1') {_hadPauseFlag = true; sessionStorage.removeItem(AA_DATA_PAUSE_KEY);}
+        const _pv = sessionStorage.getItem(AA_DATA_PAUSE_KEY);
+        if (_pv) {_hadPauseFlag = true; _pauseHadPush = _pv === '2'; sessionStorage.removeItem(AA_DATA_PAUSE_KEY);}
       } catch (e) {}
-      const _resumePushPending = _pendingResumeNotice;
+      // 8.9.4: _pauseHadPush 跨刷新还原「暂停推送已发」——此前该状态只在内存，断流中刷新后
+      // 恢复推送会漏发、时间线文案失实
+      const _resumePushPending = _pendingResumeNotice || _pauseHadPush;
       if (_resumePushPending || _aaInDataPause || _hadPauseFlag) {
         _pendingResumeNotice = false;
         _aaInDataPause = false;
+        // 8.9.4: 断流期结束，清除「已刷新过」标记——下个断流期重新获得一次自动整页刷新机会
+        try {sessionStorage.removeItem(AA_STALE_RELOAD_KEY);} catch (e) {}
         aaStateEventAdd('resume', _resumePushPending ? '工作台数据已恢复最新，自动审核继续' : '工作台数据已恢复最新（整页刷新自愈，未推送打扰）');
         if (_resumePushPending) {
           try {pushAutoAuditNotify({title: '✅ 自动审核已恢复', body: '工作台数据已恢复最新，自动审核继续', level: 'active'});} catch (e) {}
@@ -20193,8 +20305,10 @@ window.addEventListener('keydown',function(e){
     try {
       let log = [];
       try {log = JSON.parse(localStorage.getItem(K.autoAuditStateLog) || '[]');} catch (e) {}
+      // 8.9.4: 去重只比事件类型不比原因——failed/partial 标志每 tick 翻转时原因文案跟着变，
+      // 带原因比对会 30s 刷一条灌满环形缓冲；紧邻同事件视为同段抖动
       const last = log[log.length - 1];
-      if (last && last.ev === ev && (last.reason || '') === (reason || '') && Date.now() - (last.t || 0) < 15 * 60 * 1000) {return;}
+      if (last && last.ev === ev && Date.now() - (last.t || 0) < 15 * 60 * 1000) {return;}
       log.push({t: Date.now(), ev, reason: String(reason || '')});
       if (log.length > 100) {log = log.slice(log.length - 100);}
       try {localStorage.setItem(K.autoAuditStateLog, JSON.stringify(log));} catch (e2) {}
