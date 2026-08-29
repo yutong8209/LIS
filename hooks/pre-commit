@@ -1,0 +1,49 @@
+#!/bin/bash
+# pre-commit：发布纪律自动把关（对任何 agent / 任何人的提交都生效）
+# 1) iMedicalLIS-enhancer.user.js 内容变了但 @version 没递增 → 拦下（Tampermonkey 靠版本号检测更新）
+# 2) vendor 的 xlsx/jszip 内容变了但脚本内 VENDOR_SHA256 没同步更新 → 拦下（8.9.0 起兜底加载 SHA-256 校验 fail-closed）
+# 逃生口：git commit --no-verify（post-commit 的自动同步仍会照常触发，仅跳过本检查）
+set -u
+
+us="iMedicalLIS-enhancer.user.js"
+
+# ── 守卫 1：脚本内容变更必须递增 @version ──
+if ! git diff --cached --quiet -- "$us" 2>/dev/null; then
+  head_ver="$(git show HEAD:"$us" 2>/dev/null | grep -m1 '^// @version' | sed 's/.*@version[[:space:]]*//' | tr -d '[:space:]')"
+  staged_ver="$(git show ":$us" | grep -m1 '^// @version' | sed 's/.*@version[[:space:]]*//' | tr -d '[:space:]')"
+  if [ -n "$head_ver" ] && [ "$staged_ver" = "$head_ver" ]; then
+    echo ""
+    echo "❌ 拒绝提交：iMedicalLIS-enhancer.user.js 内容有改动，但 @version 仍是 ${staged_ver} 没有递增。"
+    echo "   Tampermonkey 靠版本号检测更新，不改版本号客户端永远拉不到新代码。"
+    echo "   ✔ 请递增脚本头部 @version（如 8.9.0 → 8.9.1）后重新提交。"
+    echo "   （确属无需发版的改动可用 git commit --no-verify 跳过本检查）"
+    exit 1
+  fi
+fi
+
+# ── 守卫 2：vendor 变更必须同步更新脚本内 VENDOR_SHA256 ──
+for v in xlsx.full.min.js jszip.min.js; do
+  vf="vendor/$v"
+  git diff --cached --quiet -- "$vf" 2>/dev/null && continue
+  [ -f "$vf" ] || continue
+  actual="$(shasum -a 256 "$vf" | awk '{print $1}')"
+  declared="$(git show ":$us" 2>/dev/null | grep -m1 "\"$v\"\|'$v':" | sed -E "s/.*['\"]$v['\"]: *'([0-9a-f]{64})'.*/\1/")"
+  if [ -z "$declared" ]; then
+    echo ""
+    echo "❌ 拒绝提交：$vf 有改动，但脚本里找不到 VENDOR_SHA256['$v'] 常量。"
+    echo "   8.9.0 起质控导出的 vendor 兜底加载要求哈希校验，缺失会导致兜底失效。"
+    echo "   ✔ 请在 iMedicalLIS-enhancer.user.js 的 VENDOR_SHA256 里登记 '$v' 的 SHA-256 后重新提交。"
+    exit 1
+  fi
+  if [ "$actual" != "$declared" ]; then
+    echo ""
+    echo "❌ 拒绝提交：$vf 内容变了，但脚本内 VENDOR_SHA256['$v'] 还是旧哈希。"
+    echo "   8.9.0 起 vendor 兜底加载前会做 SHA-256 校验（fail-closed），哈希不匹配会拒绝执行、质控导出兜底失效。"
+    echo "   ✔ 请把 iMedicalLIS-enhancer.user.js 里 VENDOR_SHA256['$v'] 更新为："
+    echo "     $actual"
+    echo "   （然后 @version 也需一并递增；确属暂不更新的可用 git commit --no-verify 跳过，但客户端兜底加载会失败）"
+    exit 1
+  fi
+done
+
+exit 0
