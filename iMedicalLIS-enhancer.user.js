@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.35
+// @version      8.8.36
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19505,6 +19505,7 @@ window.addEventListener('keydown',function(e){
   var _autoAuditMute = false; // 自动审核期间静默非 error toast
   var _lastDataHealthLogTs = 0; // 8.5.82: 数据不健康暂停的最近一次落日志时间（10 分钟一条防刷屏）
   var _lastHealthForceTs = 0; // 8.8.34: 健康预检强刷的最近一次时间（2 分钟一次，防故障期间每 tick 全量拉取）
+  var _pendingResumeNotice = false; // 8.8.36: 断流暂停已推送 → 待数据恢复后补一条「已恢复」推送（一次性，到期/手动关闭时清除）
   var _autoAuditRunning = false; // 防重入
   var _autoAuditCancelRequested = false; // 停止时阻止自动队列继续取下一条
   var _autoAuditTimer = null; // 30s 兜底轮询
@@ -19648,6 +19649,14 @@ window.addEventListener('keydown',function(e){
     }
     // 8.8.21: 停止/关闭不再发手机推送（原 ⏰/🛑 状态推送已移除）——
     // 关闭是用户本机主动动作，界面已有 toast 与按钮状态；减少无谓打扰与一次云端转发
+    // 8.8.36: 例外——「到期」是非人工停止，夜间无人看屏幕，补一条普通推送（active 级不穿透勿扰）；
+    // 手动关闭维持静音。同时清掉断流恢复待通知标记，防止下次开启首个健康 tick 误报「已恢复」
+    if (reason === '到期' && wasEnabled) {
+      _pendingResumeNotice = false;
+      try {pushAutoAuditNotify({title: '⏰ 自动审核已到期停止', body: '设定的审核时长已到，自动审核已停止；需再次开启请到工作台', level: 'active'});} catch (e) {}
+    } else {
+      _pendingResumeNotice = false;
+    }
   }
 
   // ==================== 8.8.12: 自动审核关键事件 → 手机推送（Bark → iPhone，Apple Watch 自动镜像） ====================
@@ -20247,23 +20256,27 @@ window.addEventListener('keydown',function(e){
           const _logSkips = _realSpecs.slice();
           _logSkips.push({reportDR: 'data-health', name: '工作台', reason: '工作台数据未确认最新，自动审核暂停'});
           autoAuditLogAdd({ normal: 0, abnormal: 0, skipped: _logSkips, audited: [] });
-          // 8.8.26/8.8.31: 暂停也推一条（同样 10 分钟节流），遵循推送模式：off 不推；
-          // blocked 仅真实拦下 >0 才推；all 照旧。计数取真实红线，哨兵只落日志不进推送计数。
+          // 8.8.36: 暂停推送升级为 critical（穿透 iPhone 勿扰/静音，夜间必达），且不再受 notifyMode
+          // 快照约束——数据断流是系统状态告警，off 模式也必须知道停转了；10 分钟节流维持
           try {
-            const _nm = autoAuditNotifyMode();
-            if (_nm !== 'off' && (_nm !== 'blocked' || _realSpecs.length > 0)) {
-              const _pl = autoAuditAbnSpecimenSummary(_realSpecs, 6);
-              let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
-              if (_realSpecs.length) {_pb += '\n当前拦下 ' + _realSpecs.length + ' 例待人工';}
-              if (_pl.length) {_pb += '\n' + _pl.join('\n');}
-              pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'active' });
-            }
+            const _pl = autoAuditAbnSpecimenSummary(_realSpecs, 6);
+            let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
+            if (_realSpecs.length) {_pb += '\n当前拦下 ' + _realSpecs.length + ' 例待人工';}
+            if (_pl.length) {_pb += '\n' + _pl.join('\n');}
+            pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'critical' });
+            _pendingResumeNotice = true;
           } catch (e) {dbg('暂停推送异常:', e);}
         }
         // 本轮到此中止：清空累积器防止与下轮混算（红线明细已随暂停推送曝光；off/blocked
         // 不发暂停推送时同样清空——off 语义本就不推，blocked 的通过类事件按语义不打扰）
         aaClear();
         return;
+      }
+      // 8.8.36: 断流恢复闭环——数据健康恢复后补一条普通推送（与 critical 暂停推送配对，
+      // 半夜被吵醒过就知道它自己缓过来了，不用爬起来看）
+      if (_pendingResumeNotice) {
+        _pendingResumeNotice = false;
+        try {pushAutoAuditNotify({title: '✅ 自动审核已恢复', body: '工作台数据已恢复最新，自动审核继续', level: 'active'});} catch (e) {}
       }
       // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义
       const candidates = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
