@@ -12,12 +12,24 @@ else
   echo "ℹ️ SwiftBar 本来就未运行"
 fi
 
-# 2) 停止 serve.py
-if pgrep -f "脚本/serve.py" >/dev/null 2>&1; then
-  pkill -f "脚本/serve.py"
+# 2) 停止 serve.py（8.9.0: 按端口找进程，不依赖启动方式——pgrep 匹配不到
+# start_serve_mac.command 启动的实例，会出现「说没运行实际还在」）
+if lsof -tiTCP:8765 -sTCP:LISTEN >/dev/null 2>&1; then
+  PIDS="$(lsof -tiTCP:8765 -sTCP:LISTEN 2>/dev/null | sort -u)"
+  for _p in $PIDS; do
+    kill "$_p" 2>/dev/null
+  done
   sleep 1
-  pgrep -f "脚本/serve.py" >/dev/null 2>&1 && echo "⚠️ serve.py 仍在，强制 kill" && pkill -9 -f "脚本/serve.py"
-  echo "✅ serve.py 已停止"
+  if lsof -tiTCP:8765 -sTCP:LISTEN >/dev/null 2>&1; then
+    for _p in $PIDS; do
+      kill -9 "$_p" 2>/dev/null
+    done
+  fi
+  if lsof -tiTCP:8765 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "⚠️ serve.py 仍在占用 8765 端口，请手动检查：lsof -iTCP:8765"
+  else
+    echo "✅ serve.py 已停止"
+  fi
 else
   echo "ℹ️ serve.py 本来就未运行"
 fi

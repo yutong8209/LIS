@@ -25,6 +25,7 @@ import os
 import sys
 import json
 import hashlib
+import threading
 import time
 import argparse
 import re
@@ -40,6 +41,8 @@ LISTEN_HOST = '127.0.0.1'
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
 # 默认不缓存 API/接口响应（可能含检验业务数据）；仅缓存静态前端资源
 CACHE_API = False
+# 8.9.0: --verbose 才打印请求头/Body 调试日志——Body 预览可能含患者数据，默认不应落终端
+VERBOSE = False
 
 # 强制直连：urlopen 默认读取 http_proxy/HTTPS_PROXY 环境变量，
 # 内网 LIS 流量绝不能被路由到系统代理（会 502/超时，甚至把内网数据发出外网）
@@ -66,8 +69,9 @@ API_PATTERNS = [
     r'\.ashx', r'\.csp', r'WorkGroup', r'Report',
 ]
 
-# 全局统计
+# 全局统计（ThreadingHTTPServer 下多线程并发更新，加锁）
 stats = {'cached': 0, 'forwarded': 0, 'api_saved': 0, 'errors': 0}
+_stats_lock = threading.Lock()
 
 
 def safe_path(url_path):
@@ -147,13 +151,15 @@ def cache_response(method, url_path, query, content_type, body):
         filename = safe + query_str + '__' + body_hash + '.json'
         filepath = str(resolve_cache_file(file_type, filename))
         save_file(filepath, body)
-        stats['api_saved'] += 1
+        with _stats_lock:
+            stats['api_saved'] += 1
         return filepath
 
     if file_type in ('js', 'css', 'svg', 'ico', 'img', 'font', 'map'):
         filepath = str(resolve_cache_file(file_type, safe))
         save_file(filepath, body)
-        stats['cached'] += 1
+        with _stats_lock:
+            stats['cached'] += 1
         return filepath
 
     if query:
@@ -165,7 +171,8 @@ def cache_response(method, url_path, query, content_type, body):
 
     filepath = str(resolve_cache_file(file_type, rel))
     save_file(filepath, body)
-    stats['cached'] += 1
+    with _stats_lock:
+        stats['cached'] += 1
     return filepath
 
 
@@ -209,20 +216,21 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
         _tparsed = urlparse(target_url)
         req_headers['Host'] = _tparsed.netloc or TARGET
 
-        # ── 调试日志 ──
-        print('\n' + '='*60)
-        print(f'  📡 {method} {self.path}')
-        print(f'  → 转发到: {target_url}')
-        print(f'  → Host: {req_headers.get("Host", "(无)")}')
-        print(f'  → 请求头 ({len(req_headers)} 个):')
-        for k,v in req_headers.items():
-            val_show = v[:60] + '...' if len(v) > 60 else v
-            print(f'    {k}: {val_show}')
-        if req_body:
-            body_preview = req_body[:200].decode('utf-8', errors='replace')
-            print(f'  → Body ({len(req_body)} bytes): {body_preview}')
-        print('='*60)
-        sys.stdout.flush()
+        # ── 调试日志（8.9.0: 默认关闭——请求头/Body 预览可能含患者数据，加 --verbose 才输出）──
+        if VERBOSE:
+            print('\n' + '='*60)
+            print(f'  📡 {method} {self.path}')
+            print(f'  → 转发到: {target_url}')
+            print(f'  → Host: {req_headers.get("Host", "(无)")}')
+            print(f'  → 请求头 ({len(req_headers)} 个):')
+            for k,v in req_headers.items():
+                val_show = v[:60] + '...' if len(v) > 60 else v
+                print(f'    {k}: {val_show}')
+            if req_body:
+                body_preview = req_body[:200].decode('utf-8', errors='replace')
+                print(f'  → Body ({len(req_body)} bytes): {body_preview}')
+            print('='*60)
+            sys.stdout.flush()
 
         try:
             req = urllib.request.Request(target_url, data=req_body, headers=req_headers, method=method)
@@ -241,14 +249,16 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
             traceback.print_exc()
             print(f'  ❌ URLError: {e.reason}')
             self.send_error(502, 'Bad Gateway: {}'.format(e.reason))
-            stats['errors'] += 1
+            with _stats_lock:
+                stats['errors'] += 1
             return
         except Exception as e:
             import traceback
             traceback.print_exc()
             print(f'  ❌ 代理异常: {e}')
             self.send_error(502, 'Proxy Error: {}'.format(e))
-            stats['errors'] += 1
+            with _stats_lock:
+                stats['errors'] += 1
             return
 
         content_type = resp_headers.get('Content-Type', '') or resp_headers.get('content-type', '')
@@ -282,7 +292,8 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
                     'path': os.path.relpath(cached_path, CACHE_DIR),
                 })
 
-        stats['forwarded'] += 1
+        with _stats_lock:
+            stats['forwarded'] += 1
 
         try:
             self.send_response(resp_status)
@@ -320,12 +331,15 @@ def main():
     parser.add_argument('--clear', action='store_true', help='启动前清空缓存')
     parser.add_argument('--cache-api', action='store_true',
                         help='缓存 API/接口响应（可能含业务数据，仅调试时用）')
+    parser.add_argument('--verbose', action='store_true',
+                        help='打印每个请求的头部/Body 调试日志（可能含患者数据，慎用）')
     args = parser.parse_args()
 
     TARGET = args.target
     LISTEN_PORT = args.port
     LISTEN_HOST = args.bind
     CACHE_API = bool(args.cache_api)
+    VERBOSE = bool(args.verbose)
     if args.cache_dir:
         CACHE_DIR = os.path.abspath(args.cache_dir)
 
@@ -366,7 +380,9 @@ def main():
     print('  按 Ctrl+C 停止代理')
     print('─' * 46)
 
-    server = http.server.HTTPServer((LISTEN_HOST, LISTEN_PORT), LISProxyHandler)
+    # 8.9.0: ThreadingHTTPServer——单线程 HTTPServer 会把浏览器并发请求完全串行化，
+    # 开着代理浏览 LIS 明显卡顿；多线程后各请求并行转发（stats 已加锁）
+    server = http.server.ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), LISProxyHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

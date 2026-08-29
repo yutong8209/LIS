@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.8.36
+// @version      8.9.0
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -106,20 +106,8 @@
       return window;
     }
   };
-  const getUIWindow = () => {
-    try {
-      return window.top || window;
-    } catch (e) {
-      return window;
-    }
-  };
-  const getUIDoc = () => {
-    try {
-      return getUIWindow().document;
-    } catch (e) {
-      return document;
-    }
-  };
+  // 8.9.0: 原 getUIWindow/getUIDoc 已删除——工作台 UI 全挂在脚本所在文档，
+  // 一律用 document/window，不再区分 top（防子 iframe 运行时静默失效）
   const g = k => {
     try {
       return uw()[k];
@@ -585,12 +573,12 @@
   const DEBUG = false;
   const _dbgLog = [];
   const dbg = (...args) => {
-    if (DEBUG) {
-      const msg = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-      console.log('[LIS]', msg);
-      _dbgLog.push(msg);
-      if (_dbgLog.length > 500) {_dbgLog.splice(0, _dbgLog.length - 500);}
-    }
+    // 8.9.0: 环形缓冲始终写入（500 条上限）——生产 DEBUG=false 时 Alt+D 面板此前永远是空的，
+    // 医院现场排障没有抓手；console 输出仍受 DEBUG 控制
+    const msg = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+    if (DEBUG) {console.log('[LIS]', msg);}
+    _dbgLog.push(msg);
+    if (_dbgLog.length > 500) {_dbgLog.splice(0, _dbgLog.length - 500);}
   };
   // 在页面底部显示调试面板（Alt+D 切换）
   function showDebugPanel() {
@@ -1111,14 +1099,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 #lis-ws-body::-webkit-scrollbar-thumb:hover{background:#b8a99a}
 #lis-ws-body table{min-height:0}
 
-/* --- 批审面板 --- */
-#lis-batch{position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:100001;background:#fff;border-radius:10px 10px 0 0;box-shadow:0 -2px 12px rgba(0,0,0,.1);padding:14px 20px;display:none;width:480px}
-#lis-batch.show{display:block}
-#lis-batch h4{margin:0 0 8px;font-size:14px;color:#2c3e50}
-#lis-batch .bf{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-#lis-batch .bf label{font-size:12px;color:#555}
-#lis-batch .bf input{padding:4px 8px;border:1px solid #ddd;border-radius:3px;font-size:12px}
-#lis-batch .bf button{padding:5px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600}
+/* --- 批审操作条样式已随 8.9.0 死代码删除（操作条从未启用，#lis-batch 勿复用）--- */
 
 /* --- 密码弹窗 --- */
 #lis-pwdo{position:fixed;inset:0;z-index:100002;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center}
@@ -1636,8 +1617,21 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let qcRefreshTimer = null;
   let qcProbeTimer = null;
   let _qcObservers = null; // 存储 QC 模块 MutationObserver 引用，页面切换时清理
+  let qcBoundDoc = null; // 8.9.0: 已绑定的质控页文档——probe 检测到 iframe 文档被替换后触发重绑
   let qcLastKey = '';
   const QC_POS_KEY = 'lis-qc-panel-pos';
+
+  // 8.9.0: 断开旧文档上的 observer 并复位初始化状态，让 probe 下一拍重新绑定。
+  // 宿主页会动态增删 iframe，质控页文档可能整体更换——旧钩子（EasyUI options 包装、
+  // doc 级监听、dataDiv observer）全部失效，面板会永远显示旧数据
+  function qcCleanupBinding() {
+    if (_qcObservers && _qcObservers.length) {
+      _qcObservers.forEach(o => {try {o.disconnect();} catch (e) {}});
+    }
+    _qcObservers = null;
+    qcInputInited = false;
+    qcBoundDoc = null;
+  }
 
   function qcSavePos() {
     const panel = document.getElementById('lis-qc-panel');
@@ -1659,8 +1653,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let qcLastFrameUrl = '';
 
   let qcIFrame = null; // 质控页面所在的 iframe 元素
-  const qcWin = null; // 质控页面的 window（可能是 iframe.contentWindow 或 window）
-  const qcDoc = null; // 质控页面的 document
+  // 8.9.0: 死常量 qcWin/qcDoc 已删除（从未被读写，实际取值走 qcGetCtx()）
 
   // 尝试在当前页面的 iframe 中查找质控页面
   function qcFindIFrame() {
@@ -2446,28 +2439,36 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     qcWrapEasyUIOption('#startdate', 'datebox', 'onSelect', () => qcScheduleRefresh(true, 700));
     qcWrapEasyUIOption('#enddate', 'datebox', 'onSelect', () => qcScheduleRefresh(true, 700));
     // 事件监听绑定到质控页面所在的 document（可能是 iframe）
+    // 8.9.0: 同一文档只绑一次（__lisQcDocBound 标记），文档被替换后重绑不会叠加
     const ctx = qcGetCtx();
     const targetDoc = ctx.doc;
-    targetDoc.addEventListener(
-      'keyup',
-      e => {
-        if (e.target && /^(INPUT|TEXTAREA)$/i.test(e.target.tagName)) {qcScheduleRefresh(false, 260);}
-      },
-      true
-    );
-    ['click', 'change'].forEach(ev =>
+    if (!targetDoc.__lisQcDocBound) {
+      targetDoc.__lisQcDocBound = true;
       targetDoc.addEventListener(
-        ev,
-        () => {
-          qcScheduleRefresh(false, 320);
+        'keyup',
+        e => {
+          if (e.target && /^(INPUT|TEXTAREA)$/i.test(e.target.tagName)) {qcScheduleRefresh(false, 260);}
         },
         true
-      )
-    );
-    window.addEventListener('resize', () => {
-      qcPlacePanel();
-      qcScheduleRefresh(false, 260);
-    });
+      );
+      ['click', 'change'].forEach(ev =>
+        targetDoc.addEventListener(
+          ev,
+          () => {
+            qcScheduleRefresh(false, 320);
+          },
+          true
+        )
+      );
+    }
+    qcBoundDoc = targetDoc;
+    if (!window.__lisQcResizeBound) {
+      window.__lisQcResizeBound = true;
+      window.addEventListener('resize', () => {
+        qcPlacePanel();
+        qcScheduleRefresh(false, 260);
+      });
+    }
     const dataDiv = targetDoc.getElementById('dataDiv');
     if (dataDiv) {
       const ob = new MutationObserver(() => {
@@ -2509,6 +2510,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const isQC = isQCDataInputPage();
       const panel = document.getElementById('lis-qc-panel');
       const fabEl = document.getElementById('lis-qc-fab'); // 8.5.82: FAB 显隐与页面同步
+      // 8.9.0: 质控页文档被宿主页替换（iframe 增删）时，旧文档上的 EasyUI 钩子/监听/observer
+      // 全部失效——检测到 ctx.doc 变化就断开旧 observer、复位状态，下一行立即重新 init
+      if (qcInputInited && qcBoundDoc) {
+        let _curDoc = null;
+        try {_curDoc = qcGetCtx().doc;} catch (e) {}
+        if (_curDoc && _curDoc !== qcBoundDoc) {
+          dbg('[LIS-QC] 质控页文档已更换，重新绑定辅助面板钩子');
+          qcCleanupBinding();
+        }
+      }
       if (isQC && !qcInputInited && !qcPanelClosed) {initQCInputEnhance();}
       else if (qcInputInited && panel) {
         if (isQC && !qcPanelClosed) {
@@ -2914,6 +2925,22 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let prLastWorkListHadFailures = false; // 最近一次工作列表查询是否有工作组/仪器失败
 
   /* 并行加载所有工作组的标本列表 */
+  // 8.9.0: 有界并发执行器——此前工作组×仪器查询全部一次性 Promise.all，
+  // 近一年数据一次能瞬间打出几十个分页 QryWorkList，易触发服务端限流/拖慢 LIS。
+  // 工作组 2 路 × 组内仪器 4 路 ≈ 8 并发，与明细读取阶段的节流量级一致
+  async function prPool(items, limit, fn) {
+    const results = new Array(items.length);
+    let idx = 0;
+    const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+      while (idx < items.length) {
+        const i = idx++;
+        results[i] = await fn(items[i], i, items.length);
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  }
+
   async function prLoadRows(filters, signal) {
     prLastWorkListHadFailures = false;
     const cacheKey = prWorkListCacheKey(filters);
@@ -2942,9 +2969,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       '仪器=' + (machinePairs.map(x => x.wg + '|' + x.mdr).join(',') || '全部')
     );
 
-    /* 所有工作组并行加载 */
+    /* 所有工作组有界并发加载（8.9.0: 2 路） */
     let requestFailed = false;
-    const wgPromises = targetWGs.map(async (w, wgIdx) => {
+    const wgResults = await prPool(targetWGs, 2, async (w, wgIdx) => {
       if (signal && signal.aborted) {return [];}
       let machines;
       try {
@@ -3007,14 +3034,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
             '标本数=' + groupRows.length,
             '带仪器DR=' + taggedWgm
           );
-          const machinePromises = machines.filter(m => m.RowID).map((m, mIdx) => fetchTarget(m, mIdx, machines.length));
-          results = await Promise.all(machinePromises);
+          results = await prPool(machines.filter(m => m.RowID), 4, fetchTarget);
         } else {
           results = [groupRows];
         }
       } else {
-        const machinePromises = queryTargets.map((m, mIdx) => fetchTarget(m, mIdx, queryTargets.length));
-        results = await Promise.all(machinePromises);
+        results = await prPool(queryTargets, 4, fetchTarget);
       }
       const wgCount = results.flat().length;
       dbg(
@@ -3027,7 +3052,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       return results.flat();
     });
 
-    const wgResults = await Promise.all(wgPromises);
     const rows = wgResults.flat();
     prLastWorkListHadFailures = !!requestFailed;
     dbg('prLoadRows 完成:', '总标本数=' + rows.length, '工作组数=' + wgTotal, 'requestFailed=' + requestFailed);
@@ -4365,8 +4389,25 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let qeInited = false;
   let qeExporting = false;
   let qeAbortFlag = false;
+  let _qeAbortCtrl = null; // 8.9.0: 导出/检测的 AbortController——停止时 abort 在途请求，不再等它们超时跑完
   // 最近一次导出成功的文件列表：[{ name, blob, rows }]，供 ZIP 一键打包
   let qeLastExportFiles = [];
+
+  // 8.9.0: 有界并发池——QE 导出此前逐项目/逐仪器/逐质控物全串行，几十上百个 15-25s 超时
+  // 链路能把一次导出拖到数分钟；limit 路并发可把耗时压缩约 limit 倍
+  async function qePool(items, limit, worker) {
+    const results = new Array(items.length);
+    let next = 0;
+    const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        results[i] = await worker(items[i], i);
+      }
+    });
+    await Promise.all(runners);
+    return results;
+  }
+  function _qeSignal() {return _qeAbortCtrl ? _qeAbortCtrl.signal : null;}
 
   // --- 9 组项目配置 ---
   const QE_GROUPS = [
@@ -4926,17 +4967,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     HIV: ['人类免疫缺陷病毒抗体测定', '人免疫缺陷病毒抗体测定', 'HIV抗体', 'HIV', '艾滋']
   };
 
-  // --- 从质控页面读取数据 ---
-  function qeGetJQ() {
-    const ctx = qcGetCtx();
-    return ctx.win.jQuery || ctx.win.$ || g('jQuery') || g('$') || window.jQuery || window.$;
-  }
-
-  function qeIsQCPage() {
-    return isQCDataInputPage();
-  }
-
   // 质控 API：仪器/项目列表用 DataView，结果数据用 DataInputNew（与录入页一致）
+  // 8.9.0: 旧「驱动质控页 UI」遗留的 qeGetJQ/qeIsQCPage 已删除（无调用方，getJQ/isQCDataInputPage 即本尊）
   function qeQCApiUrl() {
     return BASE + '/qc/ashx/ashQCDataView.ashx';
   }
@@ -4950,7 +4982,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   // 通过 API 查询某台仪器的测试项目列表（与录入页一致用 DataInputNew）
-  async function qeApiTestCodes(machineDR, startDate, endDate, matDR) {
+  async function qeApiTestCodes(machineDR, startDate, endDate, matDR, machName) {
     const api = qeQCDataApiUrl();
     const sd = startDate || '2024-01-01';
     const ed = endDate || today();
@@ -4965,16 +4997,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       '&EndDate=' +
       encodeURIComponent(ed);
     try {
-      const data = await fetchJ(url, 15000);
+      const data = await fetchJ(url, 15000, _qeSignal());
       return data && data.rows ? data.rows : Array.isArray(data) ? data : [];
     } catch (e) {
       dbg('[LIS-QE] qeApiTestCodes error:', e);
+      // 8.9.0: 查询失败 ≠ 该机器没有项目。吞成空数组会让相关项目显示「未映射/无数据」，
+      // 表面像本月没做质控，实际是网络故障 → 登记后导出结束统一提示（用户主动停止除外）
+      if (!(_qeAbortCtrl && _qeAbortCtrl.signal.aborted)) {_qeQueryFailures.push(`机器「${machName || machineDR}」测试项目列表`);}
       return [];
     }
   }
 
   // 通过 API 查询某项目各浓度的质控结果（对齐 DataInputNew.QueryData）
   let _qeLevelFailures = []; // 8.5.82: 本轮导出中拉取失败的水平（项目名+水平号），导出完成时统一提示，不再静默丢数据
+  let _qeQueryFailures = []; // 8.9.0: 本轮导出/检测中查询失败的基础接口（项目列表/机器参数/质控物列表），与 _qeLevelFailures 一起在导出结束提示
   async function qeApiQCData(machineDR, testCodeDR, matDR, startDate, endDate, projName) {
     const api = qeQCDataApiUrl();
     const levels = [];
@@ -4993,7 +5029,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         encodeURIComponent(matDR || '') +
         '&BatchCode=';
       // 8.5.82: 改用重试（超时是瞬时故障）——此前一次超时该水平整月数据就静默缺失
-      const leaveData = await fetchJRetry(leaveUrl, 15000, null, 2);
+      // 8.9.0: 贯传导出停止信号，停止后不再空等在途请求
+      const leaveData = await fetchJRetry(leaveUrl, 15000, _qeSignal(), 2);
       const leaveRows = Array.isArray(leaveData) ? leaveData : (leaveData && leaveData.rows) || [];
       leaveRows.forEach(r => {
         if (r.LevelNo != null && r.LevelNo !== '') {
@@ -5002,6 +5039,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       });
     } catch (e) {
       dbg('[LIS-QE] QueryQCLeaveData failed:', e.message);
+      // 8.9.0: 失败登记——质控物/水平列表拉不到会退回默认 L1/L2，若实际有 L3 会静默丢失
+      if (!(_qeAbortCtrl && _qeAbortCtrl.signal.aborted)) {_qeLevelFailures.push((projName || testCodeDR) + ' 质控物水平列表');}
     }
     if (!levels.length) {levels.push({ levelNo: '1', matLotDR: '' }, { levelNo: '2', matLotDR: '' });}
 
@@ -5025,7 +5064,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           encodeURIComponent(matDR || '') +
           '&BatchCode=';
         // 8.5.82: 每水平重试 2 次——单水平失败会让 Excel 少一整水平的数据
-        const data = await fetchJRetry(url, 25000, null, 2);
+        // 8.9.0: 贯传导出停止信号
+        const data = await fetchJRetry(url, 25000, _qeSignal(), 2);
         const rows = Array.isArray(data) ? data : (data && data.rows) || [];
         rows.forEach(r => {
           const levelNo = r.LevelNo || lv.levelNo;
@@ -5045,42 +5085,28 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       } catch (e) {
         dbg('[LIS-QE] QueryTestResultData L' + lv.levelNo + ' failed:', e.message);
         // 8.5.82: 失败登记（导出结束统一提示），不再只写调试日志让文件静默缺数据
-        _qeLevelFailures.push((projName || testCodeDR) + ' L' + lv.levelNo);
+        if (!(_qeAbortCtrl && _qeAbortCtrl.signal.aborted)) {_qeLevelFailures.push((projName || testCodeDR) + ' L' + lv.levelNo);}
       }
     }
     return allRows;
-  }
-
-  // 获取所有可用仪器列表
-  function qeGetMachines() {
-    const jq = qeGetJQ();
-    if (!jq || !jq('#cmbMach').combobox) {return [];}
-    try {
-      const data = jq('#cmbMach').combobox('getData') || [];
-      return data.map(d => ({
-        id: String(d.RowID || d.value || d.id || d.MachineDR || ''),
-        text: String(d.CName || d.text || d.Name || d.LName || ''),
-        raw: d
-      }));
-    } catch (e) {
-      dbg('[LIS-QE] qeGetMachines error:', e);
-      return [];
-    }
   }
 
   // 通过 QC API 查询工作组的仪器参数列表
   async function qeApiMachineParameters(wgDR) {
     const url = qeQCApiUrl() + '?Method=QryMachineParameter&WorkGroupDR=' + wgDR;
     try {
-      const data = await fetchJ(url, 15000);
+      const data = await fetchJ(url, 15000, _qeSignal());
       return data && data.rows ? data.rows : Array.isArray(data) ? data : [];
     } catch (e) {
       dbg('[LIS-QE] qeApiMachineParameters error:', e);
+      // 8.9.0: 该工作组机器列表查询失败会静默少一整组仪器（其项目全部「未映射」），登记提示
+      if (!(_qeAbortCtrl && _qeAbortCtrl.signal.aborted)) {_qeQueryFailures.push(`工作组 ${wgDR} 机器参数列表`);}
       return [];
     }
   }
 
   // 遍历所有工作组获取全部仪器（使用 QC API 查询 MachineParameter）
+  // 8.9.0: 3 个工作组并行查询
   async function qeGetAllMachines() {
     const allMachines = [];
     const wgs = [
@@ -5088,7 +5114,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       { dr: '3', name: '生化' },
       { dr: '4', name: '免疫' }
     ];
-    for (const w of wgs) {
+    await Promise.all(wgs.map(async w => {
       try {
         const rows = await qeApiMachineParameters(w.dr);
         dbg(`[LIS-QE] 工作组 ${w.name}(${w.dr}): ${rows.length} 台仪器`);
@@ -5103,95 +5129,21 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         });
       } catch (e) {
         dbg(`[LIS-QE] 加载工作组 ${w.name} 失败:`, e);
+        // 8.9.0: qeApiMachineParameters 内部已吞错返回 []，这里补一层数量校验兜底
+        if (!(_qeAbortCtrl && _qeAbortCtrl.signal.aborted)) {_qeQueryFailures.push(`工作组 ${w.name} 机器参数列表`);}
       }
-    }
+    }));
     dbg(`[LIS-QE] 共找到 ${allMachines.length} 台仪器`);
     return allMachines;
   }
 
   // 设置仪器选择（通过 loadData 注入数据再 setValue）
-  function qeSelectMachine(machineObj) {
-    return new Promise(resolve => {
-      const jq = qeGetJQ();
-      if (!jq) {
-        resolve();
-        return;
-      }
-      try {
-        // 将目标仪器注入 combobox 数据源
-        const item = {
-          RowID: machineObj.id,
-          Code: (machineObj.raw && machineObj.raw.Code) || '',
-          CName: machineObj.text,
-          value: machineObj.id,
-          text: machineObj.text
-        };
-        jq('#cmbMach').combobox('loadData', [item]);
-        jq('#cmbMach').combobox('setValue', machineObj.id);
-        // 手动触发 onSelect
-        const opts = jq('#cmbMach').combobox('options');
-        if (opts && opts.onSelect) {
-          opts.onSelect.call(jq('#cmbMach')[0], item);
-        }
-      } catch (e) {
-        dbg('[LIS-QE] qeSelectMachine error:', e);
-      }
-      // 等待测试项目列表加载
-      setTimeout(resolve, 1200);
-    });
-  }
+  // 8.9.0: 旧「驱动质控页 UI」方案遗留的 qeSelectMachine/qeGetTestCodes/qeSelectTestCode/qeReadData
+  // 已删除（全文件无调用方，改走 API 方案）——防止后人改匹配逻辑时改漏副本
 
-  // 获取当前仪器下的测试项目列表
-  function qeGetTestCodes() {
-    const jq = qeGetJQ();
-    if (!jq || !jq('#dgTestCode').datagrid) {return [];}
-    try {
-      return jq('#dgTestCode').datagrid('getRows') || [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  // 选中一个测试项目并等待数据加载
-  function qeSelectTestCode(rowIndex) {
-    return new Promise(resolve => {
-      const jq = qeGetJQ();
-      if (!jq) {
-        resolve();
-        return;
-      }
-      try {
-        jq('#dgTestCode').datagrid('selectRow', rowIndex);
-      } catch (e) {}
-      setTimeout(resolve, 1200); // 等待 dgData 加载
-    });
-  }
-
-  // 读取 dgData 中的数据
-  function qeReadData() {
-    const jq = qeGetJQ();
-    if (!jq || !jq('#dgData').datagrid) {return [];}
-    try {
-      return jq('#dgData').datagrid('getRows') || [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  // 计算质控结果值（复用 qcAverageValue 逻辑）
+  // 计算质控结果值——8.9.0 起与 QC 模块 qcAverageValue 合一（此前两份逐字重复实现）
   function qeCalcValue(row) {
-    const vals = [];
-    for (let i = 1; i <= 7; i++) {
-      const n = parseFloat(row['Result' + i]);
-      if (!Number.isNaN(n)) {vals.push(n);}
-    }
-    if (vals.length) {return vals.reduce((a, b) => a + b, 0) / vals.length;}
-    const candidates = [row.DayAve, row.Result, row.TextRes, row.TestResultPosNeg];
-    for (const v of candidates) {
-      const n = parseFloat(v);
-      if (!Number.isNaN(n)) {return n;}
-    }
-    return null;
+    return qcAverageValue(row);
   }
 
   // 从日期字符串提取日
@@ -5244,7 +5196,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     addMat(map.matDR, map.materialName);
 
     if (group.id === 'blood' || group.id === 'urine') {
-      const testCodes = await qeApiTestCodes(map.machineDR, startDate, endDate);
+      const testCodes = await qeApiTestCodes(map.machineDR, startDate, endDate, '', map.machineName);
       testCodes.forEach(tc => {
         if (!qeMatchProject(group, proj, tc, map.machineName)) {return;}
         addMat(tc.MatDR, tc.MaterialName);
@@ -5255,8 +5207,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       bestMat = map.matDR || '',
       bestName = map.materialName || '',
       bestCount = 0;
-    for (const c of matCandidates) {
-      const rows = await qeApiQCData(map.machineDR, map.testCodeDR, c.matDR, startDate, endDate, proj.name);
+    // 8.9.0: 多质控物并行拉取（此前串行 × 15-25s 超时链路）；选择逻辑仍按候选顺序，结果与旧版一致
+    const _matRows = await qePool(matCandidates, 3, c =>
+      qeApiQCData(map.machineDR, map.testCodeDR, c.matDR, startDate, endDate, proj.name)
+    );
+    matCandidates.forEach((c, idx) => {
+      const rows = _matRows[idx] || [];
       const cnt = qeCountMonthQCRows(rows, month, year);
       if (cnt > bestCount) {
         bestCount = cnt;
@@ -5264,7 +5220,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         bestMat = c.matDR;
         bestName = c.materialName || bestName;
       }
-    }
+    });
     if (bestCount > 0 && bestMat !== map.matDR) {
       dbg('[LIS-QE] ' + proj.name + ' 质控物切换: ' + (map.materialName || map.matDR) + ' -> ' + (bestName || bestMat));
       map.matDR = bestMat;
@@ -5290,7 +5246,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const matDRs = ['167', '169', '151', '98'];
     const tcByRowID = {}; // 8.5.82: RowID→CName 实测表，供硬编码兜底核对
     for (const matDR of matDRs) {
-      const testCodes = await qeApiTestCodes(coagMach.id, startDate, endDate, matDR);
+      const testCodes = await qeApiTestCodes(coagMach.id, startDate, endDate, matDR, coagMach.text);
       for (const tc of testCodes) {
         const rowID = String(tc.RowID || '');
         if (rowID) {tcByRowID[rowID] = qeNormName(tc.CName);}
@@ -5360,6 +5316,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   // 遍历所有工作组的仪器，通过 API 查询测试项目并匹配
   async function qeDetectMappings(statusCb) {
     const mappings = {}; // { projectCode: { machineDR, testCodeDR, testName, machineName, matDR, matLotDR, wgDR, wgName } }
+    _qeQueryFailures = []; // 8.9.0: 每轮检测重新登记，避免「单独检测」留下的旧失败记录混进后续导出提示
     const machines = await qeGetAllMachines();
     const now = today();
     // 计算当月日期范围
@@ -5371,13 +5328,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
     if (statusCb) {statusCb(`正在检测项目映射... 共 ${machines.length} 台仪器`, 'info');}
 
-    for (let mi = 0; mi < machines.length; mi++) {
-      if (qeAbortFlag) {break;}
-      const mach = machines[mi];
+    // 8.9.0: 两阶段——阶段1 仪器间 4 路并发抓取测试项目列表（网络耗时大头）；
+    // 阶段2 仍按原机器顺序串行分配映射（tc 抢占 unmapped 项目的顺序必须与旧版一致，
+    // 否则多台仪器都能匹配同名项目时分配结果会漂移）
+    const _machTestCodes = await qePool(machines, 4, async (mach, mi) => {
+      if (qeAbortFlag) {return [];}
       if (statusCb) {statusCb(`检测 ${mi + 1}/${machines.length}: ${mach.text}（${mach.wgName}）`, 'info');}
-
-      // 通过 API 直接查询测试项目
-      const testCodes = await qeApiTestCodes(mach.id, startDate, endDate);
+      const testCodes = await qeApiTestCodes(mach.id, startDate, endDate, '', mach.text);
       dbg(`[LIS-QE] ${mach.text}: ${testCodes.length} 个测试项目`);
       if (testCodes.length > 0) {
         dbg(
@@ -5390,6 +5347,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
             .join(' | ')
         );
       }
+      return testCodes;
+    });
+
+    for (let mi = 0; mi < machines.length; mi++) {
+      if (qeAbortFlag) {break;}
+      const mach = machines[mi];
+      const testCodes = _machTestCodes[mi] || [];
       for (let ti = 0; ti < testCodes.length; ti++) {
         const tc = testCodes[ti];
         const rowID = String(tc.RowID || '');
@@ -5474,13 +5438,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const startDate = year + '-' + String(month).padStart(2, '0') + '-01';
     const endDate = qeMonthEndDate(year, month);
 
-    for (let pi = 0; pi < group.projects.length; pi++) {
-      if (qeAbortFlag) {break;}
-      const proj = group.projects[pi];
+    // 8.9.0: 项目间 4 路并发拉数据（此前逐项目串行是导出慢的主因）；
+    // 各项目相互独立、无跨项分配，行生成仍按原项目顺序串行执行，输出行序与旧版一致
+    const _projData = await qePool(group.projects, 4, async (proj, pi) => {
+      if (qeAbortFlag) {return null;}
       const map = mappings[proj.code];
       if (!map) {
         if (statusCb) {statusCb(`  跳过 ${proj.name}（未找到映射）`, 'error');}
-        continue;
+        return null;
       }
 
       if (statusCb) {statusCb(`  加载 ${proj.name} (${pi + 1}/${group.projects.length})...`, 'info');}
@@ -5490,8 +5455,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       if (!dataRows.length) {
         const matHint = map.materialName ? '（质控物 ' + map.materialName + '）' : '';
         if (statusCb) {statusCb(`  ${proj.name}: 无数据${matHint}`, 'info');}
-        continue;
+        return null;
       }
+      return { proj, map, dataRows };
+    });
+
+    for (const _pd of _projData) {
+      if (!_pd) {continue;}
+      const proj = _pd.proj;
+      const map = _pd.map;
+      const dataRows = _pd.dataRows;
 
       // 按浓度分组
       const levels = {};
@@ -5578,65 +5551,149 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return null;
   }
 
-  // 从 vendor 源拉取脚本并 eval（@require 失败时的兜底）。8.8.35: 先试科室 nginx 源，再试本机 serve
+  // 8.9.0: vendor 文件 SHA-256（与仓库/同步到 nginx 的副本对应）。内网是 HTTP 明文，
+  // 兜底拉 JS 直接执行 = 供应链劫持面；先校验哈希再执行，不匹配一律拒绝（fail-closed）。
+  // ⚠️ 更换 vendor 文件时必须同步更新这里（本地 shasum -a 256 vendor/xxx 计算），
+  //    并用 同步脚本到nginx.command 一起推送。
+  const VENDOR_SHA256 = {
+    'xlsx.full.min.js': 'cc015130aa8521e7f088f88898eba949ccdcbfb38df0bd129b44b7273c3a6f41',
+    'jszip.min.js': 'acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e'
+  };
+  // 紧凑同步 SHA-256（HTTP 内网无 WebCrypto，只能纯 JS 实现）
+  // 标准 K 常量表（前 64 个素数立方根小数部分前 32 位）
+  const _SHA256_K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ];
+  function sha256Hex(ascii) {
+    function rotr(x, n) {return (x >>> n) | (x << (32 - n));}
+    const K = _SHA256_K;
+    const H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    const l = ascii.length;
+    const words = [];
+    for (let i = 0; i < l; i++) {words[i >> 2] = (words[i >> 2] || 0) | (ascii.charCodeAt(i) << (24 - (i % 4) * 8));}
+    words[l >> 2] = (words[l >> 2] || 0) | (0x80 << (24 - (l % 4) * 8));
+    const bitLen = l * 8;
+    // 总字数须为 16 的倍数：数据 + 0x80 + 补零 + 8 字节长度（大端 64 位）
+    const wc = (((l + 9) + 63) >> 6) << 4;
+    words[wc - 1] = bitLen % 4294967296;
+    words[wc - 2] = Math.floor(bitLen / 4294967296);
+    for (let i = 0; i < wc; i += 16) {
+      const w = new Array(64);
+      for (let t = 0; t < 16; t++) {w[t] = words[i + t] || 0;}
+      for (let t = 16; t < 64; t++) {
+        const s0 = rotr(w[t - 15], 7) ^ rotr(w[t - 15], 18) ^ (w[t - 15] >>> 3);
+        const s1 = rotr(w[t - 2], 17) ^ rotr(w[t - 2], 19) ^ (w[t - 2] >>> 10);
+        w[t] = (w[t - 16] + s0 + w[t - 7] + s1) | 0;
+      }
+      let [a, b, c, d, e, f, g, h] = H;
+      for (let t = 0; t < 64; t++) {
+        const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+        const ch = (e & f) ^ (~e & g);
+        const t1 = (h + S1 + ch + K[t] + w[t]) | 0;
+        const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+        const mj = (a & b) ^ (a & c) ^ (b & c);
+        const t2 = (S0 + mj) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
+      H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+    }
+    return H.map(x => ('00000000' + (x >>> 0).toString(16)).slice(-8)).join('');
+  }
+
+  // 从 vendor 源拉取脚本并校验 SHA-256 后执行（@require 失败时的兜底）。8.8.35: 先试科室 nginx 源，再试本机 serve
   async function qeLoadVendorScript(fileName, globalName) {
     if (qeGetGlobal(globalName)) {return true;}
+    const expect = VENDOR_SHA256[fileName];
+    if (!expect) {
+      dbg('[LIS-QE] 未登记哈希，拒绝兜底加载', fileName);
+      return false;
+    }
     const urls = [VENDOR_BASE + '/' + fileName, 'http://127.0.0.1:8765/vendor/' + fileName];
     for (const url of urls) {
       try {
         const r = await fetch(url, { cache: 'no-cache', mode: 'cors' });
         if (!r.ok) {continue;}
-        const code = await r.text();
+        const buf = await r.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        if (!bytes.length) {continue;}
+        // 8.9.0: 哈希按「原始字节」算——vendor（如 xlsx）含大量非 ASCII 字节，
+        // text() 的 UTF-16 码元与文件字节不一致会把完好文件误判成篡改
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 8192) {bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));}
+        let code = bin;
+        try {code = new TextDecoder('utf-8').decode(bytes);} catch (e) {}
         if (!code || code.length < 100) {continue;}
-        // 绑定到本脚本可访问的对象（JSZip UMD 写 window.JSZip；须屏蔽 node 的 module）
-        const root = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : {};
-        // module/exports/define 显式 undefined，避免 UMD 走 module.exports 而不挂全局
-        const runner = new Function(
-          'root',
-          'window',
-          'globalThis',
-          'self',
-          'module',
-          'exports',
-          'define',
-          code +
-            '\n;return (typeof ' +
-            globalName +
-            '!=="undefined"?' +
-            globalName +
-            ':null)||window.' +
-            globalName +
-            '||root.' +
-            globalName +
-            '||globalThis.' +
-            globalName +
-            ';'
-        );
-        let got = null;
-        try {
-          got = runner(root, root, root, root, undefined, undefined, undefined);
-        } catch (e1) {
-          dbg('[LIS-QE] Function 执行失败', fileName, e1.message);
-          try {
-            (0, eval)(code);
-          } catch (e2) {}
-          got = qeGetGlobal(globalName);
-        }
-        if (!got) {got = qeGetGlobal(globalName) || root[globalName];}
-        if (got) {
-          try {
-            root[globalName] = got;
-          } catch (e) {}
-          if (globalName === 'XLSX') {qeXlsxLib = got;}
-          if (globalName === 'JSZip') {qeJSZipLib = got;}
-          dbg('[LIS-QE] 已从本机加载', fileName);
-          return true;
-        }
+        const got = await qeExecVendorCode(fileName, code, expect, globalName, bin);
+        if (got) {return true;}
       } catch (e) {
         dbg('[LIS-QE] 加载失败', url, e.message);
       }
     }
     return !!qeGetGlobal(globalName);
+  }
+
+  async function qeExecVendorCode(fileName, code, expect, globalName, byteStr) {
+    // 8.9.0: 哈希不匹配 = 源被篡改或版本错位，拒绝执行（fail-closed，不回退明文执行）
+    const digest = await new Promise(res => {
+      try {res(sha256Hex(byteStr || code));} catch (e) {res('');}
+    });
+    if (digest !== expect) {
+      dbg('[LIS-QE] SHA-256 校验失败，拒绝执行', fileName, digest);
+      return null;
+    }
+    // 绑定到本脚本可访问的对象（JSZip UMD 写 window.JSZip；须屏蔽 node 的 module）
+    const root = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : {};
+    // module/exports/define 显式 undefined，避免 UMD 走 module.exports 而不挂全局
+    const runner = new Function(
+      'root',
+      'window',
+      'globalThis',
+      'self',
+      'module',
+      'exports',
+      'define',
+      code +
+        '\n;return (typeof ' +
+        globalName +
+        '!=="undefined"?' +
+        globalName +
+        ':null)||window.' +
+        globalName +
+        '||root.' +
+        globalName +
+        '||globalThis.' +
+        globalName +
+        ';'
+    );
+    let got = null;
+    try {
+      got = runner(root, root, root, root, undefined, undefined, undefined);
+    } catch (e1) {
+      dbg('[LIS-QE] Function 执行失败', fileName, e1.message);
+      try {
+        // eslint-disable-next-line no-eval -- 哈希已校验的 vendor 兜底执行，仅此一处
+        (0, eval)(code);
+      } catch (e2) {}
+      got = qeGetGlobal(globalName);
+    }
+    if (!got) {got = qeGetGlobal(globalName) || root[globalName];}
+    if (got) {
+      try {
+        root[globalName] = got;
+      } catch (e) {}
+      if (globalName === 'XLSX') {qeXlsxLib = got;}
+      if (globalName === 'JSZip') {qeJSZipLib = got;}
+      dbg('[LIS-QE] 已加载（SHA-256 校验通过）', fileName);
+    }
+    return got;
   }
 
   let qeXlsxLib = null;
@@ -6138,6 +6195,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     document.getElementById('lis-qe-detect').addEventListener('click', async () => {
       qeSetStatus('正在检测项目映射...', 'info');
       document.getElementById('lis-qe-detect').disabled = true;
+      qeAbortFlag = false;
+      _qeAbortCtrl = new AbortController(); // 8.9.0: 独立检测也要能被「停止」中断在途请求
       try {
         const mappings = await qeDetectMappings(qeSetStatus);
         qeSaveMappings(mappings);
@@ -6145,6 +6204,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       } catch (e) {
         qeSetStatus('检测失败: ' + e.message, 'error');
       }
+      _qeAbortCtrl = null;
       document.getElementById('lis-qe-detect').disabled = false;
     });
 
@@ -6152,6 +6212,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     document.getElementById('lis-qe-export').addEventListener('click', () => qeStartExport());
     document.getElementById('lis-qe-cancel').addEventListener('click', () => {
       qeAbortFlag = true;
+      if (_qeAbortCtrl) {_qeAbortCtrl.abort();} // 8.9.0: 同时 abort 在途请求，不再等超时
       qeSetStatus('正在停止...', 'info');
     });
 
@@ -6288,7 +6349,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // 再次点击可并发启动第二路导出、检测按钮也未禁用；先结束的一方 finally 复位守卫后守卫彻底失效
     qeExporting = true;
     qeAbortFlag = false;
+    _qeAbortCtrl = new AbortController(); // 8.9.0
     _qeLevelFailures = []; // 8.5.82
+    _qeQueryFailures = []; // 8.9.0
     const exportBtn = document.getElementById('lis-qe-export');
     const cancelBtn = document.getElementById('lis-qe-cancel');
     const detectBtn = document.getElementById('lis-qe-detect');
@@ -6328,15 +6391,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
       qeLastExportFiles = [];
       qeUpdateZipButton();
-      // SheetJS：@require 可能因 serve 未启动而失败，导出前再从本机补拉
-      qeSetStatus('正在加载 Excel 组件（本机 serve）…', 'info');
-      if (!(await qeEnsureXlsx())) {
-        qeSetStatus(
-          'SheetJS 未加载：请先运行  python3 ~/脚本/serve.py  ，保持窗口不关，再刷新本页后重试导出。',
-          'error'
-        );
-        return;
-      }
 
       const resultSection = document.getElementById('lis-qe-result-section');
       const resultList = document.getElementById('lis-qe-results');
@@ -6346,6 +6400,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const groupsToExport = QE_GROUPS.filter(g => cfg.selectedGroups.includes(g.id));
       const totalGroups = groupsToExport.length;
       const results = [];
+
+      // SheetJS：@require 可能失败，导出前兜底补拉（8.8.35 起主源科室 nginx，兜底本机 serve）
+      qeSetStatus('正在加载 Excel 组件…', 'info');
+      if (!(await qeEnsureXlsx())) {
+        qeSetStatus(
+          'SheetJS 未加载：请先确认科室 nginx 在线（192.168.31.111:9111），或在 Mac 上运行  python3 ~/脚本/serve.py  / Windows 双击 start_serve.bat，再刷新本页重试。',
+          'error'
+        );
+        return;
+      }
 
       for (let gi = 0; gi < totalGroups; gi++) {
         if (qeAbortFlag) {break;}
@@ -6380,16 +6444,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       if (!qeAbortFlag) {
         const zipHint = results.length ? ' 可点右上角「打包下载 ZIP」。' : '';
         // 8.5.82: 拉取失败的水平统一提示——此前单水平超时整月数据静默缺失，文件却显示「导出完成」
-        const failHint = _qeLevelFailures.length
-          ? ` ⚠️ 有 ${_qeLevelFailures.length} 个项目水平拉取失败（${_qeLevelFailures.slice(0, 5).join('、')}${_qeLevelFailures.length > 5 ? ' 等' : ''}），对应数据可能不完整，建议重导`
+        // 8.9.0: 基础查询失败（项目列表/机器参数/质控物列表）一并提示——吞成空数组会让整组项目
+        // 假装「本月没做质控」，实际是网络故障
+        const _allQeFails = _qeLevelFailures.concat(_qeQueryFailures);
+        const failHint = _allQeFails.length
+          ? ` ⚠️ 有 ${_allQeFails.length} 项查询失败（${_allQeFails.slice(0, 5).join('、')}${_allQeFails.length > 5 ? ' 等' : ''}），对应数据可能不完整，建议重导`
           : '';
-        qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。${failHint}${zipHint}`, _qeLevelFailures.length ? 'error' : 'ok');
+        qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。${failHint}${zipHint}`, _allQeFails.length ? 'error' : 'ok');
       } else {
         qeSetStatus('导出已停止。', 'info');
       }
     } finally {
       qeExporting = false;
       qeAbortFlag = false;
+      _qeAbortCtrl = null;
       try {
         qeHideProgress();
       } catch (e) {}
@@ -6452,6 +6520,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   //  模块 C：一体化工作台（核心）
   // ============================================================
   let wsData = []; // 加载的标本数据
+  // 8.9.0: 本地已审核移除、但可能仍出现在在途旧快照里的 ReportDR。
+  // 30s tick/阶段2 请求发出后才审核成功 → applyResults 用 T0 快照整体覆盖 wsData 会把
+  // 已审标本“复活”（幽灵卡，甚至被自动审核二次复审）。applyResults 据此过滤；
+  // 条目在全量快照确认服务端也不再返回后才清除。
+  const _wsLocalRemoved = new Set();
   let wsMachines = []; // 当前加载的仪器列表
   let wsActiveMachine = ''; // 当前选中的仪器 DR, ''=全部
   let wsActiveWG = ''; // 当前选中的工作组 DR, ''=全部工作组
@@ -6476,6 +6549,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let _filteredCache = null; // filteredData() 结果缓存
   let _filteredCacheKey = ''; // 缓存键
   let _countsCache = null; // 统一计数缓存
+  let _wsDataEpoch = 0; // 8.9.0: 数据代数，invalidateCaches 时递增，作统一计数缓存键
   let _countsCacheKey = ''; // 计数缓存键
   let _classifyRawCache = {}; // 分类时的原始 API 响应缓存，供详情面板复用
   let _classifyVersion = 0; // 分类结果版本，驱动过滤缓存失效
@@ -6558,6 +6632,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     _filteredCacheKey = '';
     _countsCache = null;
     _countsCacheKey = '';
+    _wsDataEpoch++; // 8.9.0: 数据/忽略状态代数——统一计数缓存键的一部分
     if (options.detail) {_detailLRU.clear();}
     if (options.raw) {_classifyRawCache = {};}
   }
@@ -7304,6 +7379,18 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         if (!partial) {_wsFullLoadFailStreak = 0;} // 8.6.3: 成功应用全量数据，清零失败计数
         // 8.5.42: 跨天后更新数据日期（无论清空重载还是正常更新，都归到新一天）
         if (dateChanged || allData.length > 0) {_wsLoadedDate = qEnd;}
+        // 8.9.0: 剔除刷新期间本地已审核移除的标本，防 T0 旧快照把它们带回来。
+        // 注意清除判定看「原始快照」：原始快照仍返回该标本 → 服务端尚未同步，条目保留；
+        // 原始快照已没有 → 服务端已更新，条目清掉（避免集合无限增长）。
+        if (_wsLocalRemoved.size) {
+          if (!partial) {
+            const _serverDRs = new Set(allData.map(r => String(r.ReportDR)));
+            for (const dr of _wsLocalRemoved) {if (!_serverDRs.has(dr)) {_wsLocalRemoved.delete(dr);}}
+          }
+          const _removedCnt = allData.length;
+          allData = allData.filter(r => !_wsLocalRemoved.has(String(r.ReportDR)));
+          if (allData.length !== _removedCnt) {dbg('[WS] 剔除刷新期间已本地审核的标本:', _removedCnt - allData.length, '条');}
+        }
         wsData = allData;
         // 8.5.82: 全量阶段存在失败仪器/组 → partial 置位（自动审核闸门暂停，防漏审）且不刷新 lastFullSuccessAt
         const _machinesUnhealthy = !partial && failedMachineNames.length > 0;
@@ -7583,31 +7670,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }));
   }
   function calcMachineCounts() {
-    wsMachineCounts = {};
-    wsMachineCounts['_all'] = { total: 0, normalReady: 0, abnormalReady: 0, incomplete: 0 };
-    wsData.forEach(r => {
-      const mdr = r._mdr || '_unknown';
-      // 8.5.33: 忽略的标本不计入仪器计数
-      if (isWSIgnored(r.ReportDR)) {return;}
-      if (!wsMachineCounts[mdr]) {wsMachineCounts[mdr] = { total: 0, normalReady: 0, abnormalReady: 0, incomplete: 0 };}
-      wsMachineCounts[mdr].total++;
-      wsMachineCounts['_all'].total++;
-
-      const bucket = getWSAuditBucket(r);
-      if (bucket === 'audited' || bucket === 'pending') {return;}
-      if (bucket === 'incomplete') {
-        wsMachineCounts[mdr].incomplete++;
-        wsMachineCounts['_all'].incomplete++;
-        return;
-      }
-      if (bucket === 'abnormal') {
-        wsMachineCounts[mdr].abnormalReady++;
-        wsMachineCounts['_all'].abnormalReady++;
-      } else if (bucket === 'normal') {
-        wsMachineCounts[mdr].normalReady++;
-        wsMachineCounts['_all'].normalReady++;
-      }
-    });
+    // 8.9.0: 委托统一计数（单遍遍历 + 缓存）——此前每次调用都全量重跑 getWSAuditBucket，
+    // 而本函数在每次审核成功/数据刷新/忽略切换后都会被调用
+    wsMachineCounts = calcUnifiedCounts().machCounts;
   }
 
   // 跨工作组切换：
@@ -7903,6 +7968,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       });
     }
     wsIgnoreSave();
+    invalidateCaches(); // 8.9.0: 忽略状态影响计数，统一计数缓存须失效
   }
   function wsIgnoreBtnHTML(rdr) {
     if (!rdr) {return '';}
@@ -7969,28 +8035,38 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return 'incomplete';
   }
 
+  // 8.9.0: 排序规则按 wg 缓存——此前每次调用都重建含 6+ 正则的数组，而本函数在排序
+  // 比较器里被高频调用，重建纯属浪费
+  const _machineSortRulesCache = {};
+  function _machineSortRulesFor(wg) {
+    if (!_machineSortRulesCache[wg]) {
+      _machineSortRulesCache[wg] =
+        wg === '1'
+          ? [
+            ['血细胞', /血细胞|血球|血常规|bc-|xn|xs|sysmex|mindray|迈瑞/],
+            ['血凝', /血凝|凝血|coag|cs-|ca-|stago|acl/],
+            ['尿液', /尿液|尿沉渣|尿干化|尿常规|uf|uc|urisys|ave/],
+            ['粪便', /粪便|大便|便|fec|ob/],
+            ['血流变', /血流变|流变|hemorheology/],
+            ['手工杂项', /手工|杂项|manual/]
+          ]
+          : wg === '4'
+            ? [
+              ['800', /dxi\s*800|dxi800|化学发光仪800|800/],
+              ['x8', /maglumi\s*x?8|maglumix8|x8/],
+              ['1600', /1600|getein/],
+              ['wan200', /wan\s*200|wan200/],
+              ['手工杂项', /手工|杂项|manual/]
+            ]
+            : [];
+    }
+    return _machineSortRulesCache[wg];
+  }
+
   function getMachineSortRank(machine) {
     const name = ((machine && (machine.CName || machine.Name || machine.RowID)) || '').toLowerCase();
     const wg = String((machine && machine._wg) || '');
-    const rules =
-      wg === '1'
-        ? [
-          ['血细胞', /血细胞|血球|血常规|bc-|xn|xs|sysmex|mindray|迈瑞/],
-          ['血凝', /血凝|凝血|coag|cs-|ca-|stago|acl/],
-          ['尿液', /尿液|尿沉渣|尿干化|尿常规|uf|uc|urisys|ave/],
-          ['粪便', /粪便|大便|便|fec|ob/],
-          ['血流变', /血流变|流变|hemorheology/],
-          ['手工杂项', /手工|杂项|manual/]
-        ]
-        : wg === '4'
-          ? [
-            ['800', /dxi\s*800|dxi800|化学发光仪800|800/],
-            ['x8', /maglumi\s*x?8|maglumix8|x8/],
-            ['1600', /1600|getein/],
-            ['wan200', /wan\s*200|wan200/],
-            ['手工杂项', /手工|杂项|manual/]
-          ]
-          : [];
+    const rules = _machineSortRulesFor(wg);
     for (let i = 0; i < rules.length; i++) {
       if (rules[i][1].test(name)) {return i;}
     }
@@ -8177,28 +8253,37 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (wsCategory === 'audit') {
       // 待审视图：当前登录工作组优先（减少跨组审核时的切组次数，先审完本组），
       // 组内按仪器分组，危急→异常→正常（正常放后面，供 F4 一键批审）
+      // 8.9.0: decorate-sort——先为每行预计算全部排序键，比较器只比预计算值。
+      // 原实现每次比较都调 getWSAuditBucket（内部做分类指纹 join）与
+      // getMachineSortRank（重建正则数组），500 行 ≈ 9000 次比较全在重复计算
       const _curWGForSort = resolveCurrentWG();
-      d.sort((a, b) => {
-        const wgA = String(a._wg || '');
-        const wgB = String(b._wg || '');
-        const aCur = wgA === _curWGForSort ? 0 : 1;
-        const bCur = wgB === _curWGForSort ? 0 : 1;
-        if (aCur !== bCur) {return aCur - bCur;}
-        const g = compareSpecimensByMachineGroup(a, b);
-        if (g) {return g;}
-        const rank = r => {
-          const b = getWSAuditBucket(r);
-          if (b === 'normal') {return 2;}
-          const cached = wsClassifiedCache[r.ReportDR];
-          return cached && cached.status === 'CRITICAL' ? 0 : 1;
+      const _dec = d.map(r => {
+        const b = getWSAuditBucket(r);
+        const cached = wsClassifiedCache[r.ReportDR];
+        return {
+          r,
+          isCur: String(r._wg || '') === _curWGForSort ? 0 : 1,
+          wg: String(r._wg || ''),
+          mRank: specimenMachineRank(r),
+          mdr: String(prWorkGroupMachineDR(r)),
+          mn: String(r._mn || ''),
+          crit: b === 'normal' ? 2 : (cached && cached.status === 'CRITICAL' ? 0 : 1),
+          fv: (r[field] || '').toString()
         };
-        const ra = rank(a);
-        const rb = rank(b);
-        if (ra !== rb) {return ra - rb;}
-        const va = (a[field] || '').toString();
-        const vb = (b[field] || '').toString();
-        return asc ? va.localeCompare(vb, 'zh') : vb.localeCompare(va, 'zh');
       });
+      _dec.sort((a, b) => {
+        if (a.isCur !== b.isCur) {return a.isCur - b.isCur;}
+        const wgCmp = a.wg.localeCompare(b.wg, 'zh');
+        if (wgCmp) {return wgCmp;}
+        if (a.mRank !== b.mRank) {return a.mRank - b.mRank;}
+        const mdrCmp = a.mdr.localeCompare(b.mdr, 'zh');
+        if (mdrCmp) {return mdrCmp;}
+        const mnCmp = a.mn.localeCompare(b.mn, 'zh');
+        if (mnCmp) {return mnCmp;}
+        if (a.crit !== b.crit) {return a.crit - b.crit;}
+        return asc ? a.fv.localeCompare(b.fv, 'zh') : b.fv.localeCompare(a.fv, 'zh');
+      });
+      d = _dec.map(x => x.r);
     } else {
       d.sort((a, b) => {
         const va = (a[field] || '').toString();
@@ -8226,7 +8311,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       });
       machineFilterKey = allSel.length ? allSel.sort().join('|') : wsActiveMachine;
     }
-    const ck = wsData.length + '|' + wsActiveWG + '|' + machineFilterKey;
+    const ck =
+      _wsDataEpoch + '|' + _classifyVersion + '|' + Math.floor(Date.now() / 60000) + '|' +
+      wsData.length + '|' + wsActiveWG + '|' + machineFilterKey;
     if (_countsCache && _countsCacheKey === ck) {return _countsCache;}
 
     // 工作组计数
@@ -8239,6 +8326,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       abnormalCount = 0,
       incompleteCount = 0,
       pendingCount = 0;
+    // 8.9.0: 同一遍顺带产出「当前仪器过滤」范围的分类计数（分类栏/页脚/菜单栏用）——
+    // 此前 renderWSCategoryBar 对全量 wsData 又单独跑一遍 getWSAuditBucket
+    let fTotal = 0, fNormal = 0, fAbnormal = 0, fIncomplete = 0, fPending = 0, fCollected = 0;
+    const _machFilterActive = !!(wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0));
     // 全部仪器汇总
     const machCounts = {};
     machCounts['_all'] = { total: 0, normalReady: 0, abnormalReady: 0, incomplete: 0 };
@@ -8258,17 +8349,26 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       machCounts['_all'].total++;
 
       const bucket = getWSAuditBucket(r);
+      const inScope = !_machFilterActive || rowPassWSMachineFilter(r);
+      if (inScope) {fTotal++;}
       if (bucket === 'pending') {
         pendingCount++;
+        if (inScope) {fPending++;}
         return;
       }
       if (bucket === 'audited') {return;}
+      if (bucket === 'collected') {
+        // 8.5.31: 病房采集中——只进分类栏计数，不进可审统计
+        if (inScope) {fCollected++;}
+        return;
+      }
 
       if (bucket === 'incomplete') {
         if (wgCounts[wg]) {wgCounts[wg].incomplete++;}
         machCounts[mdr].incomplete++;
         machCounts['_all'].incomplete++;
         incompleteCount++;
+        if (inScope) {fIncomplete++;}
         return;
       }
       if (bucket === 'abnormal') {
@@ -8276,15 +8376,21 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         machCounts[mdr].abnormalReady++;
         machCounts['_all'].abnormalReady++;
         abnormalCount++;
+        if (inScope) {fAbnormal++;}
       } else if (bucket === 'normal') {
         if (wgCounts[wg]) {wgCounts[wg].normalReady++;}
         machCounts[mdr].normalReady++;
         machCounts['_all'].normalReady++;
         normalCount++;
+        if (inScope) {fNormal++;}
       }
     });
 
-    const result = { wgCounts, machCounts, normalCount, abnormalCount, incompleteCount, pendingCount };
+    const result = {
+      wgCounts, machCounts, normalCount, abnormalCount, incompleteCount, pendingCount,
+      // 8.9.0: 当前仪器过滤范围（分类栏 renderWSCategoryBar 消费）
+      fTotal, fNormal, fAbnormal, fIncomplete, fPending, fCollected
+    };
     _countsCache = result;
     _countsCacheKey = ck;
     return result;
@@ -8408,21 +8514,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   // --- 渲染：仪器标签栏（两级：工作组 + 仪器）---
   function calcWSTabCounts() {
-    const wgCounts = {};
-    WG.forEach(w => {
-      wgCounts[w.dr] = { total: 0, normalReady: 0, abnormalReady: 0 };
-    });
-    wsData.forEach(r => {
-      // 8.5.33: 忽略的标本不计入工作组 tab 计数
-      if (isWSIgnored(r.ReportDR)) {return;}
-      const wg = r._wg;
-      if (!wgCounts[wg]) {return;}
-      wgCounts[wg].total++;
-      const bucket = getWSAuditBucket(r);
-      if (bucket === 'normal') {wgCounts[wg].normalReady++;}
-      else if (bucket === 'abnormal') {wgCounts[wg].abnormalReady++;}
-    });
-    return wgCounts;
+    // 8.9.0: 委托统一计数（单遍遍历 + 缓存）。wgCounts 条目含额外 incomplete 字段，消费方只用 total/normalReady/abnormalReady
+    return calcUnifiedCounts().wgCounts;
   }
 
   let _tabsBuilt = false;
@@ -8727,26 +8820,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     bar.style.flexShrink = '0';
 
     // 统计各分类数量（基于当前工作组+仪器过滤）
-    let filtered = wsData;
-    if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
-    {filtered = filtered.filter(rowPassWSMachineFilter);}
-    // 8.5.33: 忽略的标本不计入任何分类计数
-    filtered = filtered.filter(r => !isWSIgnored(r.ReportDR));
-
-    let normalCount = 0,
-      abnormalCount = 0,
-      incompleteCount = 0,
-      pendingCount = 0,
-      collectedCount = 0;
-    filtered.forEach(r => {
-      const bucket = getWSAuditBucket(r);
-      if (bucket === 'normal') {normalCount++;}
-      else if (bucket === 'abnormal') {abnormalCount++;}
-      else if (bucket === 'incomplete') {incompleteCount++;}
-      else if (bucket === 'pending') {pendingCount++;}
-      else if (bucket === 'collected') {collectedCount++;} // 8.5.31
-    });
-    const totalCount = filtered.length;
+    // 8.9.0: 计数来自统一单遍统计（含当前仪器过滤范围 f* 计数，已排除忽略行）——
+    // 此前这里对全量 wsData 再单独跑一遍 getWSAuditBucket O(N)
+    const _uc = calcUnifiedCounts();
+    const normalCount = _uc.fNormal;
+    const abnormalCount = _uc.fAbnormal;
+    const incompleteCount = _uc.fIncomplete;
+    const pendingCount = _uc.fPending;
+    const collectedCount = _uc.fCollected;
+    const totalCount = _uc.fTotal;
     const fd = filteredData();
 
     // 首次或切换分类时重建 DOM，其余只更新计数和状态
@@ -9308,7 +9390,9 @@ window.addEventListener('keydown',function(e){
   }
 
   function syncAbnormalFocusFromDOM() {
-    const card = getUIDoc().querySelector('.ws-abnormal-card.focused');
+    // 8.9.0: 用本脚本文档查询——工作台元素挂在脚本所在文档，此前用 getUIDoc()（=top 文档），
+    // 脚本一旦在子 iframe 运行会静默查不到元素
+    const card = document.querySelector('.ws-abnormal-card.focused');
     if (!card) {return;}
     _abnormalFocusDR = String(card.dataset.rdr || '');
     const data = filteredData();
@@ -9319,10 +9403,9 @@ window.addEventListener('keydown',function(e){
   function refocusAbnormalWorkbench() {
     releaseNativeReportFocus();
     try {
-      getUIWindow().focus();
+      (document.defaultView || window).focus(); // 8.9.0: 聚焦工作台所在窗口，而非固定 top
     } catch (e) {}
-    const uiDoc = getUIDoc();
-    const card = uiDoc.querySelector('.ws-abnormal-card.focused');
+    const card = document.querySelector('.ws-abnormal-card.focused');
     if (card) {
       if (!card.hasAttribute('tabindex')) {card.setAttribute('tabindex', '-1');}
       try {
@@ -9335,7 +9418,7 @@ window.addEventListener('keydown',function(e){
       syncAbnormalFocusFromDOM();
       return;
     }
-    const wsEl = uiDoc.getElementById('lis-ws');
+    const wsEl = document.getElementById('lis-ws');
     if (wsEl) {
       if (!wsEl.hasAttribute('tabindex')) {wsEl.setAttribute('tabindex', '-1');}
       try {
@@ -9713,8 +9796,17 @@ window.addEventListener('keydown',function(e){
       let displayItems = abnormalItems;
       if (displayItems.length === 0 && !hasInfectionWarning) {
         const detailCached = detailLRUGet(r.ReportDR); // 需要提升优先级，因为用户可能点击查看
-        if (detailCached && detailCached.html) {
+        // 8.9.0: 解析结果连同所依据的详情 HTML 一起缓存进分类缓存条目——此前每 30s 刷新
+        // 对每张异常卡都把整份详情 HTML 全量塞进临时 DOM 重新解析一遍，还顺带污染 LRU 访问序
+        const _cacheEntry = wsClassifiedCache[r.ReportDR];
+        if (
+          detailCached && detailCached.html &&
+          _cacheEntry && _cacheEntry._displayItemsFrom === detailCached.html && Array.isArray(_cacheEntry._displayItems)
+        ) {
+          displayItems = _cacheEntry._displayItems;
+        } else if (detailCached && detailCached.html) {
           // 从详情缓存 HTML 中提取异常项目
+          const extracted = [];
           const _tmp = document.createElement('div');
           _tmp.innerHTML = detailCached.html;
           _tmp.querySelectorAll('tr').forEach(tr => {
@@ -9726,7 +9818,7 @@ window.addEventListener('keydown',function(e){
                 const result = (tds[1].textContent || '').trim();
                 const status = (tds[3].textContent || '').trim();
                 if (name && name !== '项目')
-                {displayItems.push({
+                {extracted.push({
                   name,
                   result,
                   status: status.includes('高') ? 'HIGH' : status.includes('低') ? 'LOW' : 'ABNORMAL'
@@ -9734,6 +9826,8 @@ window.addEventListener('keydown',function(e){
               }
             }
           });
+          if (_cacheEntry) {_cacheEntry._displayItems = extracted; _cacheEntry._displayItemsFrom = detailCached.html;}
+          displayItems = extracted;
         }
         // 如果仍然没有，显示所有有结果的项目（可能 AbFlag 未标记）
         if (displayItems.length === 0 && items.length > 0) {
@@ -10451,6 +10545,41 @@ window.addEventListener('keydown',function(e){
     } catch (e) {}
   }
 
+  // 8.9.0: 列表审核与详情审核共用的「延迟兜底校验」——executeNativeAudit 可能因竞态误判失败，
+  // 此处多重确认：原生状态轮询（250ms×8，成功早退）→ 刷新 wsData（分类中会被跳过则重试 ×4）→ 本地状态判定。
+  // 此前两处各维护一份几乎相同的块，改一处漏一处的风险已存在
+  async function confirmAuditEventuallyLive(iframeWin, reportDR, specimen) {
+    // 8.5.53: 复检标本（审核前 status 4）verify 只认状态变 3
+    const pre4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
+    for (let _dv = 0; _dv < 8; _dv++) {
+      await sleep(250);
+      iframeWin = getReportIframeWin() || iframeWin;
+      if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !pre4 }) ||
+          softAuditSuccessHint(iframeWin, reportDR, { accept4: !pre4 })) {
+        dbg('审核延迟确认成功（原生状态）:', specimen.PatName);
+        return true;
+      }
+    }
+    // 刷新 wsData 后再检查状态（审核期间轮询已停止）。
+    // 分类进行中 force:false 会被跳过（8.5.4），重试几次等分类完成，
+    // 避免读到审核前旧状态把已成功误报为失败。
+    try {
+      for (let _rt = 0; _rt < 4; _rt++) {
+        const loadResult = await loadWSData({ force: false });
+        if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData'); break;}
+        await sleep(2000);
+      }
+    } catch (e) {}
+    const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
+    const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
+    // 复检标本（审核前 status 4）需状态变 3 才算成功（审核前就是 4）
+    if (liveStatus === '3' || (liveStatus === '4' && !pre4)) {
+      dbg('审核延迟确认成功（wsData 状态）:', specimen.PatName);
+      return true;
+    }
+    return false;
+  }
+
   async function auditAbnormalSpecimen(specimen, options = {}) {
     // 8.5.82: quiet=true（自动审核夜间调用）——静默全部 toast（含 error），结果走返回值+日志；
     // 手动路径不传 options，行为不变。此前调用方传 {quiet:true} 但函数根本不收这个参数
@@ -10624,43 +10753,11 @@ window.addEventListener('keydown',function(e){
         advanceAbnormalFocusAfterSkip(startIndex);
         return;
       }
-      // 最终兜底：executeNativeAudit 可能因竞态误判失败，再等 2s 多重校验
-      // 8.5.35: 改 250ms 轮询早退（原生状态回写完成即继续），不再固定白等 2s
+      // 最终兜底：executeNativeAudit 可能因竞态误判失败，多重校验确认
+      // 8.9.0: 延迟兜底校验抽为 confirmAuditEventuallyLive 共用（250ms 轮询早退）
       if (!auditResult) {
         if (ft) {ft.textContent = `确认审核结果: ${specimen.PatName || specimen.Labno || targetDR}`;}
-        // 8.5.53: 复检标本（审核前 status 4）verify 只认状态变 3
-        const _abPre4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
-        for (let _dv = 0; _dv < 8; _dv++) {
-          await sleep(250);
-          iframeWin = getReportIframeWin() || iframeWin;
-          if (verifyAuditSucceededByReportDR(iframeWin, targetDR, { accept4: !_abPre4 }) ||
-              softAuditSuccessHint(iframeWin, targetDR, { accept4: !_abPre4 })) {
-            auditResult = true;
-            break;
-          }
-        }
-        if (auditResult) {
-          dbg('异常审核延迟确认成功（原生状态）:', specimen.PatName);
-        } else {
-          if (ft) {ft.textContent = `刷新数据: ${specimen.PatName || specimen.Labno || targetDR}`;}
-          // 刷新 wsData 后再检查状态（审核期间轮询已停止）。
-          // 分类进行中 force:false 会被跳过（8.5.4），重试几次等分类完成，
-          // 避免读到审核前旧状态把已成功误报为失败。
-          try {
-            for (let _rt = 0; _rt < 4; _rt++) {
-              const loadResult = await loadWSData({ force: false });
-              if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData'); break;}
-              await sleep(2000);
-            }
-          } catch (e) {}
-          const liveRow = wsData.find(r => String(r.ReportDR) === String(targetDR));
-          const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
-          // 8.5.53: 复检标本（审核前 status 4）需状态变 3 才算成功（审核前就是 4）
-          if (liveStatus === '3' || (liveStatus === '4' && !_abPre4)) {
-            dbg('异常审核延迟确认成功（wsData 状态）:', specimen.PatName);
-            auditResult = true;
-          }
-        }
+        auditResult = await confirmAuditEventuallyLive(iframeWin, targetDR, specimen);
       }
       if (!auditResult) {
         _toast('未确认审核成功，已跳到下一条', 'warning');
@@ -10703,6 +10800,7 @@ window.addEventListener('keydown',function(e){
       }
 
       delete wsClassifiedCache[specimen.ReportDR];
+      _wsLocalRemoved.add(String(specimen.ReportDR)); // 8.9.0: 防在途旧快照把该行带回列表
       wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
       invalidateCaches();
       calcMachineCounts();
@@ -10762,6 +10860,24 @@ window.addEventListener('keydown',function(e){
 
   // --- 8.5.31: 病房采集视图（只读） — 标本已采未送，无核收、无审核 ---
   // 与 renderIncompleteView 共用样式（条纹 / 行点击 → 详情），仅 banner 文案与列定义不同。
+  // 8.9.0: 只读视图（采集/不完整）共用的行点击委托——行点击开详情、空白处收回；
+  // 沿用 _incompleteClickHandler 属性名，移除旧委托防止刷新累积多个处理器
+  function bindReadOnlyRowClick(body) {
+    if (body._incompleteClickHandler) {
+      body.removeEventListener('click', body._incompleteClickHandler);
+    }
+    body._incompleteClickHandler = e => {
+      const tr = e.target.closest('tr[data-rdr]');
+      if (!tr) {
+        if (isDetailPanelVisible()) {closeDetailPanel();}
+        return;
+      }
+      const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
+      if (specimen) {openDetailPanel(specimen);}
+    };
+    body.addEventListener('click', body._incompleteClickHandler);
+  }
+
   function renderCollectedView(data, body) {
     let h = '<div class="ws-collected-banner">🩸 以下标本为病房采集中、尚未送到科室 · 仅供追踪/催送</div>';
 
@@ -10788,19 +10904,7 @@ window.addEventListener('keydown',function(e){
     body.innerHTML = h;
 
     // 行点击 → 详情面板；空白处点击 → 收回
-    if (body._incompleteClickHandler) {
-      body.removeEventListener('click', body._incompleteClickHandler);
-    }
-    body._incompleteClickHandler = e => {
-      const tr = e.target.closest('tr[data-rdr]');
-      if (!tr) {
-        if (isDetailPanelVisible()) {closeDetailPanel();}
-        return;
-      }
-      const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
-      if (specimen) {openDetailPanel(specimen);}
-    };
-    body.addEventListener('click', body._incompleteClickHandler);
+    bindReadOnlyRowClick(body);
   }
 
   // --- 结果不完整视图（只读）---
@@ -10831,20 +10935,7 @@ window.addEventListener('keydown',function(e){
     body.innerHTML = h;
 
     // 行点击 → 详情；空白处点击 → 收回详情
-    // 移除旧委托，防止刷新累积多个处理器
-    if (body._incompleteClickHandler) {
-      body.removeEventListener('click', body._incompleteClickHandler);
-    }
-    body._incompleteClickHandler = e => {
-      const tr = e.target.closest('tr[data-rdr]');
-      if (!tr) {
-        if (isDetailPanelVisible()) {closeDetailPanel();}
-        return;
-      }
-      const specimen = findWSSpecimenByReportDR(tr.dataset.rdr);
-      if (specimen) {openDetailPanel(specimen);}
-    };
-    body.addEventListener('click', body._incompleteClickHandler);
+    bindReadOnlyRowClick(body);
   }
 
   // --- 全部标本视图 ---
@@ -10874,7 +10965,7 @@ window.addEventListener('keydown',function(e){
       const ignored = isWSIgnored(r.ReportDR);
       // 8.5.34: 忽略行 checkbox 禁用且不可被全选带上（忽略=不再管它）
       const ckAttr = ignored ? ' disabled' : ck ? ' checked' : '';
-      h += `<tr class="st-${statusVal} ${wsChecked.has(r.ReportDR) && !ignored ? 'sel' : ''}${ignored ? ' ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      h += `<tr class="st-${escAttr(statusVal)} ${wsChecked.has(r.ReportDR) && !ignored ? 'sel' : ''}${ignored ? ' ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`; // 8.9.0: statusVal 加固转义
       h += `<td><input type="checkbox" class="lis-ws-ck" data-rdr="${escAttr(r.ReportDR || '')}"${ckAttr} /></td>`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
       // 8.5.54: 审核后（status 3）且曾为复审的标本 → 显示『审核』+『复审』双标识
@@ -11094,62 +11185,38 @@ window.addEventListener('keydown',function(e){
   }
 
   // --- 批审操作条 ---
-  function updateBatchBar() {
-    let bb = document.getElementById('lis-batch');
-    if (!bb) {
-      bb = document.createElement('div');
-      bb.id = 'lis-batch';
-      document.body.appendChild(bb);
-    }
-    if (wsChecked.size === 0) {
-      bb.classList.remove('show');
-      return;
-    }
-    bb.classList.add('show');
-    bb.innerHTML = `
-            <h4>📋 已选 ${wsChecked.size} 个标本</h4>
-            <div class="bf">
-                <button id="lis-bb-detail" style="background:#9b59b6;color:#fff" title="查看选中标本详情">👁 查看详情</button>
-                <button id="lis-bb-audit" style="background:#27ae60;color:#fff" title="F5 快捷审核">✅ 审核</button>
-                <button id="lis-bb-nav" style="background:#3498db;color:#fff" title="在原生界面中打开">📂 打开</button>
-                <button id="lis-bb-sel" style="background:#f39c12;color:#fff">☑ 全选当前</button>
-                <button id="lis-bb-clr" style="background:#95a5a6;color:#fff">✕ 取消选择</button>
-                <span style="font-size:11px;color:#999;margin-left:8px">💡 点击标本行查看详情 | F5 审核</span>
-            </div>`;
-    document.getElementById('lis-bb-audit').addEventListener('click', () => {
-      auditSelectedSpecimens();
-    });
-    document.getElementById('lis-bb-detail').addEventListener('click', () => {
-      // 查看第一个选中标本的详情
-      const fd = filteredData();
-      const first = fd.find(r => wsChecked.has(r.ReportDR));
-      if (first) {
-        openDetailPanel(first);
-      } else {
-        toast('请先选择标本', 'w');
-      }
-    });
-    document.getElementById('lis-bb-nav').addEventListener('click', () => {
-      // 导航到第一个选中的标本
-      const fd = filteredData();
-      const first = fd.find(r => wsChecked.has(r.ReportDR));
-      if (first) {navigateToSpecimen(first);}
-    });
-    document.getElementById('lis-bb-sel').addEventListener('click', () => {
-      filteredData().forEach(r => {
-        if (r.ReportDR) {wsChecked.add(r.ReportDR);}
-      });
-      renderWSTable();
-      updateBatchBar();
-    });
-    document.getElementById('lis-bb-clr').addEventListener('click', () => {
-      wsChecked.clear();
-      renderWSTable();
-      updateBatchBar();
-    });
-  }
+  // 8.9.0: updateBatchBar/auditSelectedSpecimens 已删除——操作条从未被调用（底部浮动条
+  // 永远不出现），F5 审核也从未绑定；批量审核入口统一走「一键批审 F4」/详情面板 Enter
+
 
   // --- 导航到原生界面 ---
+  // 8.9.0: 延迟在原生工作列表中按 ReportDR/Labno 选中对应行——
+  // navigateToSpecimen 与 checkNavigateTarget（跨组跳转恢复）各有一份相同逻辑，抽为共用
+  function selectNativeRowAfterDelay(reportDR, labno, delayMs) {
+    setTimeout(() => {
+      try {
+        const iframeWin = getReportIframeWin();
+        if (!iframeWin) {return;}
+        const jq = iframeWin.jQuery || iframeWin.$;
+        if (!jq) {return;}
+        const dg = jq('#dgWorkList');
+        if (!dg.length) {return;}
+        const rows = dg.datagrid('getRows');
+        if (!rows || rows.length === 0) {return;}
+        // 根据 ReportDR 或 Labno 选中对应行
+        for (let i = 0; i < rows.length; i++) {
+          if (String(rows[i].ReportDR) === String(reportDR) || String(rows[i].Labno) === String(labno)) {
+            dg.datagrid('selectRow', i);
+            dbg('导航: 已选中行', i, 'ReportDR:', reportDR);
+            break;
+          }
+        }
+      } catch (e) {
+        dbg('导航选行失败:', e);
+      }
+    }, delayMs || 1500);
+  }
+
   function navigateToSpecimen(row) {
     const curDR = wgDR();
     const targetDR = row._wg;
@@ -11207,28 +11274,7 @@ window.addEventListener('keydown',function(e){
       }
 
       // 等待搜索结果加载并选中对应行
-      setTimeout(() => {
-        try {
-          const iframeWin = getReportIframeWin();
-          if (!iframeWin) {return;}
-          const jq = iframeWin.jQuery || iframeWin.$;
-          if (!jq) {return;}
-          const dg = jq('#dgWorkList');
-          if (!dg.length) {return;}
-          const rows = dg.datagrid('getRows');
-          if (!rows || rows.length === 0) {return;}
-          // 根据 ReportDR 或 Labno 选中对应行
-          for (let i = 0; i < rows.length; i++) {
-            if (String(rows[i].ReportDR) === String(reportDR) || String(rows[i].Labno) === String(labno)) {
-              dg.datagrid('selectRow', i);
-              dbg('导航: 已选中行', i, 'ReportDR:', reportDR);
-              break;
-            }
-          }
-        } catch (e) {
-          dbg('导航选行失败:', e);
-        }
-      }, 1500);
+      selectNativeRowAfterDelay(reportDR, labno);
     } catch (e) {
       dbg('导航失败:', e);
     }
@@ -11435,49 +11481,9 @@ window.addEventListener('keydown',function(e){
     clearAuditQueue();
   }
 
-  // --- F5 快捷键审核选中标本 ---
-  function auditSelectedSpecimens() {
-    if (wsChecked.size === 0) {
-      toast('请先选择要审核的标本', 'w');
-      return;
-    }
-
-    // 获取选中的标本（8.5.34: 忽略的标本不参与 F5 审核）
-    const selectedSpecimens = filteredData().filter(r => wsChecked.has(r.ReportDR) && !isWSIgnored(r.ReportDR));
-    if (selectedSpecimens.length === 0) {
-      toast('未找到选中的标本', 'w');
-      return;
-    }
-
-    // 检查是否有未审核的标本
-    const unreviewed = selectedSpecimens.filter(r => String(r.Status || r.ReportStatus || '') !== '3');
-    if (unreviewed.length === 0) {
-      toast('选中的标本已全部审核', 'w');
-      return;
-    }
-
-    // 使用缓存的分类结果；只允许 NORMAL 进入自动审核
-    const formatted = unreviewed.map(r => {
-      const cached = wsClassifiedCache[r.ReportDR];
-      if (cached) {cached._accessTs = Date.now();}
-      return cached && !isClassificationStale(r)
-        ? { status: cached.status, items: cached.items || [], row: r, reportDR: r.ReportDR }
-        : { status: 'UNCERTAIN', items: [], row: r, reportDR: r.ReportDR };
-    });
-    const normalOnly = formatted.filter(isAutoAuditableClassified);
-    const blocked = formatted.filter(r => !isAutoAuditableClassified(r));
-    if (blocked.length > 0) {
-      showToast(`已排除 ${blocked.length} 个异常/危急/待定标本`, 'warning');
-    }
-    if (normalOnly.length === 0) {
-      showToast(
-        blocked.length ? getAutoAuditBlockReason(blocked[0], blocked[0].row) : '没有可审核的正常标本',
-        'warning'
-      );
-      return;
-    }
-    confirmAndBatchAudit(normalOnly);
-  }
+  // (showAuditConfirmDialog 和 performAudit 已删除，使用 confirmAndBatchAudit 替代)
+  // 8.9.0: auditSelectedSpecimens（F5 审核选中）已删除——仅被已删除的 updateBatchBar 调用，
+  // 且 F5 快捷键从未注册；勾选批量审核入口由「一键批审 F4」承担
 
   // (showAuditConfirmDialog 和 performAudit 已删除，使用 confirmAndBatchAudit 替代)
 
@@ -11656,28 +11662,30 @@ window.addEventListener('keydown',function(e){
     // 加载详细结果
     loadDetailResults(specimen);
 
-    // 更新底部按钮
-    const footer = document.getElementById('lis-detail-footer');
-    if (footer) {
-      // 移除旧的"原生界面"按钮
-      const oldNative = document.getElementById('lis-detail-native');
-      if (oldNative) {oldNative.remove();}
-      // 添加"在原生界面中打开"按钮
-      const nativeBtn = document.createElement('button');
-      nativeBtn.id = 'lis-detail-native';
-      nativeBtn.className = 'btn-close';
-      nativeBtn.style.background = '#3498db';
-      nativeBtn.textContent = '📂 原生界面';
-      nativeBtn.addEventListener('click', () => {
-        navigateToSpecimen(specimen);
-        closeDetailPanel();
-      });
-      footer.insertBefore(nativeBtn, footer.firstChild);
-    }
+    // 更新底部按钮（8.9.0: 共用工厂）
+    _installDetailNativeButton(specimen);
     _bindDetailAuditButton();
     _setDetailAuditBusy(false);
 
     // 注册详情面板键盘监听（Enter 与审核钮同一路径）
+    _installDetailKeyHandler();
+    dbg('详情面板键盘监听已注册, specimen:', specimen.PatName);
+    // 确保 F4 桥在原生 iframe 上挂着（面板打开时异常处理器已被移除，Enter 靠桥捕获）
+    _attachF4BridgeToIframe();
+    refocusDetailPanel();
+    scheduleDetailPrewarm(specimen, 120);
+  }
+
+  function _removeDetailKeyHandler() {
+    if (_detailKeyHandler) {
+      document.removeEventListener('keydown', _detailKeyHandler, true);
+      _detailKeyHandler = null;
+    }
+  }
+
+  // 8.9.0: 详情键盘监听与「原生界面」按钮在 openDetailPanel / _switchDetailInPlace 原各有一份
+  // 逐字相同的实现（改一处漏一处的风险已存在），抽为共用工厂
+  function _installDetailKeyHandler() {
     _removeDetailKeyHandler();
     _detailKeyHandler = e => {
       if (isPatientResultPanelEvent(e)) {return;}
@@ -11716,18 +11724,24 @@ window.addEventListener('keydown',function(e){
       }
     };
     document.addEventListener('keydown', _detailKeyHandler, true);
-    dbg('详情面板键盘监听已注册, specimen:', specimen.PatName);
-    // 确保 F4 桥在原生 iframe 上挂着（面板打开时异常处理器已被移除，Enter 靠桥捕获）
-    _attachF4BridgeToIframe();
-    refocusDetailPanel();
-    scheduleDetailPrewarm(specimen, 120);
   }
 
-  function _removeDetailKeyHandler() {
-    if (_detailKeyHandler) {
-      document.removeEventListener('keydown', _detailKeyHandler, true);
-      _detailKeyHandler = null;
-    }
+  function _installDetailNativeButton(specimen) {
+    const footer = document.getElementById('lis-detail-footer');
+    if (!footer) {return;}
+    // 移除旧的"原生界面"按钮再重建
+    const oldNative = document.getElementById('lis-detail-native');
+    if (oldNative) {oldNative.remove();}
+    const nativeBtn = document.createElement('button');
+    nativeBtn.id = 'lis-detail-native';
+    nativeBtn.className = 'btn-close';
+    nativeBtn.style.background = '#3498db';
+    nativeBtn.textContent = '📂 原生界面';
+    nativeBtn.addEventListener('click', () => {
+      navigateToSpecimen(specimen);
+      closeDetailPanel();
+    });
+    footer.insertBefore(nativeBtn, footer.firstChild);
   }
 
   function formatDetailTimeText(value) {
@@ -11834,65 +11848,16 @@ window.addEventListener('keydown',function(e){
       body.innerHTML = '<div id="lis-detail-loading"><div class="spinner"></div><p>正在加载结果...</p></div>';
     }
 
-    // 更新底部按钮
-    const footer = document.getElementById('lis-detail-footer');
-    if (footer) {
-      const oldNative = document.getElementById('lis-detail-native');
-      if (oldNative) {oldNative.remove();}
-      const nativeBtn = document.createElement('button');
-      nativeBtn.id = 'lis-detail-native';
-      nativeBtn.className = 'btn-close';
-      nativeBtn.style.background = '#3498db';
-      nativeBtn.textContent = '📂 原生界面';
-      nativeBtn.addEventListener('click', () => {
-        navigateToSpecimen(specimen);
-        closeDetailPanel();
-      });
-      footer.insertBefore(nativeBtn, footer.firstChild);
-    }
+    // 更新底部按钮（8.9.0: 共用工厂）
+    _installDetailNativeButton(specimen);
     _bindDetailAuditButton();
     _setDetailAuditBusy(false);
 
     // 加载详情（LRU 缓存命中时极快）
     loadDetailResults(specimen);
 
-    // 重新注册键盘监听
-    _removeDetailKeyHandler();
-    _detailKeyHandler = e => {
-      if (isPatientResultPanelEvent(e)) {return;}
-      if (!detailPanel || !detailPanel.classList.contains('show')) {return;}
-      // 焦点在搜索框/面板内输入框时 Enter 不触发审核（与 _f4BridgeHandler 的 shouldIgnore 对齐）
-      if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
-      // 历史浮层打开时：详情键全部让位（避免 Enter 误审），Esc 由历史层处理
-      if (histIsOpen()) {return;}
-      if (e.key === 'H' || e.key === 'h') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        histOpen();
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        closeDetailPanel();
-      } else if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        void _auditFromDetailPanel();
-      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        if (_detailAuditInProgress) {return;}
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        const data = filteredData();
-        if (data.length === 0) {return;}
-        const curIdx = data.findIndex(r => r.ReportDR === (currentDetailSpecimen && currentDetailSpecimen.ReportDR));
-        let newIdx = curIdx + (e.key === 'ArrowDown' ? 1 : -1);
-        if (newIdx < 0) {newIdx = data.length - 1;}
-        if (newIdx >= data.length) {newIdx = 0;}
-        _switchDetailInPlace(data[newIdx], detailSource, newIdx);
-      }
-    };
-    document.addEventListener('keydown', _detailKeyHandler, true);
+    // 重新注册键盘监听（8.9.0: 共用工厂）
+    _installDetailKeyHandler();
     _attachF4BridgeToIframe();
     refocusDetailPanel();
     scheduleDetailPrewarm(specimen, 120);
@@ -12096,37 +12061,11 @@ window.addEventListener('keydown',function(e){
         showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
         return;
       }
-      // 最终兜底：再等 2s 后多重校验（原生状态 + wsData + softHint）
+      // 最终兜底：多重校验（原生状态轮询 + wsData + softHint）
+      // 8.9.0: 延迟兜底校验抽为 confirmAuditEventuallyLive 共用
       if (!auditResult) {
         _setDetailAuditBusy(true, '⏳ 确认审核结果…');
-        // 8.5.53: 复检标本（审核前 status 4）verify 只认状态变 3
-        const _dtPre4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
-        await sleep(2000);
-        iframeWin = getReportIframeWin() || iframeWin;
-        if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !_dtPre4 }) ||
-            softAuditSuccessHint(iframeWin, reportDR, { accept4: !_dtPre4 })) {
-          dbg('详情审核延迟确认成功（原生状态）:', specimen.PatName);
-          auditResult = true;
-        } else {
-          _setDetailAuditBusy(true, '⏳ 刷新数据…');
-          // 刷新 wsData 后再检查状态（审核期间轮询已停止）。
-          // 分类进行中 force:false 会被跳过（8.5.4），重试几次等分类完成，
-          // 避免读到审核前旧状态把已成功误报为失败。
-          try {
-            for (let _rt = 0; _rt < 4; _rt++) {
-              const loadResult = await loadWSData({ force: false });
-              if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData'); break;}
-              await sleep(2000);
-            }
-          } catch (e) {}
-          const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
-          const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
-          // 8.5.53: 复检标本需状态变 3 才算成功（审核前就是 4）
-          if (liveStatus === '3' || (liveStatus === '4' && !_dtPre4)) {
-            dbg('详情审核延迟确认成功（wsData 状态）:', specimen.PatName);
-            auditResult = true;
-          }
-        }
+        auditResult = await confirmAuditEventuallyLive(iframeWin, reportDR, specimen);
       }
       if (!auditResult) {
         showToast(`审核失败: ${specimen.PatName || ''}，未能确认审核结果，请核对原生列表状态`, 'error');
@@ -12145,6 +12084,7 @@ window.addEventListener('keydown',function(e){
 
       // 从数据中移除
       delete wsClassifiedCache[specimen.ReportDR];
+      _wsLocalRemoved.add(String(specimen.ReportDR)); // 8.9.0: 防在途旧快照把该行带回列表
       wsData = wsData.filter(r => r.ReportDR !== specimen.ReportDR);
       invalidateCaches();
       calcMachineCounts();
@@ -12867,28 +12807,7 @@ window.addEventListener('keydown',function(e){
             }
           }
           // 等待搜索结果加载并选中对应行
-          setTimeout(() => {
-            try {
-              const iframeWin = getReportIframeWin();
-              if (!iframeWin) {return;}
-              const jq = iframeWin.jQuery || iframeWin.$;
-              if (!jq) {return;}
-              const dg = jq('#dgWorkList');
-              if (!dg.length) {return;}
-              const rows = dg.datagrid('getRows');
-              if (!rows || rows.length === 0) {return;}
-              // 根据 ReportDR 或 Labno 选中对应行
-              for (let i = 0; i < rows.length; i++) {
-                if (String(rows[i].ReportDR) === String(tgt.reportDR) || String(rows[i].Labno) === String(tgt.labno)) {
-                  dg.datagrid('selectRow', i);
-                  dbg('导航: 已选中行', i, 'ReportDR:', tgt.reportDR);
-                  break;
-                }
-              }
-            } catch (e) {
-              dbg('导航选行失败:', e);
-            }
-          }, 1500);
+          selectNativeRowAfterDelay(tgt.reportDR, tgt.labno);
         } catch (e) {}
       }, 1500);
     } catch (e) {}
@@ -13013,8 +12932,11 @@ window.addEventListener('keydown',function(e){
     // 键盘快捷键
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape') {
+        // 8.9.0: 密码弹窗打开时 Esc 只关弹窗——此前 closeWS()/closePwdDlg() 同时执行，
+        // 在弹窗输入框里按 Esc 会把整个工作台连带关掉
+        const pwdO = document.getElementById('lis-pwdo');
+        if (pwdO && pwdO.classList.contains('show')) {closePwdDlg(); return;}
         closeWS();
-        closePwdDlg();
       }
     });
   }
@@ -13605,24 +13527,33 @@ window.addEventListener('keydown',function(e){
         } else {
           // QueryReportList 不带 WorkGroupDR 时实测只返回当前登录工作组的历史，
           // 所以按每个工作组分别查一次再合并去重（同时诊断该病人是否真的无别组历史）
+          // 8.9.0: 3 个工作组并行查询（此前串行 × 15s 超时，最坏 45s 后才开始取明细），
+          // AbortError 语义保留：任一被取消即中止本轮
           const perWg = [];
-          for (const w of WG) {
-            try {
-              const url =
-                '/iMedicalLIS/lis/ashx/ashReportQuery.ashx?Method=QueryReportList&RegNo=' +
-                encodeURIComponent(regNo) +
-                '&WorkGroupDR=' +
-                encodeURIComponent(w.dr);
-              const raw = await fetchJ(url, 15000, _ctrl.signal);
-              const rows = Array.isArray(raw) ? raw : (raw && raw.rows) || [];
-              rows.forEach(r => { r._histWG = w.dr; });
-              perWg.push({ wg: w.name, dr: w.dr, count: rows.length });
-              reports = reports.concat(rows);
-            } catch (e) {
-              if (e && e.name === 'AbortError') { return; }
-              perWg.push({ wg: w.name, dr: w.dr, count: -1, err: e.message });
-            }
-          }
+          let _wgAborted = false;
+          const _wgRows = await Promise.all(
+            WG.map(async (w, wi) => {
+              try {
+                const url =
+                  '/iMedicalLIS/lis/ashx/ashReportQuery.ashx?Method=QueryReportList&RegNo=' +
+                  encodeURIComponent(regNo) +
+                  '&WorkGroupDR=' +
+                  encodeURIComponent(w.dr);
+                const raw = await fetchJ(url, 15000, _ctrl.signal);
+                const rows = Array.isArray(raw) ? raw : (raw && raw.rows) || [];
+                rows.forEach(r => { r._histWG = w.dr; });
+                perWg.push({ wg: w.name, dr: w.dr, count: rows.length });
+                return rows;
+              } catch (e) {
+                if (e && e.name === 'AbortError') { _wgAborted = true; return []; }
+                perWg.push({ wg: w.name, dr: w.dr, count: -1, err: e.message });
+                return [];
+              }
+            })
+          );
+          if (_wgAborted || seq !== histLoadSeq) { return; }
+          reports = reports.concat(_wgRows.flat());
+          perWg.sort((a, b) => WG.map(x => String(x.dr)).indexOf(String(a.dr)) - WG.map(x => String(x.dr)).indexOf(String(b.dr)));
           _wgDebug = perWg;
           // 去重（同 ReportDR），并按日期倒序
           const seen = new Set();
@@ -13634,6 +13565,15 @@ window.addEventListener('keydown',function(e){
           });
           reports.sort((a, b) => String(_histReportDate(b)).localeCompare(String(_histReportDate(a))));
           histReportListCache[regNo] = { ts: Date.now(), rows: reports }; // 8.5.34: 带时间戳
+          // 8.9.0: 容量上限 200 + 最旧淘汰——每条含整份历次报告 rows，科室电脑一天不关
+          // 会缓慢吃内存（同文件 histReportCache 有 40 条上限，这里此前漏了）
+          const _histListKeys = Object.keys(histReportListCache);
+          if (_histListKeys.length > 200) {
+            _histListKeys
+              .sort((a, b) => (histReportListCache[a].ts || 0) - (histReportListCache[b].ts || 0))
+              .slice(0, _histListKeys.length - 200)
+              .forEach(k => {delete histReportListCache[k];});
+          }
         }
       } else {
         histDebug.list = 'RegNo 为空（手工录入/未建档），跳过历次报告查询';
@@ -13662,10 +13602,25 @@ window.addEventListener('keydown',function(e){
         : null; // 无当前报告锚点（从 PR 结果列表打开单项目历史）
       const targets = currentReport ? [currentReport, ...inRange] : inRange;
 
+      // 8.9.0: 会话过期熔断——histFetchReportItems 对每份报告按候选 ss 列表逐个盲试且失败不缓存，
+      // 会话过期时 4 并发 × 全部在架报告 × ss数×2 次请求会持续打满 LIS 数分钟；
+      // 连续 3 份报告全失败即 abort 本轮剩余请求并提示
+      let _failStreak = 0;
+      let _breakerTripped = false;
       const results = await histPool(targets, 4, async rep => {
         const rdr = String(rep.ReportDR || '');
         try {
           const val = await histFetchReportItems(rep, _ctrl.signal);
+          if (val && val.failed) {
+            histDebug.perReport.push({ rdr, items: -1, ok: false, err: 'failed' });
+            _failStreak++;
+            if (_failStreak >= 3 && !_breakerTripped) {
+              _breakerTripped = true;
+              try { _ctrl.abort(); } catch (e) {}
+            }
+            return { report: rep, items: [], lab: {} };
+          }
+          _failStreak = 0;
           histDebug.perReport.push({ rdr, items: val.items.length, ok: true });
           return { report: rep, ...val };
         } catch (e) {
@@ -13676,6 +13631,14 @@ window.addEventListener('keydown',function(e){
       });
 
       if (seq !== histLoadSeq) { return; }
+      if (_breakerTripped) {
+        const _msg = '连续多份报告拉取失败，LIS 会话可能已过期——请刷新页面重新登录后再打开历史';
+        histSetStatus(_msg, 'error');
+        const _be = document.getElementById('lis-hist-body');
+        if (_be) {_be.innerHTML = '<div class="hist-empty"><p>⚠️ ' + esc(_msg) + '</p></div>';}
+        dbg('患者历史加载熔断：连续失败，已中止剩余请求');
+        return;
+      }
       histAgg = histBuildAggregate(results, currentReport);
       histRender();
     } catch (e) {
@@ -13907,9 +13870,16 @@ window.addEventListener('keydown',function(e){
     document.getElementById('lis-hist-close-btn').addEventListener('click', histClose);
     const fbadge = document.getElementById('lis-hist-focusbadge');
     if (fbadge) { fbadge.addEventListener('click', histExitFocus); }
+    // 8.9.0: 搜索加 200ms 防抖——每次键入都对全部分组整表 innerHTML 重建，
+    // 大病史数百行时打字明显卡顿
+    let _histSearchDebounce = null;
     document.getElementById('lis-hist-search').addEventListener('input', e => {
-      histFilter.q = e.target.value;
-      histRender();
+      const val = e.target.value;
+      clearTimeout(_histSearchDebounce);
+      _histSearchDebounce = setTimeout(() => {
+        histFilter.q = val;
+        histRender();
+      }, 200);
     });
     document.getElementById('lis-hist-days').addEventListener('change', e => {
       histFilter.days = parseInt(e.target.value, 10) || 0;
@@ -14405,10 +14375,6 @@ window.addEventListener('keydown',function(e){
 
   //  模块 C2：报告处理页增强工具栏（审核流程优化核心）
   // ============================================================
-
-  // 分类结果（模块级，避免全局污染）
-  let _toolbarClassifiedRows = null;
-  let _toolbarClassifiedResults = null;
 
   // --- 样式注入 ---
   GM_addStyle(`
@@ -16624,459 +16590,8 @@ window.addEventListener('keydown',function(e){
     }
   }
 
-  // 实时检查CA认证状态
-  async function checkRealCAStatus() {
-    try {
-      const iframeWin = getReportIframeWin();
-      if (!iframeWin) {return { authenticated: false, reason: '页面未加载' };}
-
-      const jq = iframeWin.jQuery || iframeWin.$;
-      if (!jq) {return { authenticated: false, reason: '页面未就绪' };}
-
-      // 检查CA窗口是否存在且可见
-      const caWin = jq('#win_CAUserLogin');
-      if (caWin.length && caWin.is(':visible')) {
-        return { authenticated: false, reason: 'CA窗口已打开' };
-      }
-
-      // 检查审核用户是否已登录
-      const authStatus = getAuditStatusText(iframeWin);
-      if (authStatus && authStatus.indexOf('未登录') !== -1) {
-        return { authenticated: false, reason: '审核用户未登录' };
-      }
-
-      return { authenticated: true, reason: '已认证' };
-    } catch (e) {
-      return { authenticated: false, reason: '检查失败: ' + e.message };
-    }
-  }
-
-  // --- 确保CA已认证（审核前调用，自动触发CA认证流程）---
-  async function ensureCAAuthenticated() {
-    // 快速检查：如果 CA UKey 已绑定，跳过
-    try {
-      const iframeWin0 = getReportIframeWin();
-      if (iframeWin0 && iframeWin0.CAMsg && iframeWin0.CAMsg.UkeyNoArray) {
-        const _me0 = iframeWin0.me;
-        const _userDR = _me0?.AuthUserDR || uid();
-        if (_userDR && iframeWin0.CAMsg.UkeyNoArray[_userDR]) {
-          dbg('CA: UKey 已绑定，跳过认证');
-          return true;
-        }
-      }
-    } catch (e) {}
-
-    // 本地缓存检查（1小时内有效）
-    const cached = loadCAAuth();
-    if (cached && cached.wg === wgDR() && Date.now() - cached.time < 3600000) {
-      dbg('CA: 使用本地缓存');
-      return true;
-    }
-
-    dbg('CA: 需要认证，直接调用 CAMsg.Login');
-
-    try {
-      let iframeWin = getReportIframeWin();
-      if (!iframeWin) {iframeWin = await ensureReportPageLoaded();}
-      if (!iframeWin) {
-        showToast('未找到报告页面', 'error');
-        return false;
-      }
-
-      // 等待 iframe 就绪
-      for (let w = 0; w < 15; w++) {
-        if (iframeWin.CAMsg && iframeWin.me) {break;}
-        await sleep(400);
-        iframeWin = getReportIframeWin();
-      }
-      if (!iframeWin || !iframeWin.CAMsg) {
-        showToast('报告页面未就绪', 'error');
-        return false;
-      }
-
-      const jq = iframeWin.jQuery || iframeWin.$;
-      const me = iframeWin.me;
-      const CAMsg = iframeWin.CAMsg;
-
-      // 直接调用 CAMsg.Login 触发 CA 认证（不点审核按钮，避免触发审核流程）
-      const caUserDR = me?.AuthUserDR || uid();
-      dbg('CA: 调用 CAMsg.Login, userDR=' + caUserDR);
-
-      // 先检查 CA 窗口是否已经打开
-      let caWin = jq('#win_CAUserLogin');
-      if (caWin.length && caWin.is(':visible')) {
-        dbg('CA: CA窗口已打开，直接处理登录');
-        const caOK = await handleCALogin(iframeWin);
-        if (caOK) {
-          saveCAAuth();
-          showToast('✅ CA 认证成功', 'success');
-          return true;
-        }
-        clearCAAuth();
-        return false;
-      }
-
-      // 调用 CAMsg.Login 触发 CA 窗口
-      CAMsg.Login(
-        caUserDR,
-        function () {
-          dbg('CA: CAMsg.Login 回调触发');
-        },
-        []
-      );
-
-      // 等待 CA 窗口出现（最多 15 秒）
-      let waited = 0;
-      caWin = jq('#win_CAUserLogin');
-      while ((!caWin.length || !caWin.is(':visible')) && waited < 15000) {
-        await sleep(500);
-        waited += 500;
-        caWin = jq('#win_CAUserLogin');
-      }
-
-      if (!caWin.length || !caWin.is(':visible')) {
-        // CA窗口没出现 = 不需要CA认证 或 CA客户端未运行
-        dbg('CA: 未弹出CA窗口（等了' + waited + 'ms），可能不需要CA认证或CA客户端未运行');
-        saveCAAuth();
-        return true;
-      }
-
-      // CA窗口已弹出，自动完成 capping 登录
-      dbg('CA: CA窗口已弹出，自动登录');
-      const caOK = await handleCALogin(iframeWin);
-
-      if (caOK) {
-        saveCAAuth();
-        showToast('✅ CA 认证成功', 'success');
-        return true;
-      } else {
-        clearCAAuth();
-        showToast('CA 认证失败，请手动完成', 'error');
-        return false;
-      }
-    } catch (e) {
-      dbg('CA 认证异常:', e);
-      showToast('CA 认证异常: ' + e.message, 'error');
-      return false;
-    }
-  }
-
-  function getAuditStatusText(iframeWin) {
-    try {
-      const doc = iframeWin ? iframeWin.document : document;
-      // 尝试多种方式获取状态栏文本
-      const statusBar = doc.querySelector('#sp_EntryLoginInfo, .statusbar, .panel-body .messager-info');
-      if (statusBar) {return statusBar.textContent || '';}
-      // 查找"审核用户未登录"文本
-      const allText = doc.body ? doc.body.textContent : '';
-      const idx = allText.indexOf('审核用户未登录');
-      return idx !== -1 ? '审核用户未登录' : '';
-    } catch (e) {
-      return '';
-    }
-  }
-
-  async function handleAuditLogin(iframeWin, jq) {
-    try {
-      // 点击"审核登录"按钮
-      const authLoginBtn =
-        iframeWin.document.getElementById('btn_AuthLogin') || document.getElementById('btn_AuthLogin');
-      if (!authLoginBtn) {
-        dbg('审核登录按钮不存在');
-        return false;
-      }
-      jq(authLoginBtn).click();
-      dbg('已点击审核登录按钮');
-      await sleep(800);
-
-      // showwin 在 dialog 里创建 iframe(#FRMdetail)，登录表单在这个 iframe 里
-      const doc = iframeWin.document;
-      const loginWin = doc.querySelector('#win_AuthLogin') || doc.querySelector('#win_BatchAuthUserLogin');
-      if (!loginWin) {
-        dbg('审核登录窗口未找到');
-        return false;
-      }
-
-      // 在 dialog 内部找 iframe（showwin 用的 #FRMdetail）
-      const dialogIframe = loginWin.querySelector('iframe');
-      let pwdInput = null;
-      let okBtn = null;
-      let loginDoc = doc; // 默认在父文档找
-
-      if (dialogIframe) {
-        try {
-          const iDoc = dialogIframe.contentDocument || dialogIframe.contentWindow.document;
-          if (iDoc && iDoc.body && iDoc.body.childElementCount > 0) {
-            loginDoc = iDoc;
-            dbg('审核登录表单在 dialog iframe 内');
-          }
-        } catch (e) {
-          dbg('访问 dialog iframe 失败:', e.message);
-        }
-      }
-
-      // 在正确的文档里找密码框
-      pwdInput =
-        loginDoc.querySelector('#text_AuthUserLoginPasssword') || loginDoc.querySelector('input[type="password"]');
-      if (!pwdInput) {
-        // 再试一层 iframe
-        const innerIframe = loginDoc.querySelector('iframe');
-        if (innerIframe) {
-          try {
-            const iDoc2 = innerIframe.contentDocument || innerIframe.contentWindow.document;
-            if (iDoc2) {
-              pwdInput =
-                iDoc2.querySelector('#text_AuthUserLoginPasssword') || iDoc2.querySelector('input[type="password"]');
-              if (pwdInput) {
-                loginDoc = iDoc2;
-                dbg('密码框在更深层 iframe');
-              }
-            }
-          } catch (e) {}
-        }
-      }
-
-      if (!pwdInput) {
-        dbg('密码框未找到，尝试所有 iframe...');
-        // 遍历所有 iframe 查找
-        const allIframes = loginWin.querySelectorAll('iframe');
-        for (const ifr of allIframes) {
-          try {
-            const iDoc = ifr.contentDocument || ifr.contentWindow.document;
-            if (!iDoc) {continue;}
-            pwdInput =
-              iDoc.querySelector('#text_AuthUserLoginPasssword') || iDoc.querySelector('input[type="password"]');
-            if (pwdInput) {
-              loginDoc = iDoc;
-              dbg('密码框在 iframe 中找到');
-              break;
-            }
-            // 再深一层
-            const deep = iDoc.querySelectorAll('iframe');
-            for (const d of deep) {
-              try {
-                const dDoc = d.contentDocument || d.contentWindow.document;
-                if (!dDoc) {continue;}
-                pwdInput =
-                  dDoc.querySelector('#text_AuthUserLoginPasssword') || dDoc.querySelector('input[type="password"]');
-                if (pwdInput) {
-                  loginDoc = dDoc;
-                  dbg('密码框在深层 iframe');
-                  break;
-                }
-              } catch (e) {}
-            }
-            if (pwdInput) {break;}
-          } catch (e) {}
-        }
-      }
-
-      if (!pwdInput) {
-        dbg('❌ 审核登录密码框未找到');
-        return false;
-      }
-
-      // 同时查找账户输入框（审核登录需要账户+密码）
-      let acctInput =
-        loginDoc.querySelector('#text_AuthUserCode') ||
-        loginDoc.querySelector('input[id*="UserCode"]') ||
-        loginDoc.querySelector('input[id*="Account"]') ||
-        loginDoc.querySelector('input[placeholder*="账户"]');
-      // 如果没找到，在所有 input 里找第一个 text 类型的
-      if (!acctInput) {
-        const allInputs = loginDoc.querySelectorAll('input[type="text"], input:not([type])');
-        for (const inp of allInputs) {
-          if (inp.id !== pwdInput.id && !inp.readOnly && !inp.disabled) {
-            acctInput = inp;
-            break;
-          }
-        }
-      }
-
-      const pwd = await loadPwdAsync();
-      if (!pwd) {
-        dbg('❌ 未保存审核密码');
-        return false;
-      }
-
-      // 填写账户（用当前登录用户名）
-      if (acctInput) {
-        const userName = uname();
-        if (userName) {
-          setNativeInputValue(acctInput, userName);
-          dbg('已填写审核账户: ' + userName);
-        }
-      } else {
-        dbg('⚠️ 未找到账户输入框，仅填写密码');
-      }
-
-      // 填写密码
-      fillPwdNoSave(pwdInput, pwd);
-      dbg('已自动填写审核密码');
-      await sleep(300);
-
-      // 找确定按钮（在 loginDoc 里）
-      const btns = loginDoc.querySelectorAll('a.l-btn, button');
-      for (const b of btns) {
-        const text = (b.textContent || '').trim();
-        if (text.includes('确定') || text.includes('登录') || text === 'OK') {
-          okBtn = b;
-          break;
-        }
-      }
-      // 也检查 dialog 按钮区域
-      if (!okBtn) {
-        const allBtns = loginWin.querySelectorAll('a.l-btn, button');
-        for (const b of allBtns) {
-          const text = (b.textContent || '').trim();
-          if (text.includes('确定') || text.includes('登录')) {
-            okBtn = b;
-            break;
-          }
-        }
-      }
-
-      if (!okBtn) {
-        dbg('❌ 审核登录确定按钮未找到');
-        return false;
-      }
-
-      jq(okBtn).click();
-      dbg('已点击审核登录确定');
-
-      // 等待登录窗口关闭（最多 5 秒）
-      for (let w = 0; w < 25; w++) {
-        await sleep(200);
-        if (!loginWin || loginWin.style.display === 'none' || !loginWin.offsetParent) {
-          dbg('审核登录窗口已关闭');
-          // 设置原生 me 状态
-          try {
-            const _me = iframeWin.me;
-            if (_me) {
-              _me.IsAuthLogin = 1;
-              const auInfo = sessionStorage.getItem('AuInfo');
-              if (auInfo) {
-                _me.AuthUserDR = auInfo.split('^')[0];
-              } else {
-                _me.AuthUserDR = uid();
-              }
-              dbg('已设置 me.IsAuthLogin=1, AuthUserDR=' + (_me.AuthUserDR || ''));
-            }
-          } catch (e) {
-            dbg('设置审核状态异常:', e.message);
-          }
-          return true;
-        }
-        // 检查是否有错误提示
-        try {
-          const errWin = loginDoc.querySelector('.messager-window, .window');
-          if (errWin && errWin.style.display !== 'none') {
-            const errBody = errWin.querySelector('.messager-body, .panel-body');
-            if (errBody) {
-              const errText = (errBody.textContent || '').trim();
-              if (
-                errText &&
-                (errText.includes('密码') ||
-                  errText.includes('错误') ||
-                  errText.includes('password') ||
-                  errText.includes('fail'))
-              ) {
-                dbg('审核登录错误: ' + errText.substring(0, 50));
-                return false;
-              }
-            }
-          }
-        } catch (e) {}
-      }
-      dbg('审核登录窗口超时未关闭');
-      return false;
-    } catch (e) {
-      dbg('审核登录异常:', e);
-      return false;
-    }
-  }
-
   function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
-  }
-
-  // --- 通过原生按钮审核（带 CA 自动登录）---
-  async function simulateNativeAudit() {
-    let iframeWin = getReportIframeWin();
-    if (!iframeWin) {
-      showToast('正在加载报告处理页面...', 'warning');
-      iframeWin = await ensureReportPageLoaded();
-    }
-    if (!iframeWin) {
-      showToast('未找到报告处理页面，请先打开"报告处理"', 'error');
-      return false;
-    }
-    // 确保工作列表有数据
-    if (!ensureSelectedGrid(iframeWin)) {
-      dbg('工作列表无选中行，尝试刷新...');
-      try {
-        iframeWin.RefreshWorkList();
-      } catch (e) {}
-      await sleep(1500);
-      if (!ensureSelectedGrid(iframeWin)) {
-        showToast('工作列表无数据，请先加载标本', 'warning');
-        return false;
-      }
-    }
-    // 点击原生审核按钮（自动处理审核登录和 CA）
-    return await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', { action: 'audit', expectedStatuses: ['3'] });
-  }
-
-  // --- 初审 ---
-  async function simulateNativeInitialReview() {
-    let iframeWin = getReportIframeWin();
-    if (!iframeWin) {iframeWin = await ensureReportPageLoaded();}
-    if (!iframeWin) {return false;}
-    if (!ensureSelectedGrid(iframeWin)) {return false;}
-    return await clickNativeAuditButton(iframeWin, 'btn_ReportEnt', { action: 'entry', expectedStatuses: ['2', '3'] });
-  }
-
-  // --- 取审 ---
-  function simulateNativeUndoAudit() {
-    const iframeWin = getReportIframeWin();
-    if (!iframeWin) {return false;}
-    // 优先调用 ReportUndo 函数
-    if (typeof iframeWin.ReportUndo === 'function') {
-      if (!ensureSelectedGrid(iframeWin)) {return false;}
-      try {
-        const sel = iframeWin.me.selectedGrid.datagrid('getSelected');
-        if (!sel) {return false;}
-        dbg('直接调用 ReportUndo');
-        iframeWin.ReportUndo(sel.ReportDR, '', '');
-        return true;
-      } catch (e) {
-        dbg('ReportUndo 调用失败:', e);
-        return false;
-      }
-    }
-    // 回退：点击取审按钮
-    try {
-      const doc = iframeWin.document;
-      const btn = doc.getElementById('btn_ReportUndo');
-      if (btn) {
-        const jq = iframeWin.jQuery;
-        if (jq) {
-          jq(btn).click();
-          return true;
-        }
-        btn.click();
-        return true;
-      }
-    } catch (e) {}
-    return false;
-  }
-
-  // --- 保存 ---
-  async function simulateNativeSave() {
-    const iframeWin = getReportIframeWin();
-    if (!iframeWin) {return false;}
-    if (!ensureSelectedGrid(iframeWin)) {return false;}
-    return await clickNativeAuditButton(iframeWin, 'btn_ReportSave', { action: 'save', expectedStatuses: [] });
   }
 
   // --- 结果分类 ---
@@ -17897,55 +17412,6 @@ window.addEventListener('keydown',function(e){
     } catch (e) {}
   }
 
-  // --- 更新工具栏统计 ---
-  async function updateToolbarStats() {
-    const statEl = document.getElementById('lis-tb-stat');
-    if (!statEl) {return;}
-
-    const eligible = getAuditEligibleRows();
-    const total = eligible.length;
-
-    if (total === 0) {
-      statEl.innerHTML = '<span class="st-total">✅ 无待审核标本</span>';
-      return;
-    }
-
-    statEl.innerHTML = `<span class="st-total">待审核: ${total}</span><span style="color:rgba(255,255,255,.5);font-size:11px">点击刷新</span>`;
-
-    // 异步获取每个标本的分类（只取前50个避免过慢）
-    const toCheck = eligible.slice(0, 50);
-    let normal = 0,
-      abnormal = 0,
-      critical = 0,
-      uncertain = 0;
-
-    // 并发获取（每批10个）
-    const allResults = [];
-    for (let i = 0; i < toCheck.length; i += 10) {
-      const batch = toCheck.slice(i, i + 10);
-      const results = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
-      allResults.push(...results);
-      results.forEach(r => {
-        if (r.status === 'NORMAL') {normal++;}
-        else if (r.status === 'CRITICAL') {critical++;}
-        else if (r.status === 'ABNORMAL') {abnormal++;}
-        else {uncertain++;}
-      });
-    }
-
-    statEl.innerHTML = `
-            <span class="st-normal" title="全部正常，可批量审核">正常: ${normal}</span>
-            <span class="st-abnormal" title="有异常结果，需人工审核">异常: ${abnormal}</span>
-            ${critical > 0 ? `<span class="st-abnormal" title="危急值，必须在原始LIS中审核">危急: ${critical}</span>` : ''}
-            ${uncertain > 0 ? `<span class="st-uncertain" title="无法判断，需人工审核">待定: ${uncertain}</span>` : ''}
-            <span class="st-total">共: ${total}</span>
-        `;
-
-    // 保存分类结果供后续使用（复用已获取的数据，不重复请求）
-    _toolbarClassifiedRows = toCheck;
-    _toolbarClassifiedResults = allResults;
-  }
-
   // --- 快速审核当前标本 ---
   async function quickAuditCurrent() {
     const auditLockId = acquireAuditLock('quickAudit');
@@ -18127,6 +17593,18 @@ window.addEventListener('keydown',function(e){
         for (let i = 0; i < toFetch.length; i += 8) {
           const batch = toFetch.slice(i, i + 8);
           const batchResults = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
+          // 8.9.0: 结果写回分类缓存（与 classifyAllSpecimens 同款）——此前只存局部数组，
+          // 确认后 continueAuditQueue 经 getLiveClassification 查缓存落空，逐条再拉一遍
+          // GetReportInfoAll，200 条待审时对 LIS 多打一倍请求
+          batchResults.forEach(r => {
+            if (r && r.reportDR) {
+              r._accessTs = Date.now();
+              if (!r.fingerprint && r.row) {attachClassificationMeta(r, r.row);}
+              wsClassifiedCache[r.reportDR] = r;
+              _classifyVersion++;
+            }
+          });
+          invalidateCaches();
           results.push(...batchResults);
         }
       }
@@ -19710,23 +19188,31 @@ window.addEventListener('keydown',function(e){
     _notifyRetryTimer = setTimeout(async () => {
       _notifyRetryTimer = null;
       const now = Date.now();
-      const batch = _notifyRetryQueue.filter(it => it && it.p && now - (it.t || 0) <= AA_RETRY_MAX_AGE);
+      // 8.9.0: 先把到期项同步从队列取走，再逐条 await 发送。发送期间 _notifyRetryEnqueue
+      // 可能推入新失败项；若发送完才用旧快照整体覆盖队列，期间入队的新推送会被静默丢弃
+      //（8.8.34「推送丢失」修复残留缺口：夜间 serve 掉线时关键推送会永久丢）。
+      const batch = [];
       const remain = [];
+      for (const it of _notifyRetryQueue) {
+        if (it && it.p && now - (it.t || 0) <= AA_RETRY_MAX_AGE) {batch.push(it);}
+        else {remain.push(it);} // 超龄条目直接丢弃
+      }
+      _notifyRetryQueue = remain;
+      _notifyRetrySave();
       for (const it of batch) {
-        if (!(await _notifySend(it.p))) {remain.push(it);}
+        if (!(await _notifySend(it.p))) {_notifyRetryQueue.push(it);} // 失败取回原条目（保留原时间戳，下轮超龄自然过期）
       }
-      if (remain.length !== _notifyRetryQueue.length) {
-        _notifyRetryQueue = remain;
-        _notifyRetrySave();
-      }
+      if (batch.length) {_notifyRetrySave();}
       if (_notifyRetryQueue.length) {_flushNotifyRetry();} // 仍有残余 → 30s 后继续补发
     }, 30000);
   }
-  function _notifyRetryEnqueue(p) {
+  function _notifyRetryEnqueue(p, sigKey) {
     try {
-      const sig = (p.title || '') + '|' + (p.body || '');
-      if (_notifyRetryQueue.some(it => it && it.p && (it.p.title || '') + '|' + (it.p.body || '') === sig)) {return;} // 同内容已在队列
-      _notifyRetryQueue.push({t: Date.now(), p});
+      // 8.9.0: 去重键支持外部传入（含 nonce 的完整 key）——仅按 title|body 去重会把
+      // serve 中断期间连续多轮的同文案推送合并成一条（8.8.34② 同类复发）。
+      const sig = sigKey || ((p.title || '') + '|' + (p.body || ''));
+      if (_notifyRetryQueue.some(it => it && it.sig === sig)) {return;} // 同内容已在队列
+      _notifyRetryQueue.push({t: Date.now(), p, sig});
       if (_notifyRetryQueue.length > AA_RETRY_MAX) {_notifyRetryQueue.splice(0, _notifyRetryQueue.length - AA_RETRY_MAX);}
       _notifyRetrySave();
     } catch (e) {}
@@ -19740,7 +19226,8 @@ window.addEventListener('keydown',function(e){
     if (_notifyBarkLast.key === key && now - _notifyBarkLast.t < 60 * 1000) {return;} // 60s 同内容去重（nonce 随轮次变化，正常轮次不受影响）
     _notifyBarkLast = { key, t: now };
     const send = {title: p.title || '', body: p.body || '', level: p.level || 'active'};
-    _notifySend(send).then(ok => {if (!ok) {_notifyRetryEnqueue(send);}});
+    // 8.9.0: 补发登记带上含 nonce 的完整 key，防同文案多轮被去重误杀
+    _notifySend(send).then(ok => {if (!ok) {_notifyRetryEnqueue(send, key);}});
   }
   // 危急红线原因判定：这些标本被拦下留人工，属于必须立即知道的关键事件
   // （危急值 / 负值 / 传染病阳性 / 心肌标志物达拦截线 / 疑似堵孔）
@@ -21449,9 +20936,13 @@ window.addEventListener('keydown',function(e){
       }
     });
     ob.observe(document, { childList: true, subtree: true });
-    // iframe 延迟加载补扫（个别框架 onload 前密码框已就位）
+    // iframe 延迟补扫（个别框架 onload 前密码框已就位）
+    // 8.9.0: 跑 2 分钟后自动退出——MutationObserver 已覆盖新增节点，常驻 3s 全量扫 iframe
+    // 在长驻页面是纯开销（补扫只是兜底，页面加载完成后的 iframe 由 load 事件覆盖）
+    const _pwdScanStart = Date.now();
     const ifrTimer = setInterval(() => {
       try {
+        if (Date.now() - _pwdScanStart > 120000) {clearInterval(ifrTimer); return;}
         document.querySelectorAll('iframe').forEach(f => {
           if (f.contentDocument) {apply(f.contentDocument);}
         });

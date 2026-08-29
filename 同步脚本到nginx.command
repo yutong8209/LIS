@@ -18,11 +18,11 @@ scp "$DIR/iMedicalLIS-enhancer.user.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/" || {
   echo "❌ 传输失败。若从未开启过 SSH，请在 nginx 那台 Windows 上："
   echo "   ① 设置 → 应用 → 可选功能 → 添加可选功能 → 搜索并安装「OpenSSH 服务器」"
   echo "   ② 管理员 PowerShell 执行：Start-Service sshd; Set-Service sshd -StartupType Automatic"
-  echo "   ③ 确认 C:\\lis-tools\\ 和 C:\\lis-tools\\vendor\\ 目录已建好"
+  echo "   ③ 确认 D:\\nginx-1.31.2\\lis-tools\\ 和 D:\\nginx-1.31.2\\lis-tools\\vendor\\ 目录已建好"
   exit 1
 }
 scp "$DIR/vendor/xlsx.full.min.js" "$DIR/vendor/jszip.min.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/vendor/" || {
-  echo "❌ vendor 传输失败：确认 nginx 机 C:\\lis-tools\\vendor\\ 目录已存在"
+  echo "❌ vendor 传输失败：确认 nginx 机 D:\\nginx-1.31.2\\lis-tools\\vendor\\ 目录已存在"
   exit 1
 }
 echo

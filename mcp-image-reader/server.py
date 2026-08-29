@@ -178,28 +178,39 @@ async def describe_image(path: str, custom_prompt: str = ""):
     })
 
     # 重试机制：最多重试3次
+    # 8.9.0: 全程异步化——此前在 async 函数里用 time.sleep(2) 和同步 urllib/httpx，
+    # 会阻塞整个 MCP 事件循环，识别慢时所有其它 MCP 请求一起卡
     max_retries = 3
     last_error = None
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
 
     for attempt in range(max_retries):
         try:
             log(f"API call attempt {attempt + 1}/{max_retries}")
 
-            # 优先使用 httpx
+            # 优先使用 httpx（异步客户端，不阻塞事件循环）
+            data = None
             try:
                 import httpx
-                with httpx.Client(timeout=60) as client:
-                    resp = client.post(url, content=payload, headers={
-                        "x-api-key": api_key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json"
-                    })
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(url, content=payload, headers=headers)
                     resp.raise_for_status()
                     data = resp.json()
             except ImportError:
-                log("httpx not found, using urllib")
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    data = json.loads(resp.read())
+                log("httpx not found, using urllib in worker thread")
+                import functools
+                loop = __import__('asyncio').get_running_loop()
+
+                def _urllib_call():
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        return json.loads(resp.read())
+
+                data = await loop.run_in_executor(None, functools.partial(_urllib_call))
 
             # 解析响应
             content = data.get("content", [])
@@ -208,8 +219,8 @@ async def describe_image(path: str, custom_prompt: str = ""):
             if not content:
                 log("Warning: empty content in response")
                 if attempt < max_retries - 1:
-                    import time
-                    time.sleep(2)
+                    import asyncio
+                    await asyncio.sleep(2)
                     continue
                 return [TextContent(type="text", text="视觉模型返回空内容，请重试")]
 
@@ -221,8 +232,8 @@ async def describe_image(path: str, custom_prompt: str = ""):
 
             log(f"Warning: no text block found in content: {json.dumps(content, ensure_ascii=False)[:200]}")
             if attempt < max_retries - 1:
-                import time
-                time.sleep(2)
+                import asyncio
+                await asyncio.sleep(2)
                 continue
             return [TextContent(type="text", text="视觉模型未返回文本内容，请重试")]
 
@@ -230,8 +241,8 @@ async def describe_image(path: str, custom_prompt: str = ""):
             last_error = e
             log(f"Attempt {attempt + 1} failed: {e}")
             if attempt < max_retries - 1:
-                import time
-                time.sleep(2)
+                import asyncio
+                await asyncio.sleep(2)
                 continue
 
     log(f"All {max_retries} attempts failed")
