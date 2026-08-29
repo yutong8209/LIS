@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.1
+// @version      8.9.2
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7207,6 +7207,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (!wsEl.classList.contains('show')) {
       applyWSState(loadWSState());
       invalidateCaches(); // 确保使用最新数据渲染
+      // 8.9.2: 与 openWS 同款旗帜重置——renderWSHeader 会重建头部并清空分类栏 DOM，
+      // 不重置 _catBarBuilt 会导致分类栏「看起来消失」（自动审核保活重开工作台路径的根因）
+      _tabsBuilt = false;
+      _catBarBuilt = false;
       wsEl.classList.add('show');
       renderWSHeader();
       renderWSTabs();
@@ -7506,6 +7510,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }, 350);
   }
 
+  // 8.9.2: 自动升级整页刷新的节流阀——LIS 彻底故障时若不限制，会陷入「刷新→断流→再刷新」循环。
+  // 5 分钟内最多自动整页刷新一次（用户手点 ↻ 不受限流，那是明确意图）
+  const WS_AUTO_RELOAD_KEY = 'LIS_WS_LastAutoReload';
+  const WS_AUTO_RELOAD_MIN_MS = 5 * 60 * 1000;
+  function autoHardReloadAllowed() {
+    try {
+      const last = Number(sessionStorage.getItem(WS_AUTO_RELOAD_KEY) || 0);
+      if (Date.now() - last < WS_AUTO_RELOAD_MIN_MS) {return false;}
+      sessionStorage.setItem(WS_AUTO_RELOAD_KEY, String(Date.now()));
+      return true;
+    } catch (e) {return true;}
+  }
+
   function maybeReopenWSAfterReload() {
     try {
       if (sessionStorage.getItem(WS_REOPEN_KEY) !== '1') {return;}
@@ -7560,6 +7577,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
       // 软刷新成功拿到数据 → 正常继续
       if (result && result.ok && !empty && !err) {
+        // 8.9.2: 「成功」但健康仍是 failed/partial → 拿到的数据不可信（部分仪器失败/数据过期），
+        // 正是「点了刷新只报一串黄字警告、计数还是旧的」的场景——整页刷新兜底（5 分钟节流）
+        if ((_wsDataHealth.failed || _wsDataHealth.partial) && autoHardReloadAllowed()) {
+          hardReloadPageForWS('刷新后仍有仪器/工作组加载失败，数据可能不是最新，正在整页刷新恢复…');
+          return;
+        }
         dbg('[WS] 强制刷新成功，条数=', wsData.length);
         showToast('工作台已刷新（' + wsData.length + ' 条）', 'success');
         return;
@@ -8843,7 +8866,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const fd = filteredData();
 
     // 首次或切换分类时重建 DOM，其余只更新计数和状态
-    if (!_catBarBuilt) {
+    // 8.9.2: 除旗帜外再校验 DOM 里是否真有标签——keepWorkbenchOnTop/renderWSHeader 重建头部会
+    // 连带清空分类栏 DOM，旧逻辑只看 _catBarBuilt 旗帜导致清空后永不重建
+    //（「待审/不完整小标签全没了、退出重进才恢复」的根因）。DOM 校验让任何路径清空后下一拍自愈
+    if (!_catBarBuilt || !bar.querySelector('.cat-tab')) {
       _catBarBuilt = true;
       _buildCategoryBarDOM(bar);
     }
@@ -19000,6 +19026,7 @@ window.addEventListener('keydown',function(e){
   var _lastHealthForceTs = 0; // 8.8.34: 健康预检强刷的最近一次时间（2 分钟一次，防故障期间每 tick 全量拉取）
   var _pendingResumeNotice = false; // 8.8.36: 断流暂停已推送 → 待数据恢复后补一条「已恢复」推送（一次性，到期/手动关闭时清除）
   var _aaInDataPause = false; // 8.9.1: 数据健康暂停期间置位，恢复时配对记「恢复」事件（含未推送过的暂停也配对）
+  var _aaStaleTickCnt = 0; // 8.9.2: 数据健康连续不健康的 tick 计数（连续 3 个 → 自动整页刷新升级）
   var _autoAuditRunning = false; // 防重入
   var _autoAuditCancelRequested = false; // 停止时阻止自动队列继续取下一条
   var _autoAuditTimer = null; // 30s 兜底轮询
@@ -19764,6 +19791,15 @@ window.addEventListener('keydown',function(e){
         _aaInDataPause = true;
         _pendingResumeNotice = true;
         aaStateEventAdd('pause', '工作台数据未确认最新（' + _ph + '），自动审核暂停，恢复后自动继续');
+        // 8.9.2: 持续断流自动升级——连续 3 个 tick（约 90 秒+）数据仍不健康，自动执行浏览器级
+        // 整页刷新（实测能恢复会话与工作台状态）；5 分钟节流防 LIS 故障期间的刷新循环
+        _aaStaleTickCnt++;
+        if (_aaStaleTickCnt >= 3 && autoHardReloadAllowed()) {
+          _aaStaleTickCnt = 0;
+          aaStateEventAdd('pause', '数据连续多个周期未恢复，已自动执行整页刷新尝试恢复');
+          hardReloadPageForWS('工作台数据持续未恢复，正在自动整页刷新…');
+          return;
+        }
         // 真暂停：红线从当前数据现扫（Map 语义，不受 skipSeen 去重影响，连续暂停每轮明细都完整）
         const _cand = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
         const _rl = _aaScanRedLines(_cand);
@@ -19798,6 +19834,7 @@ window.addEventListener('keydown',function(e){
       // 8.8.36: 断流恢复闭环——数据健康恢复后补一条普通推送（与 critical 暂停推送配对，
       // 半夜被吵醒过就知道它自己缓过来了，不用爬起来看）
       // 8.9.1: 恢复事件同时进「查看记录」时间线（_aaInDataPause 覆盖未触发推送的暂停场景）
+      _aaStaleTickCnt = 0; // 8.9.2: 数据恢复，连续断流计数清零
       if (_pendingResumeNotice || _aaInDataPause) {
         _pendingResumeNotice = false;
         _aaInDataPause = false;
