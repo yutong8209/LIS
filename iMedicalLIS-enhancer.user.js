@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.4
+// @version      8.9.5
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -21224,6 +21224,36 @@ window.addEventListener('keydown',function(e){
     });
   }
 
+  // ==================== 8.9.5: LIS 会话保活 ====================
+  // LIS 会话只在「长时间完全不操作」后才过期（实测数小时）。夜间/无人时段工作台关闭、自动审核
+  // 间隙，整页可能数小时无任何请求 → 会话悄悄过期 → 自动审核走断流暂停→整页刷新链路（还连带掉 CA）。
+  // 每 4 分钟对 LIS 发一次极轻量只读请求维持会话活跃（单次 <2KB，远小于工作台一次刷新的请求量）。
+  // 设计约束：完全静音——失败只进调试日志（Alt+D 可见），会话真过期仍由自动审核健康预检按既有
+  // 链路处理，不新增任何推送/toast 噪音。仅保活 Web 会话；CA 认证绑在页面内存（切组/刷新即失效），
+  // 请求保活管不到，维持 8.9.4「每断流期至多一次整页刷新」的既有代价模型
+  const LIS_KEEPALIVE_INTERVAL = 4 * 60 * 1000;
+  function lisKeepalivePing() {
+    if (isLoginPage() || isAuthPage()) {return;}
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => {ctrl.abort();}, 10000);
+    // QryMachineParameter 是 QE 模块在用的现成只读接口，响应极小；WorkGroupDR=1 固定查临检组即可
+    fetch(BASE + '/qc/ashx/ashQCDataView.ashx?Method=QryMachineParameter&WorkGroupDR=1', {
+      credentials: 'same-origin',
+      signal: ctrl.signal
+    }).then(r => r.text()).then(txt => {
+      clearTimeout(timer);
+      if (/Login\.aspx/i.test(txt)) {dbg('[Keepalive] 会话已过期（响应为登录页），交由自动审核健康预检处理');}
+      else {dbg('[Keepalive] 会话保活 OK');}
+    }).catch(e => {
+      clearTimeout(timer);
+      dbg('[Keepalive] 保活请求失败（网络/服务异常）:', e && e.message);
+    });
+  }
+  function startLisSessionKeepalive() {
+    setInterval(lisKeepalivePing, LIS_KEEPALIVE_INTERVAL);
+    setTimeout(lisKeepalivePing, 15000); // 首次延后，避开页面加载请求高峰
+  }
+
   function init() {
     if (_inited) {return;}
     _inited = true;
@@ -21284,6 +21314,7 @@ window.addEventListener('keydown',function(e){
     safeInit('maybeReopenWSAfterReload', maybeReopenWSAfterReload);
     safeInit('startMenubarCmdPoller', startMenubarCmdPoller); // 菜单栏下拉点击 → 跨进程切分类
     safeInit('startMenubarKeepAlive', startMenubarKeepAlive); // 菜单栏 keep-alive，防止离开工作台后显示过期
+    safeInit('startLisSessionKeepalive', startLisSessionKeepalive); // 8.9.5: LIS 会话保活，防夜间长时间无操作被服务端踢下线
     dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
   }
 
