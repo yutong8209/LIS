@@ -9,7 +9,8 @@ A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Ta
 | File | Purpose |
 |---|---|
 | `iMedicalLIS-enhancer.user.js` | Main userscript. Report review automation, batch approve, hotkeys, result classification, QC data export. |
-| `serve.py` / `serve.js` | Local HTTP server on `localhost:8765`（推荐 **serve.py**）serving userscript + `vendor/` for TM auto-update. |
+| `serve.py` / `serve.js` | Local HTTP server on `localhost:8765`（推荐 **serve.py**）serving userscript + `vendor/` for TM auto-update. 8.9.7 起脚本/vendor 主源为科室 nginx，serve 主要剩 **Mac 菜单栏 /stats** 与**推送兜底**。 |
+| `bark-relay/` | **8.9.7: 网关机 Bark 推送中转**（部署在 192.168.31.111 的 `D:\bark-relay\`，勿放进 nginx 网络目录）——nginx 把 `/notify*` 反代到它（127.0.0.1:8766），所有机器推送无需本机开 serve；部署步骤见 `bark-relay/README-网关部署.md`。userscript 推送端点：网关中转优先 → 本机 8765 兜底（粘滞记忆）。 |
 | `vendor/xlsx.full.min.js` | SheetJS 本地副本（质控导出，不走公网 CDN） |
 | `start_serve_mac.command` | Mac startup script — double-click or add to Login Items. |
 | `start_serve.bat` | Windows 启动 serve（质控导出必需） |
@@ -56,7 +57,7 @@ pip3 install -r ~/脚本/requirements.txt
 
 - **Python packages**: 见 `requirements.txt`（`pillow`, `mss`, `pyautogui`, 可选 `mcp`）
 - **MCP config**: each MCP server has its own `config.json` in its subdirectory（勿提交密钥）。
-- Tampermonkey 更新前请保持 **serve.py 运行**，否则 SheetJS `@require` 与脚本更新会失败。
+- Tampermonkey 更新前请保持 **serve.py 运行**，否则 SheetJS `@require` 与脚本更新会失败。（8.9.7 起 vendor/脚本主源为科室 nginx，本条主要针对推送兜底与 Mac 菜单栏；推送主通道是网关机 bark-relay。）
 - **菜单栏功能**（可选）：`brew install --cask swiftbar`（`jq` 系统自带 `/usr/bin/jq`）。菜单栏读数依赖 **serve.py 在线**。⚠️ **已取消开机自启**：launchd 服务 `com.yutong.lis-serve` 已 `unload`（plist 仍保留在 `~/Library/LaunchAgents/` 备用），不再开机自启/崩溃自拉起。改为**手动开关**：
   - 用的时候双击 `start_lis_menubar.command` → 启动 serve.py（nohup 后台）+ 打开 SwiftBar
   - 不用的时候双击 `stop_lis_menubar.command` → 退出 SwiftBar + 停止 serve.py（无后台残留）

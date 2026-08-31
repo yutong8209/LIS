@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.6
+// @version      8.9.7
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19276,7 +19276,8 @@ window.addEventListener('keydown',function(e){
   }
 
   // ==================== 8.8.12: 自动审核关键事件 → 手机推送（Bark → iPhone，Apple Watch 自动镜像） ====================
-  // 通道：本地 serve.py /notify → https://api.day.app/push（Bark 云端）→ APNs → iPhone 通知中心。
+  // 通道：① 网关中转 http://192.168.31.111:9111/notify（nginx 反代网关机上的 bark_relay，8.9.7 起主通道，本机无需开 serve）
+  //       ② 本机 serve.py /notify（兜底）→ https://api.day.app/push（Bark 云端）→ APNs → iPhone 通知中心。
   // 隐私红线：正文只含「聚合计数 + 标本异常摘要（留人工与通过自动审核的异常标本同样列出：
   // 流水号/接收时间 + 项目名/数值/方向标记/参考范围）」。
   // 8.8.14: 用户已确认标本标识与接收时间不属于病人隐私，可带；8.8.22: 标本头改用流水号（EpisodeNo，检验号兜底）。
@@ -19304,15 +19305,19 @@ window.addEventListener('keydown',function(e){
   function _notifyRetrySave() {
     try {localStorage.setItem(K.notifyRetryQueue, JSON.stringify(_notifyRetryQueue));} catch (e) {}
   }
-  function _notifySend(p) {
-    // 发送单条推送并检查结果：网络错误 / 非 2xx / accepted=false 均返回 false
+  // 8.9.7: 推送端点故障转移——网关中转（nginx 反代网关机上的 bark_relay，所有机器无需本机开 serve）优先，
+  // 本机 serve.py 8765 兜底；粘滞记忆上次成功的端点，失败自动降级、网关恢复后下轮自动切回。
+  const AA_NOTIFY_ENDPOINTS = ['http://192.168.31.111:9111/notify', 'http://127.0.0.1:8765/notify'];
+  let _notifyEndpointIdx = 0;
+  function _notifySendTo(url, p) {
+    // 向单个端点发送推送并检查结果：网络错误 / 非 2xx / accepted=false 均返回 false
     return new Promise(resolve => {
       let settled = false;
       const done = ok => {if (!settled) {settled = true; resolve(!!ok);}};
       try {
         const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const tmr = ctl ? setTimeout(() => {try {ctl.abort();} catch (e) {}}, 8000) : null;
-        fetch('http://127.0.0.1:8765/notify', {
+        const tmr = ctl ? setTimeout(() => {try {ctl.abort();} catch (e) {}}, 5000) : null;
+        fetch(url, {
           method: 'POST',
           headers: {'Content-Type': 'text/plain'}, // text/plain 免 CORS 预检
           body: JSON.stringify(p),
@@ -19322,11 +19327,25 @@ window.addEventListener('keydown',function(e){
           if (tmr) {clearTimeout(tmr);}
           resp.json().then(d => done(resp.ok && (!d || d.accepted !== false))).catch(() => done(resp.ok));
         }).catch(() => {if (tmr) {clearTimeout(tmr);} done(false);});
-        setTimeout(() => done(false), 9000); // 响应兜底超时（abort/网络挂起）
+        setTimeout(() => done(false), 6000); // 响应兜底超时（abort/网络挂起）
       } catch (e) {done(false);}
     });
   }
-  let _notifyPumpRunning = false; // 8.9.4: 泵运行中标志——长批发送（每条最长 9s）期间 timer 已置空，
+  function _notifySend(p) {
+    // 按端点顺序（粘滞优先）逐个尝试，任一成功即记住该端点；全部失败返回 false（进补发队列）
+    return (async () => {
+      for (let i = 0; i < AA_NOTIFY_ENDPOINTS.length; i++) {
+        const url = AA_NOTIFY_ENDPOINTS[(_notifyEndpointIdx + i) % AA_NOTIFY_ENDPOINTS.length];
+        const ok = await _notifySendTo(url, p);
+        if (ok) {
+          _notifyEndpointIdx = AA_NOTIFY_ENDPOINTS.indexOf(url);
+          return true;
+        }
+      }
+      return false;
+    })();
+  }
+  let _notifyPumpRunning = false; // 8.9.4: 泵运行中标志——长批发送（8.9.7 起每条最长约 12s＝两端点各 6s）期间 timer 已置空，
   // 无此标志时新入队会叠出第二个并发泵，两泵取走/回填交错会扩大丢失窗口
   function _flushNotifyRetry() {
     if (_notifyRetryTimer || _notifyPumpRunning || !_notifyRetryQueue.length) {return;}
@@ -19334,7 +19353,7 @@ window.addEventListener('keydown',function(e){
       _notifyRetryTimer = null;
       const now = Date.now();
       // 8.9.4: 到期项标记「在发」但保留在队列里（发送成功才移除）——此前「先取走后发送」，
-      // 每条最长 9s 的发送窗口内整页刷新/关标签会让整批未送达推送无痕迹丢失（断流时恰高发）
+      // 每条最长约 12s 的发送窗口内整页刷新/关标签会让整批未送达推送无痕迹丢失（断流时恰高发）
       const batch = [];
       const remain = [];
       for (const it of _notifyRetryQueue) {
@@ -20643,7 +20662,7 @@ window.addEventListener('keydown',function(e){
             </div>
             <div id="lis-aa-notify-edit-hint" style="display:none;margin-top:4px;color:#d9534f;font-size:11px;font-weight:600"></div>
             <div id="lis-aa-push-status" style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border:1px solid #e3e8ee;border-radius:4px;color:#555;font-size:12px;line-height:1.7">⏳ 正在获取推送状态…</div>
-            <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。</div>
+            <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。8.9.7 起默认走<b>网关中转</b>（192.168.31.111，本机无需开 serve.py；不通时自动落回本机 serve 兜底）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。</div>
           </div>
           <div class="ab-section" style="margin-top:10px">
             <div style="padding:6px 10px;background:#fff8e1;border:1px solid #f0d58a;border-radius:4px">🔒 梅毒、丙肝、艾滋阳性为固定人工审核红线；乙肝两对半 5 项不在此红线内。</div>
@@ -20717,7 +20736,8 @@ window.addEventListener('keydown',function(e){
       box.innerHTML = '🎯 当前审核范围：' + parts.join('　') + (scope ? ' <span style="color:#0d6655;font-weight:700">（开启时固定）</span>' : '');
     };
     renderScope();
-    // 8.8.20: 实时推送状态（serve.py 在线 + Bark 配置 + 最近一次推送结果），与范围一样每 5s 刷新
+    // 8.8.20: 实时推送状态（推送服务在线 + Bark 配置 + 最近一次推送结果），与范围一样每 5s 刷新
+    // 8.9.7: 双端点探测——网关中转优先，本机 serve.py 兜底，显示实际生效通道
     let _pushStatusFetching = false;
     const renderPushStatus = async () => {
       const box = document.getElementById('lis-aa-push-status');
@@ -20732,16 +20752,41 @@ window.addEventListener('keydown',function(e){
         if (bg) {b.style.background = bg;}
         if (bd) {b.style.borderColor = bd;}
       };
-      try {
+      const _probe = async url => {
         const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const tmr = ctl ? setTimeout(() => ctl.abort(), 2500) : null;
-        const resp = await fetch('http://127.0.0.1:8765/notify_status', ctl ? {signal: ctl.signal} : {});
-        if (tmr) {clearTimeout(tmr);}
-        const d = await resp.json();
-        if (!d || !d.configured) {
+        const tmr = ctl ? setTimeout(() => {try {ctl.abort();} catch (e) {}}, 2500) : null;
+        try {
+          const resp = await fetch(url, ctl ? {signal: ctl.signal} : {});
+          if (tmr) {clearTimeout(tmr);}
+          return (await resp.json()) || null;
+        } catch (e) {return null;} finally {if (tmr) {clearTimeout(tmr);}}
+      };
+      try {
+        // 探测顺序与 _notifySend 一致：网关中转 → 本机 serve.py
+        let d = await _probe(AA_NOTIFY_ENDPOINTS[0].replace('/notify', '/notify_status'));
+        let chan = d ? '📡 网关中转（192.168.31.111，无需本机开 serve）' : null;
+        if (!d) {
+          d = await _probe(AA_NOTIFY_ENDPOINTS[1].replace('/notify', '/notify_status'));
+          if (d) {chan = '💻 本机 serve.py（兜底通道）';}
+        }
+        if (!d) {
+          // 8.9.7: 双通道都不可达——网关中转挂了且本机 serve 也没开
+          const _isWin = /Windows/i.test(navigator.userAgent || '');
+          _paint(
+            '❌ <b>推送服务不可达</b>：网关中转（192.168.31.111）与本机 serve.py 均无响应。<br>' +
+            (_isWin ? '通常等待网关机推送中转恢复即可（自动恢复后下次推送自动走网关）；急用可双击 <b>start_serve.bat</b> 用本机兜底。'
+                    : '通常等待网关机推送中转恢复即可；急用可双击 <b>start_lis_menubar.command</b> 用本机兜底。'),
+            '#fdecea', '#f5c6cb'
+          );
+          return;
+        }
+        if (!d.configured) {
           // 8.8.34: 未配置 bark_key 单独判（此前 && 写反：enabled 默认 true，未配置时两条件都不成立，
           // 走到 else 分支显示「✅ 已配置」假绿灯，而 serve 实际会静默丢弃每次推送）
-          _paint('⚠️ <b>尚未启用推送</b>：把 notify_config.example.json 复制为 ~/脚本/<b>notify_config.json</b> 并填入 iPhone 的 Bark 设备码（见《Bark推送配置.md》）', '#fff8e1', '#f0d58a');
+          // 8.9.7: 按实际通道提示配置位置
+          _paint('⚠️ <b>推送服务已连通，但该端尚未配置 Bark</b><br>' + (chan.indexOf('网关') === 0
+            ? '在网关机 <b>D:\\bark-relay\\notify_config.json</b> 填入 bark_key（模板 notify_config.example.json），改完即时生效无需重启'
+            : '把 notify_config.example.json 复制为 ~/脚本/<b>notify_config.json</b> 并填入 iPhone 的 Bark 设备码（见《Bark推送配置.md》）'), '#fff8e1', '#f0d58a');
         } else if (!d.enabled) {
           _paint('⏸ Bark 已配置，但 notify_config.json 里 <b>enabled=false</b>，推送整体关闭中', '#fff8e1', '#f0d58a');
         } else {
@@ -20750,21 +20795,11 @@ window.addEventListener('keydown',function(e){
             ? ('最近一次：' + pushShortTime(new Date((last.ts || 0) * 1000)) + ' ' + (last.ok ? '✅ 成功「' : '❌ 失败「') + esc(String(last.title || '')) + '」' + (last.ok ? '' : '<br>原因：' + esc(String(last.detail || ''))))
             : '暂无推送记录（开启自动审核跑一轮后，这里显示最近一次结果）';
           _paint(
-            (last && !last.ok ? '⚠️ <b>Bark 已配置，但最近一次推送失败</b><br>' + lastTxt : '✅ <b>推送链路正常</b>（本机 serve.py 在线 · Bark 已配置）<br>' + lastTxt),
+            (last && !last.ok ? '⚠️ <b>Bark 已配置，但最近一次推送失败</b><br>' + lastTxt : '✅ <b>推送链路正常</b>（' + chan + ' · Bark 已配置）<br>' + lastTxt),
             last && !last.ok ? '#fff8e1' : '#eef7f5',
             last && !last.ok ? '#f0d58a' : '#bfe3dd'
           );
         }
-      } catch (e) {
-        // 8.8.32: 启动提示按操作系统自适应——.command 是 macOS 双击脚本，Windows 上不存在，
-        // Windows 整包对应 start_serve.bat（见《Windows安装-含质控.md》）
-        const _isWin = /Windows/i.test(navigator.userAgent || '');
-        _paint(
-          '❌ <b>本机推送服务未运行</b>：' + (_isWin
-            ? '双击 <b>start_serve.bat</b>'
-            : '双击 <b>start_lis_menubar.command</b>') + ' 启动 serve.py 后这里自动变绿',
-          '#fdecea', '#f5c6cb'
-        );
       } finally {
         _pushStatusFetching = false;
       }

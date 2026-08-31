@@ -77,3 +77,6 @@ FORMAT_SUMMARY.md
 
 # Bark 推送配置（本地密钥，勿提交；模板见 notify_config.example.json）
 notify_config.json
+bark-relay/notify_config.json
+bark-relay/bark_relay.log
+bark-relay/bark_relay.log.old

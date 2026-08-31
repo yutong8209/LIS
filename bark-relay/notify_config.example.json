@@ -1,0 +1,8 @@
+{
+  "bark_key": "在此粘贴 Bark App 里的设备码",
+  "enabled": true,
+  "push_encrypt": false,
+  "encrypt_algo": "aes128",
+  "encrypt_key": "App加密设置里填的16位Key（aes256则为32位）",
+  "encrypt_iv": "留空=每次推送自动随机IV（推荐）；填16位则固定"
+}

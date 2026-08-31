@@ -1,7 +1,8 @@
 #!/bin/bash
 # Bark 推送自测脚本
 # 用法:
-#   bash test_bark_push.sh          # 走本地 serve.py /notify 链路（推荐，测全链路）
+#   bash test_bark_push.sh          # 网关中转优先（8.9.7 起 userscript 同款顺序），不通自动落回本机 serve.py
+#   bash test_bark_push.sh --local  # 只走本机 serve.py /notify
 #   bash test_bark_push.sh --direct # 直接调 Bark 云接口（只验证设备码本身）
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -60,14 +61,27 @@ print(urllib.request.urlopen(req, timeout=10).read().decode())
 print(f'✅ 已直连 Bark 云{enc_note}，手机上应收到「🧪 Bark 直连测试」')
 PYEOF
 else
-  echo "→ 走本地 serve.py /notify（需 serve.py 在运行）..."
-  RESP="$(curl -s -m 10 -X POST "http://127.0.0.1:8765/notify" \
-    -H 'Content-Type: text/plain' \
-    -d "{\"title\":\"🧪 Bark 测试\",\"body\":\"自动审核推送链路正常\",\"level\":\"active\"}")"
-  echo "本地响应: $RESP"
-  if echo "$RESP" | grep -q '"accepted": true'; then
-    echo "✅ 已提交给 Bark 云转发，手机上应已收到「🧪 Bark 测试」"
-  else
-    echo "⚠️ 未被接受（多半是 serve.py 未运行或配置未生效），见上"
+  MODE="${1:-}"
+  ENDPOINTS=("http://192.168.31.111:9111/notify（网关中转）" "http://127.0.0.1:8765/notify（本机 serve 兜底）")
+  if [ "$MODE" = "--local" ]; then
+    ENDPOINTS=("http://127.0.0.1:8765/notify（本机 serve）")
+  fi
+  OK=0
+  for EP in "${ENDPOINTS[@]}"; do
+    URL="${EP%%（*}"
+    NAME="${EP#*（}"; NAME="${NAME%）}"
+    echo "→ 尝试 $NAME（$URL）..."
+    RESP="$(curl -s -m 8 -X POST "$URL" \
+      -H 'Content-Type: text/plain' \
+      -d "{\"title\":\"🧪 Bark 测试\",\"body\":\"自动审核推送链路正常\",\"level\":\"active\"}")" || RESP=""
+    echo "  响应: ${RESP:-无响应}"
+    if echo "$RESP" | grep -q '"accepted": true'; then
+      echo "✅ 已提交给 Bark 云转发，手机上应已收到「🧪 Bark 测试」（经$NAME）"
+      OK=1
+      break
+    fi
+  done
+  if [ "$OK" != "1" ]; then
+    echo "⚠️ 所有端点都未被接受：网关中转需在网关机部署 bark-relay（见 bark-relay/README-网关部署.md），本机兜底需 serve.py 在运行"
   fi
 fi
