@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.1
+// @version      8.10.2
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -83,7 +83,8 @@
     autoAuditStateLog: 'LIS_AutoAuditStateLog', // 8.9.1: 自动审核运行状态事件（暂停/恢复/开启/关闭/到期，环形上限 100）
     aalFolds: 'LIS_AAL_Folds', // 8.9.8: 折叠偏好键（8.9.11 起不再读写，仅打开弹窗时清一次旧值）
     notifyRetryQueue: 'LIS_NotifyRetryQueue', // 8.8.34: 推送发送失败的待补发队列（serve 未运行/网络瞬断不再丢推送）
-    autoAuditPushBuf: 'LIS_AA_PushBuf' // 8.9.6: 连续结果合并推送缓冲区（静默窗口攒单，防手机连响）
+    autoAuditPushBuf: 'LIS_AA_PushBuf', // 8.9.6: 连续结果合并推送缓冲区（连续做标本时攒单，防手机连响）
+    autoAuditPushLast: 'LIS_AA_PushLastTs' // 8.10.2: 上一条轮次推送发出时刻（前沿即发 + 最短间隔节奏，跨刷新存续）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -98,6 +99,11 @@
   const AUTO_AUDIT_DATA_MAX_AGE = 60000; // 自动审核要求最近一次全量刷新成功
   const ZERO_BLOCK_MACHINE_NAMES = /生化分析仪|全自动生化|生化仪/i;
   const BATCH_CONFIRM_MS = { normal: 1500, afterCA: 2500 };
+  // 8.10.2: 自动审核永久排除的仪器分类——临检与免疫各有一个「手工杂项」，标本多为手工录入/
+  // 手工添加项目，结果由人填写、无仪器回传，绝不自动审核。用户明确要求：即使工作组勾选了
+  // 「全部工作组的全部仪器」，这两个分类下的标本也一律不进自动审核（仍可手动审、仍进工作台统计）。
+  // 只作用于自动审核候选（rowAutoAuditMachineAllowed），不影响手动批审 / F4 / 工作台显示。
+  const AUTO_AUDIT_EXCLUDE_MACHINE_NAMES = /手工|杂项|manual/i;
 
   // ==================== 工具 ====================
   const $ = s => document.querySelector(s);
@@ -7029,6 +7035,31 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     if (scope.machine) {return mdr === String(scope.machine);}
     return true;
+  }
+
+  // 8.10.2: 自动审核仪器黑名单——「手工杂项」分类（临检/免疫各一个）永不自动审核。
+  // 理由：这类仪器下的标本是手工登记/手工添加项目，结果靠人填，LIS 不置 IsComplete=1 的居多，
+  // 偶有置位的也不该由机器代签。与勾选范围无关：即使快照是「全部工作组全部仪器」也一律排除。
+  // 判定优先用行上的仪器名 _mn（loadWSData 已附加），缺失时回退 wsMachines 里按 _mdr 查名字。
+  function rowAutoAuditMachineAllowed(row) {
+    if (!row) {return false;}
+    let name = String(row._mn || row.MachineName || row.machineName || '').trim();
+    if (!name) {
+      const mdr = String(row._mdr || prWorkGroupMachineDR(row) || '');
+      if (mdr) {
+        const m = (wsMachines || []).find(x => String(x.RowID) === mdr);
+        if (m) {name = String(m.CName || m.Name || '').trim();}
+      }
+    }
+    if (!name) {return true;} // 名字取不到不误杀（漏排一台好过整组不审）
+    return !AUTO_AUDIT_EXCLUDE_MACHINE_NAMES.test(name);
+  }
+  // 8.10.2: 自动审核候选统一闸门——忽略列表 + 范围快照 + 手工杂项黑名单，三处候选过滤共用
+  function rowIsAutoAuditCandidate(row) {
+    if (!row) {return false;}
+    if (isWSIgnored(row.ReportDR)) {return false;}
+    if (!rowPassAuditSnapshot(row)) {return false;}
+    return rowAutoAuditMachineAllowed(row);
   }
 
   const DETAIL_LRU_TTL = 5 * 60 * 1000; // 8.5.82: 详情缓存有效期——标本结果被仪器重传/复检修正后，重开详情不能再看旧 HTML
@@ -19337,7 +19368,8 @@ window.addEventListener('keydown',function(e){
       if (!_autoAudit.notifyMode || !['all', 'blocked', 'blocked_abn', 'off'].includes(_autoAudit.notifyMode)) {
         _autoAudit.notifyMode = 'all';
       }
-      // 8.9.6: 合并推送窗口（分钟）——0=不合并（每轮立即推）；非法值回退默认 2，上限 30
+      // 8.9.6: mergeWindowMin（分钟）——0=不合并（每轮立即推）；非法值回退默认 2，上限 30
+      // 8.10.2: 语义改为「连续做标本时的最短推送间隔」（原为「最长攒多久」），取值范围与存储不变
       const _mw = Number(_autoAudit.mergeWindowMin);
       if (!Number.isFinite(_mw) || _mw < 0) {_autoAudit.mergeWindowMin = 2;}
       else {_autoAudit.mergeWindowMin = Math.min(30, Math.round(_mw));}
@@ -19603,23 +19635,145 @@ window.addEventListener('keydown',function(e){
     });
   }
 
-  // ---- 8.9.6: 连续结果合并推送（防手机连响轰炸）；8.9.15: 升级为「智能节奏」 ----
-  // 背景：连续出一批标本时，每轮 30s 结算各推一条，手机响个不停。机制：
-  //   轮次推送先写入持久化缓冲区（localStorage，防整页刷新丢失），随后每 15s 复查一次：
-  //   ① 距最后一个结果已静默 ≥60s（用户观察：同一台仪器前后脚上的标本结果出来间隔基本不超过
-  //      1 分钟）→ 判定同批结束，立即合并发出——孤立结果约 60~75s 即达，不再傻等固定窗口；
-  //   ② 流水仍在继续（60s 内有新结果）→ 继续攒；
-  //   ③ 自首个入队事件起攒满「合并窗口」（默认 2 分钟，弹窗可选）→ 连续高峰强制发出一条。
-  //   危急值/堵孔/传染病/心肌/负值等红线不受等待限制：立即把缓冲区与本轮合并成一条 critical 推送。
+  // ---- 8.9.6: 连续结果合并推送（防手机连响轰炸）；8.9.15 智能节奏；8.10.2 前沿即发 ----
+  // 目的：单个单个做标本时一条条即时推；连续做标本时攒一会儿合并成一条。
+  // 8.9.15 及以前是纯「尾沿静默 debounce」：每一轮都先押 60s 观察后面还有没有结果，
+  // 导致孤立标本也要延迟 60~90s 才到手机——只有尾沿，没有前沿，表达不了「单个即时」。
+  // 8.10.2 改为「前沿即发 + 最短间隔 + 在跑队列」：
+  //   ① 前沿：缓冲区为空且距上次推送已过最短间隔（单个单个做的常态）→ 本轮直接发，0 延迟；
+  //   ② 连续做：缓冲区非空/间隔未到 → 进持久化缓冲区（localStorage，防整页刷新丢失），
+  //      每 15s 复查，距上次推送满「最短间隔」（mergeWindowMin，默认 2 分钟）发一条合并小结；
+  //   ③ 提前收尾：同批（核收时间 ±5 分钟）已无「在跑」标本 → 这批做完了，不等满间隔就发
+  //      （距上次推送 ≥45s 的地板间隔，防连响）。「在跑」= 已核收但 IsComplete≠1；
+  //      滞留超 20 分钟的（手工添加项目、待复查、疑似堵孔）不算在跑，否则永远等不完。
+  //      免疫组慢项目不做时长自学习：等不到就按 ② 的间隔照常发，不会被拖住。
+  //   ④ 在跑队列判不了（数据不够新/核收时间无法解析）→ 退回 8.9.15 的静默 60s 规则。
+  //   危急值/堵孔/传染病/心肌/负值等红线不受任何等待限制：立即把缓冲区与本轮合并成一条 critical 推送。
   //   off 模式在调用方已拦，不进缓冲区。标题/正文仍由 autoAuditPushTitle /
   //   autoAuditAbnSpecimenSummary 统一生成，与旧单轮推送同构；合并条目按标本 id 去重（同标本取最后一次）。
-  const AA_STREAM_QUIET_MS = 60 * 1000; // 8.9.15: 静默判定阈值——同批结果间隔经验值（同一仪器前后脚 ≤1 分钟）
+  const AA_STREAM_QUIET_MS = 60 * 1000; // 静默判定阈值（8.10.2 起仅作在跑队列判不了时的退路）
   const AA_PUSH_TICK_MS = 15 * 1000; // 8.9.15: 复查间隔
   const AA_PUSH_BUF_MAX_AGE = 30 * 60 * 1000; // 启动恢复时缓冲超龄（跨夜残骸）静默丢弃
-  const AA_PUSH_BUF_MAX_LINES = 14; // 合并推送正文明细行上限（多轮合并比单轮略宽）
+  const AA_PUSH_BUF_MAX_LINES = 20; // 8.10.2: 合并推送正文明细行上限（14→20：连续高峰一个间隔内常超 14 条，明细被截太多）
+  // 8.10.2: 「前沿即发 + 最短间隔 + 在跑队列」三件套常量
+  const AA_PUSH_GAP_FLOOR_MS = 45 * 1000; // 前沿推送后的地板间隔：批刚结束也至少隔 45s 再发小结，防紧跟着连响两声
+  const AA_PUSH_BUF_HARD_MS = 10 * 60 * 1000; // 缓冲区绝对寿命下限保护（真正上限取 max(本值, 最短间隔+30s)）
+  const AA_COHORT_CLUSTER_MS = 5 * 60 * 1000; // 同批判定：核收时间相差 ≤5 分钟视为「前后脚核收」的同一批
+  const AA_COHORT_STUCK_MS = 20 * 60 * 1000; // 连续在跑超 20 分钟仍未出结果 → 视为滞留（手工添加项目/待复查/堵孔），不再等它
   let _aaPushBuf = null;
   let _aaPushBufTimer = null;
-  // 8.9.6: 合并窗口（分钟）读取与规范化——0=不合并（每轮立即推）；非法值回退默认 2
+  // 8.10.2: 上一条轮次推送时刻（跨整页刷新存续）——前沿即发与最短间隔都以它为基准
+  function _aaPushLastTs() {
+    try {
+      const v = Number(localStorage.getItem(K.autoAuditPushLast) || 0);
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    } catch (e) {return 0;}
+  }
+  function _aaPushLastTsSet(ts) {
+    try {localStorage.setItem(K.autoAuditPushLast, String(ts || Date.now()));} catch (e) {}
+  }
+  // 8.10.2: LIS 时间串 → 毫秒。AcceptDT 常见 'YYYY-MM-DD HH:mm:ss'；
+  // 待排/采集行是 AcceptDate + ' ' + AcceptTime 拼的，也可能只剩 'HH:mm'（按今天补齐）
+  function _aaAcceptTs(v) {
+    if (!v) {return 0;}
+    const s = String(v).trim();
+    const m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2}))?/.exec(s);
+    if (m) {
+      const d = new Date(
+        Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+        m[4] === undefined ? 0 : Number(m[4]),
+        m[5] === undefined ? 0 : Number(m[5])
+      );
+      const t = d.getTime();
+      return Number.isNaN(t) ? 0 : t;
+    }
+    const mt = /^(\d{1,2}):(\d{1,2})/.exec(s);
+    if (mt) {
+      const n = new Date();
+      const d = new Date(n.getFullYear(), n.getMonth(), n.getDate(), Number(mt[1]), Number(mt[2]));
+      const t = d.getTime();
+      return Number.isNaN(t) ? 0 : t;
+    }
+    return 0;
+  }
+  // 8.10.2: 「在跑」= 已核收、结果尚未出全。
+  // ⚠️ 必须直接读 IsComplete，不能用 getWSAuditBucket()==='incomplete'——那个函数把
+  // 「分类缓存未完成/已过期」也归进 incomplete，这些标本结果其实早出来了，拿来当在跑会永远等下去。
+  function _aaRowInFlight(r) {
+    const st = String((r && (r.Status || r.ReportStatus)) || '');
+    if (st === '0' || st === '9' || st === '3' || st === '5') {return false;} // 待排/采集/已审/取消都不在跑
+    return String((r && r.IsComplete) || '') !== '1';
+  }
+  // dr → 首次观察到「在跑」的时刻（内存即可：刷新后重建，最坏退化成按最短间隔发）
+  const _aaInFlightSince = new Map();
+  const AA_INFLIGHT_MAP_MAX = 4000;
+  // 8.10.2: 同批还在跑的标本数。refTsList = 本次要推送的标本核收时刻集合。
+  // 返回 {known, running}：known=false 表示判不了（数据不健康/无可解析核收时间）→ 调用方退回 8.9.15 静默规则。
+  function _aaRunningCohort(refTsList, now) {
+    try {
+      if (!Array.isArray(refTsList) || !refTsList.length) {return {known: false, running: 0};}
+      if (!wsData || !wsData.length) {return {known: false, running: 0};}
+      // 数据不健康或不够新时不敢下「已经没有在跑标本」的结论（漏等 → 拆成多条推送）
+      if (_wsDataHealth.failed || _wsDataHealth.partial) {return {known: false, running: 0};}
+      if (!_wsDataHealth.lastFullSuccessAt || now - _wsDataHealth.lastFullSuccessAt > 2 * AUTO_AUDIT_DATA_MAX_AGE) {
+        return {known: false, running: 0};
+      }
+      let running = 0;
+      const seen = new Set();
+      for (let i = 0; i < wsData.length; i++) {
+        const r = wsData[i];
+        if (!_aaRowInFlight(r)) {continue;}
+        if (!rowIsAutoAuditCandidate(r)) {continue;} // 范围外/被忽略/手工杂项 不算在跑
+        const dr = String(r.ReportDR || '');
+        if (dr) {seen.add(dr);}
+        const ts = _aaAcceptTs(r.AcceptDT || r.acceptDT);
+        if (!ts) {
+          // 核收时间取不到：退回内存观察起点，滞留过久同样不等（起点表仅此处用得上）
+          if (!dr) {continue;}
+          if (!_aaInFlightSince.has(dr)) {_aaInFlightSince.set(dr, now);}
+          if (now - _aaInFlightSince.get(dr) > AA_COHORT_STUCK_MS) {continue;}
+          running++; // 判不出属于哪一批，保守算作在跑（宁可多等一个间隔，也不拆成两条推送）
+          continue;
+        }
+        // 核收已久仍没出结果（免疫慢项目、手工添加项目、待复查）→ 不等它。
+        // 按服务端核收时间判定比内存观察起点可靠：整页刷新会重置内存起点，
+        // 光靠它会让躺了几小时的手工标本重新获得 20 分钟「在跑」资格，拖慢每一条推送。
+        if (now - ts > AA_COHORT_STUCK_MS) {continue;}
+        for (let j = 0; j < refTsList.length; j++) {
+          if (Math.abs(ts - refTsList[j]) <= AA_COHORT_CLUSTER_MS) {running++; break;}
+        }
+      }
+      // 已出结果/已审掉的条目清出「在跑起点」表（顺带防无限增长）
+      if (_aaInFlightSince.size) {
+        for (const dr of Array.from(_aaInFlightSince.keys())) {
+          if (!seen.has(dr)) {_aaInFlightSince.delete(dr);}
+        }
+        if (_aaInFlightSince.size > AA_INFLIGHT_MAP_MAX) {_aaInFlightSince.clear();}
+      }
+      return {known: true, running};
+    } catch (e) {
+      dbg('在跑队列判定异常:', e);
+      return {known: false, running: 0};
+    }
+  }
+  // 8.10.2: 缓冲区里各标本的核收时刻（按分钟去重，最多取 40 个）——同批判定的参照点
+  function _aaBufRefAcceptTs(buf) {
+    const out = [];
+    const seen = new Set();
+    const entries = (buf && buf.entries) || [];
+    for (let i = 0; i < entries.length && out.length < 40; i++) {
+      const e = entries[i] && entries[i].e;
+      const ts = _aaAcceptTs(e && (e.acceptDT || e.AcceptDT));
+      if (!ts) {continue;}
+      const k = Math.floor(ts / 60000);
+      if (seen.has(k)) {continue;}
+      seen.add(k);
+      out.push(ts);
+    }
+    return out;
+  }
+  // 8.9.6: 读取并规范化 mergeWindowMin（分钟）——0=不合并（每轮立即推）；非法值回退默认 2
+  // 8.10.2: 语义 = 连续做标本时的「最短推送间隔」（原为「最长攒多久」），取值集合不变
   function autoAuditMergeWindowMin() {
     const v = Number(_autoAudit && _autoAudit.mergeWindowMin);
     if (!Number.isFinite(v) || v < 0) {return 2;}
@@ -19653,6 +19807,15 @@ window.addEventListener('keydown',function(e){
     _aaPushBuf = null;
     if (_aaPushBufTimer) {clearTimeout(_aaPushBufTimer); _aaPushBufTimer = null;}
     try {localStorage.removeItem(K.autoAuditPushBuf);} catch (e) {}
+  }
+  // 8.10.2: 决策/入队前先把持久化缓冲区读进内存。
+  // 必须有这一步：整页刷新后内存 _aaPushBuf 是 null 而 localStorage 里可能还攒着上次会话的内容，
+  // 若直接按「缓冲区为空」走前沿即发，_aaPushBufAdd 会新建缓冲并覆盖落盘，上次攒的推送就无声丢了。
+  // 超龄（跨夜残骸）在这里一并丢弃，语义与 aaPushBufRecover 一致。
+  function _aaPushBufEnsure() {
+    if (_aaPushBuf) {return;}
+    _aaPushBufLoad();
+    if (_aaPushBuf && Date.now() - (_aaPushBuf.updated || _aaPushBuf.ts || 0) > AA_PUSH_BUF_MAX_AGE) {_aaPushBufClear();}
   }
   // 条目计数贡献（dir=+1 计入 / -1 冲销）：通过按机器|正常/异常聚合计数，跳过按红线类别/其他失败
   function _aaCountBufEntry(b, en, dir) {
@@ -19696,6 +19859,7 @@ window.addEventListener('keydown',function(e){
   function flushAutoAuditPushBuffer(extra, opts) {
     opts = opts || {};
     try {
+      _aaPushBufEnsure(); // 8.10.2: 先认领盘上攒着的内容，红线/补报的立即推送才能把它一并带走
       if (extra) {_aaPushBufAdd(extra);}
       if (!_aaPushBuf) {return false;}
       const b = _aaPushBuf;
@@ -19726,18 +19890,47 @@ window.addEventListener('keydown',function(e){
       if (abnLines.length >= AA_PUSH_BUF_MAX_LINES) {body += '\n…（部分标本明细略，详见审核记录）';}
       if (opts.note) {body += '\n' + opts.note;}
       pushAutoAuditNotify({title, body, level: hasRed ? 'critical' : 'active', nonce: (b.updated || b.ts) + ':' + order.length});
+      _aaPushLastTsSet(Date.now()); // 8.10.2: 记住发出时刻——前沿即发与最短间隔都以它为基准
       _aaPushBufClear();
       return true;
     } catch (e) {dbg('合并推送结算异常:', e); return false;}
   }
-  // 8.9.15: 复查节奏决策（纯函数便于离线测试）——返回 0=立即发；>0=再等 delay ms
-  //  触发立即发：① 静默 ≥60s（同批不会再有结果）② 攒满合并窗口上限（连续高峰必发）
+  // 8.10.2: 复查节奏决策（纯函数便于离线测试）。语义从「尾沿静默 debounce」改为
+  // 「前沿即发 + 最短间隔 + 在跑队列」——mergeWindowMin 现在是「同一批内最短推送间隔」：
+  //   ① 距上次推送已达最短间隔 → 发（连续高峰的常态节奏：每 winMin 一条合并小结）
+  //   ② 同批（核收时间 ±5 分钟）已无在跑标本 → 这批做完了，提前发小结，不用等满间隔；
+  //      但至少距上次推送 AA_PUSH_GAP_FLOOR_MS（45s），防前沿那条和小结紧跟着连响两声
+  //   ③ 在跑队列判不了（数据不够新/无可解析核收时间）→ 退回 8.9.15 的静默 60s 规则
+  //   ④ 兜底硬上限：任何异常下都不会攒过 AA_PUSH_BUF_HARD_MS
+  // 免疫组不做时长自学习：慢项目不会被等（②只看「还有没有在跑」，等不到就靠①按间隔发）。
   function _aaPushBufNextDelay(buf, now, winMin) {
-    const silence = now - (buf.updated || buf.ts || now);
-    if (silence >= AA_STREAM_QUIET_MS) {return 0;}
-    const remaining = (buf.ts || now) + winMin * 60000 - now;
+    const gapMs = winMin * 60000;
+    // ④ 绝对寿命：兜住 lastPush 时钟漂移/丢失等异常。选了 10 分钟间隔时上限随之放宽，
+    //    否则硬上限会先于最短间隔触发，把用户选的节奏改掉
+    const hardMs = Math.max(AA_PUSH_BUF_HARD_MS, gapMs + 30000);
+    if (now - (buf.ts || now) >= hardMs) {return 0;}
+    const lastTs = _aaPushLastTs();
+    const sinceLast = lastTs ? now - lastTs : Infinity;
+    if (sinceLast >= gapMs) {return 0;} // ①
+    if (sinceLast >= AA_PUSH_GAP_FLOOR_MS) {
+      const co = _aaRunningCohort(_aaBufRefAcceptTs(buf), now);
+      if (co.known) {
+        if (co.running === 0) {return 0;} // ② 同批跑完 → 提前结清
+      } else if (now - (buf.updated || buf.ts || now) >= AA_STREAM_QUIET_MS) {
+        return 0; // ③ 判不了 → 退回静默规则
+      }
+    }
+    const remaining = lastTs ? lastTs + gapMs - now : 0;
     if (remaining <= 3000) {return 0;}
     return Math.min(AA_PUSH_TICK_MS, remaining);
+  }
+  // 8.10.2: 按当前节奏挂下一次复查（delay=0 直接结清）
+  function _aaPushBufSchedule() {
+    if (_aaPushBufTimer || !_aaPushBuf) {return;}
+    const winMin = Math.max(0.5, autoAuditMergeWindowMin() || 2); // 0 已在入队时直发，防御性兜底
+    const delay = _aaPushBufNextDelay(_aaPushBuf, Date.now(), winMin);
+    if (delay === 0) {flushAutoAuditPushBuffer(); return;}
+    _aaPushBufTimer = setTimeout(_aaPushBufTick, delay);
   }
   function _aaPushBufTick() {
     _aaPushBufTimer = null;
@@ -19750,24 +19943,45 @@ window.addEventListener('keydown',function(e){
       _aaPushBufTimer = setTimeout(_aaPushBufTick, delay);
     } catch (e) {dbg('合并推送复查异常:', e);}
   }
-  // 轮次推送统一入口：红线/补报/未启用合并 → 立即结清；否则进缓冲区按智能节奏复查
+  // 轮次推送统一入口：红线/补报/未启用合并 → 立即结清；
+  // 8.10.2: 新增「前沿即发」——缓冲区为空且距上次推送已过最短间隔（= 单个单个做标本的常态）
+  // 直接发本轮，不再押 60s 静默观察；连续做时缓冲区非空/间隔未到，照常进缓冲区按节奏合并。
   function queueAutoAuditPush(data) {
     try {
       const d = data || {};
       const hasRed = Object.keys(_aaNormRedCats(d.redCats)).length > 0;
       const winMin = autoAuditMergeWindowMin();
       if (d.immediate || hasRed || !winMin) {return flushAutoAuditPushBuffer(d);}
+      _aaPushBufEnsure(); // 刷新后内存为空但盘上可能还攒着，先认领再判前沿
+      const lastTs = _aaPushLastTs();
+      if (!_aaPushBuf && (!lastTs || Date.now() - lastTs >= winMin * 60000)) {
+        return flushAutoAuditPushBuffer(d); // 前沿：孤立结果 0 延迟到手机
+      }
       _aaPushBufAdd(d);
-      if (!_aaPushBufTimer) {_aaPushBufTimer = setTimeout(_aaPushBufTick, AA_PUSH_TICK_MS);} // 常驻 15s 复查，tick 内自会判断静默/上限
+      _aaPushBufSchedule();
       return true;
     } catch (e) {dbg('合并推送入队异常:', e); return false;}
   }
   // 启动时：上次会话攒着没发的合并推送 → 立即补发（窗口已无意义，老消息尽早送达）
   function aaPushBufRecover() {
-    if (!_aaPushBuf) {_aaPushBufLoad();}
+    _aaPushBufEnsure(); // 含超龄（跨夜残骸）静默丢弃
     if (!_aaPushBuf) {return;}
-    if (Date.now() - (_aaPushBuf.updated || _aaPushBuf.ts || 0) > AA_PUSH_BUF_MAX_AGE) {_aaPushBufClear(); return;} // 跨夜残骸：静默丢弃
     flushAutoAuditPushBuffer();
+  }
+  // 8.10.2: 兜底恢复——aaPushBufRecover 只在「重开工作台」（resumeAutoAuditIfActive）时被调用；
+  // 若页面刷新后一直没重开工作台，攒着的缓冲区会一直躺到超龄（30 分钟）被静默丢弃 = 丢推送。
+  // 启动 60s 后补一次：延迟而非立即，是为了让「重开工作台 → 上轮补报」先与缓冲区合并成一条。
+  // 只在「无活跃复查定时器」且「已 2 分钟没更新」时才动手，绝不打断正在正常攒单的节奏。
+  function aaPushBufRecoverLater() {
+    setTimeout(() => {
+      try {
+        if (_aaPushBufTimer) {return;} // 节奏活跃：交给 tick，不插手
+        _aaPushBufEnsure();
+        if (!_aaPushBuf) {return;}
+        if (Date.now() - (_aaPushBuf.updated || _aaPushBuf.ts || 0) < 2 * 60 * 1000) {return;}
+        aaPushBufRecover();
+      } catch (e) {dbg('合并推送兜底恢复异常:', e);}
+    }, 60000);
   }
 
   // 危急红线原因判定：这些标本被拦下留人工，属于必须立即知道的关键事件
@@ -20255,8 +20469,9 @@ window.addEventListener('keydown',function(e){
         : (m === 'blocked_abn' ? (skipN > 0 || _hasVisAbn) : false));
       if (!shouldPush) {return false;}
       if (a.v === 3 && evEntries) {
-        // 8.9.15: 走合并推送队列——补报（opts.immediate）立即结清；续跑/跨组结算按合并窗口攒单；
-        // 红线（redCats 非空）在队列内不受窗口限制立即合并发出。明细/标题由 flush 统一生成。
+        // 8.9.15/8.10.2: 走合并推送队列——补报（opts.immediate）立即结清；续跑/跨组结算按
+        // 「前沿即发 + 最短间隔」节奏（孤立结果直发，连续时合并）；
+        // 红线（redCats 非空）在队列内不受任何等待限制立即合并发出。明细/标题由 flush 统一生成。
         queueAutoAuditPush({passByMn, redCats, otherFailN, entries: aaEventEntriesForPush(m, evEntries), mode: m, immediate: opts.immediate, suffix: opts.suffix, note: opts.note});
         return true;
       }
@@ -20466,7 +20681,8 @@ window.addEventListener('keydown',function(e){
           return;
         }
         // 真暂停：红线从当前数据现扫（Map 语义，不受 skipSeen 去重影响，连续暂停每轮明细都完整）
-        const _cand = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
+        // 8.10.2: 与主循环候选口径统一（含手工杂项黑名单）——不自动审的仪器不该在暂停推送里冒充「拦下待人工」
+        const _cand = wsData.filter(r => rowIsAutoAuditCandidate(r));
         const _rl = _aaScanRedLines(_cand);
         const _realSpecs = [];
         _rl.map.forEach((reason, dr) => {
@@ -20530,7 +20746,8 @@ window.addEventListener('keydown',function(e){
         }
       }
       // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义
-      const candidates = wsData.filter(r => !isWSIgnored(r.ReportDR) && rowPassAuditSnapshot(r));
+      // 8.10.2: 追加「手工杂项」永久黑名单（临检/免疫各一台）——即使快照是全工作组全仪器也排除
+      const candidates = wsData.filter(r => rowIsAutoAuditCandidate(r));
       let normals = candidates.filter(r => getWSAuditBucket(r) === 'normal');
       let abnormals = candidates.filter(r => getWSAuditBucket(r) === 'abnormal');
 
@@ -20642,8 +20859,9 @@ window.addEventListener('keydown',function(e){
           aaRecordEvent('留人工', entry);
         }
         // 每审完一条重新取异常候选（成功者已被 auditAbnormalSpecimen 移出 wsData，新到标本纳入）
+        // 8.10.2: 复用统一候选闸门（含手工杂项黑名单），与轮次开头口径一致
         abnormalIter = wsData.filter(
-          x => !isWSIgnored(x.ReportDR) && rowPassAuditSnapshot(x) && getWSAuditBucket(x) === 'abnormal'
+          x => rowIsAutoAuditCandidate(x) && getWSAuditBucket(x) === 'abnormal'
         );
       }
 
@@ -20670,9 +20888,9 @@ window.addEventListener('keydown',function(e){
         // 8.8.13: 本轮有审核动作 → 手机推送关键事件（8.9.6 起统一走合并推送队列）。
         // 推送模式开关 autoAuditNotifyMode()：all=成功+未成功都推（本轮有动作即推）；
         // blocked=只推未成功自动审核的标本（有留人工才推，全部通过则不推）；off=完全不推。
-        // 8.9.6/8.9.15: 合并推送——普通结果进缓冲区按智能节奏复查（静默≥1分钟判定批结束即发），
-        // 连续流水一直攒着（最多攒「合并窗口」分钟必发）；危急值等红线立即合并成一条 critical 发出；
-        // 红线（危急值/堵孔0值/传染病阳性/心肌标志物/含负值）不受窗口限制，立即把缓冲与本轮合并成一条 critical 发出。
+        // 8.9.6/8.9.15/8.10.2: 合并推送——单个单个做标本时前沿即发（缓冲区空且距上次推送已过
+        // 最短间隔 → 本轮直接发）；连续做时进缓冲区，按「最短间隔」合并成一条，同批做完提前收尾。
+        // 红线（危急值/堵孔0值/传染病阳性/心肌标志物/含负值）不受任何等待限制，立即把缓冲与本轮合并成一条 critical 发出。
         // 隐私红线：用户已确认标本号与接收时间可进推送；姓名/住院号/床号/科室等身份信息绝不含。
         const _notifyMode = autoAuditNotifyMode();
         // 8.9.15: blocked_abn 触发条件——有未成功 OR 有「可见异常」的异常通过标本
@@ -20991,14 +21209,14 @@ window.addEventListener('keydown',function(e){
               <label style="cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap">⏱ 连续结果合并推送
                 <select id="lis-aa-merge-win" style="padding:3px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px">
                   <option value="0"${curMergeWin === 0 ? ' selected' : ''}>不合并（每轮立即推）</option>
-                  <option value="1"${curMergeWin === 1 ? ' selected' : ''}>流水最长 1 分钟</option>
-                  <option value="2"${curMergeWin === 2 ? ' selected' : ''}>流水最长 2 分钟（推荐）</option>
-                  <option value="3"${curMergeWin === 3 ? ' selected' : ''}>流水最长 3 分钟</option>
-                  <option value="5"${curMergeWin === 5 ? ' selected' : ''}>流水最长 5 分钟</option>
-                  <option value="10"${curMergeWin === 10 ? ' selected' : ''}>流水最长 10 分钟</option>
+                  <option value="1"${curMergeWin === 1 ? ' selected' : ''}>连续时最快 1 分钟一条</option>
+                  <option value="2"${curMergeWin === 2 ? ' selected' : ''}>连续时最快 2 分钟一条（推荐）</option>
+                  <option value="3"${curMergeWin === 3 ? ' selected' : ''}>连续时最快 3 分钟一条</option>
+                  <option value="5"${curMergeWin === 5 ? ' selected' : ''}>连续时最快 5 分钟一条</option>
+                  <option value="10"${curMergeWin === 10 ? ' selected' : ''}>连续时最快 10 分钟一条</option>
                 </select>
               </label>
-              <span style="color:#999;line-height:1.6">8.9.15 智能节奏：同一批结果连续出来时一直攒着，静默约 1 分钟（同一台仪器前后脚结果出来的间隔经验值）判定批结束，合并成一条发出——孤立结果约 1 分钟即达，不再傻等固定窗口；连续不断的高峰最多攒所选时长必发。危急值等红线不受等待限制，立即推送。</span>
+              <span style="color:#999;line-height:1.6">8.10.2 前沿即发：<b>单个单个做标本</b>时每条即时推送（不再压 1 分钟观察）；<b>连续做</b>时第一条即时推，之后按所选间隔合并成一条。同批（核收时间相差 5 分钟内）的标本都出完结果，会提前发收尾小结，不用等满间隔。免疫组慢项目不会拖住推送。危急值等红线不受任何等待限制，立即推送。</span>
             </div>
             <div id="lis-aa-notify-edit-hint" style="display:none;margin-top:4px;color:#d9534f;font-size:11px;font-weight:600"></div>
             <div id="lis-aa-push-status" style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border:1px solid #e3e8ee;border-radius:4px;color:#555;font-size:12px;line-height:1.7">⏳ 正在获取推送状态…</div>
@@ -21006,6 +21224,7 @@ window.addEventListener('keydown',function(e){
           </div>
           <div class="ab-section" style="margin-top:10px">
             <div style="padding:6px 10px;background:#fff8e1;border:1px solid #f0d58a;border-radius:4px">🔒 梅毒、丙肝、艾滋阳性为固定人工审核红线；乙肝两对半 5 项不在此红线内。</div>
+            <div style="margin-top:6px;padding:6px 10px;background:#fff8e1;border:1px solid #f0d58a;border-radius:4px">🔧 临检与免疫的「<b>手工杂项</b>」仪器分类<b>永不自动审核</b>（结果靠人工录入，不由机器代签）——即使这里勾选了全部工作组的全部仪器，这两个分类下的标本也一律跳过，需手动审核。</div>
           </div>
         </div>
         <div class="ab-ft" style="justify-content:flex-end">
@@ -21073,7 +21292,22 @@ window.addEventListener('keydown',function(e){
       // 8.5.67: 快照语义 —— 显示开启时固定的范围（_autoAudit.scope）；无快照（旧数据）回退显示当前动态范围
       const scope = _autoAudit && _autoAudit.scope;
       const parts = scope ? scopeParts(scope.wg, scope.byWG, scope.machine) : scopeParts(wsActiveWG, wsSelectedMachinesByWG, wsActiveMachine);
-      box.innerHTML = '🎯 当前审核范围：' + parts.join('　') + (scope ? ' <span style="color:#0d6655;font-weight:700">（开启时固定）</span>' : '');
+      // 8.10.2: 范围里若含「手工杂项」（含「全选」隐含包含的情况），显式说明它被永久排除，
+      // 避免用户看着「仪器：全选」却发现这台的标本没审
+      let excludeNote = '';
+      try {
+        const nameOfDR = dr => {
+          const m = wsMachines.find(x => String(x.RowID) === String(dr));
+          return (m && (m.CName || m.Name)) || '';
+        };
+        const sel = [];
+        if (scope && scope.byWG) {Object.keys(scope.byWG).forEach(g => (scope.byWG[g] || []).forEach(dr => sel.push(nameOfDR(dr))));}
+        else if (!scope) {Object.keys(wsSelectedMachinesByWG || {}).forEach(g => (wsSelectedMachinesByWG[g] || []).forEach(dr => sel.push(nameOfDR(dr))));}
+        const explicit = sel.some(n => n && AUTO_AUDIT_EXCLUDE_MACHINE_NAMES.test(n));
+        const allSelected = !sel.length; // 未勾选具体仪器 = 全选，隐含包含手工杂项
+        if (explicit || allSelected) {excludeNote = ' <span style="color:#b26a00;font-weight:700">（🔧 手工杂项不自动审核）</span>';}
+      } catch (e) {}
+      box.innerHTML = '🎯 当前审核范围：' + parts.join('　') + (scope ? ' <span style="color:#0d6655;font-weight:700">（开启时固定）</span>' : '') + excludeNote;
     };
     renderScope();
     // 8.8.20: 实时推送状态（推送服务在线 + Bark 配置 + 最近一次推送结果），与范围一样每 5s 刷新
@@ -21957,6 +22191,7 @@ window.addEventListener('keydown',function(e){
     safeInit('startMenubarCmdPoller', startMenubarCmdPoller); // 菜单栏下拉点击 → 跨进程切分类
     safeInit('startMenubarKeepAlive', startMenubarKeepAlive); // 菜单栏 keep-alive，防止离开工作台后显示过期
     safeInit('startLisSessionKeepalive', startLisSessionKeepalive); // 8.9.5: LIS 会话保活，防夜间长时间无操作被服务端踢下线
+    safeInit('aaPushBufRecoverLater', aaPushBufRecoverLater); // 8.10.2: 兜底补发上次会话攒着的合并推送（不重开工作台也不会躺到超龄丢弃）
     dbg('就绪 | 左键🔬=工作组 | 右键🔬=全科 | Ctrl+Shift+L/A');
   }
 
