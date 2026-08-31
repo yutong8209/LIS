@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.9
+// @version      8.9.10
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19624,15 +19624,18 @@ window.addEventListener('keydown',function(e){
     return sameDay ? hm : pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + hm;
   }
 
-  // 8.9.6: 是否血常规类标本（推送瘦身用）——按项目组合名判断，覆盖常见叫法；组合名缺失时不瘦身（保守不漏）
+  // 8.9.6: 是否血常规/血细胞分析类标本（推送瘦身用）——按项目组合名判断，覆盖常见叫法；
+  // 8.9.10: 加入「网织」——网织红常为独立组合（如「网织红细胞计数」），同样纳入三级瘦身；
+  // 组合名缺失时不瘦身（保守不漏）
   function aaIsCbcTest(test) {
-    return /血常规|血细胞|血球|CBC/i.test(String(test || ''));
+    return /血常规|血细胞|血球|CBC|网织/i.test(String(test || ''));
   }
   // 8.9.9: 血常规推送三级瘦身（取代 8.9.6 的黑名单式过滤）——
   //   ① core 始终显示：WBC / RBC / HGB / PLT + 白细胞五分类「计数值」（比率/百分比在 skip 层已拦）
-  //   ② cond 条件显示：HCT / MCV / MCH / MCHC——超出最近参考限达阈值才显示（阈值见 AA_CBC_COND_LIMITS）
-  //   ③ skip 始终省略：比率/百分比、分布宽度(RDW/PDW)、MPV、大血小板比率、血小板压积、
-  //      未达阈值的 cond 项、网织红/有核红等其余衍生项
+  //   ② cond 条件显示：HCT / MCV / MCH / MCHC + 网织红细胞计数(绝对值)——超出最近参考限达阈值才显示
+  //     （阈值见 AA_CBC_COND_LIMITS）
+  //   ③ skip 始终省略：比率/百分比（含网织红比率）、分布宽度(RDW/PDW)、MPV、大血小板比率、血小板压积、
+  //      RET-He 等网织红衍生参数、未达阈值的 cond 项、有核红等其余衍生项
   //   危急值不受任何过滤限制，始终显示。
   // 阈值语义：偏离度 = (值 − 最近参考限) / |该限值|，即「超出参考上限/下限的幅度比例」。
   //   例：MCV 118（上限 100）→ 超限 18% ≥ 15% → 推；MCV 103 → 超限 3% → 略。
@@ -19643,11 +19646,15 @@ window.addEventListener('keydown',function(e){
   //     低值信息与必推的 HGB 重复度高，门槛高些不漏要事。
   //   MCHC 10%——其参考区间极窄（约 316-354），生理波动小，数值变化本身就是信号，门槛应低于其他指数；
   //     10% ≈ 389+/285-，想更灵敏可降到 5%（≈372/300）。
+  //   网织红计数(RET#) 30%——网织红日间生理波动比红细胞指数大（昼夜 ±10-15%），且参考区间本身很宽
+  //     （如 25-75），小幅超限多为噪声；而有临床意义的事件（溶血、骨髓恢复、化疗后反应）通常翻倍级
+  //     变化，30% ≈ 98+/17-（按 25-75 计），想更灵敏可降到 20%。
   const AA_CBC_COND_LIMITS = [
     {re: /平均血红蛋白浓度|^mchc$/i, limit: 0.10}, // MCHC：参考区间窄，门槛低于其他指数
     {re: /红细胞压积|[红血]细胞比[积容]|^hct$|hematocrit/i, limit: 0.15}, // HCT
     {re: /平均红细胞体积|^mcv$|corpuscular volume/i, limit: 0.15}, // MCV
-    {re: /平均血红蛋白含量|^mch$|corpuscular hemoglobin(?! concentration)/i, limit: 0.15} // MCH
+    {re: /平均血红蛋白含量|^mch$|corpuscular hemoglobin(?! concentration)/i, limit: 0.15}, // MCH
+    {re: /网织红|^ret#?$|^retic/i, limit: 0.30} // 8.9.10: 网织红细胞计数（绝对值/RET#）
   ];
   const AA_CBC_COND_DEFAULT_LIMIT = 0.15;
   function aaCbcCondLimitOf(name) {
@@ -19686,7 +19693,14 @@ window.addEventListener('keydown',function(e){
     if (/平均血红蛋白|^mch(c)?$|corpuscular hemoglobin/i.test(s)) {return 'cond';} // MCH/MCHC
     if (/白细胞/.test(s) && !/酯酶/.test(s)) {return 'core';} // 白细胞计数（比率/百分比已在上面拦掉）
     if (/^wbc$/i.test(s)) {return 'core';}
-    if (/网织|有核/.test(s)) {return 'skip';} // 网织红/有核红等不在用户清单内
+    // 8.9.10: 网织红细分——只有「计数/数/绝对值/#」形态(或裸名)按超限比例条件显示,
+    // 其余衍生(比率/百分比/RET-He 血红蛋白含量/体积/宽度等)一律省略(白名单思路,防漏网变体)
+    if (/网织|retic|^ret/i.test(s)) {
+      if (/计数|数目|数量|绝对值|数$/.test(s) || /^网织红细胞$/.test(s) ||
+          /^ret(ic|iculocyte)?\s*(#|count|abs(olute)?)?$/i.test(s)) {return 'cond';}
+      return 'skip';
+    }
+    if (/有核/.test(s)) {return 'skip';} // 有核红细胞不在清单内
     if (/^rbc$|^红细胞$|红细胞计数|红细胞数目/i.test(s)) {return 'core';}
     if (/血小板/.test(s)) {return 'core';} // 血小板计数/数目（宽度/压积/体积已拦掉）
     if (/^plt/i.test(s)) {return 'core';}
