@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.13
+// @version      8.9.14
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -21210,7 +21210,7 @@ window.addEventListener('keydown',function(e){
           const ld = new Date(latest.t || 0);
           const ltm = String(ld.getHours()).padStart(2, '0') + ':' + String(ld.getMinutes()).padStart(2, '0');
           stateBox.innerHTML =
-            '<div class="aal-fold-head" data-fold="states">⚙️ 运行状态（暂停 / 恢复 / 开关）· ' + states.length + ' 条' +
+            '<div class="aal-fold-head" id="lis-aal-states-head" data-fold="states">⚙️ 运行状态（暂停 / 恢复 / 开关）· ' + states.length + ' 条' +
             '<span class="aal-fold-latest">最近：' + lm.icon + ' ' + esc(lm.label) + ' ' + ltm + '</span>' +
             '<span class="aal-fold-arrow"></span></div>' +
             '<div class="aal-fold-body" id="lis-aal-states-body">' +
@@ -21234,7 +21234,7 @@ window.addEventListener('keydown',function(e){
           // 8.9.13: 无事件时不再整块消失——渲染禁用态折叠头占位，用于区分「没有事件（数据面）」
           // 与「区块没渲染（脚本面）」；本机从未记录过事件时（8.9.1 起才开始记录）给出说明
           stateBox.innerHTML =
-            '<div class="aal-fold-head" data-fold="states" style="opacity:.55">⚙️ 运行状态（暂停 / 恢复 / 开关）· 暂无事件' +
+            '<div class="aal-fold-head" id="lis-aal-states-head" data-fold="states" style="opacity:.55">⚙️ 运行状态（暂停 / 恢复 / 开关）· 暂无事件' +
             '<span class="aal-fold-arrow">▸ 展开</span></div>' +
             '<div class="aal-fold-body" id="lis-aal-states-body" style="display:none">' +
             '<div style="color:#94a3b8;padding:8px 12px;font-size:12px">本机未记录到任何自动审核运行状态事件（8.9.1 起才开始记录）。' +
