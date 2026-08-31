@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.14
+// @version      8.9.15
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -17312,11 +17312,15 @@ window.addEventListener('keydown',function(e){
       return INFECTION_ITEMS.some(item => name.includes(item.toLowerCase()));
     });
 
-    if (infectionItems.length < 5) {return null;} // 不是完整的传染病面板
-
-    // 检查是否有历史阳性现在阴性的情况
+    // 8.9.15: 逐项比对（不再要求 ≥5 项完整面板）——术前四项（4 项）此前被面板门槛整体跳过，
+    // 其「既往阳→现阴」漏拦正是用户观察到的场景；单项有历史就比单项。
+    // 检查阴阳性双向不符（8.9.15：原来只拦「历史阳性→现阴性」，现补上「历史阴性→现阳性」——
+    // 乙肝 e 抗原转阳/核心抗体转阳等新发转换更不能自动审核）。
+    // 豁免：乙肝表面抗体（HBsAb）——转阳=疫苗/免疫应答预期事件、转阴=抗体衰减，都属正常演变，
+    // 拦下只会造成无谓打扰（其余传染病项目双向不符都拦；如需连表面抗体也拦删掉这行即可）。
     const warnings = [];
     infectionItems.forEach(item => {
+      if (/表面抗体|hbsab/i.test(String(item.name || ''))) {return;}
       const history = item.preResult;
       if (!history) {return;}
 
@@ -17335,12 +17339,17 @@ window.addEventListener('keydown',function(e){
 
       // 判断历史是否阳性
       const isHistPositive = isPositiveResult(histResult, item);
+      const isHistNegative = isNegativeResult(histResult, item);
       // 判断当前是否阴性（8.5.14：传 item，按参考范围判断，与 isPositiveResult 对称）
       const isCurrentNegative = isNegativeResult(item.result, item);
+      const isCurrentPositive = isPositiveResult(item.result, item);
 
       // 历史阳性 → 现在阴性 = 异常
       if (isHistPositive && isCurrentNegative) {
         warnings.push(`${item.name}: 历史阳性(${histResult}) → 现阴性`);
+      } else if (isHistNegative && isCurrentPositive) {
+        // 8.9.15: 历史阴性 → 现在阳性 = 新发/转换，同样不可自动审核
+        warnings.push(`${item.name}: 历史阴性(${histResult}) → 现阳性`);
       }
     });
 
@@ -19115,19 +19124,25 @@ window.addEventListener('keydown',function(e){
   }
   function autoAuditEnabled() {return !!(_autoAudit && _autoAudit.enabled);}
   // 8.8.18: 通知推送模式。all=成功+未成功都推；blocked=只推未成功/红线留人工；off=不推。
+  // 8.9.15: 新增 blocked_abn=只推「未成功」+「有可见异常的异常标本」（全推送去掉全部正常
+  //   与只有忽略项目异常的标本——后者在推送里本来就没有内容行）。
   function autoAuditNotifyMode() {
     const m = _autoAudit && _autoAudit.notifyMode;
-    return (m === 'blocked' || m === 'off') ? m : 'all';
+    return (m === 'blocked' || m === 'blocked_abn' || m === 'off') ? m : 'all';
   }
   // 8.8.28: 推送模式中文文案与彩色徽章展示
   function autoAuditNotifyModeText(mode) {
     const m = mode || autoAuditNotifyMode();
+    if (m === 'blocked_abn') {return '推送不成功+有异常标本（正常的与仅忽略项目异常的不推）';}
     if (m === 'blocked') {return '只推送未成功的标本';}
     if (m === 'off') {return '不推送（已关闭）';}
     return '推送所有（成功+未成功标本）';
   }
   function autoAuditNotifyModeBadgeHTML(mode) {
     const m = mode || autoAuditNotifyMode();
+    if (m === 'blocked_abn') {
+      return '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:#ffe8d9;color:#a35200;font-weight:700;font-size:11px;border:1px solid #ffd0a8">🟠 未成功+有异常</span>';
+    }
     if (m === 'blocked') {
       return '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:#fff3cd;color:#856404;font-weight:700;font-size:11px;border:1px solid #ffeeba">⚠️ 只推未成功标本</span>';
     }
@@ -19146,7 +19161,7 @@ window.addEventListener('keydown',function(e){
     const min = Math.floor(ms / 60000);
     const sec = Math.floor((ms % 60000) / 1000);
     const mode = autoAuditNotifyMode();
-    const modeShort = mode === 'blocked' ? '仅未成功' : mode === 'off' ? '免打扰' : '全推';
+    const modeShort = mode === 'blocked_abn' ? '未成功+异常' : mode === 'blocked' ? '仅未成功' : mode === 'off' ? '免打扰' : '全推';
     return '🤖自动审核 ' + min + ':' + String(sec).padStart(2, '0') + ' (' + modeShort + ')';
   }
 
@@ -19170,7 +19185,7 @@ window.addEventListener('keydown',function(e){
         _autoAudit.rules || {}
       );
       // 8.8.18: 通知推送模式——all(成功+未成功标本都推) / blocked(只推未成功/红线) / off(不推)。旧状态无此字段按 all。
-      if (!_autoAudit.notifyMode || !['all', 'blocked', 'off'].includes(_autoAudit.notifyMode)) {
+      if (!_autoAudit.notifyMode || !['all', 'blocked', 'blocked_abn', 'off'].includes(_autoAudit.notifyMode)) {
         _autoAudit.notifyMode = 'all';
       }
       // 8.9.6: 合并推送窗口（分钟）——0=不合并（每轮立即推）；非法值回退默认 2，上限 30
@@ -19414,15 +19429,18 @@ window.addEventListener('keydown',function(e){
     _notifySend(send).then(ok => {if (!ok) {_notifyRetryEnqueue(send, key);}});
   }
 
-  // ---- 8.9.6: 连续结果合并推送（防手机连响轰炸） ----
+  // ---- 8.9.6: 连续结果合并推送（防手机连响轰炸）；8.9.15: 升级为「智能节奏」 ----
   // 背景：连续出一批标本时，每轮 30s 结算各推一条，手机响个不停。机制：
-  //   轮次推送先写入持久化缓冲区（localStorage，防整页刷新丢失），静默「合并窗口」（默认 2 分钟，
-  //   自动审核弹窗可选）无新轮次才合并成一条推送发出；等待期自首个入队事件起超过 10 分钟强制发出
-  //   （连续高峰至少每 10 分钟一条）。危急值/堵孔/传染病/心肌/负值等红线不受窗口限制：
-  //   立即把缓冲区与本轮合并成一条 critical 推送发出。off 模式在调用方已拦，不进缓冲区。
-  //   标题/正文仍由 autoAuditPushTitle / autoAuditAbnSpecimenSummary 统一生成，与旧单轮推送同构；
-  //   合并条目按标本 id 去重（同标本取最后一次），重复记录不翻倍。
-  const AA_PUSH_BUF_MAX_WAIT = 10 * 60 * 1000; // 缓冲最长等待（自首个入队事件起算）
+  //   轮次推送先写入持久化缓冲区（localStorage，防整页刷新丢失），随后每 15s 复查一次：
+  //   ① 距最后一个结果已静默 ≥60s（用户观察：同一台仪器前后脚上的标本结果出来间隔基本不超过
+  //      1 分钟）→ 判定同批结束，立即合并发出——孤立结果约 60~75s 即达，不再傻等固定窗口；
+  //   ② 流水仍在继续（60s 内有新结果）→ 继续攒；
+  //   ③ 自首个入队事件起攒满「合并窗口」（默认 2 分钟，弹窗可选）→ 连续高峰强制发出一条。
+  //   危急值/堵孔/传染病/心肌/负值等红线不受等待限制：立即把缓冲区与本轮合并成一条 critical 推送。
+  //   off 模式在调用方已拦，不进缓冲区。标题/正文仍由 autoAuditPushTitle /
+  //   autoAuditAbnSpecimenSummary 统一生成，与旧单轮推送同构；合并条目按标本 id 去重（同标本取最后一次）。
+  const AA_STREAM_QUIET_MS = 60 * 1000; // 8.9.15: 静默判定阈值——同批结果间隔经验值（同一仪器前后脚 ≤1 分钟）
+  const AA_PUSH_TICK_MS = 15 * 1000; // 8.9.15: 复查间隔
   const AA_PUSH_BUF_MAX_AGE = 30 * 60 * 1000; // 启动恢复时缓冲超龄（跨夜残骸）静默丢弃
   const AA_PUSH_BUF_MAX_LINES = 14; // 合并推送正文明细行上限（多轮合并比单轮略宽）
   let _aaPushBuf = null;
@@ -19519,7 +19537,7 @@ window.addEventListener('keydown',function(e){
       if (passN + abnPassN + skipN <= 0) {_aaPushBufClear(); return false;} // 凑不出内容的残骸：静默清掉
       const redEntries = Object.entries(redCats);
       const hasRed = redEntries.length > 0;
-      const emoji = hasRed ? '🚨' : (b.mode === 'blocked' ? '⚠️' : '🤖');
+      const emoji = hasRed ? '🚨' : ((b.mode === 'blocked' || b.mode === 'blocked_abn') ? '⚠️' : '🤖');
       const title = (autoAuditPushTitle(b.passByMn, redEntries, b.otherFailN || 0, emoji) || ('自动审核 ' + (passN + abnPassN) + ' 例')) + (opts.suffix || '');
       let body = '正常 ' + passN + ' · 异常 ' + abnPassN + ' · 留人工 ' + skipN;
       if (hasRed) {
@@ -19538,7 +19556,27 @@ window.addEventListener('keydown',function(e){
       return true;
     } catch (e) {dbg('合并推送结算异常:', e); return false;}
   }
-  // 轮次推送统一入口：红线/补报/未启用合并 → 立即结清；否则进缓冲区等静默窗口
+  // 8.9.15: 复查节奏决策（纯函数便于离线测试）——返回 0=立即发；>0=再等 delay ms
+  //  触发立即发：① 静默 ≥60s（同批不会再有结果）② 攒满合并窗口上限（连续高峰必发）
+  function _aaPushBufNextDelay(buf, now, winMin) {
+    const silence = now - (buf.updated || buf.ts || now);
+    if (silence >= AA_STREAM_QUIET_MS) {return 0;}
+    const remaining = (buf.ts || now) + winMin * 60000 - now;
+    if (remaining <= 3000) {return 0;}
+    return Math.min(AA_PUSH_TICK_MS, remaining);
+  }
+  function _aaPushBufTick() {
+    _aaPushBufTimer = null;
+    try {
+      if (!_aaPushBuf) {return;}
+      const now = Date.now();
+      const winMin = Math.max(0.5, autoAuditMergeWindowMin() || 2); // 0 已在入队时直发，防御性兜底
+      const delay = _aaPushBufNextDelay(_aaPushBuf, now, winMin);
+      if (delay === 0) {flushAutoAuditPushBuffer(); return;}
+      _aaPushBufTimer = setTimeout(_aaPushBufTick, delay);
+    } catch (e) {dbg('合并推送复查异常:', e);}
+  }
+  // 轮次推送统一入口：红线/补报/未启用合并 → 立即结清；否则进缓冲区按智能节奏复查
   function queueAutoAuditPush(data) {
     try {
       const d = data || {};
@@ -19546,10 +19584,7 @@ window.addEventListener('keydown',function(e){
       const winMin = autoAuditMergeWindowMin();
       if (d.immediate || hasRed || !winMin) {return flushAutoAuditPushBuffer(d);}
       _aaPushBufAdd(d);
-      if (_aaPushBufTimer) {clearTimeout(_aaPushBufTimer);} // 每有新内容重置静默窗
-      const waited = Date.now() - (_aaPushBuf.ts || Date.now());
-      const wait = Math.min(winMin * 60000, Math.max(15000, AA_PUSH_BUF_MAX_WAIT - waited));
-      _aaPushBufTimer = setTimeout(() => {_aaPushBufTimer = null; flushAutoAuditPushBuffer();}, wait);
+      if (!_aaPushBufTimer) {_aaPushBufTimer = setTimeout(_aaPushBufTick, AA_PUSH_TICK_MS);} // 常驻 15s 复查，tick 内自会判断静默/上限
       return true;
     } catch (e) {dbg('合并推送入队异常:', e); return false;}
   }
@@ -19565,7 +19600,8 @@ window.addEventListener('keydown',function(e){
   // （危急值 / 负值 / 传染病阳性 / 心肌标志物达拦截线 / 疑似堵孔）
   function isAutoAuditRedLineReason(reason) {
     if (!reason) {return false;}
-    return /危急值|含负值|梅毒|丙肝|艾滋|心肌标志物|疑似堵孔/.test(String(reason));
+    // 8.9.15: 加入「传染病历史不符」——乙肝等两对半项目的阴阳转换此前只算普通异常
+    return /危急值|含负值|传染病历史不符|梅毒|丙肝|艾滋|心肌标志物|疑似堵孔/.test(String(reason));
   }
 
   // 8.8.13: 异常项目状态 → 推送短标记。8.8.16: 用彩色箭头；8.8.17: 升高红🔺、降低蓝🔽。只用于摘要正文。
@@ -19711,6 +19747,43 @@ window.addEventListener('keydown',function(e){
     return 'skip'; // 其余未知衍生项：宁可少推不占地方（危急值有直通行，不受此影响）
   }
 
+  // 8.9.15: 推送可见性判定——某个异常项在推送摘要里会不会被展示（危急值/core 必显，
+  // cond 达阈值显，skip 不显；非血常规标本任何异常项都显）。摘要过滤与 blocked_abn
+  // 模式的触发判定共用此口径，两边永远一致。
+  function aaPushItemVisible(test, it) {
+    const st = it.s || it.status || '';
+    if (st === 'CRITICAL') {return true;}
+    if (!aaIsCbcTest(test)) {return true;}
+    const tier = aaCbcItemTier(it.n || it.name);
+    if (tier === 'core') {return true;}
+    if (tier === 'cond') {
+      const dev = aaCbcCondDeviation(it);
+      return dev === null ? true : dev >= aaCbcCondLimitOf(it.n || it.name);
+    }
+    return false;
+  }
+  // 8.9.15: 一个（异常通过自动审核的）标本在推送里是否含有「可见异常」——
+  // 「只有忽略项目异常」（如仅 RDW/比率类异常的血常规）视为无可见异常。
+  function aaEntryHasVisibleAbn(entry) {
+    if (!entry) {return false;}
+    const test = entry.test || '';
+    const list = (entry.items && entry.items.length) ? entry.items : (entry.abn || []);
+    return list.some(it => {
+      const st = it.s || it.status || '';
+      return st && st !== 'NORMAL' && aaPushItemVisible(test, it);
+    });
+  }
+  // 8.9.15: 按推送模式决定哪些条目进推送明细（聚合计数不受影响）——
+  //   all: 全部；blocked: 只有留人工；blocked_abn: 留人工 + 有可见异常的异常通过标本
+  //   （「只有忽略项目异常」的标本不进明细，避免推送里出现无内容的占位行）
+  function aaEventEntriesForPush(mode, evEntries) {
+    if (mode === 'all') {return evEntries;}
+    if (mode === 'blocked_abn') {
+      return evEntries.filter(en => en.k === 's' || (en.k === 'a' && aaEntryHasVisibleAbn(en.e)));
+    }
+    return evEntries.filter(en => en.k === 's'); // blocked / off 兜底
+  }
+
   // 8.8.14: 标本异常项目 → 推送摘要（按标本展开，手机端可直接定位标本）。
   // 用户已确认：标本号、接收时间（报告时间语境，工作台卡片同一时间）不属于病人隐私，可进推送；
   // 8.8.15: 不显示单位，每个异常项均附参考范围帮助判断（用户要求）。
@@ -19743,20 +19816,11 @@ window.addEventListener('keydown',function(e){
       const tst = String(s.test || '').trim().slice(0, 10);
       const header = [seq ? '流水号 ' + seq : ('检验号 ' + labno), tm, tst].filter(Boolean).join(' ') || '标本';
       // 8.9.9: 血常规三级瘦身——危急值必留；core 必留；cond(HCT/MCV/MCH/MCHC) 超参考限达阈值才留；skip 略
+      // 8.9.15: 判定口径提取为 aaPushItemVisible（与 blocked_abn 模式的触发判定共用，保证一致）
       let abn = abnAll;
       let filteredN = 0;
       if (aaIsCbcTest(s.test || s.TestSetDesc || '')) {
-        abn = abnAll.filter(it => {
-          const st = it.s || it.status || '';
-          if (st === 'CRITICAL') {return true;}
-          const tier = aaCbcItemTier(it.n || it.name);
-          if (tier === 'core') {return true;}
-          if (tier === 'cond') {
-            const dev = aaCbcCondDeviation(it);
-            return dev === null ? true : dev >= aaCbcCondLimitOf(it.n || it.name);
-          }
-          return false;
-        });
+        abn = abnAll.filter(it => aaPushItemVisible(s.test || s.TestSetDesc || '', it));
         filteredN = abnAll.length - abn.length;
       }
       if (!abn.length) {
@@ -19827,6 +19891,7 @@ window.addEventListener('keydown',function(e){
   // 8.8.24: 跳过原因 → 红线类别名（供推送标题分组）；非红线返回 ''（归入「审核失败」）
   function autoAuditReasonCat(reason) {
     const s = String(reason || '');
+    if (/传染病历史不符/.test(s)) {return '传染病阴阳不符';} // 8.9.15: 双向转换单独归类,别混进「阳性」
     if (/危急值/.test(s)) {return '危急值';}
     if (/含负值/.test(s)) {return '含负值';}
     if (/梅毒|丙肝|艾滋/.test(s)) {return '传染病阳性';}
@@ -20006,16 +20071,22 @@ window.addEventListener('keydown',function(e){
       // 日志总是落（off/blocked 不推也要有记录），明细截断口径与实时轮一致
       try {autoAuditLogAdd({normal: passN, abnormal: abnPassN, skipped: skips.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX), audited: auds.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX)});} catch (e) {}
       // 推送模式快照语义（8.8.29 固化的策略在此生效）：all=有动作即推；blocked=只有未成功才推；off=不推
-      const shouldPush = m === 'all' ? true : (m === 'blocked' ? skipN > 0 : false);
+      // 8.9.15: blocked_abn 触发——有未成功 OR 有「可见异常」的异常通过标本（口径与主循环一致）
+      const _hasVisAbn = m === 'blocked_abn' &&
+        (evEntries ? evEntries.some(en => en.k === 'a' && aaEntryHasVisibleAbn(en.e))
+                   : auds.some(x => x.t === 'abnormal' && aaEntryHasVisibleAbn(x)));
+      const shouldPush = m === 'all' ? true
+        : (m === 'blocked' ? skipN > 0
+        : (m === 'blocked_abn' ? (skipN > 0 || _hasVisAbn) : false));
       if (!shouldPush) {return false;}
       if (a.v === 3 && evEntries) {
-        // 8.9.6: 走合并推送队列——补报（opts.immediate）立即结清；续跑/跨组结算按合并窗口攒单；
+        // 8.9.15: 走合并推送队列——补报（opts.immediate）立即结清；续跑/跨组结算按合并窗口攒单；
         // 红线（redCats 非空）在队列内不受窗口限制立即合并发出。明细/标题由 flush 统一生成。
-        queueAutoAuditPush({passByMn, redCats, otherFailN, entries: evEntries, mode: m, immediate: opts.immediate, suffix: opts.suffix, note: opts.note});
+        queueAutoAuditPush({passByMn, redCats, otherFailN, entries: aaEventEntriesForPush(m, evEntries), mode: m, immediate: opts.immediate, suffix: opts.suffix, note: opts.note});
         return true;
       }
       // v2 遗留形态（8.8.25~8.8.29 升级前遗留的聚合计数，无明细条目）：保持旧直推行为
-      const emoji = hasRed ? '🚨' : (m === 'blocked' ? '⚠️' : '🤖');
+      const emoji = hasRed ? '🚨' : ((m === 'blocked' || m === 'blocked_abn') ? '⚠️' : '🤖');
       const title0 = autoAuditPushTitle(passByMn, redEntries, otherFailN, emoji);
       if (!title0) {return false;}
       const title = title0 + (opts.suffix ? opts.suffix : '');
@@ -20424,12 +20495,16 @@ window.addEventListener('keydown',function(e){
         // 8.8.13: 本轮有审核动作 → 手机推送关键事件（8.9.6 起统一走合并推送队列）。
         // 推送模式开关 autoAuditNotifyMode()：all=成功+未成功都推（本轮有动作即推）；
         // blocked=只推未成功自动审核的标本（有留人工才推，全部通过则不推）；off=完全不推。
-        // 8.9.6: 合并推送——普通结果按「合并窗口」（自动审核弹窗可选，默认静默 2 分钟）攒单，
-        // 窗口内无新轮次才合并成一条发出（连续出一批标本不再连响）；最长攒 10 分钟必发；
+        // 8.9.6/8.9.15: 合并推送——普通结果进缓冲区按智能节奏复查（静默≥1分钟判定批结束即发），
+        // 连续流水一直攒着（最多攒「合并窗口」分钟必发）；危急值等红线立即合并成一条 critical 发出；
         // 红线（危急值/堵孔0值/传染病阳性/心肌标志物/含负值）不受窗口限制，立即把缓冲与本轮合并成一条 critical 发出。
         // 隐私红线：用户已确认标本号与接收时间可进推送；姓名/住院号/床号/科室等身份信息绝不含。
         const _notifyMode = autoAuditNotifyMode();
-        if (_notifyMode !== 'off' && (_notifyMode === 'all' || skipped.length > 0)) {
+        // 8.9.15: blocked_abn 触发条件——有未成功 OR 有「可见异常」的异常通过标本
+        // （仅忽略项目异常的血常规标本不算有异常，与推送摘要展示口径一致）
+        const _hasVisAbn = _notifyMode === 'blocked_abn' &&
+          audited.some(a => a.t === 'abnormal' && aaEntryHasVisibleAbn(a));
+        if (_notifyMode !== 'off' && (_notifyMode === 'all' || (_notifyMode === 'blocked_abn' ? (skipped.length > 0 || _hasVisAbn) : skipped.length > 0))) {
           // 标题分组统计：红线按类别、其余失败归「审核失败」
           const _redCats = [];
           let _otherFailN = 0;
@@ -20440,13 +20515,12 @@ window.addEventListener('keydown',function(e){
               if (hit) {hit[1]++;} else {_redCats.push([cat, 1]);}
             } else {_otherFailN++;}
           });
-          // blocked 模式只带留人工条目（通过标本只进聚合计数）；all 模式通过标本也带异常明细
-          const _entries = [];
-          skipped.forEach(s => {_entries.push({id: _aaPushEntryId(s), k: 's', e: s});});
-          if (_notifyMode === 'all') {
-            audited.forEach(a => {_entries.push({id: _aaPushEntryId(a), k: a.t === 'abnormal' ? 'a' : 'n', e: a});});
-          }
-          queueAutoAuditPush({passByMn: _passByMn, redCats: _redCats, otherFailN: _otherFailN, entries: _entries, mode: _notifyMode});
+          // 8.9.15: 明细条目按模式过滤（聚合计数不受影响）——all 全带；blocked 只带留人工；
+          // blocked_abn 带留人工 + 有可见异常的异常通过标本
+          const _evEntries = [];
+          skipped.forEach(s => {_evEntries.push({id: _aaPushEntryId(s), k: 's', e: s});});
+          audited.forEach(a => {_evEntries.push({id: _aaPushEntryId(a), k: a.t === 'abnormal' ? 'a' : 'n', e: a});});
+          queueAutoAuditPush({passByMn: _passByMn, redCats: _redCats, otherFailN: _otherFailN, entries: aaEventEntriesForPush(_notifyMode, _evEntries), mode: _notifyMode});
         }
         // 8.8.25: 本轮完整走完并已推送 → 清空累积器（off 模式也清，避免日后重开时误补报旧轮）
         aaClear();
@@ -20674,8 +20748,8 @@ window.addEventListener('keydown',function(e){
       const sec = Math.floor((ms % 60000) / 1000);
       const timeStr = min + ':' + String(sec).padStart(2, '0');
       const mode = autoAuditNotifyMode();
-      const modeShort = mode === 'blocked' ? '仅未成功' : mode === 'off' ? '免打扰' : '全推';
-      const modeLong = mode === 'blocked' ? '只推未成功标本' : mode === 'off' ? '不推送' : '全量推送（成功+未成功）';
+      const modeShort = mode === 'blocked_abn' ? '未成功+异常' : mode === 'blocked' ? '仅未成功' : mode === 'off' ? '免打扰' : '全推';
+      const modeLong = mode === 'blocked_abn' ? '推送不成功+有异常标本' : mode === 'blocked' ? '只推未成功标本' : mode === 'off' ? '不推送' : '全量推送（成功+未成功）';
       btn.classList.add('on');
       btn.textContent = '🤖 自动审核中 ' + timeStr + ' (' + modeShort + ')';
       btn.title = '自动审核进行中，剩余 ' + timeStr + ' · 推送策略：' + modeLong + ' · 点击查看/设置/停止';
@@ -20727,6 +20801,7 @@ window.addEventListener('keydown',function(e){
             </div>
             <div id="lis-aa-notify-opts" style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 10px;background:#fafbfc;border:1px solid #e1e4e8;border-radius:4px">
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="all" ${curNotifyMode === 'all' ? 'checked' : ''}> 📲 推送所有（成功+未成功标本）</label>
+              <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="blocked_abn" ${curNotifyMode === 'blocked_abn' ? 'checked' : ''}> 🟠 推送不成功+有异常标本</label>
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="blocked" ${curNotifyMode === 'blocked' ? 'checked' : ''}> ⚠️ 只推送未成功的标本</label>
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="off" ${curNotifyMode === 'off' ? 'checked' : ''}> 🔕 不推送</label>
             </div>
@@ -20734,14 +20809,14 @@ window.addEventListener('keydown',function(e){
               <label style="cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap">⏱ 连续结果合并推送
                 <select id="lis-aa-merge-win" style="padding:3px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px">
                   <option value="0"${curMergeWin === 0 ? ' selected' : ''}>不合并（每轮立即推）</option>
-                  <option value="1"${curMergeWin === 1 ? ' selected' : ''}>静默 1 分钟</option>
-                  <option value="2"${curMergeWin === 2 ? ' selected' : ''}>静默 2 分钟（推荐）</option>
-                  <option value="3"${curMergeWin === 3 ? ' selected' : ''}>静默 3 分钟</option>
-                  <option value="5"${curMergeWin === 5 ? ' selected' : ''}>静默 5 分钟</option>
-                  <option value="10"${curMergeWin === 10 ? ' selected' : ''}>静默 10 分钟</option>
+                  <option value="1"${curMergeWin === 1 ? ' selected' : ''}>流水最长 1 分钟</option>
+                  <option value="2"${curMergeWin === 2 ? ' selected' : ''}>流水最长 2 分钟（推荐）</option>
+                  <option value="3"${curMergeWin === 3 ? ' selected' : ''}>流水最长 3 分钟</option>
+                  <option value="5"${curMergeWin === 5 ? ' selected' : ''}>流水最长 5 分钟</option>
+                  <option value="10"${curMergeWin === 10 ? ' selected' : ''}>流水最长 10 分钟</option>
                 </select>
               </label>
-              <span style="color:#999;line-height:1.6">结果连续出来时先攒着，静默一段时间后合并成一条推送（连续高峰最长攒 10 分钟必发）；危急值等红线不受窗口限制，立即推送。</span>
+              <span style="color:#999;line-height:1.6">8.9.15 智能节奏：同一批结果连续出来时一直攒着，静默约 1 分钟（同一台仪器前后脚结果出来的间隔经验值）判定批结束，合并成一条发出——孤立结果约 1 分钟即达，不再傻等固定窗口；连续不断的高峰最多攒所选时长必发。危急值等红线不受等待限制，立即推送。</span>
             </div>
             <div id="lis-aa-notify-edit-hint" style="display:none;margin-top:4px;color:#d9534f;font-size:11px;font-weight:600"></div>
             <div id="lis-aa-push-status" style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border:1px solid #e3e8ee;border-radius:4px;color:#555;font-size:12px;line-height:1.7">⏳ 正在获取推送状态…</div>
