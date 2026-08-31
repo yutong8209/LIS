@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.15
+// @version      8.10.0
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1620,13 +1620,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   // ============================================================
-  //  模块 B：快速切换条（已移除，保留占位避免历史引用）
-  // ============================================================
-  function initQBar() {
-    /* deprecated */
-  }
-
-  // ============================================================
   //  模块 QC：质控数据录入页辅助
   // ============================================================
   let qcInputInited = false;
@@ -1952,12 +1945,18 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const dots = points
       .map((p, i) => {
         const diff = p.value - xbar;
-        const z = Math.abs(diff) / spread;
-        // 颜色优先级：outlier > 偏离方向
+        // 8.10.0: z 分级只在有真实 SD 时做——SetUpSD 缺失时 spread 回退为 (max-min)/6，
+        // 各点相等时取 0.0001，z 值爆表，微小差异的点全被标成 ≥3SD 红（失真）。
+        // 无有效 SD 时只按偏离方向着色
         let cls;
-        if (z >= 3) {cls = 'loss';}
-        else if (z >= 2) {cls = 'warn';}
-        else if (diff === 0) {cls = 'eq';}
+        if (sdRaw > 0) {
+          const z = Math.abs(diff) / sdRaw;
+          if (z >= 3) {cls = 'loss';}
+          else if (z >= 2) {cls = 'warn';}
+          else if (diff === 0) {cls = 'eq';}
+          else if (diff > 0) {cls = 'above';}
+          else {cls = 'below';}
+        } else if (diff === 0) {cls = 'eq';}
         else if (diff > 0) {cls = 'above';}
         else {cls = 'below';}
         return `<circle class="qc-dot ${cls}" cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3.2" data-date="${esc(p.date || '')}" data-val="${esc(fmt(p.value))}"></circle>`;
@@ -2023,12 +2022,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       html = '<div id="lis-qc-empty">暂无可绘制数据。</div>';
     } else {
       drawLevels.forEach(ln => {
-        const pts = levelMap[ln].slice(-45).sort((a, b) => {
-          const ta = qcParseDate(a.date);
-          const tb = qcParseDate(b.date);
-          if (!Number.isNaN(ta) && !Number.isNaN(tb)) {return ta - tb;}
-          return String(a.date || '').localeCompare(String(b.date || ''));
-        });
+        // 8.10.0: 先按日期排序再取尾部 45 条——此前按网格插入顺序 slice(-45) 再排序，
+        // LIS 返回行序非日期序时画出的不是最新 45 个点
+        const pts = levelMap[ln]
+          .slice()
+          .sort((a, b) => {
+            const ta = qcParseDate(a.date);
+            const tb = qcParseDate(b.date);
+            if (!Number.isNaN(ta) && !Number.isNaN(tb)) {return ta - tb;}
+            return String(a.date || '').localeCompare(String(b.date || ''));
+          })
+          .slice(-45);
         const label = 'Level ' + ln;
         html += `<div class="qc-chart-wrap">${qcBuildSVG(pts, label)}</div>`;
       });
@@ -2598,7 +2602,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (!el) {return;}
     el.textContent = text || '';
     el.classList.remove('ok', 'error', 'info');
-    if (type === 'error') {el.classList.add('error');}
+    // 8.10.0: 'warning' 此前不被识别、样式落空——无专用样式类，按 error 呈现
+    if (type === 'error' || type === 'warning') {el.classList.add('error');}
     else if (type === 'ok') {el.classList.add('ok');}
     else if (type === 'info') {el.classList.add('info');}
   }
@@ -3225,11 +3230,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           out.push(r);
         }
       });
-      const total = prTotalFromResponse(data, 0);
       if (rows.length < pageSize) {break;}
       /* LIS 有时 total 不准：满页时主动多探一页；如果下一页全重复则停止，避免死循环。 */
       if (page > 1 && rows.length > 0 && fresh === 0) {break;}
-      if (total > 0 && out.length >= total && rows.length < pageSize) {break;}
+      /* 8.10.0: 删除原 `total>0 && out.length>=total && rows.length<pageSize` 分支——
+         rows.length<pageSize 已在上方先 break，该条件永假，属死代码；
+         total 本就不可靠（见上注），不以其作提前终止依据 */
     }
     return out;
   }
@@ -4183,6 +4189,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         );
         if (signal.aborted || querySeq !== prQuerySeq) {return;}
         lists.forEach(list => resultRows.push(...list));
+        // 8.10.0: 硬顶判定提前到批循环内——此前只在全部批次拉完后截断一次，
+        // 「近一年」全组查询仍会把所有标本明细全部拉完，内存/网络峰值并没有被防住
+        if (resultRows.length >= PR_MAX_RESULT_ROWS) {
+          resultRows.length = PR_MAX_RESULT_ROWS;
+          prDataPartial = true;
+          showToast(`结果已达 ${PR_MAX_RESULT_ROWS} 行上界，已截断。请缩小日期/筛选范围获取完整数据`, 'warning');
+          break;
+        }
         const done = Math.min(i + batch.length, detailRows.length);
         if (resultRows.length && (resultRows.length - lastRenderAt >= 500 || done === detailRows.length)) {
           prData = resultRows;
@@ -5185,6 +5199,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return Number.isNaN(d.getTime()) ? 0 : d.getMonth() + 1;
   }
 
+  // 8.10.0: 年份提取——此前 inMonth 只比月不比年，LIS 若返回范围外的往年同月
+  // 质控数据会混入导出 Excel
+  function qeExtractYear(dateStr) {
+    const s = String(dateStr || '').trim();
+    const m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (m) {return parseInt(m[1], 10);}
+    if (/^\d{8}$/.test(s)) {return parseInt(s.slice(0, 4), 10);}
+    const d = new Date(s.replace(/-/g, '/'));
+    return Number.isNaN(d.getTime()) ? 0 : d.getFullYear();
+  }
+
   function qeCountMonthQCRows(dataRows, month, year) {
     let n = 0;
     (dataRows || []).forEach(r => {
@@ -5193,8 +5218,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const date = r.TestDate || r.AddDate || r.QCDate || '';
       const m = qeExtractMonth(date);
       const d = qeExtractDay(date);
+      const y = qeExtractYear(date); // 8.10.0: 补年份比较
       const inMonth =
-        (m === month && d > 0) || (String(date).indexOf(year + '-' + String(month).padStart(2, '0')) === 0 && d > 0);
+        (y === year && m === month && d > 0) || (String(date).indexOf(year + '-' + String(month).padStart(2, '0')) === 0 && d > 0);
       if (inMonth) {n++;}
     });
     return n;
@@ -5495,8 +5521,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           const date = r.TestDate || r.AddDate || r.QCDate || '';
           const m = qeExtractMonth(date);
           const d = qeExtractDay(date);
+          const y = qeExtractYear(date); // 8.10.0: 补年份比较
           const inMonth =
-            (m === month && d > 0) ||
+            (y === year && m === month && d > 0) ||
             (String(date).indexOf(year + '-' + String(month).padStart(2, '0')) === 0 && d > 0);
           if (inMonth) {levels[lv].push({ day: d, value: val });}
         }
@@ -5637,8 +5664,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     const urls = [VENDOR_BASE + '/' + fileName, 'http://127.0.0.1:8765/vendor/' + fileName];
     for (const url of urls) {
+      // 8.10.0: 兜底 fetch 补上超时 + 停止信号——此前无 AbortController，vendor 源
+      // 「半死」（接受连接不响应）时导出永远卡在「正在加载 Excel 组件…」，
+      // 「停止」按钮无效（信号没接进来），导出按钮永久禁用，只能刷新页面
+      const ctrl = new AbortController();
+      const toId = setTimeout(() => ctrl.abort(), 15000);
+      const extSig = _qeSignal();
+      const onExtAbort = () => ctrl.abort();
+      if (extSig) {
+        if (extSig.aborted) {ctrl.abort();}
+        else {extSig.addEventListener('abort', onExtAbort, { once: true });}
+      }
       try {
-        const r = await fetch(url, { cache: 'no-cache', mode: 'cors' });
+        const r = await fetch(url, { cache: 'no-cache', mode: 'cors', signal: ctrl.signal });
         if (!r.ok) {continue;}
         const buf = await r.arrayBuffer();
         const bytes = new Uint8Array(buf);
@@ -5654,6 +5692,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         if (got) {return true;}
       } catch (e) {
         dbg('[LIS-QE] 加载失败', url, e.message);
+        // 用户停止信号到达时不再尝试下一个源，直接结束兜底
+        if (extSig && extSig.aborted) {return !!qeGetGlobal(globalName);}
+      } finally {
+        clearTimeout(toId);
+        if (extSig) {extSig.removeEventListener('abort', onExtAbort);}
       }
     }
     return !!qeGetGlobal(globalName);
@@ -6216,6 +6259,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       document.getElementById('lis-qe-detect').disabled = true;
       qeAbortFlag = false;
       _qeAbortCtrl = new AbortController(); // 8.9.0: 独立检测也要能被「停止」中断在途请求
+      const _detectCtrl = _qeAbortCtrl; // 8.10.0: 记住本次操作自己的控制器
       try {
         const mappings = await qeDetectMappings(qeSetStatus);
         qeSaveMappings(mappings);
@@ -6223,7 +6267,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       } catch (e) {
         qeSetStatus('检测失败: ' + e.message, 'error');
       }
-      _qeAbortCtrl = null;
+      // 8.10.0: 仅当仍是本次操作的控制器才置空——检测进行中启动导出时，
+      // 导出新建的控制器不能被检测收尾误清（否则导出的「停止」失效、在途请求不可中断）
+      if (_qeAbortCtrl === _detectCtrl) {_qeAbortCtrl = null;}
       document.getElementById('lis-qe-detect').disabled = false;
     });
 
@@ -6369,6 +6415,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     qeExporting = true;
     qeAbortFlag = false;
     _qeAbortCtrl = new AbortController(); // 8.9.0
+    const _exportCtrl = _qeAbortCtrl; // 8.10.0: 与检测收尾对称——只清自己的控制器
     _qeLevelFailures = []; // 8.5.82
     _qeQueryFailures = []; // 8.9.0
     const exportBtn = document.getElementById('lis-qe-export');
@@ -6476,7 +6523,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     } finally {
       qeExporting = false;
       qeAbortFlag = false;
-      _qeAbortCtrl = null;
+      if (_qeAbortCtrl === _exportCtrl) {_qeAbortCtrl = null;} // 8.10.0: 防止误清其它操作的控制器
       try {
         qeHideProgress();
       } catch (e) {}
@@ -6550,7 +6597,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   function markSpecimenAuditedInMem(reportDR) {
     try {
       const r = wsData.find(x => String(x.ReportDR) === String(reportDR));
-      if (r) {r.Status = '3'; r.ReportStatus = '3';}
+      if (r) {
+        r.Status = '3';
+        r.ReportStatus = '3';
+        // 8.10.0: 改数据必失效缓存（8.9.0 epoch 机制）——此前只改内存行，
+        // _filteredCache/_countsCache 键未变，批审期间任何走缓存的渲染/计数
+        // 仍会把该标本算进待审
+        invalidateCaches();
+      }
     } catch (e) {}
   }
   let wsMachines = []; // 当前加载的仪器列表
@@ -7415,7 +7469,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         // 注意清除判定看「原始快照」：原始快照仍返回该标本 → 服务端尚未同步，条目保留；
         // 原始快照已没有 → 服务端已更新，条目清掉（避免集合无限增长）。
         if (_wsLocalRemoved.size) {
-          if (!partial) {
+          // 8.10.0: 本轮存在加载失败的仪器/组时快照本身不完整——失败仪器上刚审完的
+          // 标本不在 allData 里，会被「原始快照已没有」误判为服务端已确认而清掉；
+          // 下一轮该仪器恢复、服务端状态尚未回写时，旧快照会把标本带回列表（幽灵卡），
+          // 甚至可能被自动审核二次复审。此时跳过清理，条目留到下轮完整快照再判定
+          if (!partial && failedMachineNames.length === 0) {
             const _serverDRs = new Set(allData.map(r => String(r.ReportDR)));
             for (const dr of _wsLocalRemoved) {
               if (!_serverDRs.has(dr)) {_wsLocalRemoved.delete(dr); continue;}
@@ -7505,7 +7563,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       _wsDataHealth.failed = true;
       _wsDataHealth.partial = false;
       dbg('loadWSData 异常:', e);
-      if (qi) {qi.textContent = '加载失败';}
+      // 8.10.0: qi 是 try 块内的块级变量，catch 里裸引用会抛 ReferenceError，
+      // 连带 _noteWSLoadFailure()（8.6.3 失败升级提醒）永远执行不到——改为重新查询
+      try {
+        const qiFail = document.getElementById('lis-qi');
+        if (qiFail) {qiFail.textContent = '加载失败';}
+      } catch (_) {}
       _noteWSLoadFailure(); // 8.6.3: 连续失败升级提醒（wsData 未动，数字保持旧值）
       return { ok: false, error: e, empty: true };
     } finally {
@@ -7575,8 +7638,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     dbg('[WS] 强制刷新工作台状态');
     stopWSRefresh();
     clearMachineCache();
-    const hadData = wsData.length > 0 || _lastWSNonEmptyAt > 0;
-    const alreadyEmpty = wsData.length === 0;
+    // 8.10.0: 删除已死的 hadData/alreadyEmpty——二者只在被删除的恒真条件下使用
     wsLoading = false;
     wsClassifying = false;
     _classifyRunSeq++; // 先递增序号，确保正在运行的分类任务感知到并中止
@@ -7626,13 +7688,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
 
       // 锁屏/会话失效常见：一直 0 或接口失败 → 整页刷新（与浏览器强刷同效果）
-      // 条件：曾经有过数据、或当前已是全 0、或明确会话错误
-      if (sessionDead || hadData || alreadyEmpty || empty) {
-        hardReloadPageForWS(
-          sessionDead ? '会话可能已失效，正在刷新页面…' : '工作台数据异常（全 0 或加载失败），正在刷新页面…'
-        );
-        return;
-      }
+      // 8.10.0: 走到这里说明软刷新未拿到可用数据——原「恒真条件」已去除，直接整页刷新
+      hardReloadPageForWS(
+        sessionDead ? '会话可能已失效，正在刷新页面…' : '工作台数据异常（全 0 或加载失败），正在刷新页面…'
+      );
+      return;
     } catch (e) {
       dbg('[WS] forceRefreshWS 异常:', e);
       hardReloadPageForWS('刷新异常，正在刷新页面…');
@@ -8070,6 +8130,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   function getWSAuditBucket(r) {
     const status = String(r.Status || r.ReportStatus || '');
+    if (status === '5') {
+      // 8.10.0: 已取消标本一律不可审——此前只挡 3/0/9，取消标本若 IsComplete='1'
+      // 且分类 NORMAL 会混入待审视图/批审队列，存在误审已取消报告的风险
+      return 'audited'; // 与已审同等隐藏（各分类视图不显示，「全部」视图仍可见）
+    }
     if (status === '3') {
       // 8.5.50: 一审完成（审核）= 已审核，保持隐藏
       return 'audited';
@@ -8675,19 +8740,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     tabs.innerHTML = h;
 
     // 事件绑定（只绑一次）
-    tabs.querySelectorAll('.ws-wg-tab').forEach(b =>
-      b.addEventListener('click', () => {
-        invalidateCaches();
-        wsActiveWG = b.dataset.wg;
-        wsActiveMachine = '';
-        wsAbnormalIndex = -1;
-        wsChecked.clear();
-        saveWSState();
-        renderWSTabs();
-        renderWSCategoryBar();
-        renderWSTable();
-      })
-    );
+    // 8.10.0: 删除 .ws-wg-tab 绑定——本函数生成的 DOM 里没有该类元素
+    // （工作组标签在 renderWSHeader），querySelectorAll 恒空，属死代码且易误导
     tabs.querySelectorAll('.ws-mach-all').forEach(b =>
       b.addEventListener('click', () => {
         invalidateCaches();
@@ -12086,6 +12140,11 @@ window.addEventListener('keydown',function(e){
         showToast(`跳过: ${specimen.PatName} 已审核`, 'warning');
         return;
       }
+      // 8.10.0: status 5（已取消）拦截——已取消报告不可审核
+      if (status === '5') {
+        showToast(`跳过: ${specimen.PatName} 标本已取消，不可审核`, 'warning');
+        return;
+      }
 
       const curDR = resolveCurrentWG();
       const spDR = specimen._wg || '';
@@ -13377,7 +13436,15 @@ window.addEventListener('keydown',function(e){
     histRender();
   }
 
-  function _histCacheGet(rdr) { return histReportCache[rdr] || null; }
+  function _histCacheGet(rdr) {
+    const v = histReportCache[rdr];
+    if (!v) {return null;}
+    // 8.10.0: 命中即移到尾部（对象插入序=使用序）——此前按插入序淘汰，
+    // 反复查看的热点报告会被先淘汰、历史重复拉取
+    delete histReportCache[rdr];
+    histReportCache[rdr] = v;
+    return v;
+  }
   function _histCacheSet(rdr, val) {
     histReportCache[rdr] = val;
     const keys = Object.keys(histReportCache);
@@ -14051,6 +14118,7 @@ window.addEventListener('keydown',function(e){
   const LOGIN_CREDS_KEY = 'LIS_LoginCreds';
   const LOGIN_WG_KEY = 'LIS_LastWorkGroup';
   let _loginSubmitTimer = null; // fillNativeAndSubmit 的定时器，页面卸载时清理
+  let _loginSubmitDelayTimer = null; // 8.10.0: 延迟 300ms 提交 login() 的句柄——防快速连按 Enter 双重提交
 
   function initLoginPage() {
     dbg('检测到登录页面，启动登录优化');
@@ -14370,6 +14438,8 @@ window.addEventListener('keydown',function(e){
       // 8.5.82: 先清旧 interval——面板 Enter 每按一次都会调本函数，旧 interval 句柄被覆盖但仍在跑，
       // 多个 interval 各自 login() 会重复提交登录
       if (_loginSubmitTimer) {clearInterval(_loginSubmitTimer); _loginSubmitTimer = null;}
+      // 8.10.0: 已排出的 300ms 延迟提交也要清——否则第一次调用排出的 login() 无法被第二次调用取消
+      if (_loginSubmitDelayTimer) {clearTimeout(_loginSubmitDelayTimer); _loginSubmitDelayTimer = null;}
       const userField = document.getElementById('txtUserCode');
       const pwdField = document.getElementById('txtPassword');
 
@@ -14390,8 +14460,10 @@ window.addEventListener('keydown',function(e){
       if (pwdField) {
         pwdField.dispatchEvent(new Event('blur', { bubbles: true }));
       }
-      if (typeof checkUser === 'function') {
-        checkUser();
+      // 8.10.0: 页面全局函数必须经 unsafeWindow 访问——Tampermonkey @grant 沙箱下
+      // 裸标识符 checkUser/login 永远 undefined，这两行此前恒被跳过（代码库其它处均用 uw().X）
+      if (typeof uw().checkUser === 'function') {
+        uw().checkUser();
       }
 
       // 4. 等待工作组列表加载完成后自动选择并提交
@@ -14416,9 +14488,9 @@ window.addEventListener('keydown',function(e){
           clearInterval(_loginSubmitTimer);
           wgSelect.value = wgDR;
           wgSelect.dispatchEvent(new Event('change', { bubbles: true }));
-          setTimeout(() => {
+          _loginSubmitDelayTimer = setTimeout(() => {
             const btn = document.getElementById('btnOK');
-            if (typeof login === 'function') {login(btn);}
+            if (typeof uw().login === 'function') {uw().login(btn);}
             else if (btn) {btn.click();}
           }, 300);
         } else if (hasOptions) {
@@ -14426,9 +14498,9 @@ window.addEventListener('keydown',function(e){
           dbg('未找到工作组DR=' + wgDR + '，使用第一个');
           wgSelect.selectedIndex = 1;
           wgSelect.dispatchEvent(new Event('change', { bubbles: true }));
-          setTimeout(() => {
+          _loginSubmitDelayTimer = setTimeout(() => {
             const btn = document.getElementById('btnOK');
-            if (typeof login === 'function') {login(btn);}
+            if (typeof uw().login === 'function') {uw().login(btn);}
             else if (btn) {btn.click();}
           }, 300);
         } else if (attempts >= 20) {
@@ -15278,8 +15350,10 @@ window.addEventListener('keydown',function(e){
     missingAsSuccess = false,
     options = {}
   ) {
-    const doc = iframeWin ? iframeWin.document : document;
-    const jq = iframeWin ? iframeWin.jQuery || iframeWin.$ : window.jQuery;
+    // 8.10.0: doc/jq 改 let——循环内 iframeWin 每轮可能重建（详情面板切换/报告页重载），
+    // 只在入口捕获一次会让失败弹窗识别/代关拿着旧 document 失效，引发遮罩残留→连锁超时
+    let doc = iframeWin ? iframeWin.document : document;
+    let jq = iframeWin ? iframeWin.jQuery || iframeWin.$ : window.jQuery;
     let me = iframeWin ? iframeWin.me : null;
     const started = Date.now();
     const end = started + timeoutMs;
@@ -15289,6 +15363,7 @@ window.addEventListener('keydown',function(e){
     let missingSince = 0;
     let failureSince = 0;
     let lastTickAt = 0;
+    let lastQuickVerifyAt = 0; // 8.10.0: 时间戳判定替代取模窗口
     let sawSaveSuccess = false;
     const ignoreMessages = !!options.ignoreMessages;
     const missingStableMs = Number(options.missingStableMs || 700);
@@ -15314,7 +15389,10 @@ window.addEventListener('keydown',function(e){
         } catch (e) {}
       }
       // 每隔约 1s 做一次跨路径快速成功校验（解决「后台已审成、UI 状态慢半拍」的假卡顿）
-      if (typeof options.quickVerify === 'function' && elapsed > 400 && (elapsed % 1000 < 120 || sawSaveSuccess)) {
+      // 8.10.0: 取模窗口（elapsed % 1000 < 120）配 140ms sleep 可能整个窗口被跳过，
+      // 造成约 1s 的校验空窗——改为「距上次校验 ≥1000ms」的时间戳判定
+      if (typeof options.quickVerify === 'function' && elapsed > 400 && (now - lastQuickVerifyAt >= 1000 || sawSaveSuccess)) {
+        lastQuickVerifyAt = now;
         try {
           if (options.quickVerify()) {
             dbg('原生操作成功（quickVerify）');
@@ -15325,6 +15403,9 @@ window.addEventListener('keydown',function(e){
 
       await sleep(now < fastEnd ? (turbo ? 30 : 50) : turbo ? 60 : 140);
       iframeWin = getReportIframeWin() || iframeWin;
+      // 8.10.0: iframe 重建后同步重取 doc/jq/me
+      doc = iframeWin ? iframeWin.document : document;
+      jq = iframeWin ? iframeWin.jQuery || iframeWin.$ : window.jQuery;
       me = iframeWin ? iframeWin.me : me;
       closeIgnorableNativeExceptionDialogs(doc, jq);
 
@@ -15894,15 +15975,20 @@ window.addEventListener('keydown',function(e){
   // 8.5.43: 返回用户选中的账号对象 { id, pwd, note }（含明文密码供重试）；false=取消
   function _caAskSwitchAccount(currentId, alreadyReady) {
     return new Promise(async resolve => {
-      const cur = String(currentId || '');
-      const all = await caAccountsAll();
-      const keys = Object.keys(all).filter(u => all[u].pwd && u !== cur);
-      if (alreadyReady || keys.length === 0) {resolve(false);return;}
-      const overlay = document.createElement('div');
-      overlay.id = 'lis-capick';
-      overlay.style.cssText =
-        'position:fixed;inset:0;z-index:120001;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center';
-      overlay.innerHTML = `<div style="background:#fff;border-radius:10px;width:340px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.3);overflow:hidden">
+      // 8.10.0: 执行器整体兜底——new Promise(async …) 里执行器抛错会被静默吞掉、
+      // Promise 永不落定：批审卡死且锁心跳持续续期，45s 强释放永不触发。任何异常一律
+      // 清理浮层并 resolve(false)（保持原账号，交给上层继续按失败路径处理）
+      let _pickTimer = null;
+      try {
+        const cur = String(currentId || '');
+        const all = await caAccountsAll();
+        const keys = Object.keys(all).filter(u => all[u].pwd && u !== cur);
+        if (alreadyReady || keys.length === 0) {resolve(false);return;}
+        const overlay = document.createElement('div');
+        overlay.id = 'lis-capick';
+        overlay.style.cssText =
+          'position:fixed;inset:0;z-index:120001;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center';
+        overlay.innerHTML = `<div style="background:#fff;border-radius:10px;width:340px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.3);overflow:hidden">
             <div style="padding:14px 18px;background:#0f766e;color:#fff;font-weight:700">CA 认证失败 · 账号 ${esc(cur || '?')}</div>
             <div style="padding:12px 16px;font-size:13px;color:#334155;line-height:1.6">
                 是否改用其他已存账号重试？<div style="font-size:11px;color:#9aa5b1;margin-top:4px">选择后立即用该账号重新 capping 认证，并记为默认。</div>
@@ -15919,28 +16005,37 @@ window.addEventListener('keydown',function(e){
             </div>
             <div style="padding:10px 14px;border-top:1px solid #f0f3f7;font-size:11px;color:#9aa5b1">也可在工作台菜单保留设置里切换默认账号。</div>
         </div>`;
-      document.body.appendChild(overlay);
-      let done = false;
-      const finish = v => {
-        if (done) {return;}
-        done = true;
-        clearTimeout(_pickTimer);
-        overlay.remove();
-        resolve(v);
-      };
-      // 8.5.82: 无人值守兜底——120s 无操作自动取消，避免夜间自动审核整夜卡在等用户点击
-      const _pickTimer = setTimeout(() => finish(false), 120000);
-      overlay.querySelectorAll('button[data-u]').forEach(b => {
-        b.addEventListener('click', () => {
-          const u = b.getAttribute('data-u');
-          try { localStorage.setItem(K.caDefaultUser, u); } catch (e) {}
-          finish(all[u] ? { id: u, ...all[u] } : false); // 8.5.43: 返回选中账号（含明文密码）
+        document.body.appendChild(overlay);
+        let done = false;
+        const finish = v => {
+          if (done) {return;}
+          done = true;
+          if (_pickTimer) {clearTimeout(_pickTimer);}
+          overlay.remove();
+          resolve(v);
+        };
+        // 8.5.82: 无人值守兜底——120s 无操作自动取消，避免夜间自动审核整夜卡在等用户点击
+        _pickTimer = setTimeout(() => finish(false), 120000);
+        overlay.querySelectorAll('button[data-u]').forEach(b => {
+          b.addEventListener('click', () => {
+            const u = b.getAttribute('data-u');
+            try { localStorage.setItem(K.caDefaultUser, u); } catch (e) {}
+            finish(all[u] ? { id: u, ...all[u] } : false); // 8.5.43: 返回选中账号（含明文密码）
+          });
         });
-      });
-      overlay.querySelector('#lis-capick-cancel').addEventListener('click', () => finish(false));
-      overlay.addEventListener('click', e => {
-        if (e.target === overlay) {finish(false);}
-      });
+        overlay.querySelector('#lis-capick-cancel').addEventListener('click', () => finish(false));
+        overlay.addEventListener('click', e => {
+          if (e.target === overlay) {finish(false);}
+        });
+      } catch (e) {
+        dbg('_caAskSwitchAccount 异常，兜底保持原账号:', e);
+        if (_pickTimer) {clearTimeout(_pickTimer);}
+        try {
+          const ov = document.getElementById('lis-capick');
+          if (ov) {ov.remove();}
+        } catch (_) {}
+        resolve(false);
+      }
     });
   }
 
@@ -16696,13 +16791,16 @@ window.addEventListener('keydown',function(e){
     const hasLow = low && !isNaN(low.value);
     const hasHigh = high && !isNaN(high.value);
 
-    // 带操作符的结果：只能在确定时返回 HIGH/LOW，否则返回 ''（不确定）
+    // 带操作符的结果：只能在确定时返回 HIGH/LOW/NORMAL，否则返回 ''（不确定）
     if (parsed.op === '<' || parsed.op === '<=') {
       // "<X" 的实际值 < X，永远不能确定为 HIGH
       if (parsed.op === '<' && hasLow && parsed.value <= low.value) {return 'LOW';}
       if (parsed.op === '<=' && hasLow && parsed.value < low.value) {return 'LOW';}
       // 只有无边界限制时才可能是 NORMAL
       if (!hasLow && !hasHigh) {return 'NORMAL';}
+      // 8.10.0: 可证明正常——无下界、且实际值 < X ≤ 上界时必然不超上界
+      // （如 "<0.01" 对参考 0–0.05），安全判 NORMAL；其余仍不确定
+      if (!hasLow && hasHigh && parsed.value <= high.value) {return 'NORMAL';}
       return ''; // 不确定
     }
     if (parsed.op === '>' || parsed.op === '>=') {
@@ -16711,6 +16809,9 @@ window.addEventListener('keydown',function(e){
       if (parsed.op === '>=' && hasHigh && parsed.value > high.value) {return 'HIGH';}
       // 只有无边界限制时才可能是 NORMAL
       if (!hasLow && !hasHigh) {return 'NORMAL';}
+      // 8.10.0: 可证明正常——无上界、且实际值 > X ≥ 下界时必然不低于下界
+      // （如 ">100" 对参考 50–），安全判 NORMAL；其余仍不确定
+      if (hasLow && !hasHigh && parsed.value >= low.value) {return 'NORMAL';}
       return ''; // 不确定
     }
     // 无操作符：标准数值比较
@@ -16996,14 +17097,20 @@ window.addEventListener('keydown',function(e){
     }
 
     // 回退：数值比较
+    const _opNum = parseComparableNumber(result);
     const range = getItemRangeValues(item);
     if (range.low || range.high) {
       const rangeStatus = compareResultToRange(result, range.low, range.high);
       if (rangeStatus) {return rangeStatus;}
     }
 
+    // 8.10.0: 带操作符的结果（>X/<X/≥/≤）无法与参考范围证明确定时一律留人工——
+    // 此前「可解析为数值」即落 NORMAL，会让 ">8"（参考 <25，真值可能 200）这类结果
+    // 混进自动审核/批审；宁可人审，不可漏放。确定的 HIGH/LOW/可证明 NORMAL 已在上面返回。
+    if (_opNum && _opNum.op) {return 'UNCERTAIN';}
+
     // 无法判断（非数值结果等）→ UNCERTAIN
-    if (!parseComparableNumber(result) && !flag) {
+    if (!_opNum && !flag) {
       return 'UNCERTAIN';
     }
 
@@ -17541,6 +17648,13 @@ window.addEventListener('keydown',function(e){
 
       if (result.status === 'UNCERTAIN') {
         showToast(`⚠️ 待定标本: ${selected.PatName || ''} - 需人工确认`, 'warning');
+        return;
+      }
+
+      // 8.10.0: 兜底拦截一切非 NORMAL——此前只拦 CRITICAL/ABNORMAL/UNCERTAIN，
+      // 8.5.58 新增的 ZERO（疑似堵孔，整批 0 值）会直接落进「正常标本，执行审核」
+      if (result.status !== 'NORMAL') {
+        showToast(getAutoAuditBlockReason(result, selected), 'warning');
         return;
       }
 
@@ -18178,6 +18292,27 @@ window.addEventListener('keydown',function(e){
     if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 })) {
       return { ok: true, iframeWin, already: true };
     }
+    // 8.10.0: 补审轮是全部审核入口中唯一不做 live 分类复检的——被队尾重试的条目
+    // 可能在批审开始不久即通过校验、批末才补审，中途结果被仪器修正（转异常/危急/待定）
+    // 会漏拦。补审前重查一次分类；拿不到或不可自动审核则放弃补审、留人工
+    if (_salvageRow) {
+      let _svClassified = getLiveClassification(item.reportDR);
+      if (!_svClassified || isClassificationStale(_salvageRow)) {
+        try {
+          _svClassified = await fetchAndClassifySpecimen(_salvageRow);
+          if (_svClassified && _svClassified.reportDR) {
+            wsClassifiedCache[_svClassified.reportDR] = _svClassified;
+            _classifyVersion++;
+          }
+        } catch (e) {
+          dbg('补审前重分类失败:', item.reportDR, e.message);
+        }
+      }
+      if (!_svClassified || !isAutoAuditableClassified(_svClassified)) {
+        dbg('补审复检：分类缺失或不可自动审核，留人工:', item.reportDR);
+        return { ok: false, iframeWin, reclassified: true };
+      }
+    }
     // 8.5.82: 补审首轮尊重用户选行锁（批审刚结束、进度条未消失的瞬间用户可能正在原生页查看标本），
     // 被挡住再走下方 force 升级路径——补审目标不变：列表里不留未审
     const sel = await waitAndSelectNativeRow(iframeWin, item, {
@@ -18325,9 +18460,6 @@ window.addEventListener('keydown',function(e){
     // 8.9.4: 停止标志前移到任何 await 之前——旧位置在 ensureBatchAuthAndCAReady/队列准备等多个
     // await 之后，进度条⏹已可点击的窗口内点停止会被这里的重置吞掉
     _batchAbort = false;
-    // 8.9.4: 切组暂停标记在真正拿到队列锁之后才清——此前 runAuditQueueResume 在拿锁前就清并落盘，
-    // 锁被残留占用导致接手失败时，队列既丢了 pausedForSwitch 又没人再重试（孤儿队列）
-    if (queue.pausedForSwitch) {delete queue.pausedForSwitch; saveAuditQueueNow(queue);}
     if (_abnormalAuditInProgress) {
       showToast('正在审核异常标本中，请稍候', 'warning');
       releaseAuditLock(auditLockId);
@@ -18340,6 +18472,11 @@ window.addEventListener('keydown',function(e){
       releaseQueueLock();
       return;
     }
+    // 8.9.4: 切组暂停标记在真正拿到队列锁之后才清——此前 runAuditQueueResume 在拿锁前就清并落盘，
+    // 锁被残留占用导致接手失败时，队列既丢了 pausedForSwitch 又没人再重试（孤儿队列）
+    // 8.10.0: 进一步移到异常/详情审核冲突检查之后——冲突返回时若已清标志，
+    // _recheckResume 只认 pausedForSwitch 才重试，队列会无人接手、整批剩余标本静默漏审
+    if (queue.pausedForSwitch) {delete queue.pausedForSwitch; saveAuditQueueNow(queue);}
     if (queue.keepWS) {keepWorkbenchOnTop('批审开始');}
     const resumeWSRefresh = !!wsTimer;
     stopWSRefresh();
@@ -18578,6 +18715,15 @@ window.addEventListener('keydown',function(e){
         refreshQueueLock();
         refreshAuditLock(auditLockId); // 心跳：健康长批审不被 45s 假死判定误抢
         const liveRow = resolveQueueItemRow(item);
+        // 8.10.0: 取消标本（Status='5'）显式排除——不可进入审核执行
+        if (liveRow && String(liveRow.Status || liveRow.ReportStatus || '') === '5') {
+          queue.skipped.push({ ...item, reason: '标本已取消，留人工' });
+          _aaRecordQueueItem('留人工', item, '标本已取消，留人工');
+          skipCount++;
+          queue.current++;
+          saveAuditQueueNow(queue);
+          continue;
+        }
         if (liveRow && String(liveRow.Status || liveRow.ReportStatus || '') === '3') {
           queue.skipped.push({ ...item, reason: '标本已审核，跳过' });
           _aaRecordQueueItem('留人工', item, '标本已审核，跳过');
@@ -19237,6 +19383,9 @@ window.addEventListener('keydown',function(e){
       sessionStorage.removeItem(AA_STALE_RELOAD_KEY);
       sessionStorage.removeItem(AA_PAUSE_NOTIFY_TS);
     } catch (e) {}
+    // 8.10.0: 重置「同标本同原因只记一次」记忆——跨轮次残留会让重新开启后
+    // 持续未处理的同原因红线标本（如危急值）不再产生跳过记录与推送
+    _autoAuditSkipSeen = {};
     startAutoAuditTimers();
     renderAutoAuditButtonState();
     updateWSFooter();
@@ -19332,10 +19481,13 @@ window.addEventListener('keydown',function(e){
   const AA_NOTIFY_ENDPOINTS = ['http://192.168.31.111:9111/notify', 'http://127.0.0.1:8765/notify'];
   let _notifyEndpointIdx = 0;
   function _notifySendTo(url, p) {
-    // 向单个端点发送推送并检查结果：网络错误 / 非 2xx / accepted=false 均返回 false
+    // 向单个端点发送推送并检查结果（8.10.0 起三态）：
+    //   'ok'        受理成功
+    //   'permanent' 端点明确拒绝（accepted=false 且非限流）= 未配置 Bark 等永久状态，不该重试
+    //   'fail'      网络错误 / 非 2xx / 超时 / 限流（rate_limited）等临时故障，可重试
     return new Promise(resolve => {
       let settled = false;
-      const done = ok => {if (!settled) {settled = true; resolve(!!ok);}};
+      const done = st => {if (!settled) {settled = true; resolve(st);}};
       try {
         const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
         const tmr = ctl ? setTimeout(() => {try {ctl.abort();} catch (e) {}}, 5000) : null;
@@ -19347,24 +19499,32 @@ window.addEventListener('keydown',function(e){
           signal: ctl ? ctl.signal : undefined
         }).then(resp => {
           if (tmr) {clearTimeout(tmr);}
-          resp.json().then(d => done(resp.ok && (!d || d.accepted !== false))).catch(() => done(resp.ok));
-        }).catch(() => {if (tmr) {clearTimeout(tmr);} done(false);});
-        setTimeout(() => done(false), 6000); // 响应兜底超时（abort/网络挂起）
-      } catch (e) {done(false);}
+          resp.json().then(d => {
+            if (resp.ok && (!d || d.accepted !== false)) {done('ok');return;}
+            // accepted=false：限流（429/rate_limited）属临时，其余视为永久拒绝
+            if (d && d.accepted === false && !d.rate_limited) {done('permanent');return;}
+            done('fail');
+          }).catch(() => done(resp.ok ? 'ok' : 'fail'));
+        }).catch(() => {if (tmr) {clearTimeout(tmr);} done('fail');});
+        setTimeout(() => done('fail'), 6000); // 响应兜底超时（abort/网络挂起）
+      } catch (e) {done('fail');}
     });
   }
   function _notifySend(p) {
-    // 按端点顺序（粘滞优先）逐个尝试，任一成功即记住该端点；全部失败返回 false（进补发队列）
+    // 按端点顺序（粘滞优先）逐个尝试，任一成功即记住该端点；
+    // 返回 'ok' / 'permanent'（所有端点都明确拒绝）/ 'fail'（临时失败，进补发队列）
     return (async () => {
+      let allPermanent = true;
       for (let i = 0; i < AA_NOTIFY_ENDPOINTS.length; i++) {
         const url = AA_NOTIFY_ENDPOINTS[(_notifyEndpointIdx + i) % AA_NOTIFY_ENDPOINTS.length];
-        const ok = await _notifySendTo(url, p);
-        if (ok) {
+        const st = await _notifySendTo(url, p);
+        if (st === 'ok') {
           _notifyEndpointIdx = AA_NOTIFY_ENDPOINTS.indexOf(url);
-          return true;
+          return 'ok';
         }
+        if (st !== 'permanent') {allPermanent = false;}
       }
-      return false;
+      return allPermanent ? 'permanent' : 'fail';
     })();
   }
   let _notifyPumpRunning = false; // 8.9.4: 泵运行中标志——长批发送（8.9.7 起每条最长约 12s＝两端点各 6s）期间 timer 已置空，
@@ -19392,8 +19552,14 @@ window.addEventListener('keydown',function(e){
       _notifyPumpRunning = true;
       try {
         for (const it of batch) {
-          if (await _notifySend(it.p)) {
+          const st = await _notifySend(it.p);
+          if (st === 'ok') {
             _notifyRetryQueue = _notifyRetryQueue.filter(x => x !== it);
+          } else if (st === 'permanent') {
+            // 8.10.0: 8.8.34③ 语义落地——端点明确 accepted=false（未配置 Bark）视为永久失败：
+            // 此前被当普通失败反复重试最长 2 小时。丢弃并留调试日志
+            _notifyRetryQueue = _notifyRetryQueue.filter(x => x !== it);
+            dbg('推送丢弃（端点返回 accepted=false，视为永久失败不重试）:', it.p && it.p.title);
           } else {
             delete it.f; // 失败：解除在发标记，保留原时间戳，下轮 30s 后重试，超龄自然过期
           }
@@ -19426,7 +19592,12 @@ window.addEventListener('keydown',function(e){
     _notifyBarkLast = { key, t: now };
     const send = {title: p.title || '', body: p.body || '', level: p.level || 'active'};
     // 8.9.0: 补发登记带上含 nonce 的完整 key，防同文案多轮被去重误杀
-    _notifySend(send).then(ok => {if (!ok) {_notifyRetryEnqueue(send, key);}});
+    _notifySend(send).then(st => {
+      // 8.10.0: 仅临时失败才进补发队列；'permanent'（端点 accepted=false，未配置 Bark）
+      // 视为永久失败不重试（8.8.34③ 语义落地），只留调试日志
+      if (st === 'fail') {_notifyRetryEnqueue(send, key);}
+      else if (st === 'permanent') {dbg('推送被端点拒绝（未配置 Bark），不重试:', send && send.title);}
+    });
   }
 
   // ---- 8.9.6: 连续结果合并推送（防手机连响轰炸）；8.9.15: 升级为「智能节奏」 ----
@@ -19877,6 +20048,7 @@ window.addEventListener('keydown',function(e){
       ['危急值', /危急值/],
       ['含负值', /含负值/],
       ['传染病阳性', /梅毒|丙肝|艾滋/],
+      ['传染病阴阳不符', /传染病历史不符/], // 8.10.0: 8.9.15 在 autoAuditReasonCat 加了此类，分解表漏跟上
       ['心肌标志物', /心肌标志物/],
       ['疑似堵孔', /疑似堵孔/]
     ];
@@ -20540,7 +20712,11 @@ window.addEventListener('keydown',function(e){
 
   // 跳过去重：同一标本同一原因只记一次（防止每 30s 轮询重复刷日志/小结）
   function autoAuditSkipOnce(skipped, r, reason) {
-    const key = String(r.ReportDR || r.Labno || '');
+    // 8.10.0: 取键兼容大小写两套字段——批审队列项是小写 reportDR/labno，
+    // 此前只认大写导致队列级失败/跳过键为空串直接 return：
+    // 「结果不完整/审核未确认成功/原生列表未找到」等事件不进 skipped[]，
+    // 轮次日志与推送全部丢失（blocked 模式整轮只有失败时甚至完全不推送）
+    const key = String(r.ReportDR || r.reportDR || r.Labno || r.labno || '');
     if (!key) {return;}
     if (_autoAuditSkipSeen[key] === reason) {return;}
     _autoAuditSkipSeen[key] = reason;
@@ -20761,9 +20937,12 @@ window.addEventListener('keydown',function(e){
   }
 
   // 自动审核设置对话框
+  let _aaDialogLiveTimer = null; // 8.10.0: 自动审核弹窗的 5s 刷新定时器——重复打开必须先清，避免累积
   function openAutoAuditDialog() {
     const existing = document.getElementById('lis-auto-audit-dlg');
     if (existing) {existing.remove();}
+    // 8.10.0: 旧弹窗只 remove() 不清 liveTimer，每重开一次泄漏一个 5s 定时器
+    if (_aaDialogLiveTimer) {clearInterval(_aaDialogLiveTimer); _aaDialogLiveTimer = null;}
     const rules = autoAuditRules();
     const enabled = autoAuditEnabled();
     const remain = autoAuditRemainText();
@@ -20942,7 +21121,7 @@ window.addEventListener('keydown',function(e){
           // 8.8.34: 未配置 bark_key 单独判（此前 && 写反：enabled 默认 true，未配置时两条件都不成立，
           // 走到 else 分支显示「✅ 已配置」假绿灯，而 serve 实际会静默丢弃每次推送）
           // 8.9.7: 按实际通道提示配置位置
-          _paint('⚠️ <b>推送服务已连通，但该端尚未配置 Bark</b><br>' + (chan.indexOf('网关') === 0
+          _paint('⚠️ <b>推送服务已连通，但该端尚未配置 Bark</b><br>' + (chan.includes('网关')
             ? '在网关机 <b>D:\\bark-relay\\notify_config.json</b> 填入 bark_key（模板 notify_config.example.json），改完即时生效无需重启'
             : '把 notify_config.example.json 复制为 ~/脚本/<b>notify_config.json</b> 并填入 iPhone 的 Bark 设备码（见《Bark推送配置.md》）'), '#fff8e1', '#f0d58a');
         } else if (!d.enabled) {
@@ -20964,9 +21143,13 @@ window.addEventListener('keydown',function(e){
     };
     renderPushStatus();
     // 8.5.70: 弹窗只显示审核范围（今日记录已由头部 🕘 查看记录按钮承担），5s 刷新范围与推送状态
-    const liveTimer = setInterval(() => {renderScope(); renderPushStatus();}, 5000);
+    const liveTimer = _aaDialogLiveTimer = setInterval(() => {renderScope(); renderPushStatus();}, 5000);
 
-    const close = () => {clearInterval(liveTimer); dlg.remove();};
+    const close = () => {
+      clearInterval(liveTimer);
+      if (_aaDialogLiveTimer === liveTimer) {_aaDialogLiveTimer = null;}
+      dlg.remove();
+    };
     document.getElementById('lis-aa-close').addEventListener('click', close);
     dlg.addEventListener('click', e => {if (e.target === dlg) {close();}});
     document.getElementById('lis-aa-stop').addEventListener('click', () => {
@@ -21701,8 +21884,12 @@ window.addEventListener('keydown',function(e){
       dbg('[Keepalive] 保活请求失败（网络/服务异常）:', e && e.message);
     });
   }
+  let _keepaliveTimer = null; // 8.10.0: 保存句柄——此前未存、不在清理清单，重复调用会叠加多份心跳
   function startLisSessionKeepalive() {
-    setInterval(lisKeepalivePing, LIS_KEEPALIVE_INTERVAL);
+    if (_keepaliveTimer) {return;}
+    // ⚠️ 安全权衡（有意为之）：保活会让无人值守工作站的 LIS 会话永不过期，
+    // 共享电脑请手动注销/关浏览器。目的：防夜间自动审核被服务端会话超时打断（8.9.5）
+    _keepaliveTimer = setInterval(lisKeepalivePing, LIS_KEEPALIVE_INTERVAL);
     setTimeout(lisKeepalivePing, 15000); // 首次延后，避开页面加载请求高峰
   }
 
@@ -21747,7 +21934,7 @@ window.addEventListener('keydown',function(e){
         dbg('初始化失败 [' + name + ']:', e && e.message, e);
       }
     };
-    // initQBar(); // 已禁用：不需要顶部快速切换条
+    // 8.10.0: initQBar 空壳已删除（唯一调用处本就注释，模块已移除）
     safeInit('createWS', createWS);
     safeInit('createPatientResultTool', createPatientResultTool);
     safeInit('initAbnormalEnterBridge', initAbnormalEnterBridge);
@@ -21828,6 +22015,10 @@ window.addEventListener('keydown',function(e){
     if (_loginSubmitTimer) {
       clearInterval(_loginSubmitTimer);
       _loginSubmitTimer = null;
+    }
+    if (_loginSubmitDelayTimer) {
+      clearTimeout(_loginSubmitDelayTimer);
+      _loginSubmitDelayTimer = null;
     }
     // 8.5.82: 批审锁心跳定时器（页面卸载随文档销毁，此处显式清理保持清单完整）
     stopAuditLockHeartbeat();
