@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.7
+// @version      8.9.8
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -81,6 +81,7 @@
     autoAuditLog: 'LIS_AutoAuditLog', // 8.5.58: 自动审核日志（环形上限 500）
     autoAuditRound: 'LIS_AutoAuditRoundAccum', // 8.8.25: 进行中的一轮统计（页面被整页刷新后补报推送，防丢）
     autoAuditStateLog: 'LIS_AutoAuditStateLog', // 8.9.1: 自动审核运行状态事件（暂停/恢复/开启/关闭/到期，环形上限 100）
+    aalFolds: 'LIS_AAL_Folds', // 8.9.8: 记录查看器折叠偏好（运行状态/标本记录区块展开收起）
     notifyRetryQueue: 'LIS_NotifyRetryQueue', // 8.8.34: 推送发送失败的待补发队列（serve 未运行/网络瞬断不再丢推送）
     autoAuditPushBuf: 'LIS_AA_PushBuf' // 8.9.6: 连续结果合并推送缓冲区（静默窗口攒单，防手机连响）
   };
@@ -882,6 +883,12 @@
 .aal-state-badge.expire{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
 .aal-state-time{flex:0 0 auto;color:#94a3b8;font-variant-numeric:tabular-nums}
 .aal-state-reason{flex:1;min-width:0;word-break:break-all}
+/* 8.9.8: 可折叠区块头（运行状态 / 标本记录）——点击头部整行切换展开收起，箭头指示方向 */
+#lis-auto-audit-log-box .aal-fold-head{display:flex;align-items:center;gap:7px;padding:7px 11px;margin:2px 0 6px;background:#eef2f7;border:1px solid #e2e8f0;border-radius:6px;color:#334155;font-size:12px;font-weight:700;cursor:pointer;user-select:none;transition:background .15s,color .15s}
+#lis-auto-audit-log-box .aal-fold-head:hover{background:#e4ebf3;color:#0f172a}
+#lis-auto-audit-log-box .aal-fold-head .aal-fold-latest{color:#64748b;font-weight:600;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#lis-auto-audit-log-box .aal-fold-head .aal-fold-arrow{margin-left:auto;color:#94a3b8;font-size:11px;flex:0 0 auto}
+#lis-auto-audit-log-box .aal-fold-head.folded{background:#f1f5f9;color:#64748b}
 .aal-card{background:#fff;border:1px solid #e2e8f0;border-radius:7px;margin-bottom:6px;box-shadow:0 1px 2px rgba(0,0,0,.03);transition:border-color .15s,box-shadow .15s;overflow:hidden}
 .aal-card:hover{border-color:#cbd5e1;box-shadow:0 2px 7px rgba(0,0,0,.05)}
 .aal-card.open{border-color:#14b8a6;box-shadow:0 3px 10px rgba(20,184,166,.1)}
@@ -20881,6 +20888,7 @@ window.addEventListener('keydown',function(e){
           </div>
           <div id="lis-aal-summary"></div>
           <div id="lis-aal-states"></div>
+          <div class="aal-fold-head" id="lis-aal-list-head" data-fold="list" style="display:none"></div>
           <div id="lis-aal-list" style="max-height:64vh;overflow-y:auto"></div>
         </div>
       </div>`;
@@ -21090,8 +21098,17 @@ window.addEventListener('keydown',function(e){
         }
       }
 
+      // 8.9.8: 标本记录折叠头（有记录才显示；总数在摘要区已展示，头部带收起/展开提示）
+      // 注：foldPrefs/applyFolds 定义在 render 外（弹窗初始化区），避免随 render 重复绑定监听器
+      const listHead = document.getElementById('lis-aal-list-head');
+      if (listHead) {
+        listHead.innerHTML = '📋 标本记录 · 共 ' + totalCount + ' 个标本<span class="aal-fold-arrow"></span>';
+        listHead.style.display = totalCount > 0 ? '' : 'none';
+      }
+
       // 8.9.1: 运行状态时间线（暂停/恢复/开启/关闭/到期）——按同一日期范围过滤，独立于标本记录展示，
       // 「推送说暂停、过去看已恢复」这类疑问直接在这里对时间
+      // 8.9.8: 改为可折叠区块，默认收起——折叠头直接显示最近一次事件，不再把标本记录挤到下面
       const stateBox = document.getElementById('lis-aal-states');
       if (stateBox) {
         let stLog = [];
@@ -21110,8 +21127,17 @@ window.addEventListener('keydown',function(e){
           .slice(-50)
           .reverse();
         if (states.length) {
+          // 8.9.8: 折叠头带条数与最近一次事件摘要（states 已按新→旧排序，states[0] 即最新），
+          // 收起状态下一眼就能回答「推送说暂停、现在恢复没有」
+          const latest = states[0];
+          const lm = _evMeta[latest.ev] || {icon: '•', cls: 'stop', label: String(latest.ev || '')};
+          const ld = new Date(latest.t || 0);
+          const ltm = String(ld.getHours()).padStart(2, '0') + ':' + String(ld.getMinutes()).padStart(2, '0');
           stateBox.innerHTML =
-            '<div class="aal-date-divider">⚙️ 运行状态（暂停 / 恢复 / 开关）</div>' +
+            '<div class="aal-fold-head" data-fold="states">⚙️ 运行状态（暂停 / 恢复 / 开关）· ' + states.length + ' 条' +
+            '<span class="aal-fold-latest">最近：' + lm.icon + ' ' + esc(lm.label) + ' ' + ltm + '</span>' +
+            '<span class="aal-fold-arrow"></span></div>' +
+            '<div class="aal-fold-body" id="lis-aal-states-body">' +
             states.map(e => {
               const m = _evMeta[e.ev] || {icon: '•', cls: 'stop', label: String(e.ev || '')};
               const d = new Date(e.t || 0);
@@ -21126,11 +21152,13 @@ window.addEventListener('keydown',function(e){
                 '<span class="aal-state-time">🕘 ' + esc(dayPre + tstr) + '</span>' +
                 '<span class="aal-state-reason">' + esc(e.reason || '') + '</span></div>'
               );
-            }).join('');
+            }).join('') +
+            '</div>';
         } else {
           stateBox.innerHTML = '';
         }
       }
+      applyFolds(); // 8.9.8: 按当前折叠偏好应用显隐（render 每次重建 DOM 后都要重新套用）
 
       if (!totalCount) {
         list.innerHTML = `<div style="text-align:center;color:#94a3b8;padding:48px 14px;font-size:13px">
@@ -21171,6 +21199,34 @@ window.addEventListener('keydown',function(e){
     );
     const searchInput = document.getElementById('lis-aal-search');
     searchInput.addEventListener('input', () => {q = searchInput.value; render();});
+
+    // 8.9.8: 可折叠区块（运行状态 / 标本记录）——运行状态默认收起（辅助信息，折叠头直接显示最近事件），
+    // 标本记录默认展开；点击头部整行切换，偏好持久化到 localStorage（K.aalFolds）。
+    // 监听器挂 dlg 上且只在此绑一次（render 会重建内部 DOM，不能在 render 里绑）；
+    // render 每次重建 DOM 后调用 applyFolds() 重新套用显隐。
+    const foldPrefs = {states: true, list: false};
+    try {Object.assign(foldPrefs, JSON.parse(localStorage.getItem(K.aalFolds) || '{}'));} catch (err) {}
+    const saveFolds = () => {try {localStorage.setItem(K.aalFolds, JSON.stringify(foldPrefs));} catch (err) {}};
+    const applyFolds = () => {
+      [
+        {key: 'states', head: document.getElementById('lis-aal-states-head'), body: document.getElementById('lis-aal-states-body')},
+        {key: 'list', head: document.getElementById('lis-aal-list-head'), body: document.getElementById('lis-aal-list')}
+      ].forEach(c => {
+        if (!c.head || !c.body) {return;}
+        const folded = !!foldPrefs[c.key];
+        c.head.classList.toggle('folded', folded);
+        c.body.style.display = folded ? 'none' : '';
+        const arrow = c.head.querySelector('.aal-fold-arrow');
+        if (arrow) {arrow.textContent = folded ? '▸ 展开' : '▾ 收起';}
+      });
+    };
+    dlg.addEventListener('click', ev => {
+      const head = ev.target.closest('.aal-fold-head');
+      if (!head || !head.dataset.fold) {return;}
+      foldPrefs[head.dataset.fold] = !foldPrefs[head.dataset.fold];
+      saveFolds();
+      applyFolds();
+    });
 
     // 8.5.70: 点击记录里的标本行/卡片 → 展开完整指标结果；点击「⤴ 工作台」直接跳转
     const listBox = document.getElementById('lis-aal-list');
