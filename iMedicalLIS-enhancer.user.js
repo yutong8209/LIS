@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.10
+// @version      8.9.11
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -81,7 +81,7 @@
     autoAuditLog: 'LIS_AutoAuditLog', // 8.5.58: 自动审核日志（环形上限 500）
     autoAuditRound: 'LIS_AutoAuditRoundAccum', // 8.8.25: 进行中的一轮统计（页面被整页刷新后补报推送，防丢）
     autoAuditStateLog: 'LIS_AutoAuditStateLog', // 8.9.1: 自动审核运行状态事件（暂停/恢复/开启/关闭/到期，环形上限 100）
-    aalFolds: 'LIS_AAL_Folds', // 8.9.8: 记录查看器折叠偏好（运行状态/标本记录区块展开收起）
+    aalFolds: 'LIS_AAL_Folds', // 8.9.8: 折叠偏好键（8.9.11 起不再读写，仅打开弹窗时清一次旧值）
     notifyRetryQueue: 'LIS_NotifyRetryQueue', // 8.8.34: 推送发送失败的待补发队列（serve 未运行/网络瞬断不再丢推送）
     autoAuditPushBuf: 'LIS_AA_PushBuf' // 8.9.6: 连续结果合并推送缓冲区（静默窗口攒单，防手机连响）
   };
@@ -21276,13 +21276,15 @@ window.addEventListener('keydown',function(e){
     const searchInput = document.getElementById('lis-aal-search');
     searchInput.addEventListener('input', () => {q = searchInput.value; render();});
 
-    // 8.9.8: 可折叠区块（运行状态 / 标本记录）——运行状态默认收起（辅助信息，折叠头直接显示最近事件），
-    // 标本记录默认展开；点击头部整行切换，偏好持久化到 localStorage（K.aalFolds）。
-    // 监听器挂 dlg 上且只在此绑一次（render 会重建内部 DOM，不能在 render 里绑）；
-    // render 每次重建 DOM 后调用 applyFolds() 重新套用显隐。
+    // 8.9.8: 可折叠区块（运行状态 / 标本记录）——点击头部整行切换。
+    // 8.9.11: 每次打开弹窗都重置为默认——运行状态收起、标本记录展开，不再跨会话持久化。
+    //   8.9.8 曾把折叠偏好存 localStorage，但只要展开过一次，之后每次打开都是展开态，
+    //   体感就是「没有默认收起」；辅助信息每次回到收起才符合预期。
+    //   弹窗开着期间切换日期范围/搜索触发的重渲染仍保留内存中的折叠状态。
+    //   监听器挂 dlg 上且只在此绑一次（render 会重建内部 DOM，不能在 render 里绑）；
+    //   render 每次重建 DOM 后调用 applyFolds() 重新套用显隐。
     const foldPrefs = {states: true, list: false};
-    try {Object.assign(foldPrefs, JSON.parse(localStorage.getItem(K.aalFolds) || '{}'));} catch (err) {}
-    const saveFolds = () => {try {localStorage.setItem(K.aalFolds, JSON.stringify(foldPrefs));} catch (err) {}};
+    try {localStorage.removeItem(K.aalFolds);} catch (err) {} // 清掉 8.9.8 记住的展开偏好
     const applyFolds = () => {
       [
         {key: 'states', head: document.getElementById('lis-aal-states-head'), body: document.getElementById('lis-aal-states-body')},
@@ -21300,7 +21302,6 @@ window.addEventListener('keydown',function(e){
       const head = ev.target.closest('.aal-fold-head');
       if (!head || !head.dataset.fold) {return;}
       foldPrefs[head.dataset.fold] = !foldPrefs[head.dataset.fold];
-      saveFolds();
       applyFolds();
     });
 
