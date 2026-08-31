@@ -44,7 +44,7 @@ if [ -z "$scp_err" ]; then
 fi
 
 if [ -n "$scp_err" ]; then
-  log "❌ 同步失败（$scp_err）。下次提交会自动重试；也可手动跑 bash hooks/sync-to-nginx.sh"
+  log "❌ 同步失败（${scp_err}）。下次提交会自动重试；也可手动跑 bash hooks/sync-to-nginx.sh"
   exit 1
 fi
 
