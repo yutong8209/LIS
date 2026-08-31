@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.0
+// @version      8.10.1
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -17081,7 +17081,7 @@ window.addEventListener('keydown',function(e){
       if (_titer || _p) {
         let _isPos;
         if (_titer) {
-          _isPos = _titer.den >= 2;
+          _isPos = _titer.den >= 1; // 8.10.0: 1:1 即阳性（检验科口径）
         } else if (_p.op === '>' || _p.op === '>=') {
           // 实际值大于 X：X>=1 必阳；X<1 不确定 → 按异常拦截（宁可人审，不可漏放）
           _isPos = true;
@@ -17463,8 +17463,10 @@ window.addEventListener('keydown',function(e){
     return warnings.length > 0 ? warnings.join('; ') : null;
   }
 
-  // 8.5.56: 滴度结果（如 RPR/TRUST「1:64」）——裸 parseFloat 只会截出前导「1」造成漏判。
-  // 分母 >= 2 = 该稀释度下仍凝集 = 阳性；「1:1」为原液基线，不在此判阳。
+  // 8.10.0: 滴度结果（如 RPR/TRUST「1:64」）——裸 parseFloat 只会截出前导「1」造成漏判。
+  // 8.10.0: 判阳口径改为 den >= 1（**1:1 = 阳性，已与检验科确认**）——
+  // 此前 den >= 2 把「1:1」判为阴性，弱阳 1:1 会落 NORMAL 进可自动审核，且 isPositiveResult
+  // 同口径导致梅毒硬红线也拦不住，完全依赖仪器对 1:1 打 AbFlag 才安全。
   function parseTiterResult(result) {
     const m = String(result == null ? '' : result)
       .trim()
@@ -17481,8 +17483,9 @@ window.addEventListener('keydown',function(e){
     if (r === '+' || r === '阳性' || r === 'POSITIVE' || r === 'POS' || r === 'REACTIVE') {return true;}
     if (/^\+{1,4}$/.test(r) || r.includes('阳性') || r.includes('弱阳')) {return true;}
     // 8.5.56: 滴度（1:64）优先判定，避免被数值分支截成 1 而漏判
+    // 8.10.0: den>=1，即 1:1 也判阳（检验科确认）
     const titer = parseTiterResult(r);
-    if (titer) {return titer.den >= 2;}
+    if (titer) {return titer.den >= 1;}
     // 数值结果：统一走 parseComparableNumber（8.5.56：兼容 ">8.0"/"≥5" 等不等号前缀——
     // 裸 parseFloat 对这类格式返回 NaN，会整体漏判，传染病高亮/历史比对由此失守）
     const parsed = parseComparableNumber(r);
