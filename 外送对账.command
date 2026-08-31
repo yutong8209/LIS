@@ -62,7 +62,7 @@ if [ "$RC" -eq 0 ]; then
     open "$LATEST" 2>/dev/null || true
   fi
 else
-  echo "未完成（退出码 $RC）。若取消了选文件会如此；请重新双击再选。"
+  echo "未完成（退出码 ${RC}）。若取消了选文件会如此；请重新双击再选。"
 fi
 
 echo ""

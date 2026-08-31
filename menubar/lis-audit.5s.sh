@@ -58,7 +58,7 @@ if [ "$AGE" -gt 90 ]; then
   echo ":clock.badge.exclamationmark: | sfcolor=$C_GRAY"
   echo "---"
   echo "工作台数据已过期 | $H_FONT sfimage=exclamationmark.triangle sfcolor=$C_ORANGE"
-  echo "最后更新：$TIME_TXT；请打开审核工作台刷新数据 | $SUB_FONT"
+  echo "最后更新：${TIME_TXT}；请打开审核工作台刷新数据 | $SUB_FONT"
   echo "刷新 | refresh=true $SUB_FONT sfimage=arrow.clockwise"
   exit 0
 fi

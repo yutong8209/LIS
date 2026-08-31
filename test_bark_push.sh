@@ -62,21 +62,21 @@ print(f'✅ 已直连 Bark 云{enc_note}，手机上应收到「🧪 Bark 直连
 PYEOF
 else
   MODE="${1:-}"
-  ENDPOINTS=("http://192.168.31.111:9111/notify（网关中转）" "http://127.0.0.1:8765/notify（本机 serve 兜底）")
+  ENDPOINTS=("http://192.168.31.111:9111/notify|网关中转" "http://127.0.0.1:8765/notify|本机 serve 兜底")
   if [ "$MODE" = "--local" ]; then
-    ENDPOINTS=("http://127.0.0.1:8765/notify（本机 serve）")
+    ENDPOINTS=("http://127.0.0.1:8765/notify|本机 serve")
   fi
   OK=0
   for EP in "${ENDPOINTS[@]}"; do
-    URL="${EP%%（*}"
-    NAME="${EP#*（}"; NAME="${NAME%）}"
-    echo "→ 尝试 $NAME（$URL）..."
+    URL="${EP%%|*}"
+    NAME="${EP#*|}"
+    echo "→ 尝试 ${NAME}（${URL}）..."
     RESP="$(curl -s -m 8 -X POST "$URL" \
       -H 'Content-Type: text/plain' \
       -d "{\"title\":\"🧪 Bark 测试\",\"body\":\"自动审核推送链路正常\",\"level\":\"active\"}")" || RESP=""
     echo "  响应: ${RESP:-无响应}"
     if echo "$RESP" | grep -q '"accepted": true'; then
-      echo "✅ 已提交给 Bark 云转发，手机上应已收到「🧪 Bark 测试」（经$NAME）"
+      echo "✅ 已提交给 Bark 云转发，手机上应已收到「🧪 Bark 测试」（经${NAME}）"
       OK=1
       break
     fi
