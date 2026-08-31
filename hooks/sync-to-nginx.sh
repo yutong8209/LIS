@@ -22,12 +22,28 @@ mkdir -p "$CACHE"
 log() { echo "[$(date '+%F %T')] $*" >>"$LOG"; }
 
 # 并发保护：多个 commit 连发时只跑一份，后来者留 pending 标记，收尾时补跑一次
+# 8.10.0: 锁目录内写时间戳，锁龄超过 600s 判为残留（kill -9 / 断电 / 进程被杀，
+# EXIT trap 不会执行）并强制接管——此前残留锁会让自动同步从此永久静默停摆。
+LOCK_MAX_AGE=600
 if ! mkdir "$LOCK" 2>/dev/null; then
-  touch "$PENDING"
-  log "已有同步在跑，本次标记为待补跑"
-  exit 0
+  lock_age="$LOCK_MAX_AGE"
+  [ -f "$LOCK/ts" ] && lock_age=$(( $(date +%s) - $(cat "$LOCK/ts" 2>/dev/null || echo 0) ))
+  if [ "$lock_age" -gt "$LOCK_MAX_AGE" ]; then
+    log "⚠️ 同步锁已残留 ${lock_age}s（>${LOCK_MAX_AGE}s），判定为陈旧锁，强制接管"
+    rm -rf "$LOCK"
+    if ! mkdir "$LOCK" 2>/dev/null; then
+      touch "$PENDING"
+      log "接管失败（另一进程刚好抢到锁），本次标记为待补跑"
+      exit 0
+    fi
+  else
+    touch "$PENDING"
+    log "已有同步在跑，本次标记为待补跑"
+    exit 0
+  fi
 fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+date +%s > "$LOCK/ts"
+trap 'rm -rf "$LOCK" 2>/dev/null' EXIT
 
 local_ver="$(grep -m1 '^// @version' "$DIR/iMedicalLIS-enhancer.user.js" | sed 's/.*@version[[:space:]]*//')"
 commit="$(git -C "$DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
@@ -61,7 +77,8 @@ fi
 # 补跑：同步期间又有新提交（先释放锁再重入）
 if [ -f "$PENDING" ]; then
   rm -f "$PENDING"
-  rmdir "$LOCK" 2>/dev/null
+  rm -rf "$LOCK" 2>/dev/null
+  trap - EXIT # 8.10.0: 锁已移交，解除本进程的清锁责任，防止退出时误删补跑进程的新锁
   log "检测到待补跑标记，立即再同步一次"
   "$0"
   exit $?

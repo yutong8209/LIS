@@ -1,6 +1,7 @@
 # IDE / agent
 .claude/
 .codex/
+.zcode/
 CLAUDE.md
 
 # Images & screenshots
@@ -39,6 +40,8 @@ node_modules/
 
 # MCP 本地密钥（勿提交）
 mcp-image-reader/config.json
+# 8.10.0: 通用规则——任何子目录的 config.json 都视为本地密钥配置（模板用 *.example.json）
+*/config.json
 
 # Misc
 .DS_Store

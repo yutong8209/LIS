@@ -395,6 +395,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(str(e).encode())
 
+    # 8.10.0: 统一 body 读取——拒绝负数 Content-Length（read(-n) 会挂读到 EOF），
+    # 加 64KB 上限防大 body 打内存（本机拒绝服务）；超限返回 None，调用方回 413
+    MAX_BODY = 65536
+
+    def _read_json_body(self):
+        length = int(self.headers.get('Content-Length', 0) or 0)
+        if length < 0 or length > self.MAX_BODY:
+            return None
+        raw = self.rfile.read(length) if length else b'{}'
+        return json.loads(raw.decode('utf-8'))
+
+    def _reply_413(self):
+        self.send_response(413)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+
     def do_POST(self):
         global _stats_data, _cmd_data, _notify_last
         path = unquote(urlparse(self.path).path)
@@ -405,9 +421,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == '/stats':
             try:
-                length = int(self.headers.get('Content-Length', 0))
-                raw = self.rfile.read(length) if length else b'{}'
-                data = json.loads(raw.decode('utf-8'))
+                data = self._read_json_body()
+                if data is None:
+                    self._reply_413()
+                    return
                 data['ts'] = int(time.time())
                 data['ok'] = True
                 with _stats_lock:
@@ -426,9 +443,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == '/cmd':
             # SwiftBar 下拉点击 → 指令（goto 分类）。带 id 防重复消费。
             try:
-                length = int(self.headers.get('Content-Length', 0))
-                raw = self.rfile.read(length) if length else b'{}'
-                data = json.loads(raw.decode('utf-8'))
+                data = self._read_json_body()
+                if data is None:
+                    self._reply_413()
+                    return
                 cmd = {
                     'id': int(time.time() * 1000),
                     'action': data.get('action'),
@@ -451,9 +469,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == '/cmd/claim':
             # userscript 原子认领菜单栏指令，防止多个 LIS 标签重复执行，且重启后不再重放旧指令。
             try:
-                length = int(self.headers.get('Content-Length', 0))
-                raw = self.rfile.read(length) if length else b'{}'
-                data = json.loads(raw.decode('utf-8'))
+                data = self._read_json_body()
+                if data is None:
+                    self._reply_413()
+                    return
                 cmd_id = data.get('id')
                 claimed = False
                 with _cmd_lock:
@@ -481,9 +500,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # 8.8.14 起用户确认标本号与接收时间不属于病人隐私可带）。
             # 绝不含姓名/住院号/床号/科室/ReportDR 等身份信息（隐私红线：身份信息不出内网）。
             try:
-                length = int(self.headers.get('Content-Length', 0))
-                raw = self.rfile.read(length) if length else b'{}'
-                data = json.loads(raw.decode('utf-8'))
+                data = self._read_json_body()
+                if data is None:
+                    self._reply_413()
+                    return
                 title = str(data.get('title') or '自动审核')
                 body = str(data.get('body') or '')
                 level = str(data.get('level') or 'active')
@@ -532,12 +552,14 @@ def _main():
     print('========================================')
 
     try:
-        http.server.HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
+        # 8.10.0: 多线程服务——单线程 HTTPServer 下一个慢速/半开连接会阻塞全部请求
+        # （菜单栏轮询与 userscript 的 /cmd 轮询一起卡死）；stats/cmd 已有锁，线程安全
+        http.server.ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
     except KeyboardInterrupt:
         print('\n已停止')
     except OSError as e:
-        # errno 48 = macOS EADDRINUSE / 98 = Linux EADDRINUSE（端口被占用）
-        if getattr(e, 'errno', None) in (48, 98):
+        # errno 48 = macOS / 98 = Linux / 10048 = Windows EADDRINUSE（端口被占用）
+        if getattr(e, 'errno', None) in (48, 98, 10048):
             print(f'❌ 端口 {PORT} 已被占用：serve.py 可能已在运行（菜单栏/Tampermonkey 更新依赖它）。')
             print('   如需重启请先结束旧进程: pkill -f serve.py')
             sys.exit(1)

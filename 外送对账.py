@@ -230,8 +230,19 @@ def _dedup_fee_rows(df: pd.DataFrame, keys, fee_col: str) -> pd.DataFrame:
     fee = pd.to_numeric(sub[fee_col], errors="coerce")
     sub["_has_fee"] = fee.notna() & fee.ne(0)
     sub["_row"] = range(len(sub))
-    sub = sub.sort_values(["_has_fee", "_row"], ascending=[False, True])
-    return sub.drop_duplicates(list(keys), keep="first").drop(columns=["_has_fee", "_row"])
+    # 8.10.0: 关键值（如检验号）为空的行不进去重——否则多条空键行被折叠成 1 条、费用被少算；
+    # 空键无法可靠标识唯一标本，原样保留
+    key_cols = list(keys)
+    _bad_key = sub[key_cols].astype(str).apply(
+        lambda s: s.str.strip().eq("") | s.str.lower().isin(["nan", "none"]), axis=1
+    ).any(axis=1)
+    _dedup = sub[~_bad_key].copy() if _bad_key.any() else sub.copy()
+    _dedup = _dedup.sort_values(["_has_fee", "_row"], ascending=[False, True]).drop_duplicates(list(keys), keep="first")
+    _dedup = _dedup.drop(columns=["_has_fee", "_row"])
+    if _bad_key.any():
+        _keep = sub[_bad_key].drop(columns=["_has_fee", "_row"])
+        return pd.concat([_dedup, _keep], ignore_index=True)
+    return _dedup
 
 
 def _parse_dates(s: pd.Series, col_name: str = "日期") -> pd.Series:
@@ -279,7 +290,10 @@ def _parse_dates(s: pd.Series, col_name: str = "日期") -> pd.Series:
 def _to_fee(series: pd.Series, col_name: str, src: str) -> pd.Series:
     """费用列转数值；无法解析的非空值按 0 计并告警——静默归零会掩盖真实少收。"""
     orig = series.astype(str).str.strip()
-    out = pd.to_numeric(series, errors="coerce")
+    # 8.10.0: 先清洗再转数值——此前 "1,234.56"、"¥80.00"、"80元" 等会被 pd.to_numeric
+    # 判为 NaN 而按 0 计，整份对账金额被静默归零、少收结论完全失真（只有一行控制台警告）
+    cleaned = orig.str.replace(r"[¥￥，,\u00a0\u202f元\s]", "", regex=True)
+    out = pd.to_numeric(cleaned, errors="coerce")
     bad = int((out.isna() & orig.ne("") & ~orig.str.lower().isin(["nan", "none"])).sum())
     if bad:
         print(f"[警告] {src}「{col_name}」有 {bad} 行无法解析为数字，已按 0 计——请人工核对是否漏收")
@@ -345,6 +359,9 @@ def _read_lis(path: Path) -> pd.DataFrame:
         if (wg == "外送").any():
             df = df[wg == "外送"].copy()
 
+    orig_cols = [str(c) for c in df.columns]
+    n_before_fill = len(df)
+    missing = []
     for c, default in [
         ("姓名", ""),
         ("项目", ""),
@@ -358,6 +375,14 @@ def _read_lis(path: Path) -> pd.DataFrame:
     ]:
         if c not in df.columns:
             df[c] = default
+            missing.append(c)
+
+    # 8.10.0: 缺列/模板变化时必须显式告警——此前静默填默认值，
+    # 若上游列名变化或分隔符变了，脚本仍「成功」输出（全表被过滤为空 →
+    # 所有机构行变未匹配，少收额=机构总额，误导性结果）
+    if missing:
+        print(f"[警告] LIS CSV 缺少列：{', '.join(missing)}，已按默认值填充——请核对导出模板是否变化")
+        print(f"  实际列：{', '.join(orig_cols)}")
 
     df["姓名"] = df["姓名"].astype(str).str.strip().replace({"nan": ""})
     df["项目"] = df["项目"].astype(str).str.strip().replace({"nan": ""})
@@ -370,6 +395,10 @@ def _read_lis(path: Path) -> pd.DataFrame:
     df = df[df["姓名"].ne("") & df["日期"].notna()].copy()
     if n_bad_date:
         print(f"[警告] LIS CSV {n_bad_date} 行核收时间无法解析，已被剔除，请检查导出格式")
+    # 8.10.0: 源有行但过滤后全空 → 模板/格式很可能对不上，直接报错而非给出
+    # 「所有机构行未匹配、少收额=机构总额」这类误导性结果
+    if n_before_fill > 0 and df.empty:
+        raise SystemExit("LIS CSV 过滤后无有效行（姓名/核收时间缺失或无法解析）——导出模板可能已变化，请检查列名与格式")
     df["来源"] = "医院LIS"
     df["nk"] = df["项目"].map(_norm_name)
     df["nk_set"] = df["组合"].map(_norm_name)
@@ -1114,7 +1143,8 @@ def write_clean_report(
 
     ws.merge_cells("A2:H2")
     ws["A2"] = (
-        f"{src_label}　　日期容差：±1天　　生成：{pd.Timestamp.now():%Y-%m-%d %H:%M}　　"
+        # 8.10.0: 日期容差随 day_slack 参数显示——此前硬编码 ±1天，--日期容差 3 时报表仍写 ±1天
+        f"{src_label}　　日期容差：±{day_slack}天　　生成：{pd.Timestamp.now():%Y-%m-%d %H:%M}　　"
         f"机构 {tp['日期'].min().date()}~{tp['日期'].max().date()}　"
         f"医院 {lis['日期'].min().date()}~{lis['日期'].max().date()}"
     )

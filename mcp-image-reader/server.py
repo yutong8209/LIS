@@ -112,8 +112,12 @@ async def describe_image(path: str, custom_prompt: str = ""):
             info = f"图片: {path.name} | 尺寸: {orig_w}x{orig_h} | 格式: {img.format}"
             if img.mode in ('RGBA', 'LA', 'P'):
                 img = img.convert('RGB')
-            # 压缩大图：最长边不超过 800px
-            max_size = 800
+            # 压缩大图（8.10.0: 默认上限从 800 提到 1600，可用 VISION_MAX_PX 覆盖——
+            # 高分屏代码截图压到 800px 后文字基本不可辨，直接拉低识别率）
+            try:
+                max_size = max(256, int(os.environ.get('VISION_MAX_PX', '1600')))
+            except ValueError:
+                max_size = 1600
             if max(orig_w, orig_h) > max_size:
                 ratio = max_size / max(orig_w, orig_h)
                 img = img.resize((int(orig_w * ratio), int(orig_h * ratio)), Image.LANCZOS)
@@ -132,15 +136,29 @@ async def describe_image(path: str, custom_prompt: str = ""):
         info = f"图片: {path.name}"
 
     # 视觉 API 配置
-    api_base = os.environ.get('VISION_API_BASE',
-                              os.environ.get('ANTHROPIC_BASE_URL',
-                                             'https://token-plan-cn.xiaomimimo.com/anthropic'))
-    api_key = os.environ.get('VISION_API_KEY',
-                             os.environ.get('ANTHROPIC_AUTH_TOKEN', ''))
+    # 8.10.0: base/key 必须成对取自同一来源——此前 VISION_API_KEY 缺省回退读 ANTHROPIC_AUTH_TOKEN，
+    # 而 api_base 默认回退到硬编码的第三方中转端点；若机器上只设了 ANTHROPIC_AUTH_TOKEN 未设
+    # ANTHROPIC_BASE_URL，用户的 Anthropic 令牌会连同图片被发到该中转端点（凭据错发风险）。
+    # 现在：优先 VISION_* 一对；否则要求 ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN 成对，
+    # 只设其一视为未配置。
+    api_base = os.environ.get('VISION_API_BASE', '')
+    api_key = os.environ.get('VISION_API_KEY', '')
+    if (not api_base) or (not api_key):
+        anthropic_base = os.environ.get('ANTHROPIC_BASE_URL', '')
+        anthropic_key = os.environ.get('ANTHROPIC_AUTH_TOKEN', '')
+        if anthropic_base and anthropic_key:
+            api_base = anthropic_base
+            api_key = anthropic_key
+        else:
+            # 两个来源都缺或只配了一半：不静默落到默认中转（防凭据错发），明确报错
+            api_base = os.environ.get('ANTHROPIC_BASE_URL', '')
+            api_key = os.environ.get('ANTHROPIC_AUTH_TOKEN', '')
     model = os.environ.get('VISION_MODEL', 'mimo-v2.5')
 
+    if not api_base:
+        return [TextContent(type="text", text="错误: 未配置 VISION_API_BASE（或 ANTHROPIC_BASE_URL）")]
     if not api_key:
-        return [TextContent(type="text", text="错误: 未配置 VISION_API_KEY")]
+        return [TextContent(type="text", text="错误: 未配置 VISION_API_KEY（或 ANTHROPIC_AUTH_TOKEN）")]
 
     default_prompt = (
         "请详细描述这张图片的内容。如果是代码截图、错误信息、终端输出、UI界面等，"

@@ -7,9 +7,18 @@ import sys
 import json
 import base64
 import io
-from PIL import Image
-import mss
-import pyautogui
+
+# 8.10.0: 第三方依赖移入 try/except——此前顶层 import 失败（新机器未装依赖、
+# 无显示器环境）会直接抛 ImportError 退出，stdout 什么都没有，破坏本文件声明的
+# 「任何情况下都打印单行 JSON」契约，调用方（agent）解析失败。现统一走 fail() 报错。
+try:
+    from PIL import Image
+    import mss
+    import pyautogui
+    _DEPS_MISSING = None
+except Exception as e:  # ImportError / KeyError（无 DISPLAY）等
+    Image = mss = pyautogui = None
+    _DEPS_MISSING = str(e)
 
 
 def fail(msg):
@@ -17,8 +26,17 @@ def fail(msg):
     return {"success": False, "error": msg}
 
 
+def _deps_err():
+    if _DEPS_MISSING:
+        return fail(f"missing dependency: {_DEPS_MISSING}（pip3 install -r requirements.txt）")
+    return None
+
+
 def take_screenshot():
     """Take a screenshot and return base64 encoded image."""
+    err = _deps_err()
+    if err:
+        return err
     try:
         with mss.MSS() as sct:
             monitor = sct.monitors[1]
@@ -33,6 +51,9 @@ def take_screenshot():
 
 def click(x, y):
     """Click at coordinates."""
+    err = _deps_err()
+    if err:
+        return err
     try:
         pyautogui.click(x, y)
         return {"success": True}
@@ -41,6 +62,9 @@ def click(x, y):
 
 def type_text(text):
     """Type text."""
+    err = _deps_err()
+    if err:
+        return err
     try:
         pyautogui.typewrite(text, interval=0.05)
         return {"success": True}
@@ -49,6 +73,9 @@ def type_text(text):
 
 def press_key(key):
     """Press a key."""
+    err = _deps_err()
+    if err:
+        return err
     try:
         pyautogui.press(key)
         return {"success": True}

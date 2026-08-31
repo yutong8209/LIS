@@ -6,6 +6,8 @@ pyautogui>=0.9.54
 # 外送少收分析（外送对账.py / 外送对账.bat）
 pandas>=2.0.0
 openpyxl>=3.1.0
+xlrd>=2.0.1          # 读取 .xls（旧版 Excel）必需；只导 .xlsx 可跳过
 
 # MCP 图片识别（可选，mcp-image-reader/）
 mcp>=1.0.0
+httpx>=0.24.0        # 可选但推荐：server.py 视觉 API 的首选异步通路（未装则走 urllib 线程兜底）

@@ -40,6 +40,16 @@ _NOTIFY_LEVELS = {'active', 'passive', 'timeSensitive', 'critical'}
 _notify_last = None
 _notify_lock = threading.Lock()
 
+# 8.10.0 安全加固：/notify 经 nginx 反代后，任何能访问 9111 的机器用 curl（无 Origin）
+# 即可调用——Origin 白名单只约束浏览器，挡不住脚本。加全局最小受理间隔 + 在途重试线程
+# 上限 + 请求体上限，防止恶意/误发请求轰炸手机，或用海量重试线程/大 body 耗尽资源。
+NOTIFY_MIN_INTERVAL = 1.0     # 相邻两次受理的最小间隔（秒）；超限返回 429+rate_limited
+NOTIFY_MAX_INFLIGHT = 8       # 在途推送线程上限（每条推送最长约 33s 重试）
+NOTIFY_MAX_BODY = 65536       # 请求体上限（字节）
+_notify_rate_lock = threading.Lock()
+_notify_last_accept_ts = 0.0
+_notify_inflight = 0
+
 # 浏览器来源白名单：只有 LIS 页面（userscript）可以触发推送；
 # 无 Origin 的请求视为本机脚本（curl、test_bark_push.sh）放行。其它网页一律 403。
 NOTIFY_ALLOWED_ORIGINS = {
@@ -249,6 +259,18 @@ def _notify_bark(key, title, body, level):
         _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': str(last_err)[:120]}
 
 
+def _notify_guarded(key, title, body, level):
+    """包装 _notify_bark：无论成败都释放在途计数（8.10.0 限流配套）。"""
+    global _notify_inflight
+    try:
+        _notify_bark(key, title, body, level)
+    except Exception as e:
+        _log(f'_notify_bark 未预期异常: {e}')
+    finally:
+        with _notify_rate_lock:
+            _notify_inflight -= 1
+
+
 class RelayHandler(http.server.BaseHTTPRequestHandler):
     server_version = 'LISBarkRelay/1.0'
 
@@ -305,8 +327,26 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
             _log(f'[security] 拒绝非白名单 Origin 的 POST {path}: {self.headers.get("Origin")}')
             self._send_json({'error': 'Origin not allowed'}, code=403)
             return
+        global _notify_last_accept_ts, _notify_inflight
         try:
             length = int(self.headers.get('Content-Length', 0) or 0)
+            # 8.10.0: 请求体上限 + 拒绝负值（read(-n) 会挂到 EOF）
+            if length < 0 or length > NOTIFY_MAX_BODY:
+                self._send_json({'error': 'payload too large'}, code=413)
+                return
+            # 8.10.0: 全局限流——白名单外的本机脚本/局域网请求也能打到这里，
+            # 防轰炸手机与重试线程耗尽。429+rate_limited 告知客户端属临时拒绝、可稍后重试
+            with _notify_rate_lock:
+                now = time.time()
+                if now - _notify_last_accept_ts < NOTIFY_MIN_INTERVAL:
+                    self._send_json({'accepted': False, 'rate_limited': True}, code=429)
+                    return
+                if _notify_inflight >= NOTIFY_MAX_INFLIGHT:
+                    _log(f'[security] 在途推送已达上限 {NOTIFY_MAX_INFLIGHT}，拒绝新推送')
+                    self._send_json({'accepted': False, 'rate_limited': True}, code=429)
+                    return
+                _notify_last_accept_ts = now
+                _notify_inflight += 1
             raw = self.rfile.read(length) if length else b'{}'
             data = json.loads(raw.decode('utf-8'))
             title = str(data.get('title') or '自动审核')
@@ -318,9 +358,11 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
                 _log(f'[notify] 未配置 bark_key 或 enabled=false，忽略推送: {title} - {body[:80]}')
                 with _notify_lock:
                     _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': '未配置 bark_key 或 enabled=false，已忽略'}
+                with _notify_rate_lock:
+                    _notify_inflight -= 1
                 self._send_json({'accepted': False})
                 return
-            threading.Thread(target=_notify_bark, args=(key, title, body, level), daemon=True).start()
+            threading.Thread(target=_notify_guarded, args=(key, title, body, level), daemon=True).start()
             self._send_json({'accepted': True})
         except Exception as e:
             _log(f'/notify 处理异常: {e}')
@@ -337,7 +379,12 @@ def main():
             port = int(sys.argv[sys.argv.index('--port') + 1])
         except Exception:
             pass
-    server = http.server.ThreadingHTTPServer(('127.0.0.1', port), RelayHandler)
+    # 8.10.0: 端口占用时明确记日志——计划任务以 pythonw 跑、无控制台，静默死亡极难排查
+    try:
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', port), RelayHandler)
+    except OSError as e:
+        _log(f'❌ 端口 {port} 绑定失败（errno={getattr(e, "errno", "?")}）：可能已有 bark_relay 在运行，本次退出')
+        return
     _log(f'bark_relay 已启动 http://127.0.0.1:{port}（配置: {NOTIFY_CONFIG_FILE}）')
     try:
         server.serve_forever()

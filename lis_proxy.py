@@ -35,7 +35,9 @@ from urllib.parse import urlparse, unquote
 
 
 # 配置（运行时由参数覆盖）
-TARGET = '10.0.29.100'
+# 8.10.0: 与文档/argparse 默认保持一致——此前模块级写 10.0.29.100、
+# 实际运行默认是 argparse 的 192.168.31.111:9111，两处漂移易误导排查
+TARGET = '192.168.31.111:9111'
 LISTEN_PORT = 9112
 LISTEN_HOST = '127.0.0.1'
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
@@ -190,8 +192,8 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def do_CONNECT(self):
         """HTTPS 隧道请求 — 返回 501（不支持）"""
+        # 8.10.0: send_error 已完成响应，多余的 end_headers() 会多写一个空行
         self.send_error(501, 'HTTPS tunnel not supported')
-        self.end_headers()
 
     def _proxy(self, method):
         parsed = urlparse(self.path)
@@ -238,12 +240,14 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
             _timeout = 60 if TARGET in target_url else 3
             resp = _DIRECT_OPENER.open(req, timeout=_timeout)
             resp_body = resp.read()
-            resp_headers = dict(resp.getheaders())
+            # 8.10.0: 保留 (key, value) 列表——dict() 会把重复响应头（多个 Set-Cookie 等）
+            # 折叠成最后一个，代理会话类接口时丢 cookie
+            resp_headers = resp.getheaders()
             resp_status = resp.status
         except urllib.error.HTTPError as e:
             resp_status = e.code
             resp_body = e.read()
-            resp_headers = dict(e.headers)
+            resp_headers = list(e.headers.items())
         except urllib.error.URLError as e:
             import traceback
             traceback.print_exc()
@@ -261,7 +265,7 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
                 stats['errors'] += 1
             return
 
-        content_type = resp_headers.get('Content-Type', '') or resp_headers.get('content-type', '')
+        content_type = next((v for k, v in resp_headers if k.lower() == 'content-type'), '')
         file_type = detect_type(url_path, content_type)
 
         # 默认只缓存静态前端资源；API/POST 需显式 --cache-api（可能含业务数据）
@@ -300,7 +304,7 @@ class LISProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception:
             return
 
-        for key, val in resp_headers.items():
+        for key, val in resp_headers:
             if key.lower() in ('transfer-encoding', 'connection', 'content-encoding',
                                'content-length', 'keep-alive'):
                 continue

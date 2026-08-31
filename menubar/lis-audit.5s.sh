@@ -32,21 +32,23 @@ if [ -z "$J" ] || [ "$(echo "$J" | jq -r '.ok // false')" != "true" ]; then
   exit 0
 fi
 
-M=$(echo "$J" | jq -r '.scope // "全部仪器"')
-VD=$(echo "$J" | jq -r '.viewDate // empty')
+M=$(echo "$J" | jq -r '(.scope // "全部仪器") | tostring | gsub("[|]";"") | gsub("\n";"") | gsub("\r";"") | .[0:40]')
+VD=$(echo "$J" | jq -r '(.viewDate // "") | tostring | gsub("[^0-9-]";"") | .[0:10]')
 TD=$(date +%Y-%m-%d)
 if [ -n "$VD" ] && [ "$VD" != "$TD" ]; then
   VD_LABEL=$(echo "$VD" | sed -E 's/^[0-9]{4}-//')
   M="$M [$VD_LABEL]"
 fi
 # 待审总数（正常+异常已合并）；兼容旧 serve 无 auditReady 字段时回退为两者之和
-AR=$(echo "$J" | jq -r '.auditReady // ((.normalReady // 0) + (.abnormalReady // 0))')
-NR=$(echo "$J" | jq -r '.normalReady // 0')
-PD=$(echo "$J" | jq -r '.pending // 0')
-CL=$(echo "$J" | jq -r '.collected // 0') # 8.5.31: 病房采集中、未送到科室
-IC=$(echo "$J" | jq -r '.incomplete // 0')
-TO=$(echo "$J" | jq -r '.total // 0')
-TS=$(echo "$J" | jq -r '.ts // 0')
+# 8.10.0 安全加固：/stats 可被本机任意进程写入，数字字段一律强制 tonumber（非法回退 0），
+# 防止恶意值混入 SwiftBar 行协议（行内第一个 | 之后是参数区，注入 bash= 点击即执行）
+AR=$(echo "$J" | jq -r '(.auditReady // ((.normalReady // 0) + (.abnormalReady // 0))) | tonumber? // 0')
+NR=$(echo "$J" | jq -r '(.normalReady // 0) | tonumber? // 0')
+PD=$(echo "$J" | jq -r '(.pending // 0) | tonumber? // 0')
+CL=$(echo "$J" | jq -r '(.collected // 0) | tonumber? // 0') # 8.5.31: 病房采集中、未送到科室
+IC=$(echo "$J" | jq -r '(.incomplete // 0) | tonumber? // 0')
+TO=$(echo "$J" | jq -r '(.total // 0) | tonumber? // 0')
+TS=$(echo "$J" | jq -r '(.ts // 0) | tonumber? // 0')
 
 NOW=$(date +%s)
 AGE=$(( NOW - TS ))
@@ -76,10 +78,11 @@ echo "---"
 echo "$M | $H_FONT sfimage=slider.horizontal.3 sfcolor=$C_BLUE"
 echo "---"
 # 优先用插件自身所在目录的 lis_jump.sh（无论 PluginDirectory 是软链还是实体目录），
-# 再回退软链/原始路径——避免软链缺失时下拉点击静默失效
+# 再回退纯 ASCII 软链路径——避免软链缺失时下拉点击静默失效
+# 8.10.0: 删掉 $HOME/脚本/… 兜底：把中文路径塞回 SwiftBar bash= 参数与已知的
+# SwiftBar 中文路径坑相悖（见 AGENTS.md），软链是唯一受支持的方案
 JUMP="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lis_jump.sh"
 [ -f "$JUMP" ] || JUMP="$HOME/lis-menubar/lis_jump.sh"
-[ -f "$JUMP" ] || JUMP="$HOME/脚本/menubar/lis_jump.sh"
 
 row() {
   local icon="$1" label="$2" val="$3" color="$4" cat="$5"
