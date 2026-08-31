@@ -51,6 +51,20 @@
   网关恢复后下一次推送自动切回网关。
 - 某次推送发送失败会进本地补发队列（既有机制），与端点无关。
 
+## 升级：8.10.3 副标题（subtitle）
+
+userscript 8.10.3 起，合并推送把「仪器分布 + 核收时间区间」放进 Bark **副标题**
+（Apple Watch 上与标题一同稳定可见）。这需要本服务一并升级：
+
+1. 把新版 `bark_relay.py` 覆盖到网关机 `D:\bark-relay\bark_relay.py`
+   （`notify_config.json` 不用动，密钥照旧）
+2. 重启服务：双击 **启动推送中转.bat**，或在任务计划里重启 `LIS-BarkRelay`
+3. 验证：`curl http://192.168.31.111:9111/notify_status -H "Origin: http://192.168.31.111:9111"`
+   仍返回 `{"configured": true, ...}`；再在 LIS 里跑一轮自动审核，手机通知应出现副标题一行
+
+**不升级也不会坏**：旧版忽略 `subtitle` 字段，标题/正文照常送达，只是少一行副标题。
+推送加密开启时，副标题与标题/正文一起进密文（Bark 云与 APNs 只见密文）。
+
 ## 日常运维
 
 - 日志：`D:\bark-relay\bark_relay.log`（约 2MB 自动轮转），含每次 Bark 转发结果与安全拦截记录

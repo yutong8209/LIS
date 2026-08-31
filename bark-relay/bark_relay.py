@@ -9,7 +9,8 @@ Windows 机开自动审核前必须先开 start_serve.bat。本服务把「收�
 所有机器的 userscript 直接推 http://192.168.31.111:9111/notify，本机不再需要开 serve.py。
 
 API 与 serve.py 完全同构（userscript 零改动即可切换 / 本机 serve 仍可作兜底）：
-  POST /notify         {title, body, level} → {accepted: true|false}
+  POST /notify         {title, body, level, subtitle?} → {accepted: true|false}
+                       （subtitle 为 8.10.3 新增的可选副标题；不传则与升级前行为一致）
   GET  /notify_status  → {configured, enabled, last, ts}（不含 bark_key）
 安全：
   - 仅绑定 127.0.0.1，外部只能经 nginx 反代进入；nginx 9111 站点自带 IP 白名单
@@ -206,7 +207,7 @@ def _load_encrypt_cfg(cfg):
 
 # ── 复用 serve.py 的推送转发逻辑（同款重试/加密/状态记录）──────────────────────
 
-def _notify_bark(key, title, body, level):
+def _notify_bark(key, title, body, level, subtitle=''):
     """后台线程转发到 Bark 云端 → APNs → iPhone（Apple Watch 镜像）。失败仅记日志，不阻塞响应。"""
     global _notify_last
     if level not in _NOTIFY_LEVELS:
@@ -217,7 +218,11 @@ def _notify_bark(key, title, body, level):
         enc_cfg = _load_encrypt_cfg(_load_notify_config())
         if enc_cfg:
             enc_key, fixed_iv = enc_cfg
-            inner = json.dumps({'title': title, 'body': body}, ensure_ascii=False)
+            # 8.10.3: subtitle（副标题）同属隐私内容，一起进密文
+            inner_obj = {'title': title, 'body': body}
+            if subtitle:
+                inner_obj['subtitle'] = subtitle
+            inner = json.dumps(inner_obj, ensure_ascii=False)
             iv_str = fixed_iv or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
             ct = base64.b64encode(aes_cbc_encrypt(inner.encode('utf-8'), enc_key, iv_str.encode('utf-8'))).decode('ascii')
             enc_payload = {'ciphertext': ct, 'iv': iv_str}
@@ -234,6 +239,13 @@ def _notify_bark(key, title, body, level):
             _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': f'加密配置无效: {str(enc_err)[:100]}'}
         return
     else:
+        # 8.10.3: 未启用加密时把 title/subtitle/body 明文放进 payload。
+        # 修此前隐患：旧代码只在加密分支塞内容，未配 push_encrypt 时请求体只有
+        # device_key/level，Bark 收到空标题空正文（两端一直开着加密所以没暴露）。
+        payload['title'] = title
+        payload['body'] = body
+        if subtitle:
+            payload['subtitle'] = subtitle
         log_tail = f'{title} - {body}'
     data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request(
@@ -259,11 +271,11 @@ def _notify_bark(key, title, body, level):
         _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': str(last_err)[:120]}
 
 
-def _notify_guarded(key, title, body, level):
+def _notify_guarded(key, title, body, level, subtitle=''):
     """包装 _notify_bark：无论成败都释放在途计数（8.10.0 限流配套）。"""
     global _notify_inflight
     try:
-        _notify_bark(key, title, body, level)
+        _notify_bark(key, title, body, level, subtitle)
     except Exception as e:
         _log(f'_notify_bark 未预期异常: {e}')
     finally:
@@ -352,6 +364,9 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
             title = str(data.get('title') or '自动审核')
             body = str(data.get('body') or '')
             level = str(data.get('level') or 'active')
+            # 8.10.3: subtitle（副标题）——仪器分布+时间区间，手表上与标题一同稳定可见。
+            # 老 userscript 不传该字段时为空串，行为与升级前完全一致。
+            subtitle = str(data.get('subtitle') or '')
             cfg = _load_notify_config()
             key = (cfg.get('bark_key') or '').strip()
             if not key or not cfg.get('enabled', True):
@@ -362,7 +377,7 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
                     _notify_inflight -= 1
                 self._send_json({'accepted': False})
                 return
-            threading.Thread(target=_notify_guarded, args=(key, title, body, level), daemon=True).start()
+            threading.Thread(target=_notify_guarded, args=(key, title, body, level, subtitle), daemon=True).start()
             self._send_json({'accepted': True})
         except Exception as e:
             _log(f'/notify 处理异常: {e}')

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.2
+// @version      8.10.3
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19621,11 +19621,15 @@ window.addEventListener('keydown',function(e){
   _flushNotifyRetry(); // 启动时若上次遗留待补发队列，30s 泵自动接续
   function pushAutoAuditNotify(payload) {
     const p = payload || {};
-    const key = [p.title || '', p.body || '', p.level || '', p.nonce || ''].join('|');
+    // 8.10.3: 去重键加入 subtitle（仪器分布/时间区间不同的两条推送不该被当同一条吞掉）
+    const key = [p.title || '', p.subtitle || '', p.body || '', p.level || '', p.nonce || ''].join('|');
     const now = Date.now();
     if (_notifyBarkLast.key === key && now - _notifyBarkLast.t < 60 * 1000) {return;} // 60s 同内容去重（nonce 随轮次变化，正常轮次不受影响）
     _notifyBarkLast = { key, t: now };
     const send = {title: p.title || '', body: p.body || '', level: p.level || 'active'};
+    // 8.10.3: subtitle（Bark 副标题，手表上与标题一同稳定可见）——仅在非空时带上，
+    // 老版本 serve.py / bark-relay 未升级时会忽略该字段，不影响推送成功
+    if (p.subtitle) {send.subtitle = String(p.subtitle);}
     // 8.9.0: 补发登记带上含 nonce 的完整 key，防同文案多轮被去重误杀
     _notifySend(send).then(st => {
       // 8.10.0: 仅临时失败才进补发队列；'permanent'（端点 accepted=false，未配置 Bark）
@@ -19649,8 +19653,9 @@ window.addEventListener('keydown',function(e){
   //      免疫组慢项目不做时长自学习：等不到就按 ② 的间隔照常发，不会被拖住。
   //   ④ 在跑队列判不了（数据不够新/核收时间无法解析）→ 退回 8.9.15 的静默 60s 规则。
   //   危急值/堵孔/传染病/心肌/负值等红线不受任何等待限制：立即把缓冲区与本轮合并成一条 critical 推送。
-  //   off 模式在调用方已拦，不进缓冲区。标题/正文仍由 autoAuditPushTitle /
-  //   autoAuditAbnSpecimenSummary 统一生成，与旧单轮推送同构；合并条目按标本 id 去重（同标本取最后一次）。
+  //   off 模式在调用方已拦，不进缓冲区。8.10.3 起标题/副标题/正文由 aaBuildMergedPush 统一排版
+  //   （一标本一行 + 按处置分区 + 容量自适应）；合并条目按标本 id 去重（同标本取最后一次）。
+  //   旧的 autoAuditPushTitle / autoAuditAbnSpecimenSummary 仍服务于 v2 遗留累积器与断流暂停推送。
   const AA_STREAM_QUIET_MS = 60 * 1000; // 静默判定阈值（8.10.2 起仅作在跑队列判不了时的退路）
   const AA_PUSH_TICK_MS = 15 * 1000; // 8.9.15: 复查间隔
   const AA_PUSH_BUF_MAX_AGE = 30 * 60 * 1000; // 启动恢复时缓冲超龄（跨夜残骸）静默丢弃
@@ -19856,6 +19861,7 @@ window.addEventListener('keydown',function(e){
     _aaPushBufSave(); // 每次合并即落盘：此刻卸页，攒着的内容不丢
   }
   // 缓冲区（可与 extra 合并）→ 组装一条推送发出。返回是否已发。
+  // 8.10.3: 正文/标题改由 aaBuildMergedPush 统一排版（一标本一行 + 按处置分区 + 容量自适应 + subtitle）
   function flushAutoAuditPushBuffer(extra, opts) {
     opts = opts || {};
     try {
@@ -19873,23 +19879,22 @@ window.addEventListener('keydown',function(e){
       const redCats = _aaNormRedCats(b.redCats);
       const skipN = Object.keys(redCats).reduce((s, k) => s + redCats[k], 0) + (b.otherFailN || 0);
       if (passN + abnPassN + skipN <= 0) {_aaPushBufClear(); return false;} // 凑不出内容的残骸：静默清掉
-      const redEntries = Object.entries(redCats);
-      const hasRed = redEntries.length > 0;
-      const emoji = hasRed ? '🚨' : ((b.mode === 'blocked' || b.mode === 'blocked_abn') ? '⚠️' : '🤖');
-      const title = (autoAuditPushTitle(b.passByMn, redEntries, b.otherFailN || 0, emoji) || ('自动审核 ' + (passN + abnPassN) + ' 例')) + (opts.suffix || '');
-      let body = '正常 ' + passN + ' · 异常 ' + abnPassN + ' · 留人工 ' + skipN;
-      if (hasRed) {
-        const brk = autoAuditRedLineBreakdown(order.map(id => last[id].e).filter(e => e && e.reason));
-        if (brk) {body += '\n' + brk;}
-      }
-      // 明细条目：留人工在前（问题优先），通过项按原顺序在后
-      const skipList = [], audList = [];
-      order.forEach(id => {(last[id].k === 's' ? skipList : audList).push(last[id].e);});
-      const abnLines = autoAuditAbnSpecimenSummary(skipList.concat(audList), AA_PUSH_BUF_MAX_LINES);
-      if (abnLines.length) {body += '\n' + abnLines.join('\n');}
-      if (abnLines.length >= AA_PUSH_BUF_MAX_LINES) {body += '\n…（部分标本明细略，详见审核记录）';}
-      if (opts.note) {body += '\n' + opts.note;}
-      pushAutoAuditNotify({title, body, level: hasRed ? 'critical' : 'active', nonce: (b.updated || b.ts) + ':' + order.length});
+      const built = aaBuildMergedPush({
+        entries: order.map(id => last[id]),
+        passByMn: b.passByMn,
+        redCats,
+        otherFailN: b.otherFailN || 0,
+        mode: b.mode,
+        suffix: opts.suffix,
+        note: opts.note
+      });
+      pushAutoAuditNotify({
+        title: built.title || ('🤖 自动审核 ' + (passN + abnPassN) + ' 例'),
+        subtitle: built.subtitle,
+        body: built.body,
+        level: built.hasRed ? 'critical' : 'active',
+        nonce: (b.updated || b.ts) + ':' + order.length
+      });
       _aaPushLastTsSet(Date.now()); // 8.10.2: 记住发出时刻——前沿即发与最短间隔都以它为基准
       _aaPushBufClear();
       return true;
@@ -19992,17 +19997,8 @@ window.addEventListener('keydown',function(e){
     return /危急值|含负值|传染病历史不符|梅毒|丙肝|艾滋|心肌标志物|疑似堵孔/.test(String(reason));
   }
 
-  // 8.8.13: 异常项目状态 → 推送短标记。8.8.16: 用彩色箭头；8.8.17: 升高红🔺、降低蓝🔽。只用于摘要正文。
-  // 8.8.18: 危急值用 🚨 前缀重点标识，且方向仍给箭头（HH/LL 或参考范围比较推断升/降）。
-  function autoAuditItemMark(st) {
-    if (!st || st === 'NORMAL') {return '';}
-    if (st === 'CRITICAL') {return '🚨';} // 8.8.18: 危急值前缀固定红盾；方向箭头由 summary 根据该值另外拼
-    if (st === 'HIGH') {return '🔺';}
-    if (st === 'LOW') {return '🔽';}
-    if (st === 'ZERO') {return '0值';}
-    if (st === 'UNCERTAIN') {return '待定';}
-    return '异';
-  }
+  // 8.10.3: autoAuditItemMark（8.8.13~8.8.18 的状态→短标记）已删除：推送正文统一由
+  // aaPushCompactMark 出标记（贴数值后不留空格以省宽，ZERO=⓿、危急=方向箭头+🚨）。
   // 8.8.18: 危急值的方向（升/降）→ 用两个不同箭头（红升/蓝降，与普通异常一致）。
   // 危急标签本身的 HH/LL 没被普通 HIGH/LOW 覆盖，需从这里还原：优先看原生危急 flag，
   // 再退回「数值 vs 参考范围」比较。返回 '🔺' / '🔽' 或 ''（方向不明）。
@@ -20172,92 +20168,13 @@ window.addEventListener('keydown',function(e){
     return evEntries.filter(en => en.k === 's'); // blocked / off 兜底
   }
 
-  // 8.8.14: 标本异常项目 → 推送摘要（按标本展开，手机端可直接定位标本）。
-  // 用户已确认：标本号、接收时间（报告时间语境，工作台卡片同一时间）不属于病人隐私，可进推送；
-  // 8.8.15: 不显示单位，每个异常项均附参考范围帮助判断（用户要求）。
-  // 8.8.17: 通过自动审核的异常标本与留人工标本同样列出异常值（呈现一致，仅推送级别不同）；
-  //         标记放数值与参考范围中间：数值 🔺/🔽 (参考范围)。
-  // 8.8.18: 危急值重点标识——前缀 🚨 红盾 + 方向箭头（升🔺/降🔽）+「危急」字样；
-  //         上升红🔺、下降蓝🔽（两个箭头区分方向）。普通异常保持 🔺红/🔽蓝，无 🚨。
-  // 格式：每个标本一行头「标本号 · 时间」，下一行罗列其异常项目（项目名/数值/方向标记/参考范围）。
-  // 8.9.6: 血常规推送瘦身——比例/宽度/压积/MPV 类低价值异常不进推送（危急值除外）；
-  //         全是省略项的标本只留一行头「… 另有 N 项异常未列出」；非血常规标本不受影响。
-  // 8.9.9: 瘦身升级为三级——core(WBC/RBC/HGB/PLT/五分类计数) 必推；cond(HCT/MCV/MCH/MCHC) 超参考限
-  //         达阈值才推（MCV/MCH/HCT 15%、MCHC 10%，见 AA_CBC_COND_LIMITS）；其余照旧省略。
-  // 仍绝不含：姓名/住院号/床号/科室。最多 maxLines 行。
-  function autoAuditAbnSpecimenSummary(specimens, maxLines) {
-    const lines = [];
-    (specimens || []).forEach(s => {
-      if (lines.length >= maxLines) {return;}
-      const list = (s && (s.items || s.abn)) || [];
-      const abnAll = list.filter(it => {
-        const st = it.s || it.status || '';
-        return it.n && st && st !== 'NORMAL';
-      });
-      if (!abnAll.length) {return;}
-      const labno = String(s.labno || s.Labno || '').trim();
-      // 8.8.22: 标本头改用流水号（EpisodeNo，与工作台表格/详情面板一致，便于按管找标本）；无流水号回退检验号
-      // 8.8.23: 前缀文案「流水」→「流水号」（与详情面板用词一致）
-      const seq = String(s.seq || s.EpisodeNo || s.episodeNo || '').trim();
-      const tm = pushShortTime(s.acceptDT || s.AcceptDT || '');
-      // 8.8.24: 头行带上项目组合（如「血常规」，超10字截断），手机端一眼知道是什么标本
-      const tst = String(s.test || '').trim().slice(0, 10);
-      const header = [seq ? '流水号 ' + seq : ('检验号 ' + labno), tm, tst].filter(Boolean).join(' ') || '标本';
-      // 8.9.9: 血常规三级瘦身——危急值必留；core 必留；cond(HCT/MCV/MCH/MCHC) 超参考限达阈值才留；skip 略
-      // 8.9.15: 判定口径提取为 aaPushItemVisible（与 blocked_abn 模式的触发判定共用，保证一致）
-      let abn = abnAll;
-      let filteredN = 0;
-      if (aaIsCbcTest(s.test || s.TestSetDesc || '')) {
-        abn = abnAll.filter(it => aaPushItemVisible(s.test || s.TestSetDesc || '', it));
-        filteredN = abnAll.length - abn.length;
-      }
-      if (!abn.length) {
-        // 全是省略项：只留一行头，注明略去的数量，不展开数值
-        if (filteredN > 0) {lines.push(header + ' · 另有 ' + filteredN + ' 项异常未列出（低权重/未达阈值，略）');}
-        return;
-      }
-      lines.push(header);
-      if (lines.length >= maxLines) {return;}
-      const segs = abn.slice(0, 6).map(it => {
-        const st = it.s || it.status || '';
-        let mk = autoAuditItemMark(st);
-        // 8.8.18: 危急值重点标识——前缀 🚨，紧跟方向箭头（升/降），再补「危急」字样强调
-        if (st === 'CRITICAL') {
-          let critical = '';
-          const dir = criticalDirectionArrow(it);
-          if (dir) {critical += ' ' + dir;}
-          critical += ' 危急';
-          // 项目名前加红盾：🚨 项目名 数值 🔺/🔽 危急 (参考范围)
-          let seg = '🚨 ' + it.n;
-          const val = String(it.r !== undefined && it.r !== null ? it.r : '').trim();
-          if (val) {seg += ' ' + val;}
-          seg += critical;
-          if (it.f) {
-            let f = String(it.f);
-            if (f.length > 24) {f = f.slice(0, 24) + '…';}
-            seg += ' (' + f + ')';
-          }
-          return seg;
-        }
-        let seg = it.n;
-        const val = String(it.r !== undefined && it.r !== null ? it.r : '').trim();
-        if (val) {seg += ' ' + val;}
-        // 8.8.17: 标记放数值与参考范围中间：数值 🔺/🔽 (参考范围)；不显示单位
-        if (mk) {seg += ' ' + mk;}
-        if (it.f) {
-          let f = String(it.f);
-          if (f.length > 24) {f = f.slice(0, 24) + '…';}
-          seg += ' (' + f + ')';
-        }
-        return seg;
-      });
-      let itemLine = segs.join(' · ') + (abn.length > 6 ? ' 等' + abn.length + '项' : '');
-      // 8.9.6: 血常规瘦身——正文行尾注明还有多少比例/宽度类异常被略去（占位极小但知情）
-      if (filteredN > 0) {itemLine += '（另有 ' + filteredN + ' 项略）';}
-      lines.push(itemLine);
-    });
-    return lines;
-  }
+  // 8.10.3: 8.8.14~8.9.15 的「每标本两行（头行+项目行）」推送摘要已被 aaBuildMergedPush
+  // 的一标本一行排版取代（autoAuditAbnSpecimenSummary 随之删除）。历史沿革与设计取舍：
+  //   8.8.14 起按标本展开、8.8.15 附参考范围、8.8.17 异常通过与留人工同样列出、
+  //   8.8.18 危急值 🚨+方向箭头、8.8.22 标本头用流水号、8.8.24 头行带项目组合、
+  //   8.9.6/8.9.9 血常规三级瘦身（口径保留在 aaPushItemVisible，新排版继续沿用）。
+  // 删除原因：两行制在合并推送里行数翻倍（8 标本 = 14 行），iOS 通知装不下；
+  // 新排版把头行与项目行合并、按处置分区、容量自适应折叠，同样信息占一半行数。
 
   // 8.8.13: 红线留人工原因 → 类别计数（危急值/含负值/传染病阳性/心肌标志物/疑似堵孔）
   function autoAuditRedLineBreakdown(skipped) {
@@ -20310,6 +20227,336 @@ window.addEventListener('keydown',function(e){
       out = segs.join('；') + ' 等';
     }
     return (emoji ? emoji + ' ' : '') + out;
+  }
+
+  // ==================== 8.10.3: 合并推送排版（一条推送里高效呈现多个标本）====================
+  // 背景：8.10.2 已经把连续做标本的多轮结果合并成「一条」推送（单次 pushAutoAuditNotify），
+  // 但正文沿用 8.8.14 的「每标本两行（头行 + 项目行）」格式，8 个标本就 14 行 478 字，
+  // 且标题用「审核了一个正常的XX标本」句式，8 个标本能撑到 93 字——iOS 锁屏只显示前 30 多字，
+  // 最该先看到的危急值反而被挤出可见区。本节重排为「一标本一行 + 按处置分区 + 容量自适应」。
+  //
+  // 三条原则：
+  //   ① 标题只放「要不要我立刻动手」——红线类别与例数 + 已审总数，压在 30 列内；
+  //      仪器分布与时间区间挪到副标题（Bark subtitle，8.10.3 起端到端贯通）。
+  //   ② 一标本一行：`符号 流水号 项目组合 项目缩写+数值+方向`。头行与项目行合并即省掉一半行数。
+  //      「需人工」区带参考范围（判断依据，值得占宽）；「已自动审」区不带（要细节去工作台🕘记录）。
+  //   ③ 容量自适应：行数超预算时逐级降级——先砍每标本项目数 → 再把某台仪器剩余标本折成
+  //      「…另 N 例：流水号…」→ 最后整组折成一行。任何情况下流水号都保留，可追溯。
+  //
+  // Apple Watch 兼容：手表只稳定显示 title + subtitle 与开头少量正文，且行宽比手机更窄。
+  //   故 ① 标题/副标题各自限宽（AA_PUSH_TITLE_MAX_W / AA_PUSH_SUB_MAX_W），
+  //   ② 单行限宽 AA_PUSH_LINE_MAX_W（按显示列宽而非字符数，中文/emoji 算 2 列），
+  //   ③ 需人工的标本永远排在正文最前面 —— 手表只看得到开头几行时，看到的正是必须处理的。
+  // 隐私口径不变：只有流水号/检验号、时间、项目组合、项目名与数值（及需人工区的参考范围），
+  //   绝不含姓名/住院号/床号/科室。
+  const AA_PUSH_BODY_MAX_LINES = 16; // 正文行数预算（展开通知约一屏；超出按 ③ 降级折叠）
+  const AA_PUSH_LINE_MAX_W = 56; // 单行显示列宽上限（手机 ~34 列/行 → 最多折 2 行；宁可折行也别截掉项目）
+  const AA_PUSH_TITLE_MAX_W = 40; // 标题列宽上限（iOS 锁屏可见约 34 列，留点余量放「已审N」）
+  const AA_PUSH_SUB_MAX_W = 40; // 副标题列宽上限
+  const AA_PUSH_SUB_MN_MAX = 3; // 副标题最多列几台仪器（更多折成「等N台」，防挤掉时间区间）
+  const AA_PUSH_FLAT_MAX = 3; // ≤N 个标本时走「扁平模式」：不打分区/分组标题，直接列标本（手表友好）
+  const AA_PUSH_SKIP_MAX_LINES = 12; // 需人工明细最多逐条列几例（超出折成流水号列表；红线优先级最高，允许超行数预算）
+  // 显示列宽：CJK 与 emoji 占 2 列，其余 1 列（用于按视觉宽度截断，比 length 准）
+  function aaDispW(s) {
+    let w = 0;
+    for (const ch of String(s || '')) {
+      const c = ch.codePointAt(0);
+      const wide = (c >= 0x1100 && c <= 0x115f) || c === 0x2329 || c === 0x232a ||
+        (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) ||
+        (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe6f) ||
+        (c >= 0xff00 && c <= 0xff60) || (c >= 0xffe0 && c <= 0xffe6) ||
+        (c >= 0x1f300 && c <= 0x1faff) || (c >= 0x2600 && c <= 0x27bf);
+      w += wide ? 2 : 1;
+    }
+    return w;
+  }
+  function aaClipW(s, maxW) {
+    const str = String(s || '');
+    if (aaDispW(str) <= maxW) {return str;}
+    let out = '', w = 0;
+    for (const ch of str) {
+      const cw = aaDispW(ch);
+      if (w + cw > maxW - 1) {break;}
+      out += ch;
+      w += cw;
+    }
+    return out + '…';
+  }
+  // 项目名缩写：长中文名最吃宽度（「中性粒细胞绝对值」9 字 = 18 列）。只收录检验科通用缩写，
+  // 无匹配则原样保留（宁可长一点也不要造出看不懂的名字）。
+  const AA_PUSH_ITEM_ABBR = [
+    [/^白细胞(计数|数目)?$/, 'WBC'], [/^红细胞(计数|数目)?$/, 'RBC'],
+    [/^血红蛋白(浓度)?$/, 'HGB'], [/^血小板(计数|数目)?$/, 'PLT'],
+    [/^中性粒细胞(绝对值|计数|数目)$/, 'NEU#'], [/^淋巴细胞(绝对值|计数|数目)$/, 'LYM#'],
+    [/^单核细胞(绝对值|计数|数目)$/, 'MON#'], [/^嗜酸性粒细胞(绝对值|计数|数目)$/, 'EOS#'],
+    [/^嗜碱性粒细胞(绝对值|计数|数目)$/, 'BAS#'],
+    [/^红细胞压积$|^[红血]细胞比[积容]$/, 'HCT'],
+    [/^平均红细胞体积$/, 'MCV'], [/^平均血红蛋白含量$/, 'MCH'], [/^平均血红蛋白浓度$/, 'MCHC'],
+    [/^甘油三酯$/, 'TG'], [/^总胆固醇$/, 'TC'],
+    [/^高密度脂蛋白(胆固醇)?$/, 'HDL'], [/^低密度脂蛋白(胆固醇)?$/, 'LDL'],
+    [/^丙氨酸氨基转移酶$/, 'ALT'], [/^天门冬氨酸氨基转移酶$/, 'AST'],
+    [/^γ-?谷氨酰基?转移酶$|^谷氨酰转肽酶$/, 'GGT'], [/^碱性磷酸酶$/, 'ALP'],
+    [/^总胆红素$/, 'TBIL'], [/^直接胆红素$/, 'DBIL'], [/^总蛋白$/, 'TP'], [/^白蛋白$/, 'ALB'],
+    [/^尿素氮$/, '尿素'], [/^尿酸$/, 'UA'], [/^葡萄糖$|^血糖$/, 'GLU'],
+    [/^肌酸激酶同工酶$/, 'CK-MB'], [/^乳酸脱氢酶$/, 'LDH'], [/^肌酸激酶$/, 'CK'],
+    [/^超敏[C][-]?反应蛋白$/i, 'hsCRP'], [/^[C][-]?反应蛋白$/i, 'CRP'],
+    [/^促甲状腺激素$/, 'TSH'], [/^游离甲状腺素$/, 'FT4'], [/^游离三碘甲状腺原氨酸$/, 'FT3']
+  ];
+  function aaPushItemAbbr(name) {
+    const s = String(name || '').trim();
+    if (!s) {return '';}
+    for (const [re, a] of AA_PUSH_ITEM_ABBR) {if (re.test(s)) {return a;}}
+    return s.length > 8 ? s.slice(0, 8) : s; // 未收录的长名硬截，避免单项吃掉整行
+  }
+  // 项目组合缩写：只为压宽，语义必须仍可辨认
+  const AA_PUSH_TEST_ABBR = [
+    [/肝功能\s*\+\s*肾功能|肝肾功能/, '肝肾'], [/^肝功能(检查)?$/, '肝功'], [/^肾功能(检查)?$/, '肾功'],
+    [/^血脂(全套|四项|六项)?$/, '血脂'], [/^电解质(全套|六项)?$/, '电解质'],
+    [/^心肌(酶|标志物|梗)/, '心肌'], [/甲状腺功能|甲功/, '甲功'],
+    [/^血细胞分析$|^血常规/, '血常规'], [/^凝血(功能|四项|全套)?/, '凝血'],
+    [/肿瘤标志物/, '肿标'], [/^尿液分析$|^尿常规/, '尿常规'], [/^粪便/, '粪便']
+  ];
+  function aaPushTestAbbr(test) {
+    const s = String(test || '').trim();
+    if (!s) {return '';}
+    for (const [re, a] of AA_PUSH_TEST_ABBR) {if (re.test(s)) {return a;}}
+    return aaClipW(s, 12);
+  }
+  // 仪器名压缩为分组标签（「血细胞分析仪」→「血细胞」；「DXI800化学发光仪」→「DXI800」；
+  // 「Getein1600荧光定量」→「Getein1600」——型号后缀一并去掉，副标题里不再出现「荧…」这种截断）
+  function aaPushMachineShort(mn) {
+    let s = String(mn || '').trim();
+    if (!s) {return '其他';}
+    s = s.replace(/全自动/g, '')
+      .replace(/(分析仪|检测仪|化学发光仪|发光仪|测定仪|荧光定量(分析)?|定量分析|流水线|仪)$/g, '')
+      .replace(/[—\-－]+$/, '')
+      .trim();
+    if (!s) {s = String(mn).trim();}
+    return aaClipW(s, 12);
+  }
+  // 项目状态 → 紧凑方向标记（贴在数值后，不留空格以省宽）
+  function aaPushCompactMark(it) {
+    const st = (it && (it.s || it.status)) || '';
+    if (st === 'CRITICAL') {return (criticalDirectionArrow(it) || '') + '🚨';}
+    if (st === 'HIGH') {return '🔺';}
+    if (st === 'LOW') {return '🔽';}
+    if (st === 'ZERO') {return '⓿';}
+    return '⚠️';
+  }
+  // 单标本的可见异常项 → 紧凑段落。返回 {seg, shown, more}
+  // noSlim=true 时跳过血常规三级瘦身：「需人工」标本的异常项就是被拦下的理由，
+  // 一个都不能藏（否则会出现「⓿ 307 血常规 +2 疑似堵孔」这种看不到数值的行）。
+  function aaPushSpecItemSegs(e, maxItems, withRange, noSlim) {
+    const list = (e && (e.items || e.abn)) || [];
+    const abnAll = list.filter(it => {
+      const st = it.s || it.status || '';
+      return it.n && st && st !== 'NORMAL';
+    });
+    // 血常规三级瘦身沿用 8.9.9 口径（危急值不受过滤）
+    let vis = noSlim ? abnAll : abnAll.filter(it => aaPushItemVisible(e.test || e.TestSetDesc || '', it));
+    // fail-open：全被瘦身滤掉时退回显示第一项，绝不产出没有内容的标本行
+    if (!vis.length && abnAll.length) {vis = abnAll.slice(0, 1);}
+    const hidden = abnAll.length - vis.length;
+    const take = vis.slice(0, Math.max(1, maxItems));
+    const segs = take.map(it => {
+      let s = aaPushItemAbbr(it.n);
+      const val = String(it.r !== undefined && it.r !== null ? it.r : '').trim();
+      if (val) {s += ' ' + val;}
+      s += aaPushCompactMark(it);
+      if (withRange && it.f) {s += '(' + aaClipW(String(it.f), 18) + ')';}
+      return s;
+    });
+    const more = (vis.length - take.length) + hidden;
+    return {seg: segs.join(' '), shown: take.length, more, total: abnAll.length, visN: vis.length};
+  }
+  // 一个标本 → 一行。sym 为处置符号（🚨 危急 / ⓿ 堵孔 / ⚠️ 其他留人工或异常已审 / ✅ 正常）
+  function aaPushSpecLine(e, sym, maxItems, withRange, tailNote, noSlim) {
+    const seq = String((e && (e.seq || e.EpisodeNo || e.episodeNo)) || '').trim();
+    const labno = String((e && (e.labno || e.l || e.Labno)) || '').trim();
+    const id = seq || labno || '标本';
+    const test = aaPushTestAbbr(e && e.test);
+    const it = aaPushSpecItemSegs(e, maxItems, withRange, noSlim);
+    let line = sym + ' ' + id;
+    if (test) {line += ' ' + test;}
+    if (it.seg) {line += '　' + it.seg;}
+    if (it.more > 0) {line += ' +' + it.more;}
+    if (tailNote) {line += ' ' + tailNote;}
+    return aaClipW(line, AA_PUSH_LINE_MAX_W);
+  }
+  // 留人工原因 → 处置符号与尾注（红线类别一眼可辨）
+  function aaPushSkipSym(reason) {
+    const s = String(reason || '');
+    if (/危急值/.test(s)) {return {sym: '🚨', note: ''};}
+    if (/疑似堵孔|0 ?值结果/.test(s)) {return {sym: '⓿', note: '疑似堵孔'};}
+    if (/梅毒|丙肝|艾滋/.test(s)) {return {sym: '🩸', note: '传染病阳性'};}
+    if (/传染病历史不符/.test(s)) {return {sym: '🩸', note: '阴阳不符'};}
+    if (/心肌标志物/.test(s)) {return {sym: '💔', note: '心肌'};}
+    if (/含负值/.test(s)) {return {sym: '➖', note: '含负值'};}
+    return {sym: '⚠️', note: aaClipW(s, 16)};
+  }
+  // 时间区间：取条目核收时间的最早~最晚（同一分钟只显示一个时刻）
+  // 跨天时 pushShortTime 会带上 MM-DD，两端都带日期太占宽 → 只在起点保留日期
+  function aaPushTimeSpan(entries) {
+    let min = 0, max = 0;
+    (entries || []).forEach(en => {
+      const t = _aaAcceptTs(en && en.e && (en.e.acceptDT || en.e.AcceptDT));
+      if (!t) {return;}
+      if (!min || t < min) {min = t;}
+      if (!max || t > max) {max = t;}
+    });
+    if (!min) {return '';}
+    const a = pushShortTime(new Date(min));
+    let b = pushShortTime(new Date(max));
+    if (a === b) {return a;}
+    const sameDate = new Date(min).toDateString() === new Date(max).toDateString();
+    if (sameDate) {b = b.replace(/^\d{2}-\d{2}\s+/, '');} // 同一天：终点省掉重复的日期
+    return a + '-' + b;
+  }
+  // 8.10.3: 合并推送组装总入口 —— 返回 {title, subtitle, body}
+  //   d = {entries:[{k,e}], passByMn, redCats, otherFailN, mode, suffix, note}
+  //   entries 已按标本去重（同标本取最后一次），顺序为入队顺序。
+  function aaBuildMergedPush(d) {
+    const entries = (d && d.entries) || [];
+    const redCats = _aaNormRedCats(d && d.redCats);
+    const otherFailN = (d && d.otherFailN) || 0;
+    const passByMn = (d && d.passByMn) || {};
+    let passN = 0, abnPassN = 0;
+    Object.keys(passByMn).forEach(k => {
+      if (/\|正常$/.test(k)) {passN += passByMn[k];}
+      else if (/\|异常$/.test(k)) {abnPassN += passByMn[k];}
+    });
+    const redN = Object.keys(redCats).reduce((s, k) => s + redCats[k], 0);
+    const skipN = redN + otherFailN;
+    const hasRed = redN > 0;
+    const doneN = passN + abnPassN;
+
+    // ── 标题：先说要动手的事，再说已审总数 ──
+    // 红线类别多到撑破标题时逐个折叠成「等N类」——锁屏第一眼必须能看到「有几例要我处理」，
+    // 具体分类在正文里逐条写着，标题里挤不下不影响判断。
+    let tSegs = Object.keys(redCats).map(cat => cat + redCats[cat]);
+    if (otherFailN > 0) {tSegs.push('失败' + otherFailN);}
+    let title = '';
+    if (tSegs.length) {
+      const build = segs => (hasRed ? '🚨 ' : '⚠️ ') + segs.join(' ') + ' 需人工' + (doneN > 0 ? ' · 已审' + doneN : '');
+      title = build(tSegs);
+      while (aaDispW(title) > AA_PUSH_TITLE_MAX_W && tSegs.length > 1) {
+        const dropped = tSegs.length;
+        tSegs = tSegs.slice(0, tSegs.length - 1);
+        title = build(tSegs.concat(['等' + dropped + '类']));
+      }
+      if (aaDispW(title) > AA_PUSH_TITLE_MAX_W) {
+        // 单个类别名就撑破了（极端长原因文案）：退回只报总例数
+        title = (hasRed ? '🚨 ' : '⚠️ ') + skipN + ' 例需人工' + (doneN > 0 ? ' · 已审' + doneN : '');
+      }
+    } else {
+      title = '🤖 已自动审 ' + doneN + ' 个标本';
+      if (abnPassN > 0) {title += '（异常 ' + abnPassN + '）';}
+    }
+    title = aaClipW(title, AA_PUSH_TITLE_MAX_W) + ((d && d.suffix) || '');
+
+    // ── 副标题：仪器分布 + 时间区间（手表上与标题一同稳定可见）──
+    const mnCount = {};
+    Object.keys(passByMn).forEach(k => {
+      const parts = k.split('|');
+      const mn = aaPushMachineShort(parts.slice(0, -1).join('|'));
+      mnCount[mn] = (mnCount[mn] || 0) + passByMn[k];
+    });
+    entries.forEach(en => {
+      if (!en || en.k !== 's') {return;} // 留人工标本不在 passByMn 里，单独计入分布
+      const mn = aaPushMachineShort(en.e && en.e.mn);
+      mnCount[mn] = (mnCount[mn] || 0) + 1;
+    });
+    const mnKeys = Object.keys(mnCount).sort((a, b) => mnCount[b] - mnCount[a]);
+    // 仪器多时只列前几台 + 「等N台」：时间区间比第 4 台仪器的名字更值得占位
+    const mnParts = mnKeys.slice(0, AA_PUSH_SUB_MN_MAX).map(mn => mn + ' ' + mnCount[mn]);
+    if (mnKeys.length > AA_PUSH_SUB_MN_MAX) {mnParts.push('等' + mnKeys.length + '台');}
+    const span = aaPushTimeSpan(entries);
+    let subtitle = mnParts.join(' · ');
+    if (span) {subtitle = subtitle ? subtitle + '  ' + span : span;}
+    subtitle = aaClipW(subtitle, AA_PUSH_SUB_MAX_W);
+
+    // ── 正文：需人工区（全展开，带参考范围）→ 已审区（按仪器分组）→ 正常合并一行 ──
+    const skips = entries.filter(en => en && en.k === 's');
+    const abns = entries.filter(en => en && en.k === 'a');
+    const nors = entries.filter(en => en && en.k === 'n');
+    const L = [];
+    const budget = AA_PUSH_BODY_MAX_LINES;
+    const room = () => budget - L.length;
+    // 8.10.3: 扁平模式——标本很少（单个单个做标本的常态，也是手表上最常见的场景）时
+    // 不打「━ 需人工 ━」「〔生化 异常 2〕」这类分区/分组标题：那些标题在只有 1~3 行内容时
+    // 纯属噪声，且会把真正的内容挤出手表可见区。计数已经在标题/副标题里说清了。
+    const flat = (skips.length + abns.length + nors.length) <= AA_PUSH_FLAT_MAX && !(skips.length && abns.length);
+    if (flat) {
+      skips.forEach(en => {
+        const info = aaPushSkipSym(en.e && en.e.reason);
+        L.push(aaPushSpecLine(en.e, info.sym, 4, true, info.note, true)); // 需人工：不瘦身
+      });
+      abns.forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, false, '')));
+      const fseqs = nors.map(x => aaPushSeqOf(x.e)).filter(Boolean);
+      if (fseqs.length) {L.push(aaClipW('✅ 全正常：' + fseqs.join(' '), AA_PUSH_LINE_MAX_W));}
+      else if (passN > 0 && !abns.length && !skips.length) {L.push('✅ 全正常 ' + passN);}
+      if (d && d.note) {L.push(aaClipW(String(d.note), AA_PUSH_LINE_MAX_W));}
+      return {title, subtitle, body: L.join('\n'), hasRed};
+    }
+
+    if (skips.length) {
+      L.push('━ 需人工 ' + skipN + ' ━');
+      // 需人工优先级最高：允许超出行数预算（红线不能因为排版被藏起来）。
+      // 但极端量（一次拦下几十例，如整批堵孔）时正文会长到无法阅读，超过 AA_PUSH_SKIP_MAX_LINES
+      // 的尾部折成流水号列表——例数与类别在标题里已完整给出，明细去工作台🕘记录查。
+      const showSkip = Math.min(skips.length, AA_PUSH_SKIP_MAX_LINES);
+      skips.slice(0, showSkip).forEach(en => {
+        const info = aaPushSkipSym(en.e && en.e.reason);
+        L.push(aaPushSpecLine(en.e, info.sym, 4, true, info.note, true)); // 需人工：不瘦身，拦下的理由必须看得见
+      });
+      if (skips.length > showSkip) {
+        L.push(aaClipW('　…另 ' + (skips.length - showSkip) + ' 例需人工：' + skips.slice(showSkip).map(x => aaPushSeqOf(x.e)).join(' '), AA_PUSH_LINE_MAX_W));
+      }
+    }
+    if (doneN > 0 || abns.length) {
+      L.push('━ 已自动审 ' + doneN + (abnPassN > 0 ? '（异常 ' + abnPassN + '）' : '') + ' ━');
+    }
+    if (abns.length) {
+      const byMn = {};
+      abns.forEach(en => {
+        const mn = aaPushMachineShort(en.e && en.e.mn);
+        (byMn[mn] = byMn[mn] || []).push(en);
+      });
+      // 标本多的仪器先排（先给信息量大的组分配预算）
+      const mns = Object.keys(byMn).sort((a, b) => byMn[b].length - byMn[a].length);
+      const norLine = (nors.length || passN > 0) ? 1 : 0;
+      const single = mns.length === 1; // 只有一台仪器：组标题与副标题重复，省掉
+      mns.forEach((mn, gi) => {
+        const arr = byMn[mn];
+        const groupsLeft = mns.length - gi - 1;
+        // 预留：后面每组至少一行 + 正常行一行
+        const spare = room() - groupsLeft - norLine;
+        if (spare <= 1) {
+          // 预算告急：整组折成一行，只留流水号（仍可在工作台按号查）
+          L.push(aaClipW('〔' + mn + '〕异常 ' + arr.length + '：' + arr.map(x => aaPushSeqOf(x.e)).join(' '), AA_PUSH_LINE_MAX_W));
+          return;
+        }
+        const show = Math.min(arr.length, Math.max(1, spare - (single ? 1 : 2)));
+        if (!single) {L.push('〔' + mn + ' 异常 ' + arr.length + '〕');}
+        // 已审标本不带参考范围：这些已经审过了，范围对决策无用，宽度留给项目本身
+        arr.slice(0, show).forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, false, '')));
+        if (arr.length > show) {
+          L.push(aaClipW('　…另 ' + (arr.length - show) + ' 例：' + arr.slice(show).map(x => aaPushSeqOf(x.e)).join(' '), AA_PUSH_LINE_MAX_W));
+        }
+      });
+    }
+    if (passN > 0) {
+      // 全正常标本永远只占一行（没有异常项可看，只需知道「审掉了哪些管」）
+      const seqs = nors.map(x => aaPushSeqOf(x.e)).filter(Boolean);
+      let line = '✅ 全正常 ' + passN;
+      if (seqs.length) {line += '：' + seqs.join(' ');}
+      L.push(aaClipW(line, AA_PUSH_LINE_MAX_W));
+    }
+    if (d && d.note) {L.push(aaClipW(String(d.note), AA_PUSH_LINE_MAX_W));}
+    return {title, subtitle, body: L.join('\n'), hasRed};
+  }
+  function aaPushSeqOf(e) {
+    return String((e && (e.seq || e.EpisodeNo || e.episodeNo || e.labno || e.l || e.Labno)) || '').trim();
   }
 
   // ---- 8.8.30: 轮次统计增量持久化（跨组审核触发整页刷新时，被中断轮次的推送不再丢失）----
@@ -20705,11 +20952,21 @@ window.addEventListener('keydown',function(e){
           // 8.8.36: 暂停推送升级为 critical（穿透 iPhone 勿扰/静音，夜间必达），且不再受 notifyMode
           // 快照约束——数据断流是系统状态告警，off 模式也必须知道停转了；10 分钟节流维持
           try {
-            const _pl = autoAuditAbnSpecimenSummary(_realSpecs, 6);
+            // 8.10.3: 暂停推送也用新排版列拦下的标本（一标本一行，不瘦身），
+            // 并把「拦下 N 例」放到副标题——手表上一眼看到规模
+            const _pl = _realSpecs.map(s => {
+              const _si = aaPushSkipSym(s.reason);
+              return aaPushSpecLine(s, _si.sym, 3, true, _si.note, true);
+            }).slice(0, 8);
             let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
-            if (_realSpecs.length) {_pb += '\n当前拦下 ' + _realSpecs.length + ' 例待人工';}
             if (_pl.length) {_pb += '\n' + _pl.join('\n');}
-            pushAutoAuditNotify({ title: '⚠️ 自动审核暂停', body: _pb, level: 'critical' });
+            if (_realSpecs.length > _pl.length) {_pb += '\n…另 ' + (_realSpecs.length - _pl.length) + ' 例，详见工作台记录';}
+            pushAutoAuditNotify({
+              title: '⚠️ 自动审核暂停',
+              subtitle: _realSpecs.length ? '当前拦下 ' + _realSpecs.length + ' 例待人工' : '暂无拦下标本',
+              body: _pb,
+              level: 'critical'
+            });
             _pendingResumeNotice = true;
             // 8.9.4: 暂停标记升级为「已推送」——恢复推送欠账跨整页刷新存续，半夜被吵醒的人等得到解除通知
             try {sessionStorage.setItem(AA_DATA_PAUSE_KEY, '2');} catch (e) {}
@@ -21216,11 +21473,11 @@ window.addEventListener('keydown',function(e){
                   <option value="10"${curMergeWin === 10 ? ' selected' : ''}>连续时最快 10 分钟一条</option>
                 </select>
               </label>
-              <span style="color:#999;line-height:1.6">8.10.2 前沿即发：<b>单个单个做标本</b>时每条即时推送（不再压 1 分钟观察）；<b>连续做</b>时第一条即时推，之后按所选间隔合并成一条。同批（核收时间相差 5 分钟内）的标本都出完结果，会提前发收尾小结，不用等满间隔。免疫组慢项目不会拖住推送。危急值等红线不受任何等待限制，立即推送。</span>
+              <span style="color:#999;line-height:1.6">8.10.2 前沿即发：<b>单个单个做标本</b>时每条即时推送（不再压 1 分钟观察）；<b>连续做</b>时第一条即时推，之后按所选间隔合并成一条。同批（核收时间相差 5 分钟内）的标本都出完结果，会提前发收尾小结，不用等满间隔。免疫组慢项目不会拖住推送。危急值等红线不受任何等待限制，立即推送。<br>8.10.3 合并排版：多个标本<b>合并成一条</b>推送（不是同时来几条），<b>一个标本一行</b>「流水号 项目组合　异常项+数值+方向」；<b>需人工的排最前面</b>并带参考范围（手表只看得到开头几行时，看到的正是要处理的）；已自动审的按仪器分组、不带参考范围；标本多时自动折叠成流水号列表，明细去🕘记录查。仪器分布与时间区间放在<b>副标题</b>。</span>
             </div>
             <div id="lis-aa-notify-edit-hint" style="display:none;margin-top:4px;color:#d9534f;font-size:11px;font-weight:600"></div>
             <div id="lis-aa-push-status" style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border:1px solid #e3e8ee;border-radius:4px;color:#555;font-size:12px;line-height:1.7">⏳ 正在获取推送状态…</div>
-            <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。8.9.7 起默认走<b>网关中转</b>（192.168.31.111，本机无需开 serve.py；不通时自动落回本机 serve 兜底）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。</div>
+            <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。8.9.7 起默认走<b>网关中转</b>（192.168.31.111，本机无需开 serve.py；不通时自动落回本机 serve 兜底）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。<br>⚠️ 8.10.3 的<b>副标题</b>需要网关机的 bark-relay 一并升级（<b>D:\\bark-relay\\bark_relay.py</b>）；未升级时副标题被忽略，其余照常送达。</div>
           </div>
           <div class="ab-section" style="margin-top:10px">
             <div style="padding:6px 10px;background:#fff8e1;border:1px solid #f0d58a;border-radius:4px">🔒 梅毒、丙肝、艾滋阳性为固定人工审核红线；乙肝两对半 5 项不在此红线内。</div>
