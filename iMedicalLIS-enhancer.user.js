@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.11
+// @version      8.9.12
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20701,7 +20701,7 @@ window.addEventListener('keydown',function(e){
     dlg.innerHTML = `
       <div id="lis-auto-audit-box">
         <div class="ab-hd">
-          <h4>🤖 自动审核</h4>
+          <h4>🤖 自动审核 <span style="font-size:11px;color:#94a3b8;font-weight:600">v${SCRIPT_VERSION}</span></h4>
           <button class="ab-close" id="lis-aa-close">✕</button>
         </div>
         <div class="ab-body" style="font-size:12px;line-height:1.7;color:#2c3e50">
@@ -20949,7 +20949,7 @@ window.addEventListener('keydown',function(e){
     dlg.innerHTML = `
       <div id="lis-auto-audit-log-box">
         <div class="ab-hd">
-          <h4>📋 自动审核记录</h4>
+          <h4>📋 自动审核记录 <span style="font-size:11px;color:#94a3b8;font-weight:600">v${SCRIPT_VERSION}</span></h4>
           <button class="ab-close" id="lis-aal-close" title="关闭 (Esc)">✕</button>
         </div>
         <div class="ab-body">
@@ -21182,9 +21182,12 @@ window.addEventListener('keydown',function(e){
         listHead.style.display = totalCount > 0 ? '' : 'none';
       }
 
-      // 8.9.1: 运行状态时间线（暂停/恢复/开启/关闭/到期）——按同一日期范围过滤，独立于标本记录展示，
+      // 8.9.1: 运行状态时间线（暂停/恢复/开启/关闭/到期）——独立于标本记录展示，
       // 「推送说暂停、过去看已恢复」这类疑问直接在这里对时间
       // 8.9.8: 改为可折叠区块，默认收起——折叠头直接显示最近一次事件，不再把标本记录挤到下面
+      // 8.9.12: 不再按查看范围过滤！此前「今天」范围内没有开关/暂停事件时整个区块（含折叠头）
+      //   都不渲染，体感是「运行状态凭空消失、无法收起」；运行状态本就是全局状态而非标本记录，
+      //   改为始终显示最近 50 条（非今日事件带 [日期] 前缀），折叠头永远在。
       const stateBox = document.getElementById('lis-aal-states');
       if (stateBox) {
         let stLog = [];
@@ -21198,10 +21201,7 @@ window.addEventListener('keydown',function(e){
         };
         const _todayD = fmtDay(now);
         const _yestD = fmtDay(new Date(now.getTime() - 86400000));
-        const states = stLog
-          .filter(e => !minDay || fmtDay(new Date(e.t || 0)) >= minDay)
-          .slice(-50)
-          .reverse();
+        const states = stLog.slice(-50).reverse();
         if (states.length) {
           // 8.9.8: 折叠头带条数与最近一次事件摘要（states 已按新→旧排序，states[0] 即最新），
           // 收起状态下一眼就能回答「推送说暂停、现在恢复没有」
