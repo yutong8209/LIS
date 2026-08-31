@@ -58,10 +58,10 @@ pip3 install -r ~/脚本/requirements.txt
 - **Python packages**: 见 `requirements.txt`（`pillow`, `mss`, `pyautogui`, 可选 `mcp`）
 - **MCP config**: each MCP server has its own `config.json` in its subdirectory（勿提交密钥）。
 - Tampermonkey 更新前请保持 **serve.py 运行**，否则 SheetJS `@require` 与脚本更新会失败。（8.9.7 起 vendor/脚本主源为科室 nginx，本条主要针对推送兜底与 Mac 菜单栏；推送主通道是网关机 bark-relay。）
-- **菜单栏功能**（可选）：`brew install --cask swiftbar`（`jq` 系统自带 `/usr/bin/jq`）。菜单栏读数依赖 **serve.py 在线**。⚠️ **已取消开机自启**：launchd 服务 `com.yutong.lis-serve` 已 `unload`（plist 仍保留在 `~/Library/LaunchAgents/` 备用），不再开机自启/崩溃自拉起。改为**手动开关**：
+- **菜单栏功能**（可选）：`brew install --cask swiftbar`（`jq` 系统自带 `/usr/bin/jq`）。菜单栏读数依赖 **serve.py 在线**。⚠️ **8.9.7 起已彻底禁用开机自启**：launchd 服务 `com.yutong.lis-serve` 已 `bootout` + `disable`（此前仅 unload 过一次，重启登录后 plist 又自动加载回来了——教训：LaunchAgents 目录里的 plist 必须 `launchctl disable` 或移走才算真禁用）。plist 文件仍留在 `~/Library/LaunchAgents/com.yutong.lis-serve.plist`（被 disable 挡住，不会加载；想删可手动 `rm`）。改为**手动开关**：
   - 用的时候双击 `start_lis_menubar.command` → 启动 serve.py（nohup 后台）+ 打开 SwiftBar
   - 不用的时候双击 `stop_lis_menubar.command` → 退出 SwiftBar + 停止 serve.py（无后台残留）
-  - 想恢复开机自启：`launchctl load ~/Library/LaunchAgents/com.yutong.lis-serve.plist`
+  - 想恢复开机自启：`launchctl enable gui/$(id -u)/com.yutong.lis-serve && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.yutong.lis-serve.plist`（disable 挡着，单纯 load/bootstrap 拉不起来）
   数据由 userscript 的 `renderWSCategoryBar` 推送到 `POST /stats`，落盘 `.cache/menubar_stats.json`。
   - **⚠️ 中文路径坑（必读）**：SwiftBar 的 `PluginDirectory` 偏好会把中文「脚本」存成字面 unicode 转义（`\u811a\u672c`），导致它读不到 `~/脚本/menubar`。正确做法：建纯英文软链接 `ln -sfn "/Users/yutong/脚本/menubar" "/Users/yutong/lis-menubar"`，再把 `PluginDirectory` 设为 `/Users/yutong/lis-menubar`（纯 ASCII）。改插件后若菜单栏没更新，先 `pkill -x SwiftBar && open -a SwiftBar` 重启，再 `open "swiftbar://refreshallplugins"`。
   - 插件：`menubar/lis-audit.5s.sh`（Apple 风格 SF Symbols + 分类对齐下拉，深色菜单栏专用配色）。下拉每行点击可跳转：经由 `menubar/lis_jump.sh` 发 `POST /cmd`（goto 分类）给 serve.py，userscript 轮询消费后切到对应工作台标签（normal/abnormal/pending/incomplete/all），并 `open -a "Google Chrome"` 聚焦已开的 LIS 标签。
