@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.9.8
+// @version      8.9.9
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19628,20 +19628,73 @@ window.addEventListener('keydown',function(e){
   function aaIsCbcTest(test) {
     return /血常规|血细胞|血球|CBC/i.test(String(test || ''));
   }
-  // 8.9.6: 血常规低价值衍生参数（比例/宽度/压积/MPV 类）——推送摘要不展示；危急值不受此限。
-  // 用户确认：血常规里大量「比率/宽度」异常堆在推送里很占地方且不重要。
-  // 保留核心项：WBC/RBC/HGB/HCT/PLT/MCV/MCH/MCHC/五分类绝对值等（名称不含下列模式即保留）。
-  function aaCbcLowValueItemName(name) {
+  // 8.9.9: 血常规推送三级瘦身（取代 8.9.6 的黑名单式过滤）——
+  //   ① core 始终显示：WBC / RBC / HGB / PLT + 白细胞五分类「计数值」（比率/百分比在 skip 层已拦）
+  //   ② cond 条件显示：HCT / MCV / MCH / MCHC——超出最近参考限达阈值才显示（阈值见 AA_CBC_COND_LIMITS）
+  //   ③ skip 始终省略：比率/百分比、分布宽度(RDW/PDW)、MPV、大血小板比率、血小板压积、
+  //      未达阈值的 cond 项、网织红/有核红等其余衍生项
+  //   危急值不受任何过滤限制，始终显示。
+  // 阈值语义：偏离度 = (值 − 最近参考限) / |该限值|，即「超出参考上限/下限的幅度比例」。
+  //   例：MCV 118（上限 100）→ 超限 18% ≥ 15% → 推；MCV 103 → 超限 3% → 略。
+  //   数值/参考范围解析失败 → 保守显示（fail-open，不藏可疑信息；单位口径不一致时也必然显示而非隐藏）。
+  // 阈值建议值依据（可按需微调 AA_CBC_COND_LIMITS）：
+  //   MCV/MCH/HCT 15%——以 MCV 82-100 为例，15% ≈ 115+/77-，正好落在「明确大/小细胞性」的临床界值附近，
+  //     101~110 的轻度波动多为噪声；MCH 同理对齐低色素界值；HCT 高值 15%≈52.5+（脱水/红细胞增多），
+  //     低值信息与必推的 HGB 重复度高，门槛高些不漏要事。
+  //   MCHC 10%——其参考区间极窄（约 316-354），生理波动小，数值变化本身就是信号，门槛应低于其他指数；
+  //     10% ≈ 389+/285-，想更灵敏可降到 5%（≈372/300）。
+  const AA_CBC_COND_LIMITS = [
+    {re: /平均血红蛋白浓度|^mchc$/i, limit: 0.10}, // MCHC：参考区间窄，门槛低于其他指数
+    {re: /红细胞压积|[红血]细胞比[积容]|^hct$|hematocrit/i, limit: 0.15}, // HCT
+    {re: /平均红细胞体积|^mcv$|corpuscular volume/i, limit: 0.15}, // MCV
+    {re: /平均血红蛋白含量|^mch$|corpuscular hemoglobin(?! concentration)/i, limit: 0.15} // MCH
+  ];
+  const AA_CBC_COND_DEFAULT_LIMIT = 0.15;
+  function aaCbcCondLimitOf(name) {
     const s = String(name || '').trim();
-    if (!s) {return false;}
-    if (/分布宽度|RDW|PDW/i.test(s)) {return true;} // 红细胞/血小板分布宽度
-    if (/比率|比值|百分比|百分率/.test(s)) {return true;} // 五分类比率、大血小板比率等
-    if (/%\s*$/.test(s)) {return true;} // 英文 % 类（NEUT% 等）
-    if (/平均血小板体积|MPV/i.test(s)) {return true;}
-    if (/大血小板|P-?LCR/i.test(s)) {return true;}
-    if (/血小板压积|血小板比积/i.test(s)) {return true;} // 注意：红细胞压积(HCT)不在列，保留
-    if (/^PCT$/i.test(s)) {return true;} // 血常规语境下 PCT=血小板压积（降钙素原不属于血常规组合）
-    return false;
+    for (const c of AA_CBC_COND_LIMITS) {if (c.re.test(s)) {return c.limit;}}
+    return AA_CBC_COND_DEFAULT_LIMIT;
+  }
+  // 条件项偏离度：值超出最近参考限的比例（0.15 = 15%）。在参考范围内 → 0；解析不出 → null
+  function aaCbcCondDeviation(it) {
+    const raw = String(it.r !== undefined && it.r !== null ? it.r : (it.result || '')).replace(/^[<>=≥≤]+\s*/, '');
+    const val = parseFloat(raw);
+    const ref = String(it.f || it.refRange || it.RefRanges || '');
+    const m = /(-?\d+(?:\.\d+)?)\s*[-~—～至]\s*(-?\d+(?:\.\d+)?)/.exec(ref);
+    if (!m || isNaN(val)) {return null;}
+    const lo = parseFloat(m[1]);
+    const hi = parseFloat(m[2]);
+    if (!(hi > lo)) {return null;}
+    if (val > hi) {return (val - hi) / Math.abs(hi);}
+    if (val < lo) {return (lo - val) / Math.abs(lo);}
+    return 0;
+  }
+  // 血常规项目分层：'core' 必推 / 'cond' 达阈值才推 / 'skip' 略。按上述顺序判定（skip 层先拦，
+  // 否则「中性粒细胞比率」会因含「中性粒」误入 core；cond 层须在 core 的「血红蛋白/血小板」宽匹配前拦截）
+  function aaCbcItemTier(name) {
+    const s = String(name || '').trim();
+    if (!s) {return 'skip';}
+    if (/分布宽度|RDW|PDW/i.test(s)) {return 'skip';} // 红细胞/血小板分布宽度
+    if (/比率|比值|百分比|百分率/.test(s)) {return 'skip';} // 五分类比率、大血小板比率等
+    if (/%\s*$/.test(s)) {return 'skip';} // 英文 % 类（NEUT% 等）
+    if (/平均血小板体积|MPV/i.test(s)) {return 'skip';}
+    if (/大血小板|P-?LCR/i.test(s)) {return 'skip';}
+    if (/血小板压积|血小板比积/i.test(s)) {return 'skip';} // 注意：红细胞压积(HCT)属 cond 层，不在列
+    if (/^PCT$/i.test(s)) {return 'skip';} // 血常规语境下 PCT=血小板压积（降钙素原不属于血常规组合）
+    if (/红细胞压积|[红血]细胞比[积容]|^hct$|hematocrit/i.test(s)) {return 'cond';} // HCT
+    if (/平均红细胞体积|^mcv$|corpuscular volume/i.test(s)) {return 'cond';} // MCV
+    if (/平均血红蛋白|^mch(c)?$|corpuscular hemoglobin/i.test(s)) {return 'cond';} // MCH/MCHC
+    if (/白细胞/.test(s) && !/酯酶/.test(s)) {return 'core';} // 白细胞计数（比率/百分比已在上面拦掉）
+    if (/^wbc$/i.test(s)) {return 'core';}
+    if (/网织|有核/.test(s)) {return 'skip';} // 网织红/有核红等不在用户清单内
+    if (/^rbc$|^红细胞$|红细胞计数|红细胞数目/i.test(s)) {return 'core';}
+    if (/血小板/.test(s)) {return 'core';} // 血小板计数/数目（宽度/压积/体积已拦掉）
+    if (/^plt/i.test(s)) {return 'core';}
+    if (/血红蛋白/.test(s)) {return 'core';} // HGB（平均血红蛋白含量/浓度已在 cond 层拦掉）
+    if (/^hgb$|^hb$/i.test(s)) {return 'core';}
+    if (/中性粒|嗜酸性粒|嗜碱性粒|淋巴|单核/.test(s)) {return 'core';} // 五分类计数值
+    if (/(neut|lymph|mono|^eo|baso)/i.test(s)) {return 'core';}
+    return 'skip'; // 其余未知衍生项：宁可少推不占地方（危急值有直通行，不受此影响）
   }
 
   // 8.8.14: 标本异常项目 → 推送摘要（按标本展开，手机端可直接定位标本）。
@@ -19653,7 +19706,9 @@ window.addEventListener('keydown',function(e){
   //         上升红🔺、下降蓝🔽（两个箭头区分方向）。普通异常保持 🔺红/🔽蓝，无 🚨。
   // 格式：每个标本一行头「标本号 · 时间」，下一行罗列其异常项目（项目名/数值/方向标记/参考范围）。
   // 8.9.6: 血常规推送瘦身——比例/宽度/压积/MPV 类低价值异常不进推送（危急值除外）；
-  //         全是低价值异常的标本只留一行头「… 另有比例/宽度类 N 项（略）」；非血常规标本不受影响。
+  //         全是省略项的标本只留一行头「… 另有 N 项异常未列出」；非血常规标本不受影响。
+  // 8.9.9: 瘦身升级为三级——core(WBC/RBC/HGB/PLT/五分类计数) 必推；cond(HCT/MCV/MCH/MCHC) 超参考限
+  //         达阈值才推（MCV/MCH/HCT 15%、MCHC 10%，见 AA_CBC_COND_LIMITS）；其余照旧省略。
   // 仍绝不含：姓名/住院号/床号/科室。最多 maxLines 行。
   function autoAuditAbnSpecimenSummary(specimens, maxLines) {
     const lines = [];
@@ -19673,19 +19728,26 @@ window.addEventListener('keydown',function(e){
       // 8.8.24: 头行带上项目组合（如「血常规」，超10字截断），手机端一眼知道是什么标本
       const tst = String(s.test || '').trim().slice(0, 10);
       const header = [seq ? '流水号 ' + seq : ('检验号 ' + labno), tm, tst].filter(Boolean).join(' ') || '标本';
-      // 8.9.6: 血常规瘦身——危急值必留，其余按低价值参数黑名单过滤
+      // 8.9.9: 血常规三级瘦身——危急值必留；core 必留；cond(HCT/MCV/MCH/MCHC) 超参考限达阈值才留；skip 略
       let abn = abnAll;
       let filteredN = 0;
       if (aaIsCbcTest(s.test || s.TestSetDesc || '')) {
         abn = abnAll.filter(it => {
           const st = it.s || it.status || '';
-          return st === 'CRITICAL' || !aaCbcLowValueItemName(it.n || it.name);
+          if (st === 'CRITICAL') {return true;}
+          const tier = aaCbcItemTier(it.n || it.name);
+          if (tier === 'core') {return true;}
+          if (tier === 'cond') {
+            const dev = aaCbcCondDeviation(it);
+            return dev === null ? true : dev >= aaCbcCondLimitOf(it.n || it.name);
+          }
+          return false;
         });
         filteredN = abnAll.length - abn.length;
       }
       if (!abn.length) {
-        // 全是比例/宽度类异常：只留一行头，注明略去的数量，不展开数值
-        if (filteredN > 0) {lines.push(header + ' · 另有比例/宽度类异常 ' + filteredN + ' 项（略）');}
+        // 全是省略项：只留一行头，注明略去的数量，不展开数值
+        if (filteredN > 0) {lines.push(header + ' · 另有 ' + filteredN + ' 项异常未列出（低权重/未达阈值，略）');}
         return;
       }
       lines.push(header);
@@ -19725,7 +19787,7 @@ window.addEventListener('keydown',function(e){
       });
       let itemLine = segs.join(' · ') + (abn.length > 6 ? ' 等' + abn.length + '项' : '');
       // 8.9.6: 血常规瘦身——正文行尾注明还有多少比例/宽度类异常被略去（占位极小但知情）
-      if (filteredN > 0) {itemLine += '（另有比例/宽度类 ' + filteredN + ' 项略）';}
+      if (filteredN > 0) {itemLine += '（另有 ' + filteredN + ' 项略）';}
       lines.push(itemLine);
     });
     return lines;
