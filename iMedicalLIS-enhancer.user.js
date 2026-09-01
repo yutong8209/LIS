@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.9
+// @version      8.10.10
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7409,12 +7409,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       // 8.7.0: 本次加载的查询日期窗口（平时=选中单日；自动审核运行中=开启日~今天）
       const [qStart, qEnd] = getWSQueryRange();
 
-      const curDR = wgDR();
-      // 优先加载当前登录的工作组，其他组后台延迟加载
-      const priorityWG = WG.find(w => w.dr === curDR);
-      const otherWGs = WG.filter(w => w.dr !== curDR);
-      const hasPriority = !!priorityWG;
-
       async function loadOneWG(w) {
         let machines;
         try {
@@ -7597,34 +7591,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         return true;
       }
 
-      if (hasPriority) {
-        // 阶段1：优先加载当前工作组，立即渲染
-        const priorityResult = await loadOneWG(priorityWG);
-        if (seq !== _wsLoadSeq) {return;}
-        if (!isWSVisible()) {return;}
-        // 只有还有其它工作组待加载时才算 partial；单工作组已是完整数据
-        applyResults([priorityResult], otherWGs.length > 0);
-        classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
-
-        // 阶段2：后台加载其余工作组，完成后追加渲染
-        if (otherWGs.length > 0) {
-          const otherResults = await Promise.all(otherWGs.map(w => loadOneWG(w)));
-          if (seq !== _wsLoadSeq) {return;}
-          if (!isWSVisible()) {return;}
-          applyResults([priorityResult, ...otherResults], false);
-          // 阶段1 分类可能仍在跑：classifyAllSpecimens 会排队重跑，覆盖其余工作组
-          classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
-        }
-      } else {
-        // 无法识别当前工作组，退回全量并行加载
-        const wgResults = await Promise.all(WG.map(w => loadOneWG(w)));
-        if (seq !== _wsLoadSeq) {return;}
-        if (!isWSVisible()) {return;}
-        if (!applyResults(wgResults, false)) {
-          return { ok: false, empty: true, preserved: wsData.length > 0 };
-        }
-        classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
+      // 8.10.10: 全工作组统一并行拉取，一次性原子渲染——彻底消除分阶段 partial 渲染造成的界面闪烁与跳动
+      const wgResults = await Promise.all(WG.map(w => loadOneWG(w)));
+      if (seq !== _wsLoadSeq) {return;}
+      if (!isWSVisible()) {return;}
+      if (!applyResults(wgResults, false)) {
+        return { ok: false, empty: true, preserved: wsData.length > 0 };
       }
+      classifyAllSpecimens(seq).catch(e => dbg('分类启动异常:', e));
 
       if (wsCategory === 'audit') {prefetchAbnormalAuditContext();}
       return { ok: true, count: wsData.length, empty: wsData.length === 0 };
