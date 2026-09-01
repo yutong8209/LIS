@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.11
+// @version      8.10.12
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9047,17 +9047,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   function _buildCategoryBarDOM(bar) {
     let h = '';
 
-    // 8.10.11: 核心小标签固定在左侧起始位置，顺序恒定不变
+    // 8.10.12: 分类栏仅保留 5 个纯粹小标签，位置绝对固定、永不跳动
     h += '<button class="cat-tab cat-audit" data-cat="audit">\n            🔍待审 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-incomplete" data-cat="incomplete">\n            📋不完整 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-pending" data-cat="pending">\n            📝待排 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-collected" data-cat="collected" title="病房已采未送到科室的标本（仅供追踪/催送）">\n            🩸采集 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab" data-cat="all">\n            📃全部 <span class="cat-cnt">0</span>\n        </button>';
 
-    // 8.10.11: 一键批审按钮置于标签组后方，显示/隐藏绝不影响待审等小标签的固有排版位置
-    h += '<button class="nb-btn" id="lis-ws-batch" style="padding:4px 10px;font-size:11px;margin-left:4px;display:none" title="F4 打开确认 · 再按 F4 确认批审"></button>';
-
-    // 8.10.11: 移除提示性文字与重复条数，右侧仅保留 CA 认证账号徽标，彻底消除标签栏左右挤压晃动
+    // 8.10.12: 批审功能由下方醒目的「一键批审正常 N · F4」横幅及 F4 热键统一承载，顶部栏不再放置多余批审按钮
     h += '<div class="cat-right"><span class="cat-stats cat-ca" title="当前 CA 认证账号（审核者）"></span></div>';
 
     bar.innerHTML = h;
@@ -9068,16 +9065,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         switchWSCategory(b.dataset.cat);
       })
     );
-
-    // 一键批审按钮事件
-    const batchBtn = document.getElementById('lis-ws-batch');
-    if (batchBtn) {
-      batchBtn.onclick = ev => {
-        ev.stopPropagation();
-        dbg('一键批审按钮被点击');
-        openWorkbenchBatchAudit();
-      };
-    }
 
     // 8.5.61: 自动审核按钮已移至头部（事件绑定在 renderWSHeader）
   }
@@ -9097,17 +9084,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const cnt = b.querySelector('.cat-cnt');
       if (cnt) {cnt.textContent = cntMap[cat] || 0;}
     });
-
-    // 更新一键批审按钮显隐（位于小标签组后方）
-    const batchBtn = document.getElementById('lis-ws-batch');
-    if (batchBtn) {
-      if (wsCategory === 'audit' && normalCount > 0) {
-        batchBtn.style.display = '';
-        batchBtn.textContent = `⚡ 批审正常 ${normalCount} · F4`;
-      } else {
-        batchBtn.style.display = 'none';
-      }
-    }
 
     // 8.5.58: 自动审核按钮状态（开启时显示剩余时长）
     renderAutoAuditButtonState();
