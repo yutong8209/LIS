@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.4
+// @version      8.10.5
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -75,6 +75,7 @@
     caDefaultUser: 'LIS_CADefaultUser', // 8.5.36: 当前用于 CA 的默认账号用户名
     auditQueue: 'LIS_AuditQueue_Persist',
     auditQueueLock: 'LIS_AuditQueueLock',
+    autoAuditTickLock: 'LIS_AutoAuditTickLock', // 8.10.5: 自动审核主循环跨标签互斥锁
     wsState: 'LIS_WSState_Persist',
     wsIgnore: 'LIS_WSIgnore', // 8.5.33: 待排/采集标本忽略列表（忽略后不计入任何统计）
     autoAudit: 'LIS_AutoAudit_Persist', // 8.5.58: 自动审核状态（开启/到期时间/时长/规则）
@@ -7295,6 +7296,43 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const lock = JSON.parse(raw);
       // 8.5.82: 校验 token——旧循环的 finally 不得删掉新循环刚获得的锁（token 缺失视为旧版锁，owner 匹配即删）
       if (lock.owner === _tabId && (lock.token === undefined || lock.token === _queueLockToken)) {localStorage.removeItem(K.auditQueueLock);}
+    } catch (e) {}
+  }
+
+  // 8.10.5: 自动审核主循环跨标签页主互斥锁（覆盖正常批量+异常逐条全周期，防止双标签页抢选行与审核按钮）
+  const AUTO_AUDIT_TICK_LOCK_TTL = 45000;
+  let _aaTickLockToken = '';
+  function acquireAutoAuditTickLock() {
+    try {
+      const raw = localStorage.getItem(K.autoAuditTickLock);
+      if (raw) {
+        const lock = JSON.parse(raw);
+        if (lock.owner !== _tabId && Date.now() - (lock.ts || 0) < AUTO_AUDIT_TICK_LOCK_TTL) {return false;}
+      }
+      const token = Math.random().toString(36).slice(2);
+      localStorage.setItem(K.autoAuditTickLock, JSON.stringify({ owner: _tabId, token, ts: Date.now() }));
+      const check = JSON.parse(localStorage.getItem(K.autoAuditTickLock) || '{}');
+      if (check.owner === _tabId && check.token === token) {_aaTickLockToken = token; return true;}
+      return false;
+    } catch (e) {return false;}
+  }
+  function refreshAutoAuditTickLock() {
+    try {
+      const lock = JSON.parse(localStorage.getItem(K.autoAuditTickLock) || 'null');
+      if (lock && lock.owner === _tabId && (lock.token === undefined || lock.token === _aaTickLockToken)) {
+        lock.ts = Date.now();
+        localStorage.setItem(K.autoAuditTickLock, JSON.stringify(lock));
+      }
+    } catch (e) {}
+  }
+  function releaseAutoAuditTickLock() {
+    try {
+      const raw = localStorage.getItem(K.autoAuditTickLock);
+      if (!raw) {return;}
+      const lock = JSON.parse(raw);
+      if (lock.owner === _tabId && (lock.token === undefined || lock.token === _aaTickLockToken)) {
+        localStorage.removeItem(K.autoAuditTickLock);
+      }
     } catch (e) {}
   }
 
@@ -16906,9 +16944,11 @@ window.addEventListener('keydown',function(e){
     const r = normalizeQualitativeText(value);
     if (!r) {return false;}
     if (r === '+' || /^\d+\+$/.test(r) || /^\++$/.test(r)) {return true;}
+    if (r === '±' || r === '+-' || r === '+/-') {return true;} // 8.10.5: 弱阳/可疑符号
     return (
       r.includes('阳性') ||
       r.includes('弱阳') ||
+      r.includes('疑阳') ||
       r.includes('阳性(+)') ||
       r === 'POSITIVE' ||
       r === 'POS' ||
@@ -17107,12 +17147,17 @@ window.addEventListener('keydown',function(e){
     if (_refNeg || _refPos) {
       // 8.5.56: 滴度（1:64）必须单独判——parseComparableNumber 只截出前导 1，
       // 阳性滴度会被误判 NORMAL 进入可自动审核（严重漏报风险）
+      // 8.10.5: 支持操作符与后缀（>1:64 / ≥1:128 / 1:64+ / <1:2）
       const _titer = parseTiterResult(result);
       const _p = parseComparableNumber(result);
       if (_titer || _p) {
         let _isPos;
         if (_titer) {
-          _isPos = _titer.den >= 1; // 8.10.0: 1:1 即阳性（检验科口径）
+          if (_titer.op === '<' || _titer.op === '<=') {
+            _isPos = false; // <1:2 低于检测下限判阴
+          } else {
+            _isPos = _titer.den >= 1; // 1:1, >1:64, 1:64+ 等均判阳
+          }
         } else if (_p.op === '>' || _p.op === '>=') {
           // 实际值大于 X：X>=1 必阳；X<1 不确定 → 按异常拦截（宁可人审，不可漏放）
           _isPos = true;
@@ -17495,28 +17540,33 @@ window.addEventListener('keydown',function(e){
   }
 
   // 8.10.0: 滴度结果（如 RPR/TRUST「1:64」）——裸 parseFloat 只会截出前导「1」造成漏判。
-  // 8.10.0: 判阳口径改为 den >= 1（**1:1 = 阳性，已与检验科确认**）——
-  // 此前 den >= 2 把「1:1」判为阴性，弱阳 1:1 会落 NORMAL 进可自动审核，且 isPositiveResult
-  // 同口径导致梅毒硬红线也拦不住，完全依赖仪器对 1:1 打 AbFlag 才安全。
+  // 8.10.0: 判阳口径改为 den >= 1（**1:1 = 阳性，已与检验科确认**）
+  // 8.10.5: 支持操作符前缀与后缀（>1:64 / ≥1:128 / 1:64+ / <1:2 / 1:1）
   function parseTiterResult(result) {
-    const m = String(result == null ? '' : result)
-      .trim()
-      .match(/^(\d+(?:\.\d+)?)\s*[:：]\s*(\d+(?:\.\d+)?)$/);
+    const s = String(result == null ? '' : result).trim();
+    const m = s.match(/^([>≥<≤]?)\s*(\d+(?:\.\d+)?)\s*[:：]\s*(\d+(?:\.\d+)?)\s*(\+?)$/);
     if (!m) {return null;}
-    return { num: parseFloat(m[1]), den: parseFloat(m[2]) };
+    const op = m[1] || '';
+    const num = parseFloat(m[2]);
+    const den = parseFloat(m[3]);
+    const hasPlus = m[4] === '+';
+    return { num, den, op, plus: hasPlus };
   }
 
   // 判断是否阳性结果
   function isPositiveResult(result, item) {
     if (!result) {return false;}
     const r = result.toUpperCase().trim();
-    // 阳性标记
-    if (r === '+' || r === '阳性' || r === 'POSITIVE' || r === 'POS' || r === 'REACTIVE') {return true;}
-    if (/^\+{1,4}$/.test(r) || r.includes('阳性') || r.includes('弱阳')) {return true;}
+    // 阳性标记（8.10.5: 纳入 ±、+-、+/-、疑阳）
+    if (r === '+' || r === '±' || r === '+-' || r === '+/-' || r === '阳性' || r === 'POSITIVE' || r === 'POS' || r === 'REACTIVE') {return true;}
+    if (/^\+{1,4}$/.test(r) || r.includes('阳性') || r.includes('弱阳') || r.includes('疑阳')) {return true;}
     // 8.5.56: 滴度（1:64）优先判定，避免被数值分支截成 1 而漏判
-    // 8.10.0: den>=1，即 1:1 也判阳（检验科确认）
+    // 8.10.0: den>=1，即 1:1 也判阳（检验科确认）；8.10.5: 处理 <1:2 阴性 与 >1:64 阳性
     const titer = parseTiterResult(r);
-    if (titer) {return titer.den >= 1;}
+    if (titer) {
+      if (titer.op === '<' || titer.op === '<=') {return false;}
+      return titer.den >= 1;
+    }
     // 数值结果：统一走 parseComparableNumber（8.5.56：兼容 ">8.0"/"≥5" 等不等号前缀——
     // 裸 parseFloat 对这类格式返回 NaN，会整体漏判，传染病高亮/历史比对由此失守）
     const parsed = parseComparableNumber(r);
@@ -17550,8 +17600,12 @@ window.addEventListener('keydown',function(e){
     const r = result.toUpperCase().trim();
     if (r === '-' || r === '阴性' || r === 'NEGATIVE' || r === 'NEG' || r === 'NON-REACTIVE') {return true;}
     if (r.includes('阴性') || r.includes('阴')) {return true;}
-    // 8.5.56: 滴度（1:64 等）不是阴性；与 isPositiveResult 对称
-    if (parseTiterResult(r)) {return false;}
+    // 8.5.56: 滴度（1:64 等）不是阴性；8.10.5: <1:2 属低于检出限确定为阴性
+    const titer = parseTiterResult(r);
+    if (titer) {
+      if (titer.op === '<' || titer.op === '<=') {return true;}
+      return false;
+    }
     // 8.5.56: 统一走 parseComparableNumber——裸 parseFloat 对 "<0.1" 返回 NaN，
     // 会把「低于检出限」的阴性结果判成「非阴性」，导致历史比对漏报「历史阳性→现阴性」
     const parsed = parseComparableNumber(r);
@@ -19546,15 +19600,15 @@ window.addEventListener('keydown',function(e){
     });
   }
   function _notifySend(p) {
-    // 按端点顺序（粘滞优先）逐个尝试，任一成功即记住该端点；
+    // 8.10.5: 优先尝试网关机（索引 0），失败自动降级到本机 serve.py 8765（索引 1）；
+    // 网关机恢复后下一条推送自动回归主通道，消除永久粘滞
     // 返回 'ok' / 'permanent'（所有端点都明确拒绝）/ 'fail'（临时失败，进补发队列）
     return (async () => {
       let allPermanent = true;
       for (let i = 0; i < AA_NOTIFY_ENDPOINTS.length; i++) {
-        const url = AA_NOTIFY_ENDPOINTS[(_notifyEndpointIdx + i) % AA_NOTIFY_ENDPOINTS.length];
+        const url = AA_NOTIFY_ENDPOINTS[i];
         const st = await _notifySendTo(url, p);
         if (st === 'ok') {
-          _notifyEndpointIdx = AA_NOTIFY_ENDPOINTS.indexOf(url);
           return 'ok';
         }
         if (st !== 'permanent') {allPermanent = false;}
@@ -19974,14 +20028,19 @@ window.addEventListener('keydown',function(e){
   // 8.10.2: 兜底恢复——aaPushBufRecover 只在「重开工作台」（resumeAutoAuditIfActive）时被调用；
   // 若页面刷新后一直没重开工作台，攒着的缓冲区会一直躺到超龄（30 分钟）被静默丢弃 = 丢推送。
   // 启动 60s 后补一次：延迟而非立即，是为了让「重开工作台 → 上轮补报」先与缓冲区合并成一条。
-  // 只在「无活跃复查定时器」且「已 2 分钟没更新」时才动手，绝不打断正在正常攒单的节奏。
+  // 8.10.5: 若 60s 检查时年龄未满 2 分钟，挂载剩余延时继续检查，防单次延时未达阈值导致静默丢失
   function aaPushBufRecoverLater() {
     setTimeout(() => {
       try {
         if (_aaPushBufTimer) {return;} // 节奏活跃：交给 tick，不插手
         _aaPushBufEnsure();
         if (!_aaPushBuf) {return;}
-        if (Date.now() - (_aaPushBuf.updated || _aaPushBuf.ts || 0) < 2 * 60 * 1000) {return;}
+        const age = Date.now() - (_aaPushBuf.updated || _aaPushBuf.ts || 0);
+        const wait = 2 * 60 * 1000 - age;
+        if (wait > 0) {
+          setTimeout(aaPushBufRecoverLater, Math.min(wait + 1000, 60000));
+          return;
+        }
         aaPushBufRecover();
       } catch (e) {dbg('合并推送兜底恢复异常:', e);}
     }, 60000);
@@ -20101,7 +20160,7 @@ window.addEventListener('keydown',function(e){
     if (!s) {return 'skip';}
     if (/分布宽度|RDW|PDW/i.test(s)) {return 'skip';} // 红细胞/血小板分布宽度
     if (/比率|比值|百分比|百分率/.test(s)) {return 'skip';} // 五分类比率、大血小板比率等
-    if (/%\s*$/.test(s)) {return 'skip';} // 英文 % 类（NEUT% 等）
+    if (/[%％]\s*$/.test(s)) {return 'skip';} // 8.10.5: 英文/全角 %/％ 类（NEUT% 等）
     if (/平均血小板体积|MPV/i.test(s)) {return 'skip';}
     if (/大血小板|P-?LCR/i.test(s)) {return 'skip';}
     if (/血小板压积|血小板比积/i.test(s)) {return 'skip';} // 注意：红细胞压积(HCT)属 cond 层，不在列
@@ -20354,7 +20413,6 @@ window.addEventListener('keydown',function(e){
     let vis = noSlim ? abnAll : abnAll.filter(it => aaPushItemVisible(e.test || e.TestSetDesc || '', it));
     // fail-open：全被瘦身滤掉时退回显示第一项，绝不产出没有内容的标本行
     if (!vis.length && abnAll.length) {vis = abnAll.slice(0, 1);}
-    const hidden = abnAll.length - vis.length;
     const take = vis.slice(0, Math.max(1, maxItems));
     const segs = take.map(it => {
       let s = aaPushItemAbbr(it.n);
@@ -20364,7 +20422,8 @@ window.addEventListener('keydown',function(e){
       if (withRange && it.f) {s += '(' + aaClipW(String(it.f), 18) + ')';}
       return s;
     });
-    const more = (vis.length - take.length) + hidden;
+    // 8.10.5: 已审标本（noSlim=false）只统计因行宽限制被截断的可见项；主动 skip 的项不计入 +N
+    const more = noSlim ? Math.max(0, abnAll.length - take.length) : Math.max(0, vis.length - take.length);
     return {seg: segs.join(' '), shown: take.length, more, total: abnAll.length, visN: vis.length};
   }
   // 一个标本 → 一行。sym 为处置符号（🚨 危急 / ⓿ 堵孔 / ⚠️ 其他留人工或异常已审 / ✅ 正常）
@@ -20393,7 +20452,7 @@ window.addEventListener('keydown',function(e){
     return {sym: '⚠️', note: aaClipW(s, 16)};
   }
   // 时间区间：取条目核收时间的最早~最晚（同一分钟只显示一个时刻）
-  // 跨天时 pushShortTime 会带上 MM-DD，两端都带日期太占宽 → 只在起点保留日期
+  // 8.10.5: 跨天时两端均带日期（如 08-31 23:50-09-01 00:10），消除倒流视觉歧义
   function aaPushTimeSpan(entries) {
     let min = 0, max = 0;
     (entries || []).forEach(en => {
@@ -20403,12 +20462,23 @@ window.addEventListener('keydown',function(e){
       if (!max || t > max) {max = t;}
     });
     if (!min) {return '';}
-    const a = pushShortTime(new Date(min));
-    let b = pushShortTime(new Date(max));
-    if (a === b) {return a;}
-    const sameDate = new Date(min).toDateString() === new Date(max).toDateString();
-    if (sameDate) {b = b.replace(/^\d{2}-\d{2}\s+/, '');} // 同一天：终点省掉重复的日期
-    return a + '-' + b;
+    const dMin = new Date(min);
+    const dMax = new Date(max);
+    const sameDate = dMin.toDateString() === dMax.toDateString();
+    const pad = n => String(n).padStart(2, '0');
+    const hmOf = d => pad(d.getHours()) + ':' + pad(d.getMinutes());
+    const mdOf = d => pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    const now = new Date();
+    const isToday = d => d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+
+    if (min === max || (hmOf(dMin) === hmOf(dMax) && sameDate)) {
+      return isToday(dMin) ? hmOf(dMin) : mdOf(dMin) + ' ' + hmOf(dMin);
+    }
+    if (sameDate) {
+      const prefix = isToday(dMin) ? '' : mdOf(dMin) + ' ';
+      return prefix + hmOf(dMin) + '-' + hmOf(dMax);
+    }
+    return mdOf(dMin) + ' ' + hmOf(dMin) + '-' + mdOf(dMax) + ' ' + hmOf(dMax);
   }
   // 8.10.3: 合并推送组装总入口 —— 返回 {title, subtitle, body}
   //   d = {entries:[{k,e}], passByMn, redCats, otherFailN, mode, suffix, note}
@@ -20494,8 +20564,12 @@ window.addEventListener('keydown',function(e){
       });
       abns.forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, false, '')));
       const fseqs = nors.map(x => aaPushSeqOf(x.e)).filter(Boolean);
-      if (fseqs.length) {L.push(aaClipW('✅ 全正常：' + fseqs.join(' '), AA_PUSH_LINE_MAX_W));}
-      else if (passN > 0 && !abns.length && !skips.length) {L.push('✅ 全正常 ' + passN);}
+      if (fseqs.length) {
+        L.push(aaClipW('✅ 全正常：' + fseqs.join(' '), AA_PUSH_LINE_MAX_W));
+      } else if (passN > 0) {
+        // 8.10.5: 即使 fseqs 为空或同轮有异常，只要有全正常标本就保底输出计数
+        L.push('✅ 全正常 ' + passN);
+      }
       if (d && d.note) {L.push(aaClipW(String(d.note), AA_PUSH_LINE_MAX_W));}
       return {title, overview, body: L.join('\n'), hasRed};
     }
@@ -20748,6 +20822,7 @@ window.addEventListener('keydown',function(e){
   window.addEventListener('pagehide', () => {
     if (_aaAccum) {_aaAccumSave();}
     try {releaseQueueLock();} catch (e) {}
+    try {releaseAutoAuditTickLock();} catch (e) {}
   });
   // 初始化时：发现上次被整页刷新打断的轮次 → 补报一条推送
   function aaRecoverIfInterrupted() {
@@ -20872,6 +20947,8 @@ window.addEventListener('keydown',function(e){
     if (_autoAuditRunning) {return;}
     if (wsClassifying) {return;} // 分类进行中让位
     if (_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress) {return;} // 手动优先
+    // 8.10.5: 跨标签页主互斥锁——拿锁失败说明其它标签页正在执行 autoAuditTick，本标签让位
+    if (!acquireAutoAuditTickLock()) {return;}
 
     _autoAuditRunning = true;
     const prevMute = _autoAuditMute;
@@ -21080,6 +21157,7 @@ window.addEventListener('keydown',function(e){
       // 2) 异常标本：安全门逐条审核
       let abnormalIter = abnormals;
       for (let ai = 0; ai < abnormalIter.length && autoAuditEnabled(); ai++) {
+        refreshAutoAuditTickLock(); // 8.10.5: 逐条循环中定期续期主锁
         // 用户插入手动操作 → 立即让位
         if (_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress) {break;}
         const r = abnormalIter[ai];
@@ -21181,6 +21259,7 @@ window.addEventListener('keydown',function(e){
     } catch (e) {
       dbg('自动审核循环异常:', e);
     } finally {
+      releaseAutoAuditTickLock(); // 8.10.5: 释放主锁
       _autoAuditMute = prevMute;
       _autoAuditRunning = false;
       // 8.8.2: 一轮自动审核结束（可能审过跨午夜/历史标本）——原生日期框恢复今天
