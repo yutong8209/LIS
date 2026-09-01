@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.8
+// @version      8.10.9
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20463,15 +20463,21 @@ window.addEventListener('keydown',function(e){
     if (st === 'ZERO') {return '⓿';}
     return '⚠️';
   }
-  // 8.10.8: 参考范围智能清洗——精确提取数值区间或定性词，彻底剥离单位（如 mmol/L, 10^9/L 等）与冗余符号
+  // 8.10.9: 剥离浮点数末尾无效 0（如 4.00 → 4，14.50 → 14.5，0.00 → 0）极大缩减参考值宽度
+  function aaTrimZero(n) {
+    const s = String(n || '').trim();
+    if (!s.includes('.')) {return s;}
+    return s.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+  }
+  // 8.10.8: 参考范围智能清洗——精确提取数值区间并剥离单位；8.10.9: 压缩末尾多余 0（4.00-10.00 → 4-10）
   function aaCleanRefRange(ref) {
     if (!ref) {return '';}
     let s = String(ref).trim();
     s = s.replace(/^[(\[（【]\s*/, '').replace(/\s*[)\]）】]$/, '').trim();
     const mRange = /^(-?\d+(?:\.\d+)?)\s*[-~—～至]\s*(-?\d+(?:\.\d+)?)/.exec(s);
-    if (mRange) {return mRange[1] + '-' + mRange[2];}
+    if (mRange) {return aaTrimZero(mRange[1]) + '-' + aaTrimZero(mRange[2]);}
     const mIneq = /^([<>≤≥]=?)\s*(-?\d+(?:\.\d+)?)/.exec(s);
-    if (mIneq) {return mIneq[1] + mIneq[2];}
+    if (mIneq) {return mIneq[1] + aaTrimZero(mIneq[2]);}
     const mQual = /^(阴性|阳性|未检出|正常|参考|微量)/.exec(s);
     if (mQual) {return mQual[1];}
     return s.replace(/\s*[a-zA-Zμ%％^*/]+.*$/, '').trim();
