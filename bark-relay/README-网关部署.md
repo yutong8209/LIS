@@ -51,19 +51,16 @@
   网关恢复后下一次推送自动切回网关。
 - 某次推送发送失败会进本地补发队列（既有机制），与端点无关。
 
-## 升级：8.10.3 副标题（subtitle）
+## 副标题（subtitle）说明与 8.10.4 修订
 
-userscript 8.10.3 起，合并推送把「仪器分布 + 核收时间区间」放进 Bark **副标题**
-（Apple Watch 上与标题一同稳定可见）。这需要本服务一并升级：
+**8.10.4 结论**：userscript 8.10.4 起**不再发 subtitle**——实测 Bark 对**加密推送**不还原副标题
+（明文才显示），而自动审核推送坚持端到端加密，故放弃副标题，把「仪器分布 + 核收时间区间」
+作为**正文第一行**发出。**因此本服务无需为副标题做任何事**，`bark_relay.py` 里的 subtitle
+透传只是预留兼容，加不加密都不影响正常 title/body 到达。
 
-1. 把新版 `bark_relay.py` 覆盖到网关机 `D:\bark-relay\bark_relay.py`
-   （`notify_config.json` 不用动，密钥照旧）
-2. 重启服务：双击 **启动推送中转.bat**，或在任务计划里重启 `LIS-BarkRelay`
-3. 验证：`curl http://192.168.31.111:9111/notify_status -H "Origin: http://192.168.31.111:9111"`
-   仍返回 `{"configured": true, ...}`；再在 LIS 里跑一轮自动审核，手机通知应出现副标题一行
-
-**不升级也不会坏**：旧版忽略 `subtitle` 字段，标题/正文照常送达，只是少一行副标题。
-推送加密开启时，副标题与标题/正文一起进密文（Bark 云与 APNs 只见密文）。
+技术背景：`/notify` 收到的 `{title, body, level, subtitle?}` 中 subtitle 被原样透传给 Bark；
+加密开启时它和 title/body 一起进密文，但 Bark App 解密时只还原 title/body、漏 subtitle——
+这是 Bark 端局限，非本服务问题。明文路径 subtitle 可正常显示。
 
 ## 日常运维
 

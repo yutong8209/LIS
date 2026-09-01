@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.3
+// @version      8.10.4
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19621,15 +19621,13 @@ window.addEventListener('keydown',function(e){
   _flushNotifyRetry(); // 启动时若上次遗留待补发队列，30s 泵自动接续
   function pushAutoAuditNotify(payload) {
     const p = payload || {};
-    // 8.10.3: 去重键加入 subtitle（仪器分布/时间区间不同的两条推送不该被当同一条吞掉）
-    const key = [p.title || '', p.subtitle || '', p.body || '', p.level || '', p.nonce || ''].join('|');
+    // 8.10.4: 不再发送 Bark subtitle 字段（实测加密推送下 Bark 不还原 subtitle，明文才显示，
+    // 而本推送坚持端到端加密 → 放弃副标题，概览已并入正文首行）。去重键回归 title|body。
+    const key = [p.title || '', p.body || '', p.level || '', p.nonce || ''].join('|');
     const now = Date.now();
     if (_notifyBarkLast.key === key && now - _notifyBarkLast.t < 60 * 1000) {return;} // 60s 同内容去重（nonce 随轮次变化，正常轮次不受影响）
     _notifyBarkLast = { key, t: now };
     const send = {title: p.title || '', body: p.body || '', level: p.level || 'active'};
-    // 8.10.3: subtitle（Bark 副标题，手表上与标题一同稳定可见）——仅在非空时带上，
-    // 老版本 serve.py / bark-relay 未升级时会忽略该字段，不影响推送成功
-    if (p.subtitle) {send.subtitle = String(p.subtitle);}
     // 8.9.0: 补发登记带上含 nonce 的完整 key，防同文案多轮被去重误杀
     _notifySend(send).then(st => {
       // 8.10.0: 仅临时失败才进补发队列；'permanent'（端点 accepted=false，未配置 Bark）
@@ -19653,8 +19651,9 @@ window.addEventListener('keydown',function(e){
   //      免疫组慢项目不做时长自学习：等不到就按 ② 的间隔照常发，不会被拖住。
   //   ④ 在跑队列判不了（数据不够新/核收时间无法解析）→ 退回 8.9.15 的静默 60s 规则。
   //   危急值/堵孔/传染病/心肌/负值等红线不受任何等待限制：立即把缓冲区与本轮合并成一条 critical 推送。
-  //   off 模式在调用方已拦，不进缓冲区。8.10.3 起标题/副标题/正文由 aaBuildMergedPush 统一排版
-  //   （一标本一行 + 按处置分区 + 容量自适应）；合并条目按标本 id 去重（同标本取最后一次）。
+  //   off 模式在调用方已拦，不进缓冲区。8.10.3 起标题/正文由 aaBuildMergedPush 统一排版
+  //   （一标本一行 + 按处置分区 + 容量自适应，8.10.4 起不再用 Bark subtitle）；
+  //   合并条目按标本 id 去重（同标本取最后一次）。
   //   旧的 autoAuditPushTitle / autoAuditAbnSpecimenSummary 仍服务于 v2 遗留累积器与断流暂停推送。
   const AA_STREAM_QUIET_MS = 60 * 1000; // 静默判定阈值（8.10.2 起仅作在跑队列判不了时的退路）
   const AA_PUSH_TICK_MS = 15 * 1000; // 8.9.15: 复查间隔
@@ -19890,7 +19889,6 @@ window.addEventListener('keydown',function(e){
       });
       pushAutoAuditNotify({
         title: built.title || ('🤖 自动审核 ' + (passN + abnPassN) + ' 例'),
-        subtitle: built.subtitle,
         body: built.body,
         level: built.hasRed ? 'critical' : 'active',
         nonce: (b.updated || b.ts) + ':' + order.length
@@ -20237,23 +20235,23 @@ window.addEventListener('keydown',function(e){
   //
   // 三条原则：
   //   ① 标题只放「要不要我立刻动手」——红线类别与例数 + 已审总数，压在 30 列内；
-  //      仪器分布与时间区间挪到副标题（Bark subtitle，8.10.3 起端到端贯通）。
+  //      仪器分布与时间区间放正文首行「概览」——8.10.4 起：原计划走 Bark subtitle，
+  //      但实测加密推送下 Bark 不还原 subtitle（明文才显示），本推送坚持端到端加密 → 放弃副标题。
   //   ② 一标本一行：`符号 流水号 项目组合 项目缩写+数值+方向`。头行与项目行合并即省掉一半行数。
   //      「需人工」区带参考范围（判断依据，值得占宽）；「已自动审」区不带（要细节去工作台🕘记录）。
   //   ③ 容量自适应：行数超预算时逐级降级——先砍每标本项目数 → 再把某台仪器剩余标本折成
   //      「…另 N 例：流水号…」→ 最后整组折成一行。任何情况下流水号都保留，可追溯。
   //
-  // Apple Watch 兼容：手表只稳定显示 title + subtitle 与开头少量正文，且行宽比手机更窄。
-  //   故 ① 标题/副标题各自限宽（AA_PUSH_TITLE_MAX_W / AA_PUSH_SUB_MAX_W），
-  //   ② 单行限宽 AA_PUSH_LINE_MAX_W（按显示列宽而非字符数，中文/emoji 算 2 列），
-  //   ③ 需人工的标本永远排在正文最前面 —— 手表只看得到开头几行时，看到的正是必须处理的。
+  // Apple Watch 兼容：手表只稳定显示 title 与开头少量正文，且行宽比手机更窄。
+  //   故 ① 标题限宽 AA_PUSH_TITLE_MAX_W；仪器分布+时间区间作为正文首行概览，
+  //   其余单行限宽 AA_PUSH_LINE_MAX_W（按显示列宽而非字符数，中文/emoji 算 2 列），
+  //   ② 需人工的标本永远排在正文最前面 —— 手表只看得到开头几行时，看到的正是必须处理的。
   // 隐私口径不变：只有流水号/检验号、时间、项目组合、项目名与数值（及需人工区的参考范围），
   //   绝不含姓名/住院号/床号/科室。
   const AA_PUSH_BODY_MAX_LINES = 16; // 正文行数预算（展开通知约一屏；超出按 ③ 降级折叠）
   const AA_PUSH_LINE_MAX_W = 56; // 单行显示列宽上限（手机 ~34 列/行 → 最多折 2 行；宁可折行也别截掉项目）
   const AA_PUSH_TITLE_MAX_W = 40; // 标题列宽上限（iOS 锁屏可见约 34 列，留点余量放「已审N」）
-  const AA_PUSH_SUB_MAX_W = 40; // 副标题列宽上限
-  const AA_PUSH_SUB_MN_MAX = 3; // 副标题最多列几台仪器（更多折成「等N台」，防挤掉时间区间）
+  const AA_PUSH_OVERVIEW_MN_MAX = 3; // 首行概览最多列几台仪器（更多折成「等N台」，防挤掉时间区间）
   const AA_PUSH_FLAT_MAX = 3; // ≤N 个标本时走「扁平模式」：不打分区/分组标题，直接列标本（手表友好）
   const AA_PUSH_SKIP_MAX_LINES = 12; // 需人工明细最多逐条列几例（超出折成流水号列表；红线优先级最高，允许超行数预算）
   // 显示列宽：CJK 与 emoji 占 2 列，其余 1 列（用于按视觉宽度截断，比 length 准）
@@ -20467,13 +20465,15 @@ window.addEventListener('keydown',function(e){
       mnCount[mn] = (mnCount[mn] || 0) + 1;
     });
     const mnKeys = Object.keys(mnCount).sort((a, b) => mnCount[b] - mnCount[a]);
+    // 8.10.4: 不再用 Bark subtitle 字段（实测加密推送下 Bark 不还原 subtitle，明文才显示，
+    // 而本推送坚持端到端加密 → 放弃副标题，把「仪器分布 + 时间区间」作为正文首行概览）。
     // 仪器多时只列前几台 + 「等N台」：时间区间比第 4 台仪器的名字更值得占位
-    const mnParts = mnKeys.slice(0, AA_PUSH_SUB_MN_MAX).map(mn => mn + ' ' + mnCount[mn]);
-    if (mnKeys.length > AA_PUSH_SUB_MN_MAX) {mnParts.push('等' + mnKeys.length + '台');}
+    const mnParts = mnKeys.slice(0, AA_PUSH_OVERVIEW_MN_MAX).map(mn => mn + ' ' + mnCount[mn]);
+    if (mnKeys.length > AA_PUSH_OVERVIEW_MN_MAX) {mnParts.push('等' + mnKeys.length + '台');}
     const span = aaPushTimeSpan(entries);
-    let subtitle = mnParts.join(' · ');
-    if (span) {subtitle = subtitle ? subtitle + '  ' + span : span;}
-    subtitle = aaClipW(subtitle, AA_PUSH_SUB_MAX_W);
+    let overview = mnParts.join(' · ');
+    if (span) {overview = overview ? overview + '  ' + span : span;}
+    overview = aaClipW(overview, AA_PUSH_LINE_MAX_W);
 
     // ── 正文：需人工区（全展开，带参考范围）→ 已审区（按仪器分组）→ 正常合并一行 ──
     const skips = entries.filter(en => en && en.k === 's');
@@ -20484,9 +20484,10 @@ window.addEventListener('keydown',function(e){
     const room = () => budget - L.length;
     // 8.10.3: 扁平模式——标本很少（单个单个做标本的常态，也是手表上最常见的场景）时
     // 不打「━ 需人工 ━」「〔生化 异常 2〕」这类分区/分组标题：那些标题在只有 1~3 行内容时
-    // 纯属噪声，且会把真正的内容挤出手表可见区。计数已经在标题/副标题里说清了。
+    // 纯属噪声，且会把真正的内容挤出手表可见区。计数已经在标题/首行概览里说清了。
     const flat = (skips.length + abns.length + nors.length) <= AA_PUSH_FLAT_MAX && !(skips.length && abns.length);
     if (flat) {
+      if (overview) {L.push(overview);} // 8.10.4: 概览（仪器+时间）放正文首行，手机/手表一眼可见
       skips.forEach(en => {
         const info = aaPushSkipSym(en.e && en.e.reason);
         L.push(aaPushSpecLine(en.e, info.sym, 4, true, info.note, true)); // 需人工：不瘦身
@@ -20496,8 +20497,10 @@ window.addEventListener('keydown',function(e){
       if (fseqs.length) {L.push(aaClipW('✅ 全正常：' + fseqs.join(' '), AA_PUSH_LINE_MAX_W));}
       else if (passN > 0 && !abns.length && !skips.length) {L.push('✅ 全正常 ' + passN);}
       if (d && d.note) {L.push(aaClipW(String(d.note), AA_PUSH_LINE_MAX_W));}
-      return {title, subtitle, body: L.join('\n'), hasRed};
+      return {title, overview, body: L.join('\n'), hasRed};
     }
+
+    if (overview) {L.push(overview);} // 8.10.4: 概览放正文首行（首次出现的分割线之上)
 
     if (skips.length) {
       L.push('━ 需人工 ' + skipN + ' ━');
@@ -20553,7 +20556,7 @@ window.addEventListener('keydown',function(e){
       L.push(aaClipW(line, AA_PUSH_LINE_MAX_W));
     }
     if (d && d.note) {L.push(aaClipW(String(d.note), AA_PUSH_LINE_MAX_W));}
-    return {title, subtitle, body: L.join('\n'), hasRed};
+    return {title, overview, body: L.join('\n'), hasRed};
   }
   function aaPushSeqOf(e) {
     return String((e && (e.seq || e.EpisodeNo || e.episodeNo || e.labno || e.l || e.Labno)) || '').trim();
@@ -20952,18 +20955,18 @@ window.addEventListener('keydown',function(e){
           // 8.8.36: 暂停推送升级为 critical（穿透 iPhone 勿扰/静音，夜间必达），且不再受 notifyMode
           // 快照约束——数据断流是系统状态告警，off 模式也必须知道停转了；10 分钟节流维持
           try {
-            // 8.10.3: 暂停推送也用新排版列拦下的标本（一标本一行，不瘦身），
-            // 并把「拦下 N 例」放到副标题——手表上一眼看到规模
+            // 8.10.3: 暂停推送用新排版逐条列拦下的标本（一标本一行，不瘦身）；
+            // 8.10.4: 「拦下 N 例」并入正文首行（不再用 Bark subtitle，加密下不显示）
             const _pl = _realSpecs.map(s => {
               const _si = aaPushSkipSym(s.reason);
               return aaPushSpecLine(s, _si.sym, 3, true, _si.note, true);
             }).slice(0, 8);
             let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
+            if (_realSpecs.length) {_pb = '当前拦下 ' + _realSpecs.length + ' 例待人工\n' + _pb;}
             if (_pl.length) {_pb += '\n' + _pl.join('\n');}
             if (_realSpecs.length > _pl.length) {_pb += '\n…另 ' + (_realSpecs.length - _pl.length) + ' 例，详见工作台记录';}
             pushAutoAuditNotify({
               title: '⚠️ 自动审核暂停',
-              subtitle: _realSpecs.length ? '当前拦下 ' + _realSpecs.length + ' 例待人工' : '暂无拦下标本',
               body: _pb,
               level: 'critical'
             });
@@ -21473,11 +21476,11 @@ window.addEventListener('keydown',function(e){
                   <option value="10"${curMergeWin === 10 ? ' selected' : ''}>连续时最快 10 分钟一条</option>
                 </select>
               </label>
-              <span style="color:#999;line-height:1.6">8.10.2 前沿即发：<b>单个单个做标本</b>时每条即时推送（不再压 1 分钟观察）；<b>连续做</b>时第一条即时推，之后按所选间隔合并成一条。同批（核收时间相差 5 分钟内）的标本都出完结果，会提前发收尾小结，不用等满间隔。免疫组慢项目不会拖住推送。危急值等红线不受任何等待限制，立即推送。<br>8.10.3 合并排版：多个标本<b>合并成一条</b>推送（不是同时来几条），<b>一个标本一行</b>「流水号 项目组合　异常项+数值+方向」；<b>需人工的排最前面</b>并带参考范围（手表只看得到开头几行时，看到的正是要处理的）；已自动审的按仪器分组、不带参考范围；标本多时自动折叠成流水号列表，明细去🕘记录查。仪器分布与时间区间放在<b>副标题</b>。</span>
+              <span style="color:#999;line-height:1.6">8.10.2 前沿即发：<b>单个单个做标本</b>时每条即时推送（不再压 1 分钟观察）；<b>连续做</b>时第一条即时推，之后按所选间隔合并成一条。同批（核收时间相差 5 分钟内）的标本都出完结果，会提前发收尾小结，不用等满间隔。免疫组慢项目不会拖住推送。危急值等红线不受任何等待限制，立即推送。<br>8.10.3 / 8.10.4 合并排版：多个标本<b>合并成一条</b>推送（不是同时来几条），<b>一个标本一行</b>「流水号 项目组合 异常项+数值+方向」；<b>需人工的排最前面</b>并带参考范围（手表只看得到开头几行时，看到的正是要处理的）；已自动审的按仪器分组、不带参考范围；标本多时自动折叠成流水号列表，明细去🕘记录查。仪器分布与核收时间区间放在<b>正文首行</b>。</span>
             </div>
             <div id="lis-aa-notify-edit-hint" style="display:none;margin-top:4px;color:#d9534f;font-size:11px;font-weight:600"></div>
             <div id="lis-aa-push-status" style="margin-top:8px;padding:8px 10px;background:#f6f8fa;border:1px solid #e3e8ee;border-radius:4px;color:#555;font-size:12px;line-height:1.7">⏳ 正在获取推送状态…</div>
-            <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。8.9.7 起默认走<b>网关中转</b>（192.168.31.111，本机无需开 serve.py；不通时自动落回本机 serve 兜底）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。<br>⚠️ 8.10.3 的<b>副标题</b>需要网关机的 bark-relay 一并升级（<b>D:\\bark-relay\\bark_relay.py</b>）；未升级时副标题被忽略，其余照常送达。</div>
+            <div style="color:#999;margin-top:4px;line-height:1.6">推送到 iPhone / Apple Watch（Bark）。8.9.7 起默认走<b>网关中转</b>（192.168.31.111，本机无需开 serve.py；不通时自动落回本机 serve 兜底）。红线留人工（危急值等）始终 critical 重要提醒；只推未成功时，全部通过自动审核则不打扰。<br>8.10.4：推送坚持端到端加密（Bark 云与 APNs 只见密文）；加密下 Bark 不显示副标题，仪器/时间信息已并入正文首行，不影响阅读。</div>
           </div>
           <div class="ab-section" style="margin-top:10px">
             <div style="padding:6px 10px;background:#fff8e1;border:1px solid #f0d58a;border-radius:4px">🔒 梅毒、丙肝、艾滋阳性为固定人工审核红线；乙肝两对半 5 项不在此红线内。</div>
