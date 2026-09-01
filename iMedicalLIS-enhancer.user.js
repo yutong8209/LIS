@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.6
+// @version      8.10.7
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20362,24 +20362,32 @@ window.addEventListener('keydown',function(e){
     return out + '…';
   }
   // 项目名缩写：长中文名最吃宽度（「中性粒细胞绝对值」9 字 = 18 列）。只收录检验科通用缩写，
-  // 无匹配则原样保留（宁可长一点也不要造出看不懂的名字）。
+  // 8.10.7: 兼容末尾带星号 * / 井号 # / 绝对数等常见仪器后缀（如 白细胞计数* → WBC）
   const AA_PUSH_ITEM_ABBR = [
-    [/^白细胞(计数|数目)?$/, 'WBC'], [/^红细胞(计数|数目)?$/, 'RBC'],
-    [/^血红蛋白(浓度)?$/, 'HGB'], [/^血小板(计数|数目)?$/, 'PLT'],
-    [/^中性粒细胞(绝对值|计数|数目)$/, 'NEU#'], [/^淋巴细胞(绝对值|计数|数目)$/, 'LYM#'],
-    [/^单核细胞(绝对值|计数|数目)$/, 'MON#'], [/^嗜酸性粒细胞(绝对值|计数|数目)$/, 'EOS#'],
-    [/^嗜碱性粒细胞(绝对值|计数|数目)$/, 'BAS#'],
-    [/^红细胞压积$|^[红血]细胞比[积容]$/, 'HCT'],
-    [/^平均红细胞体积$/, 'MCV'], [/^平均血红蛋白含量$/, 'MCH'], [/^平均血红蛋白浓度$/, 'MCHC'],
-    [/^甘油三酯$/, 'TG'], [/^总胆固醇$/, 'TC'],
-    [/^高密度脂蛋白(胆固醇)?$/, 'HDL'], [/^低密度脂蛋白(胆固醇)?$/, 'LDL'],
-    [/^丙氨酸氨基转移酶$/, 'ALT'], [/^天门冬氨酸氨基转移酶$/, 'AST'],
-    [/^γ-?谷氨酰基?转移酶$|^谷氨酰转肽酶$/, 'GGT'], [/^碱性磷酸酶$/, 'ALP'],
-    [/^总胆红素$/, 'TBIL'], [/^直接胆红素$/, 'DBIL'], [/^总蛋白$/, 'TP'], [/^白蛋白$/, 'ALB'],
-    [/^尿素氮$/, '尿素'], [/^尿酸$/, 'UA'], [/^葡萄糖$|^血糖$/, 'GLU'],
-    [/^肌酸激酶同工酶$/, 'CK-MB'], [/^乳酸脱氢酶$/, 'LDH'], [/^肌酸激酶$/, 'CK'],
-    [/^超敏[C][-]?反应蛋白$/i, 'hsCRP'], [/^[C][-]?反应蛋白$/i, 'CRP'],
-    [/^促甲状腺激素$/, 'TSH'], [/^游离甲状腺素$/, 'FT4'], [/^游离三碘甲状腺原氨酸$/, 'FT3']
+    [/^白细胞(计数|数目|数)?[\*＊#]?$/i, 'WBC'],
+    [/^红细胞(计数|数目|数)?[\*＊#]?$/i, 'RBC'],
+    [/^血红蛋白(浓度)?[\*＊#]?$/i, 'HGB'],
+    [/^血小板(计数|数目|数)?[\*＊#]?$/i, 'PLT'],
+    [/^中性粒[细胞]*(绝对值|计数|数目|绝对数|数)?[\*＊#]?$/i, 'NEU#'],
+    [/^淋巴[细胞]*(绝对值|计数|数目|绝对数|数)?[\*＊#]?$/i, 'LYM#'],
+    [/^单核[细胞]*(绝对值|计数|数目|绝对数|数)?[\*＊#]?$/i, 'MON#'],
+    [/^嗜酸[性]?[粒]?细胞*(绝对值|计数|数目|绝对数|数)?[\*＊#]?$/i, 'EOS#'],
+    [/^嗜碱[性]?[粒]?细胞*(绝对值|计数|数目|绝对数|数)?[\*＊#]?$/i, 'BAS#'],
+    [/^红细胞[压比][积容][\*＊#]?$/i, 'HCT'],
+    [/^平均红细胞体积[\*＊#]?$/i, 'MCV'],
+    [/^平均血红蛋白含量[\*＊#]?$/i, 'MCH'],
+    [/^平均血红蛋白浓度[\*＊#]?$/i, 'MCHC'],
+    [/^血小板分布宽度[\*＊#]?$/i, 'PDW'],
+    [/^红细胞分布宽度.*$/i, 'RDW'],
+    [/^甘油三酯[\*＊#]?$/, 'TG'], [/^总胆固醇[\*＊#]?$/, 'TC'],
+    [/^高密度脂蛋白(胆固醇)?[\*＊#]?$/, 'HDL'], [/^低密度脂蛋白(胆固醇)?[\*＊#]?$/, 'LDL'],
+    [/^丙氨酸氨基转移酶[\*＊#]?$/, 'ALT'], [/^天门冬氨酸氨基转移酶[\*＊#]?$/, 'AST'],
+    [/^γ-?谷氨酰基?转移酶$|^谷氨酰转肽酶[\*＊#]?$/, 'GGT'], [/^碱性磷酸酶[\*＊#]?$/, 'ALP'],
+    [/^总胆红素[\*＊#]?$/, 'TBIL'], [/^直接胆红素[\*＊#]?$/, 'DBIL'], [/^总蛋白[\*＊#]?$/, 'TP'], [/^白蛋白[\*＊#]?$/, 'ALB'],
+    [/^尿素氮[\*＊#]?$/, '尿素'], [/^尿酸[\*＊#]?$/, 'UA'], [/^葡萄糖$|^血糖[\*＊#]?$/, 'GLU'],
+    [/^肌酸激酶同工酶[\*＊#]?$/, 'CK-MB'], [/^乳酸脱氢酶[\*＊#]?$/, 'LDH'], [/^肌酸激酶[\*＊#]?$/, 'CK'],
+    [/^超敏[C][-]?反应蛋白[\*＊#]?$/i, 'hsCRP'], [/^[C][-]?反应蛋白[\*＊#]?$/i, 'CRP'],
+    [/^促甲状腺激素[\*＊#]?$/, 'TSH'], [/^游离甲状腺素[\*＊#]?$/, 'FT4'], [/^游离三碘甲状腺原氨酸[\*＊#]?$/, 'FT3']
   ];
   function aaPushItemAbbr(name) {
     const s = String(name || '').trim();
@@ -20392,7 +20400,7 @@ window.addEventListener('keydown',function(e){
     [/肝功能\s*\+\s*肾功能|肝肾功能/, '肝肾'], [/^肝功能(检查)?$/, '肝功'], [/^肾功能(检查)?$/, '肾功'],
     [/^血脂(全套|四项|六项)?$/, '血脂'], [/^电解质(全套|六项)?$/, '电解质'],
     [/^心肌(酶|标志物|梗)/, '心肌'], [/甲状腺功能|甲功/, '甲功'],
-    [/^血细胞分析$|^血常规/, '血常规'], [/^凝血(功能|四项|全套)?/, '凝血'],
+    [/^血细胞分析$|^血常规|^全血细胞分析/, '血常规'], [/^凝血(功能|四项|全套)?/, '凝血'],
     [/肿瘤标志物/, '肿标'], [/^尿液分析$|^尿常规/, '尿常规'], [/^粪便/, '粪便']
   ];
   function aaPushTestAbbr(test) {
@@ -20423,8 +20431,7 @@ window.addEventListener('keydown',function(e){
     return '⚠️';
   }
   // 单标本的可见异常项 → 紧凑段落。返回 {seg, shown, more}
-  // noSlim=true 时跳过血常规三级瘦身：「需人工」标本的异常项就是被拦下的理由，
-  // 一个都不能藏（否则会出现「⓿ 307 血常规 +2 疑似堵孔」这种看不到数值的行）。
+  // noSlim=true 时跳过血常规三级瘦身：「需人工」标本的异常项就是被拦下的理由，一个都不能藏
   function aaPushSpecItemSegs(e, maxItems, withRange, noSlim) {
     const list = (e && (e.items || e.abn)) || [];
     const abnAll = list.filter(it => {
@@ -20433,15 +20440,19 @@ window.addEventListener('keydown',function(e){
     });
     // 血常规三级瘦身沿用 8.9.9 口径（危急值不受过滤）
     let vis = noSlim ? abnAll : abnAll.filter(it => aaPushItemVisible(e.test || e.TestSetDesc || '', it));
-    // fail-open：全被瘦身滤掉时退回显示第一项，绝不产出没有内容的标本行
-    if (!vis.length && abnAll.length) {vis = abnAll.slice(0, 1);}
+    // 8.10.7: 仅需人工标本(noSlim=true)在全滤空时 fail-open 保底；已审标本(noSlim=false)若全为次要衍生项则不再强行露出
+    if (!vis.length && abnAll.length && noSlim) {vis = abnAll.slice(0, 1);}
     const take = vis.slice(0, Math.max(1, maxItems));
     const segs = take.map(it => {
       let s = aaPushItemAbbr(it.n);
       const val = String(it.r !== undefined && it.r !== null ? it.r : '').trim();
       if (val) {s += ' ' + val;}
       s += aaPushCompactMark(it);
-      if (withRange && it.f) {s += '(' + aaClipW(String(it.f), 18) + ')';}
+      // 8.10.7: 附带参考值数值范围（去外层括号后紧凑展示）
+      if (withRange && it.f) {
+        const rf = String(it.f).replace(/^[(\[（【]\s*|\s*[)\]）】]$/g, '').trim();
+        if (rf) {s += '(' + aaClipW(rf, 14) + ')';}
+      }
       return s;
     });
     // 8.10.5: 已审标本（noSlim=false）只统计因行宽限制被截断的可见项；主动 skip 的项不计入 +N
@@ -20584,7 +20595,7 @@ window.addEventListener('keydown',function(e){
         const info = aaPushSkipSym(en.e && en.e.reason);
         L.push(aaPushSpecLine(en.e, info.sym, 4, true, info.note, true)); // 需人工：不瘦身
       });
-      abns.forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, false, '')));
+      abns.forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, true, ''))); // 8.10.7: 已审标本同样带参考范围
       const fseqs = nors.map(x => aaPushSeqOf(x.e)).filter(Boolean);
       if (fseqs.length) {
         L.push(aaClipW('✅ 全正常：' + fseqs.join(' '), AA_PUSH_LINE_MAX_W));
@@ -20637,8 +20648,8 @@ window.addEventListener('keydown',function(e){
         }
         const show = Math.min(arr.length, Math.max(1, spare - (single ? 1 : 2)));
         if (!single) {L.push('〔' + mn + ' 异常 ' + arr.length + '〕');}
-        // 已审标本不带参考范围：这些已经审过了，范围对决策无用，宽度留给项目本身
-        arr.slice(0, show).forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, false, '')));
+        // 8.10.7: 已审标本同样带参考范围（紧凑格式如 WBC 3.4🔽(4-10)）
+        arr.slice(0, show).forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, true, '')));
         if (arr.length > show) {
           L.push(aaClipW('　…另 ' + (arr.length - show) + ' 例：' + arr.slice(show).map(x => aaPushSeqOf(x.e)).join(' '), AA_PUSH_LINE_MAX_W));
         }
@@ -20930,14 +20941,15 @@ window.addEventListener('keydown',function(e){
         f: it.refRange || it.RefRanges || it.RefRange || '',
         s: it.status || ''
       }));
-      // 8.5.81: 异常项保留 status，记录查看器摘要标签可按 高/低/异常/危急 细分配色
+      // 8.5.81: 异常项保留 status，记录查看器摘要标签可按 高/低/异常/危急 细分配色；8.10.7: 包含参考范围 f
       abn = (live.items || [])
         .filter(it => it.status && it.status !== 'NORMAL')
-        .slice(0, 10)
+        .slice(0, 15)
         .map(it => ({
           n: it.name || '',
           r: String(it.result !== undefined && it.result !== null ? it.result : ''),
           u: it.unit || '',
+          f: it.refRange || it.RefRanges || it.RefRange || '',
           s: it.status || ''
         }));
     }
