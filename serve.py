@@ -85,7 +85,7 @@ def _load_notify_config():
         return {}
 
 
-def _notify_bark(key, title, body, level, subtitle=''):
+def _notify_bark(key, title, body, level, subtitle='', group='', sound=''):
     """后台线程转发到 Bark 云端 → APNs → iPhone（Apple Watch 镜像）。失败仅打印，不阻塞 serve。"""
     global _notify_last
     if level not in _NOTIFY_LEVELS:
@@ -93,7 +93,7 @@ def _notify_bark(key, title, body, level, subtitle=''):
     # ── 8.8.23: 推送内容端到端加密（Bark App「加密设置」配了 Key 即启用）──
     # 开启后 title/body 全部进 AES 密文，Bark 云与 APNs 只见密文；level 等非敏感参数仍明文传递。
     # 加密失败一律不回退明文（fail-closed），避免隐私内容意外裸奔。
-    # 8.10.3: subtitle（副标题，手表上与标题一同稳定可见）同属隐私内容，一起进密文。
+    # 8.10.3: subtitle 同属隐私内容进密文；8.10.6: group / sound 进密文
     enc_payload = None
     enc_err = None
     try:
@@ -103,6 +103,10 @@ def _notify_bark(key, title, body, level, subtitle=''):
             inner_obj = {'title': title, 'body': body}
             if subtitle:
                 inner_obj['subtitle'] = subtitle
+            if group:
+                inner_obj['group'] = group
+            if sound:
+                inner_obj['sound'] = sound
             inner = json.dumps(inner_obj, ensure_ascii=False)
             iv_str = fixed_iv or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
             ct = base64.b64encode(aes_cbc_encrypt(inner.encode('utf-8'), enc_key, iv_str.encode('utf-8'))).decode('ascii')
@@ -111,10 +115,13 @@ def _notify_bark(key, title, body, level, subtitle=''):
         enc_err = e
         enc_payload = None
     payload = {'device_key': key, 'level': level}
-    log_tail = f'{title} - {body}'
+    if group:
+        payload['group'] = group
+    if sound:
+        payload['sound'] = sound
     if enc_payload is not None:
         payload.update(enc_payload)
-        log_tail = f'{title} - [已加密 {len(payload["ciphertext"])}B 密文]'  # 加密后控制台不再落明文正文
+        log_tail = f'[{group or "default"}] {title} - [已加密 {len(payload["ciphertext"])}B 密文]'  # 加密后控制台不再落明文正文
     elif enc_err is not None:
         # 配置了加密但加密失败：宁可不发也不发明文
         print(f'[{time.strftime("%H:%M:%S")}] Bark 推送放弃（加密配置无效，fail-closed）: {enc_err}')
@@ -122,12 +129,11 @@ def _notify_bark(key, title, body, level, subtitle=''):
         return
     else:
         # 8.10.3: 未启用加密时把 title/subtitle/body 明文放进 payload。
-        # 修一个此前的隐患：旧代码只在加密分支往 payload 塞内容，未配 push_encrypt 时
-        # 请求体里只有 device_key/level，Bark 收到的是空标题空正文（本机一直开着加密所以没暴露）。
         payload['title'] = title
         payload['body'] = body
         if subtitle:
             payload['subtitle'] = subtitle
+        log_tail = f'[{group or "default"}] {title} - {body}'
     data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request(
         BARK_PUSH_URL, data=data,
@@ -519,9 +525,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 title = str(data.get('title') or '自动审核')
                 body = str(data.get('body') or '')
                 level = str(data.get('level') or 'active')
-                # 8.10.3: subtitle（副标题）——仪器分布+时间区间，手表上与标题一同稳定可见。
-                # 老 userscript 不传该字段时为空串，行为与升级前完全一致。
+                # 8.10.3: subtitle；8.10.6: group / sound
                 subtitle = str(data.get('subtitle') or '')
+                group = str(data.get('group') or '')
+                sound = str(data.get('sound') or '')
                 cfg = _load_notify_config()
                 key = (cfg.get('bark_key') or '').strip()
                 if not key or not cfg.get('enabled', True):
@@ -530,7 +537,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': '未配置 bark_key 或 enabled=false，已忽略'}
                     accepted = False
                 else:
-                    threading.Thread(target=_notify_bark, args=(key, title, body, level, subtitle), daemon=True).start()
+                    threading.Thread(target=_notify_bark, args=(key, title, body, level, subtitle, group, sound), daemon=True).start()
                     accepted = True
                 body_resp = json.dumps({'accepted': accepted}, ensure_ascii=False).encode('utf-8')
                 self.send_response(200)

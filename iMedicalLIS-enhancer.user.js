@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.5
+// @version      8.10.6
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19519,7 +19519,7 @@ window.addEventListener('keydown',function(e){
     // 手动关闭维持静音。同时清掉断流恢复待通知标记，防止下次开启首个健康 tick 误报「已恢复」
     if (reason === '到期' && wasEnabled) {
       _pendingResumeNotice = false;
-      try {pushAutoAuditNotify({title: '⏰ 自动审核已到期停止', body: '设定的审核时长已到，自动审核已停止；需再次开启请到工作台', level: 'active'});} catch (e) {}
+      try {pushAutoAuditNotify({title: '⏰ 自动审核已到期停止', body: '设定的审核时长已到，自动审核已停止；需再次开启请到工作台', level: 'active', group: 'LIS系统状态', sound: 'glass'});} catch (e) {}
     } else {
       _pendingResumeNotice = false;
     }
@@ -19676,12 +19676,15 @@ window.addEventListener('keydown',function(e){
   function pushAutoAuditNotify(payload) {
     const p = payload || {};
     // 8.10.4: 不再发送 Bark subtitle 字段（实测加密推送下 Bark 不还原 subtitle，明文才显示，
-    // 而本推送坚持端到端加密 → 放弃副标题，概览已并入正文首行）。去重键回归 title|body。
-    const key = [p.title || '', p.body || '', p.level || '', p.nonce || ''].join('|');
+    // 而本推送坚持端到端加密 → 放弃副标题，概览已并入正文首行）。
+    // 8.10.6: 增加 group（分组折叠）与 sound（声效分级）
+    const key = [p.title || '', p.body || '', p.level || '', p.group || '', p.sound || '', p.nonce || ''].join('|');
     const now = Date.now();
     if (_notifyBarkLast.key === key && now - _notifyBarkLast.t < 60 * 1000) {return;} // 60s 同内容去重（nonce 随轮次变化，正常轮次不受影响）
     _notifyBarkLast = { key, t: now };
     const send = {title: p.title || '', body: p.body || '', level: p.level || 'active'};
+    if (p.group) {send.group = p.group;}
+    if (p.sound) {send.sound = p.sound;}
     // 8.9.0: 补发登记带上含 nonce 的完整 key，防同文案多轮被去重误杀
     _notifySend(send).then(st => {
       // 8.10.0: 仅临时失败才进补发队列；'permanent'（端点 accepted=false，未配置 Bark）
@@ -19941,10 +19944,24 @@ window.addEventListener('keydown',function(e){
         suffix: opts.suffix,
         note: opts.note
       });
+      // 8.10.6: Bark group（分组折叠）与 sound（声效分级）
+      const hasAbn = abnPassN > 0 || (extra && extra.entries && extra.entries.some(en => en && en.k === 'a')) ||
+        (b.entries && b.entries.some(en => en && en.k === 'a'));
+      let group = 'LIS自动审核';
+      let sound = 'calypso'; // 全正常轻柔音
+      if (built.hasRed) {
+        group = 'LIS危急告警';
+        sound = 'alarm'; // 危急红线警报音
+      } else if (skipN > 0 || hasAbn) {
+        group = 'LIS自动审核';
+        sound = 'chime'; // 有异常/留人工中性提示音
+      }
       pushAutoAuditNotify({
         title: built.title || ('🤖 自动审核 ' + (passN + abnPassN) + ' 例'),
         body: built.body,
         level: built.hasRed ? 'critical' : 'active',
+        group,
+        sound,
         nonce: (b.updated || b.ts) + ':' + order.length
       });
       _aaPushLastTsSet(Date.now()); // 8.10.2: 记住发出时刻——前沿即发与最短间隔都以它为基准
@@ -20002,7 +20019,8 @@ window.addEventListener('keydown',function(e){
   }
   // 轮次推送统一入口：红线/补报/未启用合并 → 立即结清；
   // 8.10.2: 新增「前沿即发」——缓冲区为空且距上次推送已过最短间隔（= 单个单个做标本的常态）
-  // 直接发本轮，不再押 60s 静默观察；连续做时缓冲区非空/间隔未到，照常进缓冲区按节奏合并。
+  // 8.10.6: 「真·孤立标本」前置判定——同批（核收时间相近）无在跑标本才前沿即发，
+  // 若有在跑标本（批处理排头兵）则进缓冲区与整批一起发，消除首个单发后 45s 发小结的碎片感
   function queueAutoAuditPush(data) {
     try {
       const d = data || {};
@@ -20012,7 +20030,11 @@ window.addEventListener('keydown',function(e){
       _aaPushBufEnsure(); // 刷新后内存为空但盘上可能还攒着，先认领再判前沿
       const lastTs = _aaPushLastTs();
       if (!_aaPushBuf && (!lastTs || Date.now() - lastTs >= winMin * 60000)) {
-        return flushAutoAuditPushBuffer(d); // 前沿：孤立结果 0 延迟到手机
+        const refTsList = _aaBufRefAcceptTs({ entries: d.entries });
+        const co = _aaRunningCohort(refTsList, Date.now());
+        if (!co.known || co.running === 0) {
+          return flushAutoAuditPushBuffer(d); // 真正孤立结果 0 延迟到手机
+        }
       }
       _aaPushBufAdd(d);
       _aaPushBufSchedule();
@@ -20813,7 +20835,16 @@ window.addEventListener('keydown',function(e){
       if (opts.note) {body += '\n' + opts.note;}
       // 8.8.34: nonce = 轮次时间:事件数——两轮聚合计数相同（连审同机器单个正常标本）时文案完全一致，
       // 纯文案去重会把第二轮静默吞掉；nonce 随轮次变化保证不同轮次各推一条，同一累积器重复结算仍被去重
-      pushAutoAuditNotify({title, body, level: hasRed ? 'critical' : 'active', nonce: (a.ts || 0) + ':' + (a.seq || 0)});
+      let group = 'LIS自动审核';
+      let sound = 'calypso';
+      if (hasRed) {
+        group = 'LIS危急告警';
+        sound = 'alarm';
+      } else if (Object.keys(a.skipped || {}).length > 0 || (a.abnormal || 0) > 0) {
+        group = 'LIS自动审核';
+        sound = 'chime';
+      }
+      pushAutoAuditNotify({title, body, level: hasRed ? 'critical' : 'active', group, sound, nonce: (a.ts || 0) + ':' + (a.seq || 0)});
       return true;
     } catch (e) {dbg('累积器结算异常:', e); return false;}
   }
@@ -21045,7 +21076,9 @@ window.addEventListener('keydown',function(e){
             pushAutoAuditNotify({
               title: '⚠️ 自动审核暂停',
               body: _pb,
-              level: 'critical'
+              level: 'critical',
+              group: 'LIS系统状态',
+              sound: 'minuet'
             });
             _pendingResumeNotice = true;
             // 8.9.4: 暂停标记升级为「已推送」——恢复推送欠账跨整页刷新存续，半夜被吵醒的人等得到解除通知
@@ -21079,7 +21112,7 @@ window.addEventListener('keydown',function(e){
         try {sessionStorage.removeItem(AA_STALE_RELOAD_KEY);} catch (e) {}
         aaStateEventAdd('resume', _resumePushPending ? '工作台数据已恢复最新，自动审核继续' : '工作台数据已恢复最新（整页刷新自愈，未推送打扰）');
         if (_resumePushPending) {
-          try {pushAutoAuditNotify({title: '✅ 自动审核已恢复', body: '工作台数据已恢复最新，自动审核继续', level: 'active'});} catch (e) {}
+          try {pushAutoAuditNotify({title: '✅ 自动审核已恢复', body: '工作台数据已恢复最新，自动审核继续', level: 'active', group: 'LIS系统状态', sound: 'glass'});} catch (e) {}
         }
       }
       // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义

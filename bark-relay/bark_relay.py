@@ -207,7 +207,7 @@ def _load_encrypt_cfg(cfg):
 
 # ── 复用 serve.py 的推送转发逻辑（同款重试/加密/状态记录）──────────────────────
 
-def _notify_bark(key, title, body, level, subtitle=''):
+def _notify_bark(key, title, body, level, subtitle='', group='', sound=''):
     """后台线程转发到 Bark 云端 → APNs → iPhone（Apple Watch 镜像）。失败仅记日志，不阻塞响应。"""
     global _notify_last
     if level not in _NOTIFY_LEVELS:
@@ -218,10 +218,14 @@ def _notify_bark(key, title, body, level, subtitle=''):
         enc_cfg = _load_encrypt_cfg(_load_notify_config())
         if enc_cfg:
             enc_key, fixed_iv = enc_cfg
-            # 8.10.3: subtitle（副标题）同属隐私内容，一起进密文
+            # 8.10.3: subtitle（副标题）同属隐私内容，一起进密文；8.10.6: group / sound 进密文
             inner_obj = {'title': title, 'body': body}
             if subtitle:
                 inner_obj['subtitle'] = subtitle
+            if group:
+                inner_obj['group'] = group
+            if sound:
+                inner_obj['sound'] = sound
             inner = json.dumps(inner_obj, ensure_ascii=False)
             iv_str = fixed_iv or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
             ct = base64.b64encode(aes_cbc_encrypt(inner.encode('utf-8'), enc_key, iv_str.encode('utf-8'))).decode('ascii')
@@ -230,9 +234,13 @@ def _notify_bark(key, title, body, level, subtitle=''):
         enc_err = e
         enc_payload = None
     payload = {'device_key': key, 'level': level}
+    if group:
+        payload['group'] = group
+    if sound:
+        payload['sound'] = sound
     if enc_payload is not None:
         payload.update(enc_payload)
-        log_tail = f'{title} - [已加密 {len(payload["ciphertext"])}B 密文]'
+        log_tail = f'[{group or "default"}] {title} - [已加密 {len(payload["ciphertext"])}B 密文]'
     elif enc_err is not None:
         _log(f'Bark 推送放弃（加密配置无效，fail-closed）: {enc_err}')
         with _notify_lock:
@@ -240,13 +248,11 @@ def _notify_bark(key, title, body, level, subtitle=''):
         return
     else:
         # 8.10.3: 未启用加密时把 title/subtitle/body 明文放进 payload。
-        # 修此前隐患：旧代码只在加密分支塞内容，未配 push_encrypt 时请求体只有
-        # device_key/level，Bark 收到空标题空正文（两端一直开着加密所以没暴露）。
         payload['title'] = title
         payload['body'] = body
         if subtitle:
             payload['subtitle'] = subtitle
-        log_tail = f'{title} - {body}'
+        log_tail = f'[{group or "default"}] {title} - {body}'
     data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request(
         BARK_PUSH_URL, data=data,
@@ -271,11 +277,11 @@ def _notify_bark(key, title, body, level, subtitle=''):
         _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': str(last_err)[:120]}
 
 
-def _notify_guarded(key, title, body, level, subtitle=''):
+def _notify_guarded(key, title, body, level, subtitle='', group='', sound=''):
     """包装 _notify_bark：无论成败都释放在途计数（8.10.0 限流配套）。"""
     global _notify_inflight
     try:
-        _notify_bark(key, title, body, level, subtitle)
+        _notify_bark(key, title, body, level, subtitle, group, sound)
     except Exception as e:
         _log(f'_notify_bark 未预期异常: {e}')
     finally:
@@ -364,9 +370,10 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
             title = str(data.get('title') or '自动审核')
             body = str(data.get('body') or '')
             level = str(data.get('level') or 'active')
-            # 8.10.3: subtitle（副标题）——仪器分布+时间区间，手表上与标题一同稳定可见。
-            # 老 userscript 不传该字段时为空串，行为与升级前完全一致。
+            # 8.10.3: subtitle；8.10.6: group / sound
             subtitle = str(data.get('subtitle') or '')
+            group = str(data.get('group') or '')
+            sound = str(data.get('sound') or '')
             cfg = _load_notify_config()
             key = (cfg.get('bark_key') or '').strip()
             if not key or not cfg.get('enabled', True):
@@ -377,7 +384,7 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
                     _notify_inflight -= 1
                 self._send_json({'accepted': False})
                 return
-            threading.Thread(target=_notify_guarded, args=(key, title, body, level, subtitle), daemon=True).start()
+            threading.Thread(target=_notify_guarded, args=(key, title, body, level, subtitle, group, sound), daemon=True).start()
             self._send_json({'accepted': True})
         except Exception as e:
             _log(f'/notify 处理异常: {e}')
