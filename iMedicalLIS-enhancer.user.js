@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.12
+// @version      8.10.13
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7254,9 +7254,23 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return wsData.find(r => String(r.ReportDR || '') === target) || null;
   }
 
+  let _wsDataRowMap = null;
+  let _wsDataRowMapEpoch = -1;
+  function getWSDataRowMap() {
+    if (!_wsDataRowMap || _wsDataRowMapEpoch !== _wsDataEpoch) {
+      _wsDataRowMap = new Map();
+      (wsData || []).forEach(r => {
+        if (r && r.ReportDR) {_wsDataRowMap.set(String(r.ReportDR), r);}
+      });
+      _wsDataRowMapEpoch = _wsDataEpoch;
+    }
+    return _wsDataRowMap;
+  }
+
   function resolveQueueItemRow(item) {
-    if (!item) {return null;}
-    return wsData.find(r => String(r.ReportDR) === String(item.reportDR)) || null;
+    if (!item || !item.reportDR) {return null;}
+    const map = getWSDataRowMap();
+    return map.get(String(item.reportDR)) || null;
   }
 
   let _queueLockToken = ''; // 8.5.82: 本队列实例的锁 token——refresh/release 必须校验，防同标签旧循环误续期/误删新循环的锁
@@ -9220,8 +9234,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     updateAbnormalEnterBridge();
     if (wsCategory !== 'audit' || !isWSVisible() || isDetailPanelVisible()) {return false;}
     const now = Date.now();
-    if (now - _abnormalEnterLastAt < 250) {return true;}
-    _abnormalEnterLastAt = now;
     if (_abnormalAuditInProgress) {
       if (!_abnormalAuditQueued) {
         _abnormalAuditQueued = true;
@@ -9231,6 +9243,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
       return true;
     }
+    if (now - _abnormalEnterLastAt < 140) {return true;}
+    _abnormalEnterLastAt = now;
     const curData = filteredData();
     if (!curData.length) {return false;}
     if (wsAbnormalIndex < 0 || wsAbnormalIndex >= curData.length) {wsAbnormalIndex = 0;}
@@ -9515,6 +9529,9 @@ window.addEventListener('keydown',function(e){
   }
 
   function refocusAbnormalWorkbench() {
+    // 8.10.13: 用户正在输入框打字（如工作台搜索框）时不抢焦点
+    const _ae = document.activeElement;
+    if (_ae && /^(INPUT|TEXTAREA|SELECT)$/i.test(_ae.tagName)) {return;}
     releaseNativeReportFocus();
     try {
       (document.defaultView || window).focus(); // 8.9.0: 聚焦工作台所在窗口，而非固定 top
@@ -10286,10 +10303,12 @@ window.addEventListener('keydown',function(e){
     return !!(iframeWin && reportDR && isReportDetailLoaded(iframeWin, reportDR));
   }
 
-  async function prewarmAbnormalAuditNative(specimen) {
+  async function prewarmAbnormalAuditNative(specimen, options = {}) {
     // 详情审核进行中也不预热：避免列表焦点标本（详情内 ↑↓ 切换后可能与详情标本不一致）
     // 的预热与详情审核双线程驱动同一原生页（8.5.4+ 修复，详见 M1 竞态）
-    if (!specimen || _abnormalAuditInProgress || _auditInProgress || _detailAuditInProgress || !isWSVisible()) {return;}
+    // 8.10.13: 允许上一条审核已确认成功时，提前预热下一条（forceNext），消除断链
+    const allowAuditInProgress = !!(options && options.forceNext);
+    if (!specimen || (!allowAuditInProgress && _abnormalAuditInProgress) || _auditInProgress || _detailAuditInProgress || !isWSVisible()) {return;}
     const reportDR = String(specimen.ReportDR || '');
     if (isAbnormalSpecimenReady(reportDR)) {
       _abnormalNativeReadyDR = reportDR;
@@ -10518,21 +10537,23 @@ window.addEventListener('keydown',function(e){
     }
     renderWSCategoryBar();
     updateWSFooter();
-    scheduleAbnormalFocusRecovery();
+    // 8.10.13: 去除此处的重复 scheduleAbnormalFocusRecovery，由 auditAbnormalSpecimen 的 finally 统一收口
   }
 
   function noteAbnormalNativeReadyAfterAudit(iframeWin, removedDR) {
     _abnormalNativeReadyDR = '';
     clearNativeUserSelectLock();
     const data = filteredData();
-    if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {return;}
-    const next = data[wsAbnormalIndex];
+    if (!data.length) {return;}
+    const targetIdx = Math.max(0, Math.min(wsAbnormalIndex, data.length - 1));
+    const next = data[targetIdx];
     if (!next || String(next.ReportDR) === String(removedDR)) {return;}
     if (isReportDetailLoaded(iframeWin, next.ReportDR)) {
       _abnormalNativeReadyDR = String(next.ReportDR);
       dbg('异常审核: 原生已定位下一条', next.ReportDR);
     } else {
-      prewarmAbnormalAuditNative(next).catch(() => {});
+      // 8.10.13: 传入 forceNext 穿透当前条审核进行中守卫，使下一条预热无缝并行
+      prewarmAbnormalAuditNative(next, { forceNext: true }).catch(() => {});
     }
   }
 
@@ -10582,37 +10603,17 @@ window.addEventListener('keydown',function(e){
       });
     }
     if (!preStatus4 && verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
-    // 延迟二次校验：原生状态回写可能有 1~2s 延迟，避免「已成功但脚本误判失败」
-    // 8.5.35: 改 250ms 轮询早退（成功即返回），不再固定白等 1.5s 只验一次
+    // 延迟二次校验：原生状态回写可能有延迟，做短轮询早退；深层兜底由外层 confirmAuditEventuallyLive 处理
     if (!result && !abortCheck()) {
-      let delayedOK = false;
-      for (let _dv = 0; _dv < 6 && !abortCheck(); _dv++) {
-        await sleep(250);
+      for (let _dv = 0; _dv < 4 && !abortCheck(); _dv++) {
+        await sleep(120);
         iframeWin = getReportIframeWin() || iframeWin;
-        // 8.5.53: 复检标本 verify 只认状态变 3；softAuditSuccessHint 有动态信号（IsAuthed/IsSaveSuccess）可信
         if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
             softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 })) {
-          delayedOK = true;
-          break;
+          dbg('延迟二次校验：标本已审核成功（原生状态）');
+          closeNativeAuditSuccessMessage(iframeWin);
+          return true;
         }
-      }
-      if (delayedOK) {
-        dbg('延迟二次校验：标本已审核成功（原生状态）');
-        closeNativeAuditSuccessMessage(iframeWin);
-        return true;
-      }
-      // 刷新 wsData 后再检查状态（审核期间轮询可能已停止）
-      try {
-        const loadResult = await loadWSData({ force: false });
-        if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData');}
-      } catch (e) {}
-      const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
-      const liveStatus = liveRow ? String(liveRow.Status || liveRow.ReportStatus || '') : '';
-      // 8.5.53: 复检标本（preStatus4）审核后状态需变 3 才算成功（审核前就是 4）
-      if (liveStatus === '3' || (!preStatus4 && liveStatus === '4')) {
-        dbg('延迟二次校验：标本已审核成功（wsData 状态）');
-        closeNativeAuditSuccessMessage(iframeWin);
-        return true;
       }
     }
     // 最终返回前也关闭可能残留的原生弹窗
@@ -10665,8 +10666,8 @@ window.addEventListener('keydown',function(e){
   async function confirmAuditEventuallyLive(iframeWin, reportDR, specimen) {
     // 8.5.53: 复检标本（审核前 status 4）verify 只认状态变 3
     const pre4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
-    for (let _dv = 0; _dv < 8; _dv++) {
-      await sleep(250);
+    for (let _dv = 0; _dv < 6; _dv++) {
+      await sleep(150);
       iframeWin = getReportIframeWin() || iframeWin;
       if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !pre4 }) ||
           softAuditSuccessHint(iframeWin, reportDR, { accept4: !pre4 })) {
@@ -10675,13 +10676,13 @@ window.addEventListener('keydown',function(e){
       }
     }
     // 刷新 wsData 后再检查状态（审核期间轮询已停止）。
-    // 分类进行中 force:false 会被跳过（8.5.4），重试几次等分类完成，
+    // 分类进行中 force:false 会被跳过（8.5.4），重试等分类完成，
     // 避免读到审核前旧状态把已成功误报为失败。
     try {
-      for (let _rt = 0; _rt < 4; _rt++) {
+      for (let _rt = 0; _rt < 2; _rt++) {
         const loadResult = await loadWSData({ force: false });
         if (loadResult && !loadResult.skipped) {dbg('延迟校验前已刷新 wsData'); break;}
-        await sleep(2000);
+        await sleep(800);
       }
     } catch (e) {}
     const liveRow = wsData.find(r => String(r.ReportDR) === String(reportDR));
@@ -10800,7 +10801,6 @@ window.addEventListener('keydown',function(e){
       }
       if (ft) {ft.textContent = `审核：准备原生页面 ${specimen.PatName || specimen.Labno || targetDR}`;}
       releaseNativeReportFocus(); // 先 blur 原生编辑焦点，避免审核按钮/回车被结果格吃掉
-      await awaitAbnormalPrewarm(specimen);
 
       let iframeWin = getReportIframeWin();
       if (!iframeWin) {
@@ -11950,6 +11950,19 @@ window.addEventListener('keydown',function(e){
       return;
     }
     currentDetailSpecimen = specimen;
+    // 8.10.13: 同步工作台底层聚焦卡片与索引，Esc 退出面板后焦点与列表严格对齐
+    _abnormalFocusDR = String(specimen.ReportDR || '');
+    if (sourceIndex !== undefined && sourceIndex >= 0) {
+      wsAbnormalIndex = sourceIndex;
+    }
+    const cards = document.querySelectorAll('.ws-abnormal-card');
+    cards.forEach(c => {
+      if (String(c.dataset.rdr || '') === _abnormalFocusDR) {
+        c.classList.add('focused');
+      } else {
+        c.classList.remove('focused');
+      }
+    });
     // 始终按标本实时分类桶校准 source，避免详情内自动跳转/方向键切换后沿用旧桶
     // （8.5.1 误拦正常标本的根因：跳转后 detailSource 仍是异常的）
     detailSource = getWSAuditBucket(specimen) === 'normal' ? 'normal' : 'abnormal';
@@ -12042,6 +12055,7 @@ window.addEventListener('keydown',function(e){
   }
 
   let _detailAuditInProgress = false;
+  let _detailAuditQueued = false; // 8.10.13: 详情面板 Enter 排队标记，连续按 Enter 不再吃键
 
   // 从详情面板审核当前标本并自动跳转下一个
   // 入口：详情「审核」按钮 / Enter —— 同一函数，可同时保留（F4 在详情内已取消，8.5.1）
@@ -12064,8 +12078,12 @@ window.addEventListener('keydown',function(e){
       return;
     }
     if (_detailAuditInProgress) {
-      dbg('详情审核跳过: 进行中');
-      showToast('正在审核当前详情，请稍候', 'info');
+      // 8.10.13: 详情审核进行中再次按 Enter，自动排队下一条，不丢弃按键
+      if (!_detailAuditQueued) {
+        _detailAuditQueued = true;
+        _setDetailAuditBusy(true, '⏳ 已排队下一条…');
+        showToast('下一条已排队，当前条完成后自动继续', 'info');
+      }
       return;
     }
     if (_auditInProgress) {
@@ -12099,9 +12117,15 @@ window.addEventListener('keydown',function(e){
       _auditingPreStatus4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
 
       let nextReportDR = null;
-      if (source && idx >= 0) {
+      if (source) {
+        // 8.10.13: 按 ReportDR 现场精准查找下一条，避免下标偏移漏审或越界
         const data = filteredData();
-        if (idx + 1 < data.length) {nextReportDR = data[idx + 1].ReportDR;}
+        const curIdx = data.findIndex(r => String(r.ReportDR) === String(specimen.ReportDR));
+        if (curIdx >= 0 && curIdx + 1 < data.length) {
+          nextReportDR = data[curIdx + 1].ReportDR;
+        } else if (idx >= 0 && idx + 1 < data.length) {
+          nextReportDR = data[idx + 1].ReportDR;
+        }
       }
 
       let iframeWin = getReportIframeWin();
@@ -12263,9 +12287,20 @@ window.addEventListener('keydown',function(e){
       if (resumeWSRefresh && isWSVisible()) {startWSRefresh();}
       // 详情审核结束：后台预热当前（下一条）标本，保证连续 Enter 秒审
       if (isDetailPanelVisible() && currentDetailSpecimen) {
-        scheduleDetailPrewarm(currentDetailSpecimen, 50);
+        scheduleDetailPrewarm(currentDetailSpecimen, 20); // 8.10.13: 缩短预热延时至 20ms
       }
       dbg('详情审核结束, inProgress 重置为 false');
+      // 8.10.13: 处理排队的 Enter，实现无缝连续审核
+      if (_detailAuditQueued) {
+        _detailAuditQueued = false;
+        if (isDetailPanelVisible() && currentDetailSpecimen) {
+          setTimeout(() => {
+            if (isDetailPanelVisible() && currentDetailSpecimen && !_detailAuditInProgress) {
+              void _auditFromDetailPanel();
+            }
+          }, 30);
+        }
+      }
     }
   }
 
@@ -12279,6 +12314,7 @@ window.addEventListener('keydown',function(e){
       dbg('审核进行中，忽略关闭详情面板');
       return;
     }
+    _detailAuditQueued = false; // 8.10.13: 关闭面板清空排队
     _removeDetailKeyHandler();
     if (detailPanel) {
       detailPanel.classList.remove('show');
@@ -15386,10 +15422,8 @@ window.addEventListener('keydown',function(e){
           options.onTick(elapsed);
         } catch (e) {}
       }
-      // 每隔约 1s 做一次跨路径快速成功校验（解决「后台已审成、UI 状态慢半拍」的假卡顿）
-      // 8.10.0: 取模窗口（elapsed % 1000 < 120）配 140ms sleep 可能整个窗口被跳过，
-      // 造成约 1s 的校验空窗——改为「距上次校验 ≥1000ms」的时间戳判定
-      if (typeof options.quickVerify === 'function' && elapsed > 400 && (now - lastQuickVerifyAt >= 1000 || sawSaveSuccess)) {
+      // 每隔约 1s 做一次跨路径快速成功校验；8.10.13: 若已捕获到 sawSaveSuccess 保存信号则不受 400ms 限制立即验出早退
+      if (typeof options.quickVerify === 'function' && ((elapsed > 400 && now - lastQuickVerifyAt >= 1000) || sawSaveSuccess)) {
         lastQuickVerifyAt = now;
         try {
           if (options.quickVerify()) {
@@ -18067,23 +18101,31 @@ window.addEventListener('keydown',function(e){
           let domClicked = false;
           try {
             const gridBody = el.closest('.datagrid').find('.datagrid-body');
-            const rows = gridBody.find('tr.datagrid-row');
-            rows.each(function () {
-              const rowJq = jq(this);
-              const rowIdx = rowJq.attr('datagrid-row-index');
-              if (rowIdx !== undefined) {
-                const rowData = el.datagrid('getRows')[parseInt(rowIdx)];
-                if (rowData && String(rowData.ReportDR) === String(reportDR)) {
-                  // 确认是父行（非子行）
-                  if (!rowJq.hasClass('treegrid-tr-tree') && !rowJq.hasClass('datagrid-row-child')) {
-                    rowJq.trigger('click');
-                    domClicked = true;
-                    dbg('selectNativeRow: DOM 点击行 index=' + rowIdx, 'ReportDR=' + reportDR);
-                    return false; // break each
+            // 8.10.13: 优先用 O(1) 属性选择器直达目标行，避免几百行全量 DOM each() 扫描
+            const directRow = gridBody.find('tr.datagrid-row[datagrid-row-index="' + targetIdx + '"]');
+            if (directRow.length && !directRow.hasClass('treegrid-tr-tree') && !directRow.hasClass('datagrid-row-child')) {
+              directRow.trigger('click');
+              domClicked = true;
+              dbg('selectNativeRow: DOM 直接定位点击行 index=' + targetIdx, 'ReportDR=' + reportDR);
+            } else {
+              const rows = gridBody.find('tr.datagrid-row');
+              rows.each(function () {
+                const rowJq = jq(this);
+                const rowIdx = rowJq.attr('datagrid-row-index');
+                if (rowIdx !== undefined) {
+                  const rowData = el.datagrid('getRows')[parseInt(rowIdx)];
+                  if (rowData && String(rowData.ReportDR) === String(reportDR)) {
+                    // 确认是父行（非子行）
+                    if (!rowJq.hasClass('treegrid-tr-tree') && !rowJq.hasClass('datagrid-row-child')) {
+                      rowJq.trigger('click');
+                      domClicked = true;
+                      dbg('selectNativeRow: DOM 回退遍历点击行 index=' + rowIdx, 'ReportDR=' + reportDR);
+                      return false; // break each
+                    }
                   }
                 }
-              }
-            });
+              });
+            }
           } catch (e) {
             dbg('selectNativeRow: DOM 点击失败', e.message);
           }
@@ -18274,16 +18316,22 @@ window.addEventListener('keydown',function(e){
     return idx < queue.items.length ? queue.items[idx] : null;
   }
 
-  function prepareNextBatchItemAfterAudit(iframeWin, queue, currentItem) {
+  async function prepareNextBatchItemAfterAudit(iframeWin, queue, currentItem) {
     const next = peekNextBatchItem(queue);
     if (!next || !iframeWin || !iframeWin.me) {return false;}
     if (String(next.mdr || '') !== String(currentItem.mdr || '')) {return false;}
-    try {
-      const sel = iframeWin.me.selectedGrid ? iframeWin.me.selectedGrid.datagrid('getSelected') : null;
-      return !!(sel && String(sel.ReportDR || '') === String(next.reportDR || ''));
-    } catch (e) {
-      return false;
+    const target = String(next.reportDR || '');
+    // 8.10.13: 原生 selectRow 往往伴随微小异步延迟，给予最多 3 次（约 50ms）微轮询吸附
+    for (let i = 0; i < 3; i++) {
+      try {
+        const me = iframeWin.me;
+        const sel = me && me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
+        if (sel && String(sel.ReportDR || '') === target) {return true;}
+        if (me && String(me.curReportDR || '') === target) {return true;}
+      } catch (e) {}
+      if (i < 2) {await sleep(25);}
     }
+    return false;
   }
 
   function requeueAuditItem(queue, item, reason) {
@@ -18801,7 +18849,10 @@ window.addEventListener('keydown',function(e){
           if (curWG) {queue.caReadyByWg[curWG] = true;}
         }
 
-        batchListFresh = false;
+        // 8.10.13: 保持当前批审列表保鲜状态；若机台发生变动且非全部仪器列表时才失效
+        if (batchLastMdr && item.mdr && String(item.mdr) !== String(batchLastMdr)) {
+          batchListFresh = false;
+        }
         totalCount = queue.items.length;
         let etaStr = '';
         if (queue.current > 0) {
@@ -19063,7 +19114,7 @@ window.addEventListener('keydown',function(e){
             queue.caReadyByWg[itemWg] = true;
             // 8.5.54: 复检标本批审成功 → 记录「曾复审」
             if (_itemPre4) {recheckDoneAdd(item.reportDR);}
-            if (prepareNextBatchItemAfterAudit(iframeWin, queue, item)) {
+            if (await prepareNextBatchItemAfterAudit(iframeWin, queue, item)) {
               batchSkipSelect = true;
               dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
             }
