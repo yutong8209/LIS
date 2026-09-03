@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.13
+// @version      8.10.14
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -568,13 +568,28 @@
     el.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
-  // 阻止 Chrome 对本密码框弹「保存/更新密码」：填值前先标 autocomplete="new-password"
-  // （注册表单标准做法）。比靠 MutationObserver/定时补扫更可靠——填的那一刻就保证标记在位。
+  // 8.10.14: 彻底阻止 Chrome（尤其是 Windows 端）弹「保存/更新密码」提示：
+  // 1. Chrome 密码管理器仅对 input[type="password"] 捕获提交与比对旧密码弹更新提示。
+  //    若为 CA 认证或非登录密码框，将其 type 改为 text 并配合 -webkit-text-security: disc（黑圆点遮蔽），
+  //    从根源上破坏 Chrome 密码表单分类器的特征匹配。
+  // 2. 避免使用 autocomplete="new-password"——现代 Chromium 会把 new-password 作为修改密码表单的强特征，
+  //    提交时反而主动弹出「是否更新密码」；改用 autocomplete="off" + data-lpignore="true"。
   function fillPwdNoSave(el, value) {
+    if (!el) {return;}
     try {
-      if (el && el.setAttribute && el.getAttribute('autocomplete') !== 'new-password') {
-        el.setAttribute('autocomplete', 'new-password');
+      const isCA = (el.id && /password|cawd|caping/i.test(el.id)) ||
+                   (el.ownerDocument && el.ownerDocument.getElementById('Div_Caping'));
+      if (isCA || el.id === 'txt_Password' || el.id === 'ps_CAPassword') {
+        el.type = 'text';
+        el.setAttribute('type', 'text');
+        el.style.webkitTextSecurity = 'disc';
+        el.style.setProperty('-webkit-text-security', 'disc', 'important');
       }
+      el.setAttribute('autocomplete', 'off');
+      el.setAttribute('data-lpignore', 'true');
+      el.setAttribute('data-1p-ignore', 'true');
+      el.setAttribute('data-form-type', 'other');
+      if (el.form) {el.form.setAttribute('autocomplete', 'off');}
     } catch (e) {}
     setNativeInputValue(el, value);
   }
@@ -13127,7 +13142,7 @@ window.addEventListener('keydown',function(e){
       o.innerHTML = `<div id="lis-pwdp">
                 <h4>🔐 密码管理</h4>
                 <label style="font-size:13px;color:#555;display:block;margin-bottom:6px">审核密码（与登录密码一致）</label>
-                <input type="password" id="lis-pwdi" placeholder="输入审核密码" />
+                <input type="password" id="lis-pwdi" placeholder="输入审核密码" autocomplete="off" data-lpignore="true" />
                 <div class="sts" id="lis-pwds"></div>
                 <label style="font-size:13px;color:#555;display:block;margin-bottom:6px;margin-top:16px">CA 认证账号（capping 多账号）</label>
                 <div id="lis-caaccts" style="max-height:200px;overflow-y:auto;border:1px solid #e3e8ef;border-radius:6px;padding:6px;margin-bottom:10px"></div>
@@ -13136,8 +13151,8 @@ window.addEventListener('keydown',function(e){
                     <button id="lis-caedit-cx" style="background:none;border:none;color:#4f46e5;font-size:14px;cursor:pointer;line-height:1">✕</button>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-                    <input type="text" id="lis-caui" placeholder="用户名" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
-                    <input type="password" id="lis-cawdi" placeholder="CA 密码" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
+                    <input type="text" id="lis-caui" placeholder="用户名" autocomplete="off" data-lpignore="true" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
+                    <input type="text" id="lis-cawdi" placeholder="CA 密码" autocomplete="off" data-lpignore="true" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px;-webkit-text-security:disc;" />
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
                     <input type="text" id="lis-canote" placeholder="备注（如：A班 / 免疫）" style="flex:1;height:28px;border:1px solid #cfd8e0;border-radius:5px;padding:0 8px;font-size:12px" />
@@ -15711,10 +15726,44 @@ window.addEventListener('keydown',function(e){
     } catch (e) {}
   }
 
+  // 8.10.14: CA 登录窗防 Chrome「更新密码」提示净化器
+  // Chrome 密码管理器仅当表单包含 input[type="password"] 时才会提取并比对旧密码弹「是否更新密码」。
+  // 将 CA 窗口内的密码框全部转为 type="text" 并用 -webkit-text-security: disc 遮蔽显示，
+  // 既保持黑圆点密码视觉效果，又彻底破坏 Chrome 密码表单特征，杜绝弹窗。
+  function sanitizeCADocPasswordInputs(caDoc) {
+    if (!caDoc) {return;}
+    try {
+      const pwds = caDoc.querySelectorAll('input[type="password"], #txt_Password, #ps_CAPassword');
+      pwds.forEach(inp => {
+        try {
+          inp.type = 'text';
+          inp.setAttribute('type', 'text');
+          inp.style.webkitTextSecurity = 'disc';
+          inp.style.setProperty('-webkit-text-security', 'disc', 'important');
+          inp.setAttribute('autocomplete', 'off');
+          inp.setAttribute('data-lpignore', 'true');
+          inp.setAttribute('data-1p-ignore', 'true');
+          inp.setAttribute('data-form-type', 'other');
+          if (inp.form) {inp.form.setAttribute('autocomplete', 'off');}
+        } catch (e) {}
+      });
+      const users = caDoc.querySelectorAll('#txt_UserCode, #st_CAUser, input[id*="UserCode"]');
+      users.forEach(u => {
+        try {
+          u.setAttribute('autocomplete', 'off');
+          u.setAttribute('data-lpignore', 'true');
+          u.setAttribute('data-1p-ignore', 'true');
+          u.setAttribute('data-form-type', 'other');
+        } catch (e) {}
+      });
+    } catch (e) {}
+  }
+
   // 只在二维码界面时切到 capping；已在 capping 时禁止再点（点了会切回二维码）
   function ensureCappingFormVisible(caDoc) {
     if (!caDoc) {return false;}
     try {
+      sanitizeCADocPasswordInputs(caDoc);
       const pwd = caDoc.getElementById('txt_Password');
       const divCap = caDoc.getElementById('Div_Caping');
       let capShown = false;
@@ -15763,6 +15812,7 @@ window.addEventListener('keydown',function(e){
         caIframe.contentDocument.body &&
         caIframe.contentDocument.body.childElementCount > 0
       ) {
+        sanitizeCADocPasswordInputs(caIframe.contentDocument);
         return caIframe.contentDocument;
       }
     } catch (e) {}
@@ -15879,8 +15929,8 @@ window.addEventListener('keydown',function(e){
         let pwdInput = caDoc.getElementById('txt_Password') || caDoc.querySelector('input[type="password"]');
         if (!pwdInput) {
           for (const inp of caDoc.querySelectorAll('input')) {
-            if (inp.type === 'password') {pwdInput = inp;}
-            if ((inp.type === 'text' || !inp.type) && !userInput) {userInput = inp;}
+            if (inp.type === 'password' || inp.id === 'txt_Password' || inp.id === 'ps_CAPassword') {pwdInput = inp;}
+            if ((inp.type === 'text' || !inp.type) && !userInput && inp.id !== 'txt_Password') {userInput = inp;}
           }
         }
         if (!pwdInput) {
@@ -15891,8 +15941,28 @@ window.addEventListener('keydown',function(e){
           continue;
         }
 
+        // 8.10.14: 提交前强制将密码框伪装为 text + webkit-text-security，断开 Chrome 密码表单识别
+        sanitizeCADocPasswordInputs(caDoc);
+        if (userInput) {
+          try {
+            userInput.setAttribute('autocomplete', 'off');
+            userInput.setAttribute('data-lpignore', 'true');
+            userInput.setAttribute('data-form-type', 'other');
+          } catch (e) {}
+        }
+        if (pwdInput) {
+          try {
+            pwdInput.type = 'text';
+            pwdInput.setAttribute('type', 'text');
+            pwdInput.style.webkitTextSecurity = 'disc';
+            pwdInput.style.setProperty('-webkit-text-security', 'disc', 'important');
+            pwdInput.setAttribute('autocomplete', 'off');
+            pwdInput.setAttribute('data-lpignore', 'true');
+            pwdInput.setAttribute('data-form-type', 'other');
+          } catch (e) {}
+        }
         if (userInput && caUser) {setNativeInputValue(userInput, caUser);}
-        fillPwdNoSave(pwdInput, caPwd);
+        setNativeInputValue(pwdInput, caPwd);
         await sleep(200);
 
         let loginBtn =
@@ -22460,9 +22530,21 @@ window.addEventListener('keydown',function(e){
     const apply = doc => {
       if (!doc || !doc.body) {return;}
       try {
+        // 8.10.14: CA 登录窗（txt_Password / ps_CAPassword / #win_CAUserLogin 内）彻底转为 text + disc，破除密码表单识别
+        sanitizeCADocPasswordInputs(doc);
         doc.querySelectorAll('input[type="password"]').forEach(inp => {
-          if (inp.getAttribute('autocomplete') !== 'new-password') {
-            inp.setAttribute('autocomplete', 'new-password');
+          if (inp.id === 'txt_Password' || inp.id === 'ps_CAPassword' || (inp.closest && inp.closest('#win_CAUserLogin, #Div_Caping, #div_UkeyLogin'))) {
+            try {
+              inp.type = 'text';
+              inp.setAttribute('type', 'text');
+              inp.style.webkitTextSecurity = 'disc';
+              inp.style.setProperty('-webkit-text-security', 'disc', 'important');
+              inp.setAttribute('autocomplete', 'off');
+              inp.setAttribute('data-lpignore', 'true');
+            } catch (e) {}
+          } else if (inp.getAttribute('autocomplete') !== 'off') {
+            inp.setAttribute('autocomplete', 'off');
+            inp.setAttribute('data-lpignore', 'true');
           }
         });
         // 递归处理同源嵌套 iframe（CA 认证窗是 报告页iframe 里的嵌套 iframe，querySelectorAll 不跨 iframe）
@@ -22474,8 +22556,21 @@ window.addEventListener('keydown',function(e){
       } catch (e) {}
     };
     const mark = el => {
-      if (el.getAttribute && el.getAttribute('autocomplete') !== 'new-password') {
-        try {el.setAttribute('autocomplete', 'new-password');} catch (e) {}
+      if (!el) {return;}
+      if (el.id === 'txt_Password' || el.id === 'ps_CAPassword' || (el.closest && el.closest('#win_CAUserLogin, #Div_Caping, #div_UkeyLogin'))) {
+        try {
+          el.type = 'text';
+          el.setAttribute('type', 'text');
+          el.style.webkitTextSecurity = 'disc';
+          el.style.setProperty('-webkit-text-security', 'disc', 'important');
+          el.setAttribute('autocomplete', 'off');
+          el.setAttribute('data-lpignore', 'true');
+        } catch (e) {}
+      } else {
+        try {
+          el.setAttribute('autocomplete', 'off');
+          el.setAttribute('data-lpignore', 'true');
+        } catch (e) {}
       }
     };
     apply(document);
@@ -22483,11 +22578,21 @@ window.addEventListener('keydown',function(e){
       for (const m of muts) {
         for (const n of m.addedNodes) {
           if (n.nodeType !== 1) {continue;}
-          if (n.tagName === 'IFRAME') {
-            try {
-              n.addEventListener('load', () => setTimeout(() => apply(n.contentDocument), 60));
-            } catch (e) {}
+          if (n.tagName === 'IFRAME' || (n.querySelector && n.querySelector('iframe'))) {
+            const ifrs = n.tagName === 'IFRAME' ? [n] : Array.from(n.querySelectorAll('iframe'));
+            ifrs.forEach(ifr => {
+              try {
+                ifr.addEventListener('load', () => setTimeout(() => apply(ifr.contentDocument), 60));
+                if (ifr.contentDocument) {apply(ifr.contentDocument);}
+              } catch (e) {}
+            });
             continue;
+          }
+          if (n.id === 'win_CAUserLogin' || (n.querySelector && n.querySelector('#win_CAUserLogin, #Div_Caping'))) {
+            try {
+              const caDoc = n.querySelector('iframe') ? n.querySelector('iframe').contentDocument : null;
+              if (caDoc) {sanitizeCADocPasswordInputs(caDoc);}
+            } catch (e) {}
           }
           if (n.matches && n.matches('input[type="password"]')) {mark(n);}
           else if (n.querySelectorAll) {
@@ -22499,21 +22604,12 @@ window.addEventListener('keydown',function(e){
       }
     });
     ob.observe(document, { childList: true, subtree: true });
-    // iframe 延迟补扫（个别框架 onload 前密码框已就位）
-    // 8.9.0: 跑 2 分钟后自动退出——MutationObserver 已覆盖新增节点，常驻 3s 全量扫 iframe
-    // 在长驻页面是纯开销（补扫只是兜底，页面加载完成后的 iframe 由 load 事件覆盖）
-    const _pwdScanStart = Date.now();
-    const ifrTimer = setInterval(() => {
-      try {
-        if (Date.now() - _pwdScanStart > 120000) {clearInterval(ifrTimer); return;}
-        document.querySelectorAll('iframe').forEach(f => {
-          if (f.contentDocument) {apply(f.contentDocument);}
-        });
-      } catch (e) {}
-    }, 3000);
+    // 8.10.14: 窗口重获焦点时做一次增量校验，确保挂载一整天后弹出的 CA 窗口即时脱密
+    window.addEventListener('focus', () => {
+      try {apply(document);} catch (e) {}
+    });
     window.addEventListener('pagehide', () => {
       try {ob.disconnect();} catch (e) {}
-      clearInterval(ifrTimer);
     });
   }
 
