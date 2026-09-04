@@ -1,52 +1,76 @@
+<# :
 @echo off
 chcp 936 >nul
-title ÆôÓÃ LIS ¹¤×÷Ì¨Ò»¼ü»½ĞÑÔ­Éú IE ²¡Àú
+title å¯ç”¨ LIS å·¥ä½œå°ä¸€é”®å”¤é†’åŸç”Ÿ IE ç—…å†
 echo ============================================================
-echo   ÕıÔÚÎªµ±Ç°µçÄÔÅäÖÃ¡¾¹¤×÷Ì¨Ò»¼ü»½ĞÑÔ­Éú 32 Î» IE ²¡Àú¡¿...
+echo   æ­£åœ¨ä¸ºå½“å‰ç”µè„‘é…ç½®ã€å·¥ä½œå°ä¸€é”®å”¤é†’åŸç”Ÿ 32 ä½ IE ç—…å†ã€‘...
 echo ============================================================
 echo.
-
-set "TARGET_DIR=%LOCALAPPDATA%\LIS-Tools"
-if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
-set "VBS_PATH=%TARGET_DIR%\launch_ie.vbs"
-
-:: Ğ´Èë´¿¾» VBS Æô¶¯½Å±¾
-(
-echo ' iMedical LIS - Native 32-bit IE Launcher
-echo Dim ie, url
-echo If WScript.Arguments.Count ^> 0 Then
-echo     url = WScript.Arguments^(0^)
-echo Else
-echo     url = "http://192.168.31.111:9111/iMedicalLIS/login/form/Index.aspx"
-echo End If
-echo If InStr^(LCase^(url^), "lis-ie://"^) = 1 Then
-echo     url = Mid^(url, 10^)
-echo ElseIf InStr^(LCase^(url^), "lis-ie:"^) = 1 Then
-echo     url = Mid^(url, 8^)
-echo End If
-echo url = Replace^(url, Chr^(34^), ""^)
-echo On Error Resume Next
-echo Set ie = CreateObject^("InternetExplorer.Application"^)
-echo If Err.Number ^<^> 0 Then
-echo     MsgBox "Failed to launch native IE: " ^& Err.Description, 16, "Error"
-echo     WScript.Quit
-echo End If
-echo ie.Visible = True
-echo ie.Navigate url
-) > "%VBS_PATH%"
-
-:: ×¢²á lis-ie:// Ğ­Òé£¨½ö×¢²áµ±Ç°ÓÃ»§ HKCU£¬Ãâ¹ÜÀíÔ±È¨ÏŞ£¬²»µ¯ UAC ¾¯¸æ£©
-reg add "HKCU\Software\Classes\lis-ie" /ve /d "URL:LIS Native IE Launcher Protocol" /f >nul
-reg add "HKCU\Software\Classes\lis-ie" /v "URL Protocol" /d "" /f >nul
-powershell -NoProfile -Command "Set-ItemProperty -Path 'HKCU:\Software\Classes\lis-ie\shell\open\command' -Name '(Default)' -Value ('wscript.exe "' + $env:LOCALAPPDATA + '\LIS-Tools\launch_ie.vbs" "%1"')" >nul
-
-:: ÔÚ×ÀÃæ´´½¨¿ì½İ·½Ê½£¨·½±ãÖ±½ÓË«»÷Ê¹ÓÃ£©
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\Æô¶¯²¡Àú-Ô­ÉúIE.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '""' + $env:LOCALAPPDATA + '\LIS-Tools\launch_ie.vbs""'; $s.IconLocation = 'shell32.dll,220'; $s.Save()" 2>nul
-
-echo [OK] ÅäÖÃÍê³É£¡
-echo.
-echo 1. ×ÀÃæÒÑÉú³É¿ì½İ·½Ê½£º¡¾Æô¶¯²¡Àú-Ô­ÉúIE¡¿£¨Ë«»÷Ö±½Ó´ò¿ª£©
-echo 2. ÏµÍ³ÒÑ×¢²á lis-ie:// Ö±Á¬Ğ­Òé
-echo 3. ÏÖÔÚÔÚ LIS ¹¤×÷Ì¨µã»÷¡¾Ô­ÉúIE´ò¿ª¡¿£¬¼´¿ÉÖ±½Óµ÷³ö¸Ã»¼Õß²¡Àú£¡
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((Get-Content -LiteralPath '%~f0') -join [Environment]::NewLine)"
 echo.
 pause
+exit /b
+#>
+$dir = Join-Path $env:LOCALAPPDATA 'LIS-Tools'
+if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+$vbs = Join-Path $dir 'launch_ie.vbs'
+$code = @'
+' iMedical LIS - Native 32-bit IE Launcher
+Dim ie, ws, url, rawUrl
+url = ""
+If WScript.Arguments.Count > 0 Then
+    rawUrl = Trim(WScript.Arguments(0))
+End If
+If Len(rawUrl) > 0 Then
+    url = rawUrl
+    url = Replace(url, "lis-ie://", "", 1, -1, 1)
+    url = Replace(url, "lis-ie:", "", 1, -1, 1)
+    url = Replace(url, Chr(34), "")
+    url = Trim(url)
+End If
+If Len(url) = 0 Or InStr(LCase(url), "http") <> 1 Then
+    On Error Resume Next
+    Dim html, clip
+    Set html = CreateObject("htmlfile")
+    clip = Trim(html.parentWindow.clipboardData.getData("text"))
+    If InStr(LCase(clip), "http://") = 1 Or InStr(LCase(clip), "https://") = 1 Then
+        If InStr(clip, "iMedical") > 0 Or InStr(clip, "websys.csp") > 0 Then
+            url = clip
+        End If
+    End If
+    On Error GoTo 0
+End If
+If Len(url) = 0 Or InStr(LCase(url), "http") <> 1 Then
+    url = "http://192.168.31.111:9111/iMedicalLIS/login/form/Index.aspx"
+End If
+On Error Resume Next
+Set ie = CreateObject("InternetExplorer.Application")
+If Err.Number <> 0 Then
+    MsgBox "Failed to launch native IE: " & Err.Description, 16, "Error"
+    WScript.Quit
+End If
+ie.Visible = True
+ie.Navigate url
+Set ws = CreateObject("WScript.Shell")
+WScript.Sleep 300
+ws.AppActivate "Internet Explorer"
+'@
+$code | Out-File -FilePath $vbs -Encoding ascii
+New-Item -Path 'HKCU:\Software\Classes\lis-ie\shell\open\command' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Classes\lis-ie' -Name '(Default)' -Value 'URL:LIS Native IE Launcher Protocol'
+Set-ItemProperty -Path 'HKCU:\Software\Classes\lis-ie' -Name 'URL Protocol' -Value ''
+Set-ItemProperty -Path 'HKCU:\Software\Classes\lis-ie\shell\open\command' -Name '(Default)' -Value ('wscript.exe "' + $vbs + '" "%1"')
+$ws = New-Object -ComObject WScript.Shell
+$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'å¯åŠ¨ç—…å†-åŸç”ŸIE.lnk'
+$s = $ws.CreateShortcut($lnk)
+$s.TargetPath = 'wscript.exe'
+$s.Arguments = '"' + $vbs + '"'
+$s.IconLocation = 'shell32.dll,220'
+$s.Save()
+
+Write-Host "[OK] é…ç½®æˆåŠŸï¼" -ForegroundColor Green
+Write-Host ""
+Write-Host "1. æ¡Œé¢å·²ç”Ÿæˆå¿«æ·æ–¹å¼ï¼šã€å¯åŠ¨ç—…å†-åŸç”ŸIEã€‘ï¼ˆåŒå‡»ç›´æ¥æ‰“å¼€ï¼‰"
+Write-Host "2. ç³»ç»Ÿå·²æ³¨å†Œ lis-ie:// ç›´è¿åè®®"
+Write-Host "3. ç°åœ¨åœ¨ LIS å·¥ä½œå°ç‚¹å‡»ã€âš¡ åŸç”ŸIEæ‰“å¼€ã€‘ï¼Œå³å¯ç›´æ¥è°ƒå‡ºè¯¥æ‚£è€…ç—…å†ï¼"
+Write-Host ""
