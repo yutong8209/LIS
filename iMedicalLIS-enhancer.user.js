@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.19
+// @version      8.10.20
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11,8 +11,13 @@
 // @match        http://192.168.31.111:9111/EKGViewer/*
 // @match        http://192.168.31.111:9111/RISWeb3/*
 // @match        http://192.168.31.111:9111/Views/*
+// @match        http://192.168.31.111:9111/DATA_FS/*
+// @match        http://192.168.31.111:9111/DATA_US/*
 // @match        http://192.168.31.111:8800/*
 // @match        http://10.0.12.248:8800/*
+// @match        http://10.0.29.111/RISWeb3/*
+// @match        http://10.0.29.114:8080/EKGViewer/*
+// @match        http://10.0.29.111:8088/Views/*
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @updateURL    http://192.168.31.111:9111/lis-tools/iMedicalLIS-enhancer.user.js
