@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.17
+// @version      8.10.18
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
 // @match        http://10.0.29.100/imedical/*
 // @match        http://192.168.31.111:9111/imedical/*
+// @match        http://192.168.31.111:9111/EKGViewer/*
+// @match        http://192.168.31.111:9111/RISWeb3/*
+// @match        http://192.168.31.111:9111/Views/*
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @updateURL    http://192.168.31.111:9111/lis-tools/iMedicalLIS-enhancer.user.js
@@ -22501,7 +22504,7 @@ window.addEventListener('keydown',function(e){
   const EMR_MODAL_ID = 'lis-emr-modal';
 
   /**
-   * 8.10.17: 将含有内网 IP (10.0.29.100) 或相对路径的病历/报告链接转换为当前 origin (如 http://192.168.31.111:9111)
+   * 8.10.18: 将含有内网 IP (10.0.29.100, 10.0.29.111:8088, 10.0.29.111, 10.0.29.114:8080) 或相对路径的病历/报告/图像链接转换为当前网关 origin
    */
   function normalizeEMRUrl(rawUrl, baseWin = null) {
     if (!rawUrl) {return '';}
@@ -22513,10 +22516,13 @@ window.addEventListener('keydown',function(e){
     u = u.replace(/:9111:80/g, ':9111');
 
     const origin = location.origin;
-    // 全局替换任何 10.0.29.100 (含端口) 为当前 origin
+    // 全局替换任何内网 IP (含端口) 为当前 origin
+    // 10.0.29.111:8088 (PACS Viewer), 10.0.29.111 (RISWeb3), 10.0.29.114:8080 (EKG), 10.0.29.100 (LIS/HIS)
+    u = u.replace(/https?:\/\/10\.0\.29\.111:8088/gi, origin);
+    u = u.replace(/https?:\/\/10\.0\.29\.111(?::80)?(?!\d)/gi, origin);
+    u = u.replace(/https?:\/\/10\.0\.29\.114:8080/gi, origin);
     u = u.replace(/https?:\/\/10\.0\.29\.100(?::\d+)?/gi, origin);
-    u = u.replace(/\b10\.0\.29\.100:80\b/g, location.host);
-    u = u.replace(/\b10\.0\.29\.100(?::\d+)?\b/g, location.host);
+    u = u.replace(/\b10\.0\.29\.(?:100|111|114)(?::\d+)?\b/g, location.host);
 
     if (/^javascript:/i.test(u)) {
       return u;
@@ -22526,7 +22532,7 @@ window.addEventListener('keydown',function(e){
       const curWin = baseWin || (typeof window !== 'undefined' ? window : null);
       const base = (curWin && curWin.location && curWin.location.href) || location.href;
       const parsed = new URL(u, base);
-      if (parsed.hostname === '10.0.29.100') {
+      if (/^10\.0\.29\./.test(parsed.hostname)) {
         parsed.protocol = location.protocol;
         parsed.host = location.host;
       }
@@ -22540,13 +22546,14 @@ window.addEventListener('keydown',function(e){
   }
 
   /**
-   * 8.10.17: HIS / EMR 页面辅助钩子
-   * 在 /imedical/* 页面及其子 frame 中生效：
-   * 1. 劫持 window.open，将所有 10.0.29.100 或含 :9111:80 的链接转换为当前网关 origin
-   * 2. 劫持 websys_createWindow、websys_lu，拦截心电图、CT等检查报告弹窗
-   * 3. 劫持 window.showModalDialog
-   * 4. 捕获阶段拦截所有 <a> 点击，防直跳内网 IP 出现空白
-   * 5. 持续递归监控与实时拦截子 frame
+   * 8.10.18: HIS / EMR / 检查报告 / 图像页面辅助钩子
+   * 在 /imedical/*, /EKGViewer/*, /RISWeb3/*, /Views/* 等页面及所有子 frame 中生效：
+   * 1. 劫持 window.open，将所有 10.0.29.x (CT/超声/心电图/HIS) 链接转换为当前网关 origin
+   * 2. 劫持 websys_createWindow、websys_lu，拦截检查报告弹窗
+   * 3. 劫持 showImg 与 showReport (inspectrs.js)，自动转换并在当前网关打开
+   * 4. 拦截 EasyUI datagrid 的 formatterImg 与 formatterPort，将 href='#' 替换为真实 target="_blank" 链接，右键在新标签页打开完全正常
+   * 5. 捕获阶段拦截所有 <a> 点击与鼠标悬浮/右键，保证链接合法
+   * 6. 持续递归监控与实时拦截子 frame
    */
   function initHISHelper() {
     const w = uw();
@@ -22604,19 +22611,76 @@ window.addEventListener('keydown',function(e){
       };
     }
 
-    // 4. 捕获阶段拦截 <a> 标签点击
+    // 4. 重点：劫持检查报告界面的 showImg 与 showReport (来自 inspectrs.js)
+    hookFunc(w, 'showImg', orig => function (url) {
+      return orig.call(this, wrapUrl(url, w));
+    });
+    hookFunc(w, 'showReport', orig => function (url) {
+      return orig.call(this, wrapUrl(url, w));
+    });
+
+    // 5. 劫持 EasyUI 表格列格式化函数，将 href='#' 改为真实 URL
+    hookFunc(w, 'formatterImg', orig => function (value, rowData) {
+      if (rowData && rowData.ImgUrl) {
+        rowData.ImgUrl = wrapUrl(rowData.ImgUrl, w);
+      }
+      const html = orig.call(this, value, rowData);
+      if (rowData && rowData.ImgUrl && typeof html === 'string') {
+        return html.replace(/href=['"]#['"]/g, `href="${escAttr(rowData.ImgUrl)}" target="_blank"`);
+      }
+      return html;
+    });
+
+    hookFunc(w, 'formatterPort', orig => function (value, rowData) {
+      if (rowData && rowData.PortUrl) {
+        rowData.PortUrl = wrapUrl(rowData.PortUrl, w);
+      }
+      const html = orig.call(this, value, rowData);
+      if (rowData && rowData.PortUrl && typeof html === 'string') {
+        return html.replace(/href=['"]#['"]/g, `href="${escAttr(rowData.PortUrl)}" target="_blank"`);
+      }
+      return html;
+    });
+
+    // 6. DOM 检查链接清洗：动态修复页面中残留的 href='#' 的 <a> 标签
+    const fixInspectLinks = () => {
+      try {
+        const links = document.querySelectorAll('a[onclick*="showReport"], a[onclick*="showImg"]');
+        for (let i = 0; i < links.length; i++) {
+          const a = links[i];
+          const oc = a.getAttribute('onclick') || '';
+          const m = oc.match(/show(?:Report|Img)\(['"]([^'"]+)['"]\)/);
+          if (m && m[1]) {
+            const real = wrapUrl(m[1], w);
+            const curHref = a.getAttribute('href');
+            if (!curHref || curHref === '#' || curHref.startsWith('javascript:')) {
+              a.setAttribute('href', real);
+              a.setAttribute('target', '_blank');
+            }
+          }
+        }
+      } catch (e) {}
+    };
+
+    try {
+      document.addEventListener('mouseover', fixInspectLinks, true);
+      document.addEventListener('contextmenu', fixInspectLinks, true);
+    } catch (e) {}
+
+    // 7. 捕获阶段拦截 <a> 标签点击
     try {
       document.addEventListener('click', e => {
+        fixInspectLinks();
         const a = e.target && e.target.closest ? e.target.closest('a') : null;
         if (a && a.href) {
-          if (a.href.includes('10.0.29.100') || a.href.includes(':9111:80') || a.href.startsWith('IEView@')) {
+          if (a.href.includes('10.0.29.') || a.href.includes(':9111:80') || a.href.startsWith('IEView@')) {
             a.href = wrapUrl(a.href, w);
           }
         }
       }, true);
     } catch (e) {}
 
-    // 5. 持续递归监控子 frame
+    // 8. 持续递归监控子 frame
     const hookSubFrames = () => {
       try {
         for (let i = 0; i < w.frames.length; i++) {
@@ -22635,12 +22699,31 @@ window.addEventListener('keydown',function(e){
             hookFunc(subW, 'websys_lu', orig => function (url, lookup, posn) {
               return orig.call(this, wrapUrl(url, subW), lookup, posn);
             });
+            hookFunc(subW, 'showImg', orig => function (url) {
+              return orig.call(this, wrapUrl(url, subW));
+            });
+            hookFunc(subW, 'showReport', orig => function (url) {
+              return orig.call(this, wrapUrl(url, subW));
+            });
             if (subW.document && !subW.document._lisHookedClicks) {
               subW.document.addEventListener('click', e => {
                 const a = e.target && e.target.closest ? e.target.closest('a') : null;
-                if (a && a.href && (a.href.includes('10.0.29.100') || a.href.includes(':9111:80') || a.href.startsWith('IEView@'))) {
+                if (a && a.href && (a.href.includes('10.0.29.') || a.href.includes(':9111:80') || a.href.startsWith('IEView@'))) {
                   a.href = wrapUrl(a.href, subW);
                 }
+              }, true);
+              subW.document.addEventListener('contextmenu', () => {
+                try {
+                  const links = subW.document.querySelectorAll('a[onclick*="showReport"], a[onclick*="showImg"]');
+                  links.forEach(a => {
+                    const oc = a.getAttribute('onclick') || '';
+                    const m = oc.match(/show(?:Report|Img)\(['"]([^'"]+)['"]\)/);
+                    if (m && m[1]) {
+                      a.setAttribute('href', wrapUrl(m[1], subW));
+                      a.setAttribute('target', '_blank');
+                    }
+                  });
+                } catch (x) {}
               }, true);
               subW.document._lisHookedClicks = true;
             }
@@ -23226,8 +23309,9 @@ window.addEventListener('keydown',function(e){
     if (_inited) {return;}
     _inited = true;
 
-    // 8.10.17: 如果当前页面是 HIS/EMR 页面 (/imedical/*)，执行 HIS 辅助钩子，劫持 window.open / websys_createWindow / 点击外链等，防止心电图、CT等检查弹出未代理的内网空白页
-    if (location.pathname.toLowerCase().startsWith('/imedical/')) {
+    // 8.10.18: 如果当前页面是 HIS/EMR/检查报告/图像查看页面，执行辅助钩子，劫持 window.open / websys_createWindow / 点击外链等
+    const path = location.pathname.toLowerCase();
+    if (path.startsWith('/imedical/') || path.startsWith('/ekgviewer/') || path.startsWith('/risweb3/') || path.startsWith('/views/')) {
       initHISHelper();
       return;
     }
