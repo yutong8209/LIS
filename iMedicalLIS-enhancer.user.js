@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.20
+// @version      8.10.21
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11685,7 +11685,7 @@ window.addEventListener('keydown',function(e){
                 <div id="lis-detail-left-actions"></div>
                 <span class="detail-footer-hint">↑↓ 切换 | Enter 审核 | Esc 关闭</span>
                 <div class="detail-footer-actions">
-                    <button class="btn-emr" id="lis-detail-emr-btn" title="查看该患者的电子病历/HIS信息">📄 病历</button>
+                    <button class="btn-emr" id="lis-detail-emr-btn" title="查看该患者的电子病历/HIS信息（Shift+点击：直接唤起原生 32 位 IE）">📄 病历</button>
                     <button class="btn-audit" id="lis-detail-audit" title="Enter 或点击：审核当前详情标本，成功后自动跳下一条">✅ 审核</button>
                     <button class="btn-close" id="lis-detail-close-btn">关闭</button>
                 </div>
@@ -11717,7 +11717,8 @@ window.addEventListener('keydown',function(e){
           labNo: sp.Labno,
           patName: sp.PatName || '',
           regNo: sp.RegNo || '',
-          episodeNo: sp.EpisodeNo || ''
+          episodeNo: sp.EpisodeNo || '',
+          directNativeIE: !!e.shiftKey
         });
       });
     }
@@ -14664,10 +14665,18 @@ window.addEventListener('keydown',function(e){
 .lis-emr-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .lis-emr-btn{border:none;background:rgba(255,255,255,.12);color:#f1f5f9;font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer;transition:all .15s ease;display:inline-flex;align-items:center;gap:4px}
 .lis-emr-btn:hover{background:rgba(255,255,255,.22);color:#fff}
+.lis-emr-btn.lis-emr-native-ie{background:rgba(59,130,246,.32);color:#93c5fd;font-weight:600}
+.lis-emr-btn.lis-emr-native-ie:hover{background:rgba(59,130,246,.55);color:#fff}
+.lis-emr-btn.lis-emr-copyurl{background:rgba(245,158,11,.22);color:#fcd34d}
+.lis-emr-btn.lis-emr-copyurl:hover{background:rgba(245,158,11,.4);color:#fff}
 .lis-emr-btn.lis-emr-edge{background:rgba(16,185,129,.28);color:#6ee7b7}
 .lis-emr-btn.lis-emr-edge:hover{background:rgba(16,185,129,.45);color:#fff}
 .lis-emr-btn.lis-emr-close{background:rgba(239,68,68,.75);font-weight:700;padding:5px 12px}
 .lis-emr-btn.lis-emr-close:hover{background:#ef4444}
+.lis-emr-tip-bar{background:#1e293b;border-bottom:1px solid #334155;color:#94a3b8;font-size:12px;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0}
+.lis-emr-tip-bar b{color:#60a5fa}
+.lis-emr-tip-link{color:#38bdf8;text-decoration:none;font-weight:600}
+.lis-emr-tip-link:hover{text-decoration:underline;color:#7dd3fc}
 .lis-emr-body{flex:1;width:100%;height:100%;position:relative;background:#f8fafc;overflow:hidden}
 .lis-emr-frame{width:100%;height:100%;border:none;background:#fff;display:block}
 .lis-emr-loading{position:absolute;inset:0;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#475569;font-size:14px;font-weight:500;z-index:2}
@@ -22865,11 +22874,17 @@ window.addEventListener('keydown',function(e){
             <span class="lis-emr-text" title="${escAttr(displayTitle)}">${esc(displayTitle)}</span>
           </div>
           <div class="lis-emr-actions">
+            <button type="button" class="lis-emr-btn lis-emr-native-ie" title="一键调用 Windows 原生 32 位 IE 浏览器打开当前患者病历（完美支持 ActiveX 控件，不卡死）">⚡ 原生IE打开</button>
+            <button type="button" class="lis-emr-btn lis-emr-copyurl" title="复制当前患者病历直达链接到剪贴板">📋 复制链接</button>
             <button type="button" class="lis-emr-btn lis-emr-edge" title="一键调用 Windows Edge 浏览器打开（可在 Edge 中直接启用 IE 模式运行 ActiveX 插件）">🌐 Edge打开</button>
             <button type="button" class="lis-emr-btn lis-emr-newtab" title="在新标签页全屏打开">↗ 新标签页</button>
             <button type="button" class="lis-emr-btn lis-emr-maximize" title="还原为窗口模式">🗗 还原</button>
             <button type="button" class="lis-emr-btn lis-emr-close" title="关闭 (Esc)">✕</button>
           </div>
+        </div>
+        <div class="lis-emr-tip-bar">
+          <span>💡 提示：病历系统需 ActiveX 控件支持，推荐点击右上角 <b>【⚡ 原生IE打开】</b></span>
+          <a href="http://192.168.31.111:9111/lis-tools/配置工作台-原生IE直达.bat" target="_blank" class="lis-emr-tip-link">（首次使用点击下载一键配置包）</a>
         </div>
         <div class="lis-emr-body">
           <div class="lis-emr-loading" id="lis-emr-spinner">
@@ -22890,6 +22905,8 @@ window.addEventListener('keydown',function(e){
     const btnMax = modal.querySelector('.lis-emr-maximize');
     const btnNewTab = modal.querySelector('.lis-emr-newtab');
     const btnEdge = modal.querySelector('.lis-emr-edge');
+    const btnNativeIE = modal.querySelector('.lis-emr-native-ie');
+    const btnCopyUrl = modal.querySelector('.lis-emr-copyurl');
 
     // 递归劫持同源 iframe 内的所有 window.open、websys_createWindow、websys_lu 以及点击事件
     // 彻底解决点心电图、CT等检查报告弹空白窗口（因硬编码 10.0.29.100 或 :9111:80 未重写）的问题
@@ -22996,6 +23013,32 @@ window.addEventListener('keydown',function(e){
       }
     });
 
+    const doCopyUrl = (silent = false) => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(targetUrl);
+          if (!silent) toast('已复制患者病历直达链接到剪贴板', 's');
+          return true;
+        }
+      } catch (e) {}
+      if (!silent) prompt('请手动复制病历链接：', targetUrl);
+      return false;
+    };
+
+    if (btnNativeIE) {
+      btnNativeIE.addEventListener('click', () => {
+        doCopyUrl(true);
+        window.location.href = 'lis-ie:' + targetUrl;
+        toast('正在唤起原生 32 位 IE 打开病历（链接已同步复制）', 's', 3500);
+      });
+    }
+
+    if (btnCopyUrl) {
+      btnCopyUrl.addEventListener('click', () => {
+        doCopyUrl(false);
+      });
+    }
+
     btnNewTab.addEventListener('click', () => {
       window.open(targetUrl, '_blank');
     });
@@ -23052,6 +23095,17 @@ window.addEventListener('keydown',function(e){
           return;
         }
       } catch (e) {}
+    }
+    if (rowInfo && rowInfo.directNativeIE) {
+      const targetUrl = normalizeEMRUrl(trimmed);
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(targetUrl);
+        }
+      } catch (e) {}
+      window.location.href = 'lis-ie:' + targetUrl;
+      toast('已直接唤起原生 32 位 IE 打开病历（链接已复制）', 's', 3500);
+      return;
     }
     openEMRViewer(trimmed, rowInfo);
   }
