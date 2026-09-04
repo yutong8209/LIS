@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.18
+// @version      8.10.19
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11,6 +11,8 @@
 // @match        http://192.168.31.111:9111/EKGViewer/*
 // @match        http://192.168.31.111:9111/RISWeb3/*
 // @match        http://192.168.31.111:9111/Views/*
+// @match        http://192.168.31.111:8800/*
+// @match        http://10.0.12.248:8800/*
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @updateURL    http://192.168.31.111:9111/lis-tools/iMedicalLIS-enhancer.user.js
@@ -22504,7 +22506,7 @@ window.addEventListener('keydown',function(e){
   const EMR_MODAL_ID = 'lis-emr-modal';
 
   /**
-   * 8.10.18: 将含有内网 IP (10.0.29.100, 10.0.29.111:8088, 10.0.29.111, 10.0.29.114:8080) 或相对路径的病历/报告/图像链接转换为当前网关 origin
+   * 8.10.19: 将含有内网 IP (10.0.29.100, 10.0.29.111:8088, 10.0.29.111:1000, 10.0.29.111, 10.0.29.114:8080, 10.0.12.248:8800) 或相对路径的病历/报告/图像链接转换为当前网关 origin 或独立反代端口
    */
   function normalizeEMRUrl(rawUrl, baseWin = null) {
     if (!rawUrl) {return '';}
@@ -22516,12 +22518,21 @@ window.addEventListener('keydown',function(e){
     u = u.replace(/:9111:80/g, ':9111');
 
     const origin = location.origin;
+    const hostname = location.hostname;
+    const protocol = location.protocol;
+
+    // 心理测量室系统 (10.0.12.248:8800) -> 转换为当前主机的 8800 端口
+    u = u.replace(/https?:\/\/10\.0\.12\.248:8800/gi, `${protocol}//${hostname}:8800`);
+    u = u.replace(/\b10\.0\.12\.248:8800\b/g, `${hostname}:8800`);
+
     // 全局替换任何内网 IP (含端口) 为当前 origin
-    // 10.0.29.111:8088 (PACS Viewer), 10.0.29.111 (RISWeb3), 10.0.29.114:8080 (EKG), 10.0.29.100 (LIS/HIS)
+    // 10.0.29.111:1000 (PACS WADO), 10.0.29.111:8088 (PACS Viewer), 10.0.29.111 (RISWeb3), 10.0.29.114:8080 (EKG), 10.0.29.100 (LIS/HIS)
+    u = u.replace(/https?:\/\/10\.0\.29\.111:1000/gi, origin);
     u = u.replace(/https?:\/\/10\.0\.29\.111:8088/gi, origin);
     u = u.replace(/https?:\/\/10\.0\.29\.111(?::80)?(?!\d)/gi, origin);
     u = u.replace(/https?:\/\/10\.0\.29\.114:8080/gi, origin);
     u = u.replace(/https?:\/\/10\.0\.29\.100(?::\d+)?/gi, origin);
+    u = u.replace(/\b10\.0\.29\.111:1000\b/g, location.host);
     u = u.replace(/\b10\.0\.29\.(?:100|111|114)(?::\d+)?\b/g, location.host);
 
     if (/^javascript:/i.test(u)) {
@@ -22535,6 +22546,9 @@ window.addEventListener('keydown',function(e){
       if (/^10\.0\.29\./.test(parsed.hostname)) {
         parsed.protocol = location.protocol;
         parsed.host = location.host;
+      } else if (parsed.hostname === '10.0.12.248') {
+        parsed.protocol = location.protocol;
+        parsed.hostname = hostname;
       }
       return parsed.href.replace(/:9111:80/g, ':9111');
     } catch (e) {
@@ -22680,13 +22694,72 @@ window.addEventListener('keydown',function(e){
       }, true);
     } catch (e) {}
 
-    // 8. 持续递归监控子 frame
+    // 8. 劫持 cornerstone 切片图像加载与 jQuery Ajax，防止任何内网 IP:端口（如 10.0.29.111:1000）阻塞
+    try {
+      if (w.jQuery && w.jQuery.ajaxSetup) {
+        w.jQuery.ajaxSetup({
+          dataFilter: function (data) {
+            if (typeof data === 'string' && (data.includes('10.0.29.') || data.includes('10.0.12.'))) {
+              return data.replace(/10\.0\.29\.111:1000/g, location.host)
+                         .replace(/10\.0\.29\.111:8088/g, location.host)
+                         .replace(/10\.0\.12\.248:8800/g, location.hostname + ':8800');
+            }
+            return data;
+          }
+        });
+      }
+    } catch (e) {}
+
+    const hookCornerstone = targetWin => {
+      try {
+        if (!targetWin) {return;}
+        const cs = targetWin.cornerstone;
+        if (cs && !cs._lisHooked) {
+          if (typeof cs.loadAndCacheImage === 'function') {
+            const orig = cs.loadAndCacheImage;
+            cs.loadAndCacheImage = function (imageId, options) {
+              if (typeof imageId === 'string') {
+                imageId = wrapUrl(imageId, targetWin);
+              }
+              return orig.call(this, imageId, options);
+            };
+          }
+          if (typeof cs.loadImage === 'function') {
+            const orig = cs.loadImage;
+            cs.loadImage = function (imageId, options) {
+              if (typeof imageId === 'string') {
+                imageId = wrapUrl(imageId, targetWin);
+              }
+              return orig.call(this, imageId, options);
+            };
+          }
+          cs._lisHooked = true;
+        }
+      } catch (e) {}
+    };
+
+    hookCornerstone(w);
+    try {
+      let _cs = w.cornerstone;
+      Object.defineProperty(w, 'cornerstone', {
+        get: () => _cs,
+        set: val => {
+          _cs = val;
+          hookCornerstone(w);
+        },
+        configurable: true,
+        enumerable: true
+      });
+    } catch (e) {}
+
+    // 9. 持续递归监控子 frame
     const hookSubFrames = () => {
       try {
         for (let i = 0; i < w.frames.length; i++) {
           try {
             const subW = w.frames[i];
             if (!subW || subW._lisHookedOpen) {continue;}
+            hookCornerstone(subW);
             const subOrigOpen = subW.open;
             subW.open = function (url, target, features) {
               return subOrigOpen.call(this, wrapUrl(url, subW), target, features);
