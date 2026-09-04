@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.15
+// @version      8.10.16
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14629,26 +14629,43 @@ window.addEventListener('keydown',function(e){
 #lis-tb-hoverzone.hidden{display:none}
 
 /* --- 电子病历现代化内嵌弹窗 --- */
-.lis-emr-backdrop{position:fixed;inset:0;z-index:120010;background:rgba(15,23,42,.55);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px;animation:lisEmrFadeIn .18s ease-out}
+.lis-emr-backdrop{position:fixed;inset:0;z-index:120010;background:rgba(15,23,42,.6);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;animation:lisEmrFadeIn .18s ease-out}
+.lis-emr-backdrop.is-maximized{padding:0!important;background:#0f172a!important}
 .lis-emr-backdrop.lis-emr-closing{animation:lisEmrFadeOut .18s ease-in forwards}
 @keyframes lisEmrFadeIn{from{opacity:0}to{opacity:1}}
 @keyframes lisEmrFadeOut{from{opacity:1}to{opacity:0}}
-.lis-emr-box{background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.08);width:1160px;max-width:95vw;height:88vh;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;position:relative;font-family:var(--lis-font);transition:width .2s ease,height .2s ease,border-radius .2s ease}
-.lis-emr-box.maximized{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;border-radius:0!important;left:0!important;top:0!important}
+.lis-emr-box{background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35),0 0 0 1px rgba(0,0,0,.1);width:1160px;max-width:95vw;height:88vh;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;position:relative;font-family:var(--lis-font);transition:border-radius .15s ease}
+.lis-emr-box.maximized{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;border-radius:0!important;left:0!important;top:0!important;right:0!important;bottom:0!important;margin:0!important;box-shadow:none!important;z-index:1}
 .lis-emr-header{height:46px;min-height:46px;background:linear-gradient(135deg,#1e293b 0%,#0f172a 100%);color:#f8fafc;display:flex;align-items:center;justify-content:space-between;padding:0 16px;user-select:none;cursor:move;border-bottom:1px solid rgba(255,255,255,.1)}
-.lis-emr-title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lis-emr-box.maximized .lis-emr-header{cursor:default}
+.lis-emr-title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .lis-emr-icon{font-size:16px}
 .lis-emr-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lis-emr-actions{display:flex;align-items:center;gap:8px}
+.lis-emr-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .lis-emr-btn{border:none;background:rgba(255,255,255,.12);color:#f1f5f9;font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer;transition:all .15s ease;display:inline-flex;align-items:center;gap:4px}
 .lis-emr-btn:hover{background:rgba(255,255,255,.22);color:#fff}
+.lis-emr-btn.lis-emr-help{background:rgba(59,130,246,.25);color:#93c5fd}
+.lis-emr-btn.lis-emr-help:hover{background:rgba(59,130,246,.4);color:#fff}
 .lis-emr-btn.lis-emr-close{background:rgba(239,68,68,.75);font-weight:700;padding:5px 12px}
 .lis-emr-btn.lis-emr-close:hover{background:#ef4444}
 .lis-emr-body{flex:1;width:100%;height:100%;position:relative;background:#f8fafc;overflow:hidden}
-.lis-emr-frame{width:100%;height:100%;border:none;background:#fff}
+.lis-emr-frame{width:100%;height:100%;border:none;background:#fff;display:block}
 .lis-emr-loading{position:absolute;inset:0;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#475569;font-size:14px;font-weight:500;z-index:2}
 .lis-emr-spinner-icon{width:36px;height:36px;border:3px solid #e2e8f0;border-top-color:#3b82f6;border-radius:50%;animation:lisEmrSpin .8s linear infinite}
 @keyframes lisEmrSpin{to{transform:rotate(360deg)}}
+.lis-emr-help-drawer{position:absolute;top:46px;right:0;width:450px;max-width:92vw;background:#fff;box-shadow:-6px 12px 32px rgba(0,0,0,.28);border-left:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;border-bottom-left-radius:10px;z-index:20;padding:18px 20px;display:none;color:#334155;font-size:13px;line-height:1.6}
+.lis-emr-help-drawer.show{display:block;animation:lisEmrDrawerIn .2s ease-out}
+@keyframes lisEmrDrawerIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.lis-emr-help-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #f1f5f9}
+.lis-emr-help-hd h4{margin:0;font-size:15px;color:#0f172a;display:flex;align-items:center;gap:6px}
+.lis-emr-help-hd button{background:none;border:none;font-size:16px;cursor:pointer;color:#94a3b8;padding:2px 6px;border-radius:4px}
+.lis-emr-help-hd button:hover{color:#0f172a;background:#f1f5f9}
+.lis-emr-help-sec{margin-bottom:14px}
+.lis-emr-help-sec h5{margin:0 0 4px 0;font-size:13px;color:#0f172a;display:flex;align-items:center;gap:6px}
+.lis-emr-help-sec p{margin:0;color:#64748b;font-size:12px;line-height:1.6}
+.lis-emr-tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:700}
+.lis-emr-tag.ok{background:#dcfce7;color:#15803d}
+.lis-emr-tag.warn{background:#fef3c7;color:#b45309}
 
 /* --- 审核确认对话框 --- */
 #lis-audit-confirm,#lis-queue-resume{position:fixed;inset:0;z-index:100020;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
@@ -22541,18 +22558,37 @@ window.addEventListener('keydown',function(e){
 
     const modal = hostDoc.createElement('div');
     modal.id = EMR_MODAL_ID;
-    modal.className = 'lis-emr-backdrop';
+    modal.className = 'lis-emr-backdrop is-maximized';
     modal.innerHTML = `
-      <div class="lis-emr-box" role="dialog" aria-modal="true">
+      <div class="lis-emr-box maximized" role="dialog" aria-modal="true">
         <div class="lis-emr-header">
           <div class="lis-emr-title">
             <span class="lis-emr-icon">📋</span>
             <span class="lis-emr-text" title="${escAttr(displayTitle)}">${esc(displayTitle)}</span>
           </div>
           <div class="lis-emr-actions">
+            <button type="button" class="lis-emr-btn lis-emr-help" title="查看电子病历浏览与插件支持说明">💡 插件说明</button>
             <button type="button" class="lis-emr-btn lis-emr-newtab" title="在新标签页全屏打开">↗ 新标签页</button>
-            <button type="button" class="lis-emr-btn lis-emr-maximize" title="最大化 / 还原">⛶ 最大化</button>
+            <button type="button" class="lis-emr-btn lis-emr-maximize" title="还原为窗口模式">🗗 还原</button>
             <button type="button" class="lis-emr-btn lis-emr-close" title="关闭 (Esc)">✕</button>
+          </div>
+        </div>
+        <div class="lis-emr-help-drawer" id="lis-emr-help-drawer">
+          <div class="lis-emr-help-hd">
+            <h4>💡 电子病历浏览与插件支持说明</h4>
+            <button type="button" id="lis-emr-help-close" title="关闭说明">✕</button>
+          </div>
+          <div class="lis-emr-help-sec">
+            <h5><span class="lis-emr-tag ok">✅ 完全支持</span>医嘱 / 检查 / 检验 / 诊断等</h5>
+            <p>顶部的<b>【医嘱浏览】</b>、<b>【检查报告】</b>、<b>【检验结果】</b>、<b>【诊断浏览】</b>、<b>【过敏记录】</b>、<b>【麻醉记录单】</b>、<b>【会诊查询】</b>及左侧就诊列表等板块均为现代网页架构，在当前 Chrome / Edge 浏览器下均可直接正常查看。</p>
+          </div>
+          <div class="lis-emr-help-sec">
+            <h5><span class="lis-emr-tag warn">⚠️ 插件限制</span>为什么病历正文显示「该插件不受支持」？</h5>
+            <p>在<b>【病历浏览】</b>中查看具体的入院记录/病程记录等病历正文时，东华 HIS 系统依赖 Windows 专有 ActiveX 二进制控件（<code>iEmrPlugin.msi</code>）。现代 Chrome 浏览器已于 2015 年彻底移除了对 NPAPI / ActiveX 控件的支持，且 macOS 无法运行 Windows 控件，因此浏览器会呈现拼图图标「该插件不受支持」。</p>
+          </div>
+          <div class="lis-emr-help-sec" style="margin-bottom:0">
+            <h5>👉 如何在电脑上查看完整病历正文？</h5>
+            <p>• <b>Windows 电脑</b>：建议在 <b>Microsoft Edge 浏览器</b>中右键选择<b>「在 Internet Explorer 模式下重新加载」</b>（或在 Edge 设置中将本站加入 IE 模式列表），安装 <code>iEmrPlugin.msi</code> 即可完整渲染与打印病历。<br>• <b>Mac 电脑</b>：因系统内核不支持 Windows ActiveX，建议查阅医嘱/检验/检查等其余 Web 栏目；如必须查看病程排版正文需在 Windows 电脑上使用 Edge IE 模式。</p>
           </div>
         </div>
         <div class="lis-emr-body">
@@ -22573,9 +22609,69 @@ window.addEventListener('keydown',function(e){
     const btnClose = modal.querySelector('.lis-emr-close');
     const btnMax = modal.querySelector('.lis-emr-maximize');
     const btnNewTab = modal.querySelector('.lis-emr-newtab');
+    const btnHelp = modal.querySelector('.lis-emr-help');
+    const helpDrawer = modal.querySelector('#lis-emr-help-drawer');
+    const helpClose = modal.querySelector('#lis-emr-help-close');
+
+    // 帮助说明抽屉开关
+    btnHelp.addEventListener('click', e => {
+      e.stopPropagation();
+      helpDrawer.classList.toggle('show');
+    });
+    helpClose.addEventListener('click', () => {
+      helpDrawer.classList.remove('show');
+    });
+    modal.addEventListener('click', e => {
+      if (helpDrawer.classList.contains('show') && !helpDrawer.contains(e.target) && e.target !== btnHelp) {
+        helpDrawer.classList.remove('show');
+      }
+    });
+
+    // 定时在同源 iframe 内检查并注入友好插件提示（防拼图白屏无指引）
+    let _emrFrameCheckTimer = null;
+    const injectFrameFallbackTip = () => {
+      try {
+        if (!iframe || !iframe.contentWindow) {return;}
+        const scanWin = w => {
+          if (!w || !w.document) {return;}
+          const d = w.document;
+          const wordBox = d.getElementById('containerWord');
+          const gridBox = d.getElementById('containerGrid');
+          if ((wordBox || gridBox) && !d.getElementById('lis-plugin-fallback-tip')) {
+            const objW = d.getElementById('browspluginWord');
+            const objG = d.getElementById('browspluginGrid');
+            const pluginObj = objW || objG;
+            if (pluginObj && typeof pluginObj.initWindow !== 'function') {
+              const tipDiv = d.createElement('div');
+              tipDiv.id = 'lis-plugin-fallback-tip';
+              tipDiv.style.cssText = 'margin:10px;padding:12px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e;font-size:12px;line-height:1.6;position:relative;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.06)';
+              tipDiv.innerHTML = '<b style="color:#b45309">💡 病历正文提示：</b>当前病程记录正文基于东华 HIS 专有 Windows ActiveX 控件（<code>iEmrPlugin.msi</code>）。现代 Chrome 浏览器（及 macOS）因已淘汰 ActiveX 技术显示拼图图标。<br>👉 <b>建议：</b>可在 Windows 电脑上使用 <b>Edge「IE 模式」</b> 查看正文；您当前仍可直接切换查看顶部的<b>【医嘱浏览】、【检查报告】、【检验结果】、【诊断】</b>等其他全部数据。<button type="button" style="float:right;background:none;border:none;color:#b45309;font-weight:bold;cursor:pointer;font-size:14px;padding:0 4px" onclick="this.parentElement.remove()">✕</button>';
+              const targetBox = wordBox || gridBox;
+              targetBox.parentElement.insertBefore(tipDiv, targetBox);
+            }
+          }
+          for (let i = 0; i < w.frames.length; i++) {
+            try { scanWin(w.frames[i]); } catch (x) {}
+          }
+        };
+        scanWin(iframe.contentWindow);
+      } catch (e) {}
+    };
 
     iframe.addEventListener('load', () => {
       if (spinner) {spinner.style.display = 'none';}
+      injectFrameFallbackTip();
+      if (!_emrFrameCheckTimer) {
+        let checks = 0;
+        _emrFrameCheckTimer = setInterval(() => {
+          checks++;
+          injectFrameFallbackTip();
+          if (checks >= 12) {
+            clearInterval(_emrFrameCheckTimer);
+            _emrFrameCheckTimer = null;
+          }
+        }, 1500);
+      }
     });
 
     const onKeyDown = e => {
@@ -22587,6 +22683,10 @@ window.addEventListener('keydown',function(e){
     };
 
     const closeModal = () => {
+      if (_emrFrameCheckTimer) {
+        clearInterval(_emrFrameCheckTimer);
+        _emrFrameCheckTimer = null;
+      }
       hostDoc.removeEventListener('keydown', onKeyDown);
       modal.classList.add('lis-emr-closing');
       setTimeout(() => {
@@ -22604,15 +22704,23 @@ window.addEventListener('keydown',function(e){
     });
 
     btnMax.addEventListener('click', () => {
-      box.classList.toggle('maximized');
-      btnMax.textContent = box.classList.contains('maximized') ? '🗗 还原' : '⛶ 最大化';
+      const isMax = box.classList.toggle('maximized');
+      modal.classList.toggle('is-maximized', isMax);
+      btnMax.textContent = isMax ? '🗗 还原' : '⛶ 最大化';
+      btnMax.title = isMax ? '还原为窗口模式' : '最大化全屏';
+      if (!isMax) {
+        box.style.position = 'relative';
+        box.style.left = '';
+        box.style.top = '';
+        box.style.margin = 'auto';
+      }
     });
 
     btnNewTab.addEventListener('click', () => {
       window.open(targetUrl, '_blank');
     });
 
-    // 拖拽标题栏
+    // 拖拽标题栏（仅在非最大化时有效）
     const header = modal.querySelector('.lis-emr-header');
     let isDragging = false;
     let startX = 0, startY = 0, origLeft = 0, origTop = 0;
