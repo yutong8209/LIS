@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.14
+// @version      8.10.15
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11665,6 +11665,7 @@ window.addEventListener('keydown',function(e){
             </div>
             <div id="lis-detail-footer">
                 <span style="font-size:11px;color:#999;margin-right:auto">↑↓ 切换 | Enter 审核 | Esc 关闭</span>
+                <button class="btn-emr" id="lis-detail-emr-btn" title="查看该患者的电子病历/HIS信息" style="background:#0284c7;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;font-weight:600;margin-right:8px">📄 病历</button>
                 <button class="btn-audit" id="lis-detail-audit" title="Enter 或点击：审核当前详情标本，成功后自动跳下一条">✅ 审核</button>
                 <button class="btn-close" id="lis-detail-close-btn">关闭</button>
             </div>
@@ -11681,6 +11682,24 @@ window.addEventListener('keydown',function(e){
     // 事件绑定（审核钮与 Enter 共用 _auditFromDetailPanel，非互斥）
     document.getElementById('lis-detail-close').addEventListener('click', closeDetailPanel);
     document.getElementById('lis-detail-close-btn').addEventListener('click', closeDetailPanel);
+    const emrBtn = document.getElementById('lis-detail-emr-btn');
+    if (emrBtn) {
+      emrBtn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const sp = currentDetailSpecimen;
+        if (!sp || !sp.Labno) {
+          toast('当前没有选中的标本详情', 'w');
+          return;
+        }
+        openEnhancedEMR(sp.Labno, {
+          labNo: sp.Labno,
+          patName: sp.PatName || '',
+          regNo: sp.RegNo || '',
+          episodeNo: sp.EpisodeNo || ''
+        });
+      });
+    }
     _bindDetailAuditButton();
     // 详情结果表每行「🔎」：打开单项目历史（事件委托，兼容 LRU 缓存 HTML）
     const dBody = document.getElementById('lis-detail-body');
@@ -14608,6 +14627,28 @@ window.addEventListener('keydown',function(e){
 #lis-tb-hoverzone:hover{background:rgba(26,82,118,.5);border-radius:0 0 4px 4px}
 #lis-tb-hoverzone:hover::after{content:'▼ 审核';position:absolute;top:4px;left:50%;transform:translateX(-50%);background:rgba(26,82,118,.9);color:#fff;padding:2px 8px;border-radius:0 0 4px 4px;font-size:10px;white-space:nowrap}
 #lis-tb-hoverzone.hidden{display:none}
+
+/* --- 电子病历现代化内嵌弹窗 --- */
+.lis-emr-backdrop{position:fixed;inset:0;z-index:120010;background:rgba(15,23,42,.55);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px;animation:lisEmrFadeIn .18s ease-out}
+.lis-emr-backdrop.lis-emr-closing{animation:lisEmrFadeOut .18s ease-in forwards}
+@keyframes lisEmrFadeIn{from{opacity:0}to{opacity:1}}
+@keyframes lisEmrFadeOut{from{opacity:1}to{opacity:0}}
+.lis-emr-box{background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.08);width:1160px;max-width:95vw;height:88vh;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;position:relative;font-family:var(--lis-font);transition:width .2s ease,height .2s ease,border-radius .2s ease}
+.lis-emr-box.maximized{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;border-radius:0!important;left:0!important;top:0!important}
+.lis-emr-header{height:46px;min-height:46px;background:linear-gradient(135deg,#1e293b 0%,#0f172a 100%);color:#f8fafc;display:flex;align-items:center;justify-content:space-between;padding:0 16px;user-select:none;cursor:move;border-bottom:1px solid rgba(255,255,255,.1)}
+.lis-emr-title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lis-emr-icon{font-size:16px}
+.lis-emr-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lis-emr-actions{display:flex;align-items:center;gap:8px}
+.lis-emr-btn{border:none;background:rgba(255,255,255,.12);color:#f1f5f9;font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer;transition:all .15s ease;display:inline-flex;align-items:center;gap:4px}
+.lis-emr-btn:hover{background:rgba(255,255,255,.22);color:#fff}
+.lis-emr-btn.lis-emr-close{background:rgba(239,68,68,.75);font-weight:700;padding:5px 12px}
+.lis-emr-btn.lis-emr-close:hover{background:#ef4444}
+.lis-emr-body{flex:1;width:100%;height:100%;position:relative;background:#f8fafc;overflow:hidden}
+.lis-emr-frame{width:100%;height:100%;border:none;background:#fff}
+.lis-emr-loading{position:absolute;inset:0;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#475569;font-size:14px;font-weight:500;z-index:2}
+.lis-emr-spinner-icon{width:36px;height:36px;border:3px solid #e2e8f0;border-top-color:#3b82f6;border-radius:50%;animation:lisEmrSpin .8s linear infinite}
+@keyframes lisEmrSpin{to{transform:rotate(360deg)}}
 
 /* --- 审核确认对话框 --- */
 #lis-audit-confirm,#lis-queue-resume{position:fixed;inset:0;z-index:100020;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
@@ -22440,6 +22481,307 @@ window.addEventListener('keydown',function(e){
     });
   }
 
+  // ============================================================
+  //  模块 EMR：电子病历查看增强（跨网段支持 + 现代浏览器直接查看 + 内嵌弹窗/新标签页）
+  // ============================================================
+  const EMR_MODAL_ID = 'lis-emr-modal';
+
+  /**
+   * 将含有内网 IP (10.0.29.100) 的病历链接转换为当前 origin (如 http://192.168.31.111:9111)
+   */
+  function normalizeEMRUrl(rawUrl) {
+    if (!rawUrl) {return '';}
+    let u = String(rawUrl).trim().replace(/^["']|["']$/g, '');
+    const origin = location.origin;
+    u = u.replace(/^https?:\/\/10\.0\.29\.100(?::\d+)?/i, origin);
+    if (u.startsWith('/')) {
+      u = origin + u;
+    } else if (!/^https?:\/\//i.test(u)) {
+      u = origin + '/' + u.replace(/^\/+/, '');
+    }
+    return u;
+  }
+
+  /**
+   * 获取或创建弹窗挂载的宿主 document
+   */
+  function getEMRHostDoc() {
+    try {
+      if (window.top && window.top.document && window.top.document.body) {
+        return window.top.document;
+      }
+    } catch (e) {}
+    return document;
+  }
+
+  /**
+   * 打开电子病历查看器弹窗
+   */
+  function openEMRViewer(rawUrl, info = {}) {
+    const targetUrl = normalizeEMRUrl(rawUrl);
+    if (!targetUrl) {
+      toast('电子病历地址无效', 'w');
+      return;
+    }
+
+    const hostDoc = getEMRHostDoc();
+    const oldModal = hostDoc.getElementById(EMR_MODAL_ID);
+    if (oldModal) {
+      try { oldModal.remove(); } catch (e) {}
+    }
+
+    const labNo = info.labNo || info.Labno || '';
+    const patName = info.patName || info.PatName || info.Name || '';
+    const regNo = info.regNo || info.RegNo || '';
+    const details = [];
+    if (labNo) {details.push(`标本号: ${labNo}`);}
+    if (patName) {details.push(`姓名: ${patName}`);}
+    if (regNo) {details.push(`登记号: ${regNo}`);}
+    const displayTitle = details.length ? `📄 电子病历（${details.join(' · ')}）` : '📄 电子病历';
+
+    const modal = hostDoc.createElement('div');
+    modal.id = EMR_MODAL_ID;
+    modal.className = 'lis-emr-backdrop';
+    modal.innerHTML = `
+      <div class="lis-emr-box" role="dialog" aria-modal="true">
+        <div class="lis-emr-header">
+          <div class="lis-emr-title">
+            <span class="lis-emr-icon">📋</span>
+            <span class="lis-emr-text" title="${escAttr(displayTitle)}">${esc(displayTitle)}</span>
+          </div>
+          <div class="lis-emr-actions">
+            <button type="button" class="lis-emr-btn lis-emr-newtab" title="在新标签页全屏打开">↗ 新标签页</button>
+            <button type="button" class="lis-emr-btn lis-emr-maximize" title="最大化 / 还原">⛶ 最大化</button>
+            <button type="button" class="lis-emr-btn lis-emr-close" title="关闭 (Esc)">✕</button>
+          </div>
+        </div>
+        <div class="lis-emr-body">
+          <div class="lis-emr-loading" id="lis-emr-spinner">
+            <div class="lis-emr-spinner-icon"></div>
+            <span>正在加载电子病历，请稍候...</span>
+          </div>
+          <iframe class="lis-emr-frame" src="${escAttr(targetUrl)}" frameborder="0"></iframe>
+        </div>
+      </div>
+    `;
+
+    hostDoc.body.appendChild(modal);
+
+    const box = modal.querySelector('.lis-emr-box');
+    const iframe = modal.querySelector('.lis-emr-frame');
+    const spinner = modal.querySelector('#lis-emr-spinner');
+    const btnClose = modal.querySelector('.lis-emr-close');
+    const btnMax = modal.querySelector('.lis-emr-maximize');
+    const btnNewTab = modal.querySelector('.lis-emr-newtab');
+
+    iframe.addEventListener('load', () => {
+      if (spinner) {spinner.style.display = 'none';}
+    });
+
+    const onKeyDown = e => {
+      if (e.key === 'Escape' || e.keyCode === 27) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeModal();
+      }
+    };
+
+    const closeModal = () => {
+      hostDoc.removeEventListener('keydown', onKeyDown);
+      modal.classList.add('lis-emr-closing');
+      setTimeout(() => {
+        try { modal.remove(); } catch (e) {}
+      }, 180);
+    };
+
+    hostDoc.addEventListener('keydown', onKeyDown);
+    btnClose.addEventListener('click', closeModal);
+
+    modal.addEventListener('click', e => {
+      if (e.target === modal) {
+        closeModal();
+      }
+    });
+
+    btnMax.addEventListener('click', () => {
+      box.classList.toggle('maximized');
+      btnMax.textContent = box.classList.contains('maximized') ? '🗗 还原' : '⛶ 最大化';
+    });
+
+    btnNewTab.addEventListener('click', () => {
+      window.open(targetUrl, '_blank');
+    });
+
+    // 拖拽标题栏
+    const header = modal.querySelector('.lis-emr-header');
+    let isDragging = false;
+    let startX = 0, startY = 0, origLeft = 0, origTop = 0;
+    header.addEventListener('pointerdown', e => {
+      if (e.target.closest('button')) {return;}
+      if (box.classList.contains('maximized')) {return;}
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = box.getBoundingClientRect();
+      origLeft = rect.left;
+      origTop = rect.top;
+      header.setPointerCapture(e.pointerId);
+      box.style.margin = '0';
+      box.style.position = 'fixed';
+      box.style.left = origLeft + 'px';
+      box.style.top = origTop + 'px';
+    });
+    header.addEventListener('pointermove', e => {
+      if (!isDragging) {return;}
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      const curWin = hostDoc.defaultView || window;
+      box.style.left = Math.max(10, Math.min(curWin.innerWidth - 200, origLeft + dx)) + 'px';
+      box.style.top = Math.max(10, Math.min(curWin.innerHeight - 80, origTop + dy)) + 'px';
+    });
+    const stopDrag = () => { isDragging = false; };
+    header.addEventListener('pointerup', stopDrag);
+    header.addEventListener('pointercancel', stopDrag);
+  }
+
+  function handleEMRResponse(retData, rowInfo) {
+    if (!retData || !retData.trim()) {
+      toast('该标本暂无关联的电子病历信息', 'w');
+      return;
+    }
+    const trimmed = retData.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        const json = JSON.parse(trimmed);
+        if (json.IsOk === false || json.Message) {
+          toast(json.Message || '无法获取病历信息', 'w');
+          return;
+        }
+      } catch (e) {}
+    }
+    openEMRViewer(trimmed, rowInfo);
+  }
+
+  function openEnhancedEMR(manualLabNo = null, manualInfo = {}) {
+    const w = uw();
+    let labNo = manualLabNo;
+    let rowInfo = { ...manualInfo };
+
+    if (!labNo) {
+      try {
+        const grid = (w.me && w.me.selectedGrid) || (w.$ && w.$('#dgWorkList'));
+        if (grid && grid.datagrid) {
+          const row = grid.datagrid('getSelected');
+          if (row) {
+            labNo = row.Labno;
+            rowInfo = {
+              labNo: row.Labno,
+              patName: row.PatName || row.Name || '',
+              regNo: row.RegNo || '',
+              episodeNo: row.EpisodeNo || ''
+            };
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!labNo) {
+      const inp = document.getElementById('txt_FindFast') || document.getElementById('txt_LabNo');
+      if (inp && inp.value && inp.value.trim()) {
+        labNo = inp.value.trim();
+        rowInfo.labNo = labNo;
+      }
+    }
+
+    if (!labNo) {
+      if (typeof w.showInfo === 'function') {
+        w.showInfo('请先在列表中选中一个标本！');
+      } else {
+        toast('请先在列表中选中一个标本', 'w');
+      }
+      return;
+    }
+
+    const actionUrl = location.origin + '/iMedicalLIS/lis/ashx/ashVisitNumberReport.ashx';
+    const reqUrl = actionUrl + '?Method=GetEMRUrl&LabNo=' + encodeURIComponent(labNo);
+
+    toast('正在获取电子病历地址...', 'i', 2000);
+
+    const ajaxFn = (w.$ && w.$.ajax) || (window.$ && window.$.ajax);
+    if (ajaxFn) {
+      ajaxFn({
+        url: reqUrl,
+        dataType: 'text',
+        success: function (retData) {
+          handleEMRResponse(retData, rowInfo);
+        },
+        error: function () {
+          toast('获取电子病历地址失败，请检查网络或会话', 'e');
+        }
+      });
+    } else {
+      fetch(reqUrl, { credentials: 'include' })
+        .then(r => r.text())
+        .then(retData => handleEMRResponse(retData, rowInfo))
+        .catch(() => toast('获取电子病历地址失败', 'e'));
+    }
+  }
+
+  function initEMREnhance() {
+    const w = uw();
+    if (!w) {return;}
+
+    // 1. 劫持 ViewEMR，支持防覆盖
+    const enhancedViewEMR = function () {
+      openEnhancedEMR();
+    };
+    try {
+      Object.defineProperty(w, 'ViewEMR', {
+        get: () => enhancedViewEMR,
+        set: () => {
+          dbg('LIS 尝试重置 ViewEMR，保持增强接管');
+        },
+        configurable: true
+      });
+    } catch (e) {
+      w.ViewEMR = enhancedViewEMR;
+    }
+
+    // 2. 劫持 LISBasePrint 作为 IEView@ 兜底拦截（防止任何原生逻辑唤起 iMedicalLIS:// 空白页）
+    let _origBasePrint = w.LISBasePrint;
+    const hookedBasePrint = function (para) {
+      if (typeof para === 'string' && para.indexOf('IEView@') === 0) {
+        const url = para.substring(7);
+        openEMRViewer(url);
+        return;
+      }
+      if (typeof _origBasePrint === 'function') {
+        return _origBasePrint.apply(this, arguments);
+      }
+    };
+    try {
+      Object.defineProperty(w, 'LISBasePrint', {
+        get: () => hookedBasePrint,
+        set: fn => {
+          _origBasePrint = fn;
+        },
+        configurable: true
+      });
+    } catch (e) {
+      if (typeof w.LISBasePrint === 'function') {
+        const orig = w.LISBasePrint;
+        w.LISBasePrint = function (para) {
+          if (typeof para === 'string' && para.indexOf('IEView@') === 0) {
+            openEMRViewer(para.substring(7));
+            return;
+          }
+          return orig.apply(this, arguments);
+        };
+      }
+    }
+    dbg('电子病历查看增强已就绪');
+  }
+
   // --- 初始化报告页增强 ---
   function initReportEnhance() {
     if (!isReportPageActive()) {return;}
@@ -22678,6 +23020,11 @@ window.addEventListener('keydown',function(e){
       return;
     }
 
+    // 8.10.15: 报告处理子页面初始化电子病历查看增强
+    if (isReportPage()) {
+      initEMREnhance();
+    }
+
     if (!_isMain) {return;}
 
     // 8.5.82: 逐模块异常隔离——此前 createWS 等 any 一处抛错，后面的批审断点续跑/初始化全部不执行
@@ -22699,6 +23046,7 @@ window.addEventListener('keydown',function(e){
     safeInit('startQEProbe', startQEProbe);
     safeInit('injectToolbar', injectToolbar);
     safeInit('initReportEnhance', initReportEnhance);
+    safeInit('initEMREnhance', initEMREnhance);
     // 预热仪器缓存：提前加载所有工作组的仪器列表，打开工作台时秒返
     WG.forEach(w => {
       loadMachines(w.dr).catch(() => {});
