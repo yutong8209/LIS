@@ -58,6 +58,14 @@ if [ -z "$scp_err" ]; then
     "$DIR/vendor/xlsx.full.min.js" "$DIR/vendor/jszip.min.js" \
     "$WIN_USER@$WIN_HOST:$WIN_DIR/vendor/" 2>>"$LOG" || scp_err="vendor"
 fi
+# 原生 IE 启动器（工作台弹窗里的配置包下载链接指向网关机；失败不阻塞主同步）
+if [ -z "$scp_err" ]; then
+  for f in "配置工作台-原生IE直达.bat" "启动病历-原生IE.bat" "启动病历-原生IE.vbs"; do
+    [ -f "$DIR/$f" ] || continue
+    scp -o BatchMode=yes -o ConnectTimeout=8 \
+      "$DIR/$f" "$WIN_USER@$WIN_HOST:$WIN_DIR/" 2>>"$LOG" || { scp_err="launcher:$f"; break; }
+  done
+fi
 
 if [ -n "$scp_err" ]; then
   log "❌ 同步失败（${scp_err}）。下次提交会自动重试；也可手动跑 bash hooks/sync-to-nginx.sh"
