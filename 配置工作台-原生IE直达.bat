@@ -249,6 +249,11 @@ reg add 'HKLM\SOFTWARE\Policies\Microsoft\Edge' /v InternetExplorerIntegrationSi
 $msi = Join-Path $env:TEMP 'iEmrPlugin.msi'
 Invoke-WebRequest -Uri 'http://192.168.31.111:9111/iemrplugin/iEmrPlugin.msi' -OutFile $msi -UseBasicParsing
 Start-Process msiexec -ArgumentList "/i `"$msi`" /qn" -Wait
+$json = '[{"protocols":["lis-ie"],"allowed_origins":["http://192.168.31.111:9111"]}]'
+foreach ($p in 'HKLM:\SOFTWARE\Policies\Microsoft\Edge','HKLM:\SOFTWARE\Policies\Google\Chrome') {
+    if (-not (Test-Path $p)) { New-Item -Path $p -Force | Out-Null }
+    Set-ItemProperty -Path $p -Name 'AutoLaunchProtocolsFromOrigins' -Value $json -Type String
+}
 '@
     Write-Host '[OK] admin step done: permanent IE-mode policy + DHCC EMR plugin installed' -ForegroundColor Green
 } catch {
