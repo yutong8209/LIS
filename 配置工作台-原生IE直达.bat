@@ -239,12 +239,29 @@ $s.Arguments = '"' + $vbs + '"'
 $s.IconLocation = 'shell32.dll,220'
 $s.Save()
 
+# --- admin step: permanent IE-mode site-list policy + DHCC plugin MSI ---
+# UAC: yes = install; cancel = skip (list browsing still works, only document body needs this)
+try {
+    Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', @'
+$ProgressPreference = 'SilentlyContinue'
+reg add 'HKLM\SOFTWARE\Policies\Microsoft\Edge' /v InternetExplorerIntegrationLevel /t REG_DWORD /d 1 /f | Out-Null
+reg add 'HKLM\SOFTWARE\Policies\Microsoft\Edge' /v InternetExplorerIntegrationSiteList /t REG_SZ /d http://192.168.31.111:9111/lis-tools/iemode-sites.xml /f | Out-Null
+$msi = Join-Path $env:TEMP 'iEmrPlugin.msi'
+Invoke-WebRequest -Uri 'http://192.168.31.111:9111/iemrplugin/iEmrPlugin.msi' -OutFile $msi -UseBasicParsing
+Start-Process msiexec -ArgumentList "/i `"$msi`" /qn" -Wait
+'@
+    Write-Host '[OK] admin step done: permanent IE-mode policy + DHCC EMR plugin installed' -ForegroundColor Green
+} catch {
+    Write-Host '[skip] admin step not approved: list browsing still works, re-run to enable document body' -ForegroundColor Yellow
+}
+
 Write-Host ''
 Write-Host '[OK] 配置完成！' -ForegroundColor Green
 Write-Host '1. 桌面已生成快捷方式【启动病历-原生IE】（双击直接打开）'
 Write-Host '2. 已注册 lis-ie:// 直连协议'
 Write-Host '3. 已把 192.168.31.111 / 10.0.29.x 加入 IE 本地 Intranet 区域，并启用内网 ActiveX'
-Write-Host '   （修复病历页在 IE 里因 ActiveX 被拦截而卡住不动的问题）'
-Write-Host '4. 现在在 LIS 工作台点击【原生IE打开】即可直接调出该患者病历'
+Write-Host '4. IE 模式站点列表策略（永久）+ DHCC 病历插件已就绪'
+Write-Host '用法：工作台点病历 -> 【原生IE打开】；在协议弹窗勾选「总是允许」以后免弹窗'
+Write-Host '      按住 Shift 点「病历」按钮 = 跳过预览直接唤起原生 IE'
 Write-Host '诊断：如病历仍卡住，把 %LOCALAPPDATA%\LIS-Tools\launch_ie.log 发给管理员'
-Write-Host '注意：请重启 IE 或注销重登一次，让区域与 ActiveX 设置生效'
+Write-Host '注意：请重启一次 Edge，让 IE 模式策略生效'
