@@ -1,5 +1,4 @@
 @echo off
-chcp 936 >nul
-title 启动原生IE病历浏览器
-echo 正在启动 Windows 原生 32 位 IE 浏览器...
-wscript "%~dp0启动病历-原生IE.vbs" %*
+chcp 65001 >nul 2>nul
+title 鍚姩鐥呭巻-鍘熺敓IE
+wscript "%~dp0launch_ie.vbs" %*

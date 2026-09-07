@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.21
+// @version      8.10.22
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -22884,7 +22884,7 @@ window.addEventListener('keydown',function(e){
         </div>
         <div class="lis-emr-tip-bar">
           <span>💡 提示：病历系统需 ActiveX 控件支持，推荐点击右上角 <b>【⚡ 原生IE打开】</b></span>
-          <a href="http://192.168.31.111:9111/lis-tools/配置工作台-原生IE直达.bat" target="_blank" class="lis-emr-tip-link">（首次使用点击下载一键配置包）</a>
+          <a href="http://192.168.31.111:9111/lis-tools/setup-native-ie.bat" target="_blank" class="lis-emr-tip-link">（首次使用点击下载一键配置包）</a>
         </div>
         <div class="lis-emr-body">
           <div class="lis-emr-loading" id="lis-emr-spinner">

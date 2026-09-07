@@ -60,7 +60,7 @@ if [ -z "$scp_err" ]; then
 fi
 # 原生 IE 启动器（工作台弹窗里的配置包下载链接指向网关机；失败不阻塞主同步）
 if [ -z "$scp_err" ]; then
-  for f in "配置工作台-原生IE直达.bat" "启动病历-原生IE.bat" "启动病历-原生IE.vbs"; do
+  for f in "配置工作台-原生IE直达.bat" "setup-native-ie.bat" "启动病历-原生IE.bat" "启动病历-原生IE.vbs" "launch_ie.vbs"; do
     [ -f "$DIR/$f" ] || continue
     scp -o BatchMode=yes -o ConnectTimeout=8 \
       "$DIR/$f" "$WIN_USER@$WIN_HOST:$WIN_DIR/" 2>>"$LOG" || { scp_err="launcher:$f"; break; }
