@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.22
+// @version      8.10.23
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -112,11 +112,11 @@
   const AUTO_AUDIT_DATA_MAX_AGE = 60000; // 自动审核要求最近一次全量刷新成功
   const ZERO_BLOCK_MACHINE_NAMES = /生化分析仪|全自动生化|生化仪/i;
   const BATCH_CONFIRM_MS = { normal: 1500, afterCA: 2500 };
-  // 8.10.2: 自动审核永久排除的仪器分类——临检与免疫各有一个「手工杂项」，标本多为手工录入/
-  // 手工添加项目，结果由人填写、无仪器回传，绝不自动审核。用户明确要求：即使工作组勾选了
-  // 「全部工作组的全部仪器」，这两个分类下的标本也一律不进自动审核（仍可手动审、仍进工作台统计）。
+  // 8.10.23: 自动审核永久排除的仪器——包括「手工杂项」以及 H900 电解质分析仪等手工录入仪器。
+  // 标本多为手工录入/手工添加项目，结果由人填写、无仪器回传完成标志，绝不自动审核。用户明确要求：即使工作组勾选了
+  // 「全部工作组的全部仪器」，这些仪器下的标本也一律不进自动审核（仍可手动审、仍进工作台统计）。
   // 只作用于自动审核候选（rowAutoAuditMachineAllowed），不影响手动批审 / F4 / 工作台显示。
-  const AUTO_AUDIT_EXCLUDE_MACHINE_NAMES = /手工|杂项|manual/i;
+  const AUTO_AUDIT_EXCLUDE_MACHINE_NAMES = /h[-_]?900|电解质|手工|杂项|manual/i;
 
   // ==================== 工具 ====================
   const $ = s => document.querySelector(s);
@@ -6702,6 +6702,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       row.ReportDR,
       row.Status || row.ReportStatus,
       row.IsComplete,
+      row.NoResRows,
       row.AcceptDT,
       row.TransmitDate,
       row._mdr,
@@ -6718,6 +6719,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const fp = specimenFingerprint(row);
     if (cached.fingerprint !== fp) {return true;}
     const age = Date.now() - (cached._classifiedAt || cached._accessTs || 0);
+    // 8.10.23: 手工录入标本若尚未录入完整（缺项或未录入），缓存有效期缩短为 20 秒，
+    // 以便检验人员在 LIS 保存录入结果后，点击刷新或定时刷新能迅速拉取最新明细并升入「待审」
+    if (cached.isManual && !cached.isManualComplete) {
+      return age > 20000;
+    }
     return age > CLASSIFY_STALE_MS;
   }
 
@@ -7071,12 +7077,48 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return true;
   }
 
-  // 8.10.2: 自动审核仪器黑名单——「手工杂项」分类（临检/免疫各一个）永不自动审核。
-  // 理由：这类仪器下的标本是手工登记/手工添加项目，结果靠人填，LIS 不置 IsComplete=1 的居多，
-  // 偶有置位的也不该由机器代签。与勾选范围无关：即使快照是「全部工作组全部仪器」也一律排除。
+  // 8.10.23: 手工录入标本识别与完整性判断（H900 电解质分析仪、手工杂项等）：
+  // 这类仪器无双向通信程序将 LIS 的 IsComplete 置为 1，结果靠检验人员在界面手工填写并保存。
+  const MANUAL_ENTRY_MACHINE_REGEX = /h[-_]?900|电解质|手工|杂项|manual/i;
+  const AUTOMATED_MACHINE_REGEX = /生化分析仪|全自动|血细胞|血球|血常规|凝血|化学发光|dxi|maglumi|getein|wan200|sysmex|mindray/i;
+
+  function isManualEntrySpecimen(row) {
+    if (!row) {return false;}
+    let name = String(row._mn || row.MachineName || row.machineName || '').trim();
+    if (!name) {
+      const mdr = String(row._mdr || prWorkGroupMachineDR(row) || '');
+      if (mdr) {
+        const m = (wsMachines || []).find(x => String(x.RowID) === mdr);
+        if (m) {name = String(m.CName || m.Name || '').trim();}
+      }
+    }
+    // 明确属于全自动仪器时，即使项目叫电解质也不是手工录入（如生化仪做电解质）
+    if (name && AUTOMATED_MACHINE_REGEX.test(name)) {return false;}
+    if (name && MANUAL_ENTRY_MACHINE_REGEX.test(name)) {return true;}
+    const ts = String(row.TestSetDesc || row.ItemDesc || '').trim();
+    if (ts && /手工|杂项/.test(ts)) {return true;}
+    if (ts && /电解质/.test(ts) && (!name || /h[-_]?900/i.test(name))) {return true;}
+    return false;
+  }
+
+  function isSpecimenActuallyComplete(row, cached = null) {
+    if (!row) {return false;}
+    const complete = String(row.IsComplete || '');
+    if (complete === '1') {return true;}
+    if (isManualEntrySpecimen(row)) {
+      const c = cached || wsClassifiedCache[row.ReportDR];
+      if (c && c.isManualComplete) {return true;}
+    }
+    return false;
+  }
+
+  // 8.10.2: 自动审核仪器黑名单——「手工杂项」与手工录入仪器（H900等）永不自动审核。
+  // 理由：这类仪器下的标本靠人填写，LIS 不置 IsComplete=1 的居多，
+  // 即使录入完整也绝不该由无人值守机器人代签。与勾选范围无关：即使快照是「全部工作组全部仪器」也一律排除。
   // 判定优先用行上的仪器名 _mn（loadWSData 已附加），缺失时回退 wsMachines 里按 _mdr 查名字。
   function rowAutoAuditMachineAllowed(row) {
     if (!row) {return false;}
+    if (isManualEntrySpecimen(row)) {return false;}
     let name = String(row._mn || row.MachineName || row.machineName || '').trim();
     if (!name) {
       const mdr = String(row._mdr || prWorkGroupMachineDR(row) || '');
@@ -8233,14 +8275,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       // 8.5.50: 复审（复检/复查）标本：结果不完整 → 不完整；结果完整 → 待审显示
       // 8.5.52: 复检标本可正常审核（危急值除外），仅危急值由 validateAuditClassification 红线拦截
       // 只处理 status 4，status 3 保持隐藏——避免 8.5.44/8.5.45 误伤已审核标本的教训
-      const complete4 = String(r.IsComplete || '');
-      if (complete4 !== '1') {return 'incomplete';}
+      if (!isSpecimenActuallyComplete(r)) {return 'incomplete';}
       // 走下方分类判断：NORMAL/ABNORMAL → 待审；无缓存/待定 → 不完整
     }
     if (status === '0') {return 'pending';}
     if (status === '9') {return 'collected';} // 8.5.31: 病房采集中、未送到科室
-    const complete = String(r.IsComplete || '');
-    if (complete !== '1') {return 'incomplete';}
+    // 8.10.23: 结果完整性判定——自动化仪器以 IsComplete==='1' 为硬门槛；
+    // 手工录入仪器（H900/手工杂项等）在所有项目录入完整后放行
+    if (!isSpecimenActuallyComplete(r)) {return 'incomplete';}
     const cached = wsClassifiedCache[r.ReportDR];
     if (!cached) {return 'incomplete';} // 分类未完成时不进入正常可审，避免误批审
     if (isClassificationStale(r)) {return 'incomplete';}
@@ -10776,8 +10818,7 @@ window.addEventListener('keydown',function(e){
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
       return;
     }
-    const _preComplete = String(specimen.IsComplete || '');
-    if (_preComplete !== '1') {
+    if (!isSpecimenActuallyComplete(specimen)) {
       _toast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
       advanceAbnormalFocusAfterSkip(Math.max(0, wsAbnormalIndex));
       return;
@@ -11127,7 +11168,7 @@ window.addEventListener('keydown',function(e){
       h += `<td>${stHTML}</td>`;
       const ic = r.IsComplete;
       let icHTML = '';
-      if (ic === '1') {icHTML = '<span class="complete-star">⭐</span>';}
+      if (ic === '1' || isSpecimenActuallyComplete(r)) {icHTML = '<span class="complete-star">⭐</span>';}
       else if (ic === '2') {icHTML = `<span class="complete-partial">⚠️ -${esc(r.NoResRows || '?')}</span>`;}
       else if (ic === '0') {icHTML = '<span class="complete-empty">❌</span>';}
       else {icHTML = '<span style="color:#999">-</span>';}
@@ -12204,8 +12245,7 @@ window.addEventListener('keydown',function(e){
         return;
       }
 
-      const complete = String(specimen.IsComplete || '');
-      if (complete !== '1') {
+      if (!isSpecimenActuallyComplete(specimen)) {
         showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
         return;
       }
@@ -12984,6 +13024,22 @@ window.addEventListener('keydown',function(e){
       }
       // 存入 LRU 缓存
       detailLRUSet(rdr, { html, ts: Date.now() });
+
+      // 8.10.23: 若为手工录入标本且详情结果已完整录入，就地计算并补全分类缓存
+      if (isManualEntrySpecimen(specimen)) {
+        const _cached = wsClassifiedCache[rdr];
+        if (!_cached || !_cached.isManualComplete) {
+          const fresh = buildClassificationFromItems(specimen, itemInfo, labInfo);
+          if (fresh.isManualComplete) {
+            wsClassifiedCache[rdr] = fresh;
+            _classifyVersion++;
+            invalidateCaches();
+            calcMachineCounts();
+            renderWSTabs();
+            renderWSCategoryBar();
+          }
+        }
+      }
     } catch (e) {
       dbg('加载详细结果失败:', e);
       if (!isCurrentDetail()) {return;}
@@ -17311,13 +17367,15 @@ window.addEventListener('keydown',function(e){
     const runSeq = ++_classifyRunSeq;
     try {
       if (loadSeq !== _wsLoadSeq) {return;}
-      // 筛选需要分类的标本：未审核 + 结果完整 + 未缓存
+      // 筛选需要分类的标本：未审核 + (结果完整 或 手工录入标本) + 未缓存/已过期
       // 8.5.50: status 4（复审）也参与分类（供待审显示）；status 3（已审核）跳过
+      // 8.10.23: 手工录入仪器（H900/手工杂项等）即使 LIS 尚未置 IsComplete=1 也纳入分类拉取，以便识别录入完整性
       const toClassify = wsData.filter(r => {
         const status = String(r.Status || r.ReportStatus || '');
         if (status === '3') {return false;}
         const complete = String(r.IsComplete || '');
-        if (complete !== '1') {return false;}
+        const isManual = isManualEntrySpecimen(r);
+        if (complete !== '1' && !isManual) {return false;}
         return isClassificationStale(r);
       });
 
@@ -17398,6 +17456,74 @@ window.addEventListener('keydown',function(e){
     }
   }
 
+  // 8.10.23: 标本项目明细分类与状态判定（供后台批量分类与详情面板即时更新共用）
+  function buildClassificationFromItems(row, itemInfo, labInfo = []) {
+    const reportDR = row.ReportDR || row.TodoReportDR || '';
+    const isManual = isManualEntrySpecimen(row);
+    if (!itemInfo || itemInfo.length === 0) {
+      return attachClassificationMeta(
+        { status: 'UNCERTAIN', items: [], labInfo: labInfo[0] || {}, row, reportDR, isManual, isManualComplete: false },
+        row
+      );
+    }
+
+    const classifications = itemInfo.map(item => ({
+      name: item.CName || '',
+      CName: item.CName || '',
+      Code: item.Code || '',
+      Synonym: item.Synonym || '',
+      result: item.TextRes && String(item.TextRes).trim() ? item.TextRes : item.Result || '',
+      unit: item.Unit || item.Units || '',
+      refRange: item.RefRanges || '',
+      RefRanges: item.RefRanges || item.RefRange || item.ReferenceRange || '',
+      ResultFormat: item.ResultFormat || '',
+      IsCheckText: item.IsCheckText || '',
+      abFlag: item.AbFlag || '',
+      status: classifyResultItem(item),
+      critical: isCriticalResultItem(item),
+      panicLow: item.PanicLow || item.CriticalLow || '',
+      panicHigh: item.PanicHigh || item.CriticalHigh || '',
+      preResult: item
+    }));
+
+    // 传染病历史结果比对（x8 仪器）：历史阳性→现阴性 = 与历史不符 → 异常
+    const infectionWarning = checkInfectionPanel(row, classifications);
+
+    const hasAbnormal = classifications.some(
+      c => c.status === 'HIGH' || c.status === 'LOW' || c.status === 'ABNORMAL' || c.status === 'CRITICAL'
+    );
+    const hasCritical =
+      isCriticalSpecimenRow(row) || classifications.some(c => c.status === 'CRITICAL' || c.critical);
+    const hasUncertain = classifications.some(c => c.status === 'UNCERTAIN');
+    // 检查是否有结果为空的项目
+    const hasEmptyResults = classifications.some(c => isEmptyResultValue(c, c.result));
+    // 8.10.23: 手工录入标本完整性判断——当且仅当全部项目已录入无空项时判定完整
+    const isManualComplete = isManual && classifications.length > 0 && !hasEmptyResults;
+    const hasComplete = row.IsComplete === '1' || isManualComplete;
+    // 8.5.58: 堵孔 0 值检测
+    const zeroInfo = analyzeZeroResults(classifications, row);
+
+    let overallStatus = 'NORMAL';
+    if (hasCritical) {overallStatus = 'CRITICAL';}
+    else if (zeroInfo.suspect) {overallStatus = 'ZERO';}
+    else if (hasAbnormal || infectionWarning) {overallStatus = 'ABNORMAL';}
+    else if (hasUncertain || !hasComplete || hasEmptyResults) {overallStatus = 'UNCERTAIN';}
+
+    return attachClassificationMeta(
+      {
+        status: overallStatus,
+        items: classifications,
+        labInfo: labInfo[0] || {},
+        row,
+        reportDR,
+        infectionWarning: infectionWarning || undefined,
+        isManual,
+        isManualComplete
+      },
+      row
+    );
+  }
+
   // --- 获取标本详情并分类 ---
   async function fetchAndClassifySpecimen(row) {
     const reportDR = row.ReportDR || row.TodoReportDR || '';
@@ -17439,69 +17565,7 @@ window.addEventListener('keydown',function(e){
         }
       }
 
-      const classifications = itemInfo.map(item => ({
-        name: item.CName || '',
-        CName: item.CName || '',
-        Code: item.Code || '',
-        Synonym: item.Synonym || '',
-        result: item.TextRes && String(item.TextRes).trim() ? item.TextRes : item.Result || '',
-        unit: item.Unit || item.Units || '',
-        refRange: item.RefRanges || '',
-        RefRanges: item.RefRanges || item.RefRange || item.ReferenceRange || '',
-        ResultFormat: item.ResultFormat || '',
-        IsCheckText: item.IsCheckText || '',
-        abFlag: item.AbFlag || '',
-        status: classifyResultItem(item),
-        critical: isCriticalResultItem(item),
-        panicLow: item.PanicLow || item.CriticalLow || '',
-        panicHigh: item.PanicHigh || item.CriticalHigh || '',
-        preResult: item
-      }));
-
-      // 传染病历史结果比对（x8 仪器）：历史阳性→现阴性 = 与历史不符 → 异常
-      // 8.5.14: 不再直接 return ABNORMAL——那样会跳过后续 hasCritical 判定，
-      // 若同时有真危急值（如血钾1）会被标成 ABNORMAL 而非 CRITICAL，危急值红线被绕过。
-      // 改为：infectionWarning 参与整体状态，危急值仍然优先。
-      const infectionWarning = checkInfectionPanel(row, classifications);
-
-      // 关键安全检查：无结果 → UNCERTAIN，绝不自动审核
-      if (itemInfo.length === 0) {
-        return attachClassificationMeta(
-          { status: 'UNCERTAIN', items: [], labInfo: labInfo[0] || {}, row, reportDR },
-          row
-        );
-      }
-
-      const hasAbnormal = classifications.some(
-        c => c.status === 'HIGH' || c.status === 'LOW' || c.status === 'ABNORMAL' || c.status === 'CRITICAL'
-      );
-      const hasCritical =
-        isCriticalSpecimenRow(row) || classifications.some(c => c.status === 'CRITICAL' || c.critical);
-      const hasUncertain = classifications.some(c => c.status === 'UNCERTAIN');
-      const hasComplete = row.IsComplete === '1';
-      // 检查是否有结果为空的项目
-      const hasEmptyResults = classifications.some(c => isEmptyResultValue(c, c.result));
-      // 8.5.58: 堵孔 0 值检测（生化仪堵孔会传一堆 0，不能自动审核；
-      // 但尿蛋白类合法 0 也不能误拦——规则见 analyzeZeroResults）
-      const zeroInfo = analyzeZeroResults(classifications, row);
-
-      let overallStatus = 'NORMAL';
-      if (hasCritical) {overallStatus = 'CRITICAL';}
-      else if (zeroInfo.suspect) {overallStatus = 'ZERO';}
-      else if (hasAbnormal || infectionWarning) {overallStatus = 'ABNORMAL';}
-      else if (hasUncertain || !hasComplete || hasEmptyResults) {overallStatus = 'UNCERTAIN';}
-
-      return attachClassificationMeta(
-        {
-          status: overallStatus,
-          items: classifications,
-          labInfo: labInfo[0] || {},
-          row,
-          reportDR,
-          infectionWarning: infectionWarning || undefined
-        },
-        row
-      );
+      return buildClassificationFromItems(row, itemInfo, labInfo);
     } catch (e) {
       dbg('获取标本详情失败:', row.PatName, e);
       return attachClassificationMeta({ status: 'UNCERTAIN', items: [], row, reportDR, error: e.message }, row);
@@ -18941,7 +19005,7 @@ window.addEventListener('keydown',function(e){
           saveAuditQueueNow(queue);
           continue;
         }
-        if (liveRow && String(liveRow.IsComplete || '') !== '1') {
+        if (liveRow && !isSpecimenActuallyComplete(liveRow)) {
           queue.skipped.push({ ...item, reason: '结果不完整' });
           _aaRecordQueueItem('留人工', item, '结果不完整');
           skipCount++;
@@ -19882,12 +19946,12 @@ window.addEventListener('keydown',function(e){
     return 0;
   }
   // 8.10.2: 「在跑」= 已核收、结果尚未出全。
-  // ⚠️ 必须直接读 IsComplete，不能用 getWSAuditBucket()==='incomplete'——那个函数把
+  // ⚠️ 必须直接读 IsComplete 或手工完整性判定，不能用 getWSAuditBucket()==='incomplete'——那个函数把
   // 「分类缓存未完成/已过期」也归进 incomplete，这些标本结果其实早出来了，拿来当在跑会永远等下去。
   function _aaRowInFlight(r) {
     const st = String((r && (r.Status || r.ReportStatus)) || '');
     if (st === '0' || st === '9' || st === '3' || st === '5') {return false;} // 待排/采集/已审/取消都不在跑
-    return String((r && r.IsComplete) || '') !== '1';
+    return !isSpecimenActuallyComplete(r);
   }
   // dr → 首次观察到「在跑」的时刻（内存即可：刷新后重建，最坏退化成按最短间隔发）
   const _aaInFlightSince = new Map();
