@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.24
+// @version      8.10.25
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -7306,12 +7306,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         if (m) {name = String(m.CName || m.Name || '').trim();}
       }
     }
+    // 8.10.25: H900 明确属于手工录入仪器（即使注册设备名含「全自动」也无双向通讯置IsComplete=1，优先判定）
+    if (name && /h[-_]?900/i.test(name)) {return true;}
     // 明确属于全自动仪器时，即使项目叫电解质也不是手工录入（如生化仪做电解质）
     if (name && AUTOMATED_MACHINE_REGEX.test(name)) {return false;}
     if (name && MANUAL_ENTRY_MACHINE_REGEX.test(name)) {return true;}
     const ts = String(row.TestSetDesc || row.ItemDesc || '').trim();
     if (ts && /手工|杂项/.test(ts)) {return true;}
-    if (ts && /电解质/.test(ts) && (!name || /h[-_]?900/i.test(name))) {return true;}
+    if (ts && /电解质|血锂|锂/.test(ts) && (!name || /h[-_]?900|电解质/i.test(name))) {return true;}
     return false;
   }
 
@@ -8502,6 +8504,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (isClassificationStale(r)) {return 'incomplete';}
     if (cached.status === 'NORMAL') {return 'normal';}
     if (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL' || cached.status === 'ZERO') {return 'abnormal';}
+    // 8.10.25: 若标本实际结果已经录入完整（手工录入无空项 或 IsComplete=1），即使含有待定项目（UNCERTAIN，如特殊符号/操作符/未配置参考范围）
+    // 也应放行进入待审（需人工确认审核），绝不能作为不完整锁死在未录入列表中
+    if (isSpecimenActuallyComplete(r, cached)) {return 'abnormal';}
     return 'incomplete';
   }
 
@@ -17240,13 +17245,14 @@ window.addEventListener('keydown',function(e){
     // 带操作符的结果：只能在确定时返回 HIGH/LOW/NORMAL，否则返回 ''（不确定）
     if (parsed.op === '<' || parsed.op === '<=') {
       // "<X" 的实际值 < X，永远不能确定为 HIGH
-      if (parsed.op === '<' && hasLow && parsed.value <= low.value) {return 'LOW';}
-      if (parsed.op === '<=' && hasLow && parsed.value < low.value) {return 'LOW';}
+      // 8.10.25: 只有当参考下界明确大于 0 时（如治疗窗 0.6-1.2），X <= low.value 才能确定判 LOW；
+      // 若下界为 0/0.0/0.00（如 0-0.10），0 为浓度物理底线并非偏低阈值，不可判 LOW
+      if (parsed.op === '<' && hasLow && low.value > 0 && parsed.value <= low.value) {return 'LOW';}
+      if (parsed.op === '<=' && hasLow && low.value > 0 && parsed.value < low.value) {return 'LOW';}
       // 只有无边界限制时才可能是 NORMAL
       if (!hasLow && !hasHigh) {return 'NORMAL';}
-      // 8.10.0: 可证明正常——无下界、且实际值 < X ≤ 上界时必然不超上界
-      // （如 "<0.01" 对参考 0–0.05），安全判 NORMAL；其余仍不确定
-      if (!hasLow && hasHigh && parsed.value <= high.value) {return 'NORMAL';}
+      // 8.10.0 / 8.10.25: 可证明正常——无下界或下界<=0（如参考 0-0.10、0.00-0.05、<0.10）、且实际值 < X ≤ 上界时必然不超上界，安全判 NORMAL
+      if ((!hasLow || (hasLow && low.value <= 0)) && hasHigh && parsed.value <= high.value) {return 'NORMAL';}
       return ''; // 不确定
     }
     if (parsed.op === '>' || parsed.op === '>=') {
