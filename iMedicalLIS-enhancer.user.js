@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.28
+// @version      8.10.29
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（高密零滚动筛选栏/含外送/费用/病历直达/组合套折叠） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -771,6 +771,8 @@
 .pr-lbl{color:#78716c;font-size:11px;font-weight:700;white-space:nowrap}
 .pr-fld input,.pr-fld select{height:24px;box-sizing:border-box;border:1px solid #ddd6ce;border-radius:4px;padding:1px 5px;font-size:11px;color:#292524;background:#fffdfb;outline:none}
 .pr-fld input:focus,.pr-fld select:focus{border-color:#c8956c;box-shadow:0 0 0 2px rgba(200,149,108,.12)}
+#lis-pr-tools input[type="number"]::-webkit-inner-spin-button,#lis-pr-tools input[type="number"]::-webkit-outer-spin-button{-webkit-appearance:none!important;margin:0!important}
+#lis-pr-tools input[type="number"]{-moz-appearance:textfield!important}
 .pr-date-shortcuts{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
 .pr-date-shortcuts button{height:24px;padding:0 6px;font-size:11px;font-weight:700;border:1px solid var(--lis-border);border-radius:3px;background:var(--lis-primary-lighter);color:var(--lis-text-secondary);cursor:pointer}
 .pr-date-shortcuts button:hover{background:var(--lis-primary-light);border-color:var(--lis-primary)}
@@ -778,23 +780,24 @@
 .pr-mach-btn{height:24px;padding:0 8px;border:1px solid #c8956c;border-radius:4px;background:#fef9ee;color:#a87548;font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .pr-mach-btn:hover{background:#fdf2dc;border-color:#a87548}
 .pr-mach-btn.has-filter{background:#dbeafe;border-color:#3b82f6;color:#1d4ed8}
-.pr-mach-popover{position:absolute;top:28px;left:0;z-index:100020;width:720px;max-width:92vw;background:#fff;border:1px solid var(--lis-border);border-radius:8px;box-shadow:0 12px 36px rgba(0,0,0,.22);padding:10px;display:flex;flex-direction:column;gap:8px}
+.pr-mach-popover{position:absolute;top:28px;left:0;z-index:100020;width:780px;max-width:94vw;background:#fff;border:1px solid var(--lis-border);border-radius:8px;box-shadow:0 12px 36px rgba(0,0,0,.22);padding:10px;display:flex;flex-direction:column;gap:8px}
 .pr-mach-popover-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--lis-border-light);font-size:11px;font-weight:700;color:var(--lis-text-secondary)}
 .pr-mach-popover-acts{display:flex;align-items:center;gap:6px}
 .pr-mach-popover-acts button{height:24px;padding:0 8px;border-radius:4px;border:1px solid var(--lis-border);background:#fff;cursor:pointer;font-size:11px;font-weight:700}
 .pr-mach-popover-acts button.primary{background:var(--lis-primary);color:#fff;border-color:var(--lis-primary-hover)}
 #lis-pr-machine-tree{display:flex;flex-wrap:wrap;gap:8px;max-height:260px;overflow-y:auto;padding:2px}
-.pr-wg-box{border:1px solid #e7e0d8;border-radius:4px;background:#fef9ee;min-width:150px;max-width:190px;flex:1 1 150px}
+.pr-wg-box{border:1px solid #e7e0d8;border-radius:4px;background:#fef9ee;min-width:170px;flex:1 1 170px}
 .pr-wg-box[data-wg="1"]{border-top:2px solid #dc2626}
 .pr-wg-box[data-wg="3"]{border-top:2px solid #c8956c}
 .pr-wg-box[data-wg="4"]{border-top:2px solid #16a34a}
 .pr-wg-box[data-wg="5"]{border-top:2px solid #7c3aed}
-.pr-wg-head{height:22px;display:flex;align-items:center;gap:5px;padding:0 7px;font-size:11px;font-weight:800;color:#a87548;cursor:pointer;border-bottom:1px solid #f0ebe5;user-select:none}
-.pr-wg-head input{width:12px!important;height:12px!important;margin:0}
-.pr-wg-body{padding:4px 6px;display:flex;flex-direction:column;gap:3px;max-height:100px;overflow:auto}
+.pr-wg-head{height:24px;display:flex;align-items:center;gap:5px;padding:0 7px;font-size:11px;font-weight:800;color:#a87548;cursor:pointer;border-bottom:1px solid #f0ebe5;user-select:none}
+.pr-wg-head input{width:13px!important;height:13px!important;flex-shrink:0!important;margin:0}
+.pr-wg-body{padding:4px 6px;display:flex;flex-direction:column;gap:3px;max-height:220px;overflow-y:auto;overflow-x:hidden}
 .pr-wg-box.collapsed .pr-wg-body{display:none}
-.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:5px;font-size:11px!important;font-weight:600!important;color:#44403c!important;line-height:1.2!important;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
-.pr-mach-option input{width:12px!important;height:12px!important;margin:0}
+.pr-mach-option{display:flex!important;flex-direction:row!important;align-items:center;gap:5px;font-size:11px!important;font-weight:600!important;color:#44403c!important;line-height:1.2!important;white-space:nowrap;cursor:pointer;user-select:none;padding:2px 0}
+.pr-mach-option input{width:13px!important;height:13px!important;flex-shrink:0!important;margin:0!important}
+.pr-mach-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .pr-actions-inline{display:inline-flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
 .pr-actions-inline button{height:24px;padding:0 10px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;border:1px solid var(--lis-border)}
 .pr-btn-clear{background:#fff;color:#78716c}
@@ -2996,7 +2999,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                 const value = (m._wg || '') + '|' + (m.RowID || '');
                 const checked = oldSelected.has(value) ? ' checked' : '';
                 const name = esc(m.CName || m.Name || m.RowID || '');
-                return `<label class="pr-mach-option" title="${name}"><input type="checkbox" class="lis-pr-machine-check" data-wg="${esc(g.wg.dr)}" value="${esc(value)}"${checked}>${name}</label>`;
+                return `<label class="pr-mach-option" title="${name}"><input type="checkbox" class="lis-pr-machine-check" data-wg="${esc(g.wg.dr)}" value="${esc(value)}"${checked}><span class="pr-mach-name">${name}</span></label>`;
               })
               .join('')
             : '<div style="font-size:11px;color:#9aa5b1;padding:2px 0">未加载到仪器</div>';
@@ -4749,9 +4752,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                     <span class="pr-row-tag">标本</span>
                     <div class="pr-fld">
                         <span class="pr-lbl">日期</span>
-                        <input type="text" id="lis-pr-start" readonly placeholder="开始" style="width:78px;cursor:pointer;text-align:center">
+                        <input type="text" id="lis-pr-start" readonly placeholder="开始日期" style="width:88px;cursor:pointer;text-align:center">
                         <span style="color:#a8a29e;font-size:11px">~</span>
-                        <input type="text" id="lis-pr-end" readonly placeholder="结束" style="width:78px;cursor:pointer;text-align:center">
+                        <input type="text" id="lis-pr-end" readonly placeholder="结束日期" style="width:88px;cursor:pointer;text-align:center">
                     </div>
                     <div class="pr-date-shortcuts">
                         <button type="button" data-range="today">今天</button>
@@ -4776,16 +4779,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">状态</span>
-                        <select id="lis-pr-status-filter" style="width:58px">
+                        <select id="lis-pr-status-filter" style="width:68px">
                             <option value="">全部</option><option value="1">登记</option><option value="2">初审</option><option value="3">审核</option><option value="4">复审</option>
                         </select>
                     </div>
-                    <div class="pr-fld" style="flex:1;min-width:130px;max-width:240px">
+                    <div class="pr-fld" style="flex:1;min-width:180px;max-width:380px">
                         <span class="pr-lbl">搜索</span>
-                        <input type="text" id="lis-pr-q" placeholder="姓名/检验号/病案号" style="width:100%">
+                        <input type="text" id="lis-pr-q" placeholder="姓名 / 检验号 / 登记号 / 病案号" style="width:100%">
                     </div>
                     <div class="pr-actions-inline">
-                        <button type="button" class="pr-btn-clear" id="lis-pr-clear">清空</button>
+                        <button type="button" class="pr-btn-clear" id="lis-pr-clear">清空条件</button>
                         <button type="button" class="pr-btn-export" id="lis-pr-export">导出CSV</button>
                         <button type="button" class="pr-btn-cancel" id="lis-pr-cancel" style="display:none">停止</button>
                         <button type="button" class="pr-btn-query" id="lis-pr-query">▶ 查询</button>
@@ -4796,39 +4799,39 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                     <span class="pr-row-tag">患者</span>
                     <div class="pr-fld">
                         <span class="pr-lbl">类型</span>
-                        <input type="text" id="lis-pr-patient-type" placeholder="体检/职工" style="width:68px">
+                        <input type="text" id="lis-pr-patient-type" placeholder="体检/职工" style="width:82px">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">科室</span>
-                        <input type="text" id="lis-pr-dept" placeholder="科室" style="width:78px">
+                        <input type="text" id="lis-pr-dept" placeholder="科室" style="width:90px">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">病区</span>
-                        <input type="text" id="lis-pr-ward" placeholder="病区" style="width:68px">
+                        <input type="text" id="lis-pr-ward" placeholder="病区" style="width:80px">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">医生</span>
-                        <input type="text" id="lis-pr-doctor" placeholder="医生" style="width:62px">
+                        <input type="text" id="lis-pr-doctor" placeholder="医生" style="width:72px">
                     </div>
-                    <div class="pr-fld" style="flex:1;min-width:110px;max-width:200px">
+                    <div class="pr-fld" style="flex:1;min-width:140px;max-width:280px">
                         <span class="pr-lbl">诊断</span>
                         <input type="text" id="lis-pr-diagnosis" placeholder="诊断关键字" style="width:100%">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">性别</span>
-                        <select id="lis-pr-sex" style="width:48px">
-                            <option value="">全</option><option value="男">男</option><option value="女">女</option>
+                        <select id="lis-pr-sex" style="width:58px">
+                            <option value="">全部</option><option value="男">男</option><option value="女">女</option>
                         </select>
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">年龄</span>
-                        <input type="number" id="lis-pr-age-min" placeholder="下限" style="width:44px">
+                        <input type="number" id="lis-pr-age-min" placeholder="下限" style="width:52px;text-align:center">
                         <span style="color:#a8a29e;font-size:11px">~</span>
-                        <input type="number" id="lis-pr-age-max" placeholder="上限" style="width:44px">
+                        <input type="number" id="lis-pr-age-max" placeholder="上限" style="width:52px;text-align:center">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">标本</span>
-                        <input type="text" id="lis-pr-specimen" placeholder="血清/全血" style="width:68px">
+                        <input type="text" id="lis-pr-specimen" placeholder="血清/全血" style="width:82px">
                     </div>
                 </div>
                 <!-- 第三行：项目结果 + 状态提示 -->
@@ -4836,34 +4839,34 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                     <span class="pr-row-tag">结果</span>
                     <div class="pr-fld">
                         <span class="pr-lbl">组合</span>
-                        <input type="text" id="lis-pr-testset" placeholder="如 传染病八项" style="width:90px">
+                        <input type="text" id="lis-pr-testset" placeholder="如 传染病八项" style="width:120px">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">项目</span>
-                        <input type="text" id="lis-pr-item" placeholder="如 梅毒" style="width:85px">
+                        <input type="text" id="lis-pr-item" placeholder="如 梅毒 / FT3" style="width:105px">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">判断</span>
-                        <select id="lis-pr-judge" style="width:58px">
+                        <select id="lis-pr-judge" style="width:68px">
                             <option value="">全部</option><option value="NORMAL">正常</option><option value="HIGH">偏高</option><option value="LOW">偏低</option><option value="ABNORMAL">异常</option><option value="CRITICAL">危急</option><option value="UNCERTAIN">待定</option>
                         </select>
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">含</span>
-                        <input type="text" id="lis-pr-result-text" placeholder="阳性/+" style="width:65px">
+                        <input type="text" id="lis-pr-result-text" placeholder="阳性 / +" style="width:76px">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">比较</span>
-                        <select id="lis-pr-result-op" style="width:50px">
+                        <select id="lis-pr-result-op" style="width:58px">
                             <option value="">不筛</option><option value="gt">&gt;</option><option value="gte">&gt;=</option><option value="lt">&lt;</option><option value="lte">&lt;=</option><option value="eq">=</option>
                         </select>
-                        <input type="number" step="any" id="lis-pr-result-value" placeholder="值" style="width:44px">
+                        <input type="number" step="any" id="lis-pr-result-value" placeholder="值" style="width:50px;text-align:center">
                     </div>
                     <div class="pr-fld">
                         <span class="pr-lbl">区间</span>
-                        <input type="number" step="any" id="lis-pr-result-min" placeholder="下限" style="width:44px">
+                        <input type="number" step="any" id="lis-pr-result-min" placeholder="下限" style="width:52px;text-align:center">
                         <span style="color:#a8a29e;font-size:11px">~</span>
-                        <input type="number" step="any" id="lis-pr-result-max" placeholder="上限" style="width:44px">
+                        <input type="number" step="any" id="lis-pr-result-max" placeholder="上限" style="width:52px;text-align:center">
                     </div>
                     <label class="pr-toggle-inline">
                         <input type="checkbox" id="lis-pr-abnormal">
