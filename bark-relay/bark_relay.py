@@ -41,6 +41,11 @@ _NOTIFY_LEVELS = {'active', 'passive', 'timeSensitive', 'critical'}
 _notify_last = None
 _notify_lock = threading.Lock()
 
+# 质控配置持久化存储（批号、操作者、映射等多机共享）
+QC_CONFIG_FILE = os.path.join(ROOT, 'qc_config.json')
+_qc_lock = threading.Lock()
+QC_MAX_BODY = 1048576  # 1MB 上限（含 mappings 大字典）
+
 # 8.10.0 安全加固：/notify 经 nginx 反代后，任何能访问 9111 的机器用 curl（无 Origin）
 # 即可调用——Origin 白名单只约束浏览器，挡不住脚本。加全局最小受理间隔 + 在途重试线程
 # 上限 + 请求体上限，防止恶意/误发请求轰炸手机，或用海量重试线程/大 body 耗尽资源。
@@ -334,10 +339,79 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
                 'relay': 'gateway',
             })
             return
+        if path in ('/qc_config', '/qc-config'):
+            if not self._origin_allowed():
+                _log(f'[security] 拒绝非白名单 Origin 的 GET {path}: {self.headers.get("Origin")}')
+                self._send_json({'error': 'Origin not allowed'}, code=403)
+                return
+            with _qc_lock:
+                try:
+                    if os.path.exists(QC_CONFIG_FILE):
+                        with open(QC_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        if not isinstance(data, dict):
+                            data = {}
+                        self._send_json({
+                            'ok': True,
+                            'config': data.get('config'),
+                            'mappings': data.get('mappings'),
+                            'updated_at': data.get('updated_at', 0),
+                            'updated_by': data.get('updated_by', '')
+                        })
+                    else:
+                        self._send_json({'ok': True, 'config': None, 'mappings': None, 'updated_at': 0})
+                except Exception as e:
+                    _log(f'/qc_config 读取异常: {e}')
+                    self._send_json({'ok': False, 'error': str(e)[:120]}, code=500)
+            return
         self._send_json({'error': 'not found'}, code=404)
 
     def do_POST(self):
         path = unquote(urlparse(self.path).path)
+        if path in ('/qc_config', '/qc-config'):
+            if not self._origin_allowed():
+                _log(f'[security] 拒绝非白名单 Origin 的 POST {path}: {self.headers.get("Origin")}')
+                self._send_json({'error': 'Origin not allowed'}, code=403)
+                return
+            try:
+                length = int(self.headers.get('Content-Length', 0) or 0)
+                if length <= 0 or length > QC_MAX_BODY:
+                    self._send_json({'error': 'payload invalid or too large'}, code=413)
+                    return
+                raw = self.rfile.read(length)
+                payload = json.loads(raw.decode('utf-8'))
+                if not isinstance(payload, dict):
+                    self._send_json({'error': 'invalid json object'}, code=400)
+                    return
+                with _qc_lock:
+                    existing = {}
+                    if os.path.exists(QC_CONFIG_FILE):
+                        try:
+                            with open(QC_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                                existing = json.load(f)
+                            if not isinstance(existing, dict):
+                                existing = {}
+                        except Exception:
+                            existing = {}
+                    if 'config' in payload and isinstance(payload['config'], dict):
+                        existing['config'] = payload['config']
+                    if 'mappings' in payload and isinstance(payload['mappings'], dict):
+                        existing['mappings'] = payload['mappings']
+                    now_ts = int(time.time() * 1000)
+                    existing['updated_at'] = payload.get('updated_at') or now_ts
+                    client_ip = self.headers.get('X-Real-IP') or self.client_address[0]
+                    existing['updated_by'] = client_ip
+                    # 原子落盘
+                    tmp_file = QC_CONFIG_FILE + '.tmp'
+                    with open(tmp_file, 'w', encoding='utf-8') as f:
+                        json.dump(existing, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp_file, QC_CONFIG_FILE)
+                _log(f'[qc_config] 已保存质控配置 (来自 {client_ip})，updated_at={existing["updated_at"]}')
+                self._send_json({'ok': True, 'updated_at': existing['updated_at']})
+            except Exception as e:
+                _log(f'/qc_config 保存异常: {e}')
+                self._send_json({'ok': False, 'error': str(e)[:120]}, code=500)
+            return
         if path != '/notify':
             self._send_json({'error': 'not found'}, code=404)
             return

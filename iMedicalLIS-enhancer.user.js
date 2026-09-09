@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.23
+// @version      8.10.24
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -4677,8 +4677,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
   ];
 
-  // --- 持久化配置 ---
+  // --- 持久化配置与网关共享（科室各电脑共享批号、操作者及映射） ---
   const QE_CONFIG_KEY = 'lis-qe-config';
+  const QE_CONFIG_ENDPOINTS = [
+    'http://192.168.31.111:9111/qc_config',
+    'http://127.0.0.1:8765/qc_config'
+  ];
+
+  function qeGetEndpoints() {
+    if (location.hostname === '192.168.31.111') {
+      return [location.origin + '/qc_config', 'http://127.0.0.1:8765/qc_config'];
+    }
+    return QE_CONFIG_ENDPOINTS;
+  }
+
   function qeLoadConfig() {
     try {
       return JSON.parse(localStorage.getItem(QE_CONFIG_KEY) || '{}');
@@ -4686,10 +4698,150 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       return {};
     }
   }
+
   function qeSaveConfig(cfg) {
     try {
+      if (cfg && !cfg._updated_at) {
+        cfg._updated_at = Date.now();
+      }
       localStorage.setItem(QE_CONFIG_KEY, JSON.stringify(cfg));
     } catch (e) {}
+  }
+
+  // 从网关机拉取共享质控配置与映射
+  async function qeFetchGatewayConfig() {
+    const endpoints = qeGetEndpoints();
+    for (const ep of endpoints) {
+      try {
+        const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const tmr = ctl ? setTimeout(() => { try { ctl.abort(); } catch (x) {} }, 3500) : null;
+        const resp = await fetch(ep, {
+          cache: 'no-cache',
+          signal: ctl ? ctl.signal : undefined
+        });
+        if (tmr) { clearTimeout(tmr); }
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.ok) {
+            return { ...data, endpoint: ep };
+          }
+        }
+      } catch (e) {
+        dbg('[LIS-QE] 网关配置拉取失败 ' + ep + ': ' + (e.message || e));
+      }
+    }
+    return null;
+  }
+
+  // 同步配置到网关机（科室各机共享）
+  async function qePushGatewayConfig(payload) {
+    const endpoints = qeGetEndpoints();
+    for (const ep of endpoints) {
+      try {
+        const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const tmr = ctl ? setTimeout(() => { try { ctl.abort(); } catch (x) {} }, 4000) : null;
+        const resp = await fetch(ep, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' }, // text/plain 免 CORS 预检
+          body: JSON.stringify(payload),
+          signal: ctl ? ctl.signal : undefined
+        });
+        if (tmr) { clearTimeout(tmr); }
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.ok) {
+            return { ok: true, endpoint: ep, updated_at: data.updated_at };
+          }
+        }
+      } catch (e) {
+        dbg('[LIS-QE] 网关配置推送失败 ' + ep + ': ' + (e.message || e));
+      }
+    }
+    return { ok: false };
+  }
+
+  // 动态填充配置到面板输入框
+  function qePopulateInputs(cfg) {
+    const panel = document.getElementById('lis-qe-panel');
+    if (!panel || !cfg) { return; }
+
+    // 批号输入框
+    if (cfg.lots) {
+      panel.querySelectorAll('.qe-lot-input').forEach(input => {
+        const gid = input.dataset.group;
+        const type = input.dataset.type;
+        const code = input.dataset.code;
+        const gc = cfg.lots[gid];
+        if (!gc) { return; }
+        let val = null;
+        if (type === 'baseLot' && typeof gc.baseLot === 'string') { val = gc.baseLot; }
+        else if (type === 'lot0' && gc.lots && typeof gc.lots[0] === 'string') { val = gc.lots[0]; }
+        else if (type === 'lot1' && gc.lots && typeof gc.lots[1] === 'string') { val = gc.lots[1]; }
+        else if (type === 'lot' && typeof gc.lot === 'string') { val = gc.lot; }
+        else if (type === 'coag_main' && typeof gc._main === 'string') { val = gc._main; }
+        else if (type === 'coag_dimer' && typeof gc._dimer === 'string') { val = gc._dimer; }
+        else if (type === 'proj' && code && typeof gc[code] === 'string') { val = gc[code]; }
+        if (val !== null && input.value !== val) {
+          input.value = val;
+        }
+      });
+    }
+
+    // 操作者输入框
+    if (cfg.operators) {
+      panel.querySelectorAll('.qe-op-input').forEach(input => {
+        const ids = (input.dataset.ids || '').split(',');
+        for (const id of ids) {
+          if (id && typeof cfg.operators[id] === 'string') {
+            input.value = cfg.operators[id];
+            break;
+          }
+        }
+      });
+    }
+
+    // 选中的组（仅在非空数组时恢复，避免误清空）
+    if (Array.isArray(cfg.selectedGroups) && cfg.selectedGroups.length) {
+      const set = new Set(cfg.selectedGroups);
+      panel.querySelectorAll('.qe-gcheck').forEach(c => {
+        c.checked = set.has(c.value);
+      });
+    }
+  }
+
+  // 面板打开时自动从网关拉取最新批号、操作者与项目映射
+  async function qeSyncFromGatewayOnOpen() {
+    try {
+      const data = await qeFetchGatewayConfig();
+      if (!data) { return; }
+      const desc = document.getElementById('lis-qe-sync-desc');
+      if (data.config) {
+        const localCfg = qeLoadConfig();
+        const localTs = localCfg._updated_at || 0;
+        const remoteTs = data.updated_at || 0;
+        // 如果网关配置有数据且（比本地新 或 本地无批号配置），自动应用并更新输入框
+        if (remoteTs >= localTs || !localCfg.lots) {
+          qePopulateInputs(data.config);
+          qeSaveConfig({ ...data.config, _updated_at: remoteTs });
+          const ts = new Date(remoteTs || Date.now());
+          const timeStr = `${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')} ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
+          if (desc) {
+            desc.innerHTML = `<span style="color:#0284c7;font-weight:600">☁️ 已同步网关配置（更新于 ${timeStr}）</span>`;
+          }
+          dbg('[LIS-QE] 已自动加载网关最新质控配置，时间: ' + timeStr);
+        }
+      }
+      if (data.mappings && Object.keys(data.mappings).length > 1) {
+        const localMap = qeLoadMappings();
+        if (!qeMappingCount(localMap)) {
+          qeSaveMappings(data.mappings);
+          qeShowMappingInfo(data.mappings);
+          dbg('[LIS-QE] 已自动从网关加载质控项目映射');
+        }
+      }
+    } catch (e) {
+      dbg('[LIS-QE] 自动同步网关配置出错: ' + (e.message || e));
+    }
   }
 
   // 获取某个组的批号配置
@@ -6098,7 +6250,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         const dist = Math.abs(ev.clientX - fabDownX) + Math.abs(ev.clientY - fabDownY);
         if (dist < 5) {
           const panel = document.getElementById('lis-qe-panel');
-          if (panel) {panel.classList.toggle('show');}
+          if (panel) {
+            const willShow = !panel.classList.contains('show');
+            panel.classList.toggle('show');
+            if (willShow) {
+              qeSyncFromGatewayOnOpen();
+            }
+          }
         } else {
           try {
             localStorage.setItem(FAB_POS_KEY, JSON.stringify({ l: fab.offsetLeft, t: fab.offsetTop }));
@@ -6202,8 +6360,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                     <div class="qe-step-hd">
                         <span class="qe-step-num">2</span>
                         <span class="qe-step-title">批号和操作者设置</span>
-                        <span class="qe-step-desc">修改后点击右侧保存</span>
-                        <button class="qe-save-btn" id="lis-qe-save">💾 保存设置</button>
+                        <span class="qe-step-desc" id="lis-qe-sync-desc">修改后点击右侧保存并同步</span>
+                        <button class="qe-save-btn" id="lis-qe-pull" style="margin-right:6px;background:#f0f9ff;color:#0284c7;border:1px solid #bae6fd" title="从网关机强制重新读取最新批号与操作者配置">☁️ 从网关读取</button>
+                        <button class="qe-save-btn" id="lis-qe-save" title="保存当前设置并实时同步共享到科室网关机">💾 保存并同步网关</button>
                     </div>
                     <div class="qe-step-body">
                         <div class="qe-lot-grid">${lotsHtml}</div>
@@ -6280,18 +6439,67 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       });
     });
 
-    // 保存设置
-    document.getElementById('lis-qe-save').addEventListener('click', () => {
+    // 保存设置并同步到网关机（全科室电脑共享）
+    document.getElementById('lis-qe-save').addEventListener('click', async () => {
       const cfg = qeCollectConfig();
+      cfg._updated_at = Date.now();
       qeSaveConfig(cfg);
       const btn = document.getElementById('lis-qe-save');
-      btn.textContent = '✅ 已保存';
-      btn.classList.add('saved');
+      const desc = document.getElementById('lis-qe-sync-desc');
+      btn.textContent = '⏳ 同步中...';
+      btn.disabled = true;
+      const res = await qePushGatewayConfig({ config: cfg });
+      btn.disabled = false;
+      if (res && res.ok) {
+        btn.textContent = '✅ 已同步网关';
+        btn.classList.add('saved');
+        if (desc) {
+          const timeStr = new Date().toTimeString().substring(0, 5);
+          desc.innerHTML = `<span style="color:#059669;font-weight:700">☁️ 已同步网关机（${timeStr} 全科室已共享）</span>`;
+        }
+        toast('质控批号与操作者已保存至网关机，科室所有电脑已同步共享！', 's', 3000);
+      } else {
+        btn.textContent = '💾 已保存在本机';
+        btn.classList.add('saved');
+        if (desc) {
+          desc.innerHTML = `<span style="color:#d97706">⚠️ 网关离线，已保存在本机</span>`;
+        }
+        toast('网关机未响应，配置已暂存本机。网关恢复后可重新保存同步。', 'w', 3500);
+      }
       setTimeout(() => {
-        btn.textContent = '💾 保存设置';
+        btn.textContent = '💾 保存并同步网关';
         btn.classList.remove('saved');
-      }, 2000);
+      }, 2500);
     });
+
+    // 从网关读取最新配置
+    const pullBtn = document.getElementById('lis-qe-pull');
+    if (pullBtn) {
+      pullBtn.addEventListener('click', async () => {
+        pullBtn.textContent = '⏳ 读取中...';
+        pullBtn.disabled = true;
+        const data = await qeFetchGatewayConfig();
+        pullBtn.disabled = false;
+        pullBtn.textContent = '☁️ 从网关读取';
+        const desc = document.getElementById('lis-qe-sync-desc');
+        if (data && data.config) {
+          qePopulateInputs(data.config);
+          qeSaveConfig({ ...data.config, _updated_at: data.updated_at || Date.now() });
+          if (data.mappings) {
+            qeSaveMappings(data.mappings);
+            qeShowMappingInfo(data.mappings);
+          }
+          const ts = data.updated_at ? new Date(data.updated_at) : new Date();
+          const timeStr = `${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')} ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
+          if (desc) {
+            desc.innerHTML = `<span style="color:#0284c7;font-weight:700">☁️ 已从网关加载配置（更新于 ${timeStr}）</span>`;
+          }
+          toast('已成功从网关机拉取最新质控配置！', 's', 2500);
+        } else {
+          toast('网关机暂无共享配置或未连接', 'i', 2500);
+        }
+      });
+    }
 
     // 检测映射
     document.getElementById('lis-qe-detect').addEventListener('click', async () => {
@@ -6304,6 +6512,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         const mappings = await qeDetectMappings(qeSetStatus);
         qeSaveMappings(mappings);
         qeShowMappingInfo(mappings);
+        qePushGatewayConfig({ mappings }).catch(() => {});
       } catch (e) {
         qeSetStatus('检测失败: ' + e.message, 'error');
       }
@@ -6333,6 +6542,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // 加载已有映射信息
     const savedMap = qeLoadMappings();
     if (Object.keys(savedMap).length > 1) {qeShowMappingInfo(savedMap);}
+
+    // 8.10.24: 初次创建面板时，异步从网关机拉取最新质控配置并自动填充
+    qeSyncFromGatewayOnOpen();
   }
 
   function qeSetStatus(text, type) {
@@ -6466,8 +6678,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (detectBtn) {detectBtn.disabled = true;}
 
     try {
-      // 保存配置
+      // 保存配置并后台同步到网关机
       qeSaveConfig(cfg);
+      qePushGatewayConfig({ config: cfg }).catch(() => {});
 
       let mappings = qeLoadMappings();
       // 映射逻辑版本不符(或缓存为空)时自动重新检测，确保用最新的 qeMatchScore 匹配，
@@ -6478,6 +6691,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           mappings = await qeDetectMappings(qeSetStatus);
           qeSaveMappings(mappings);
           qeShowMappingInfo(mappings);
+          qePushGatewayConfig({ mappings }).catch(() => {});
         } catch (e) {
           qeSetStatus('重新检测映射失败: ' + e.message + '（可手动点"检测映射"）', 'error');
           return;
