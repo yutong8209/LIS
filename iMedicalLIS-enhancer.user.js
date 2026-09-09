@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.29
-// @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（高密零滚动筛选栏/含外送/费用/病历直达/组合套折叠） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
+// @version      8.10.30
+// @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（高密零滚动筛选栏/含外送/费用/病历直达/组合套折叠/双击行展开折叠） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -848,6 +848,8 @@
 .pr-tool-btn:hover{background:var(--lis-primary-lighter);border-color:var(--lis-primary-hover)}
 .pr-expand-btn{padding:1px 6px;border:1px solid #ddd6ce;border-radius:4px;background:#fffdfb;color:#78716c;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;line-height:1.3}
 .pr-expand-btn:hover{background:var(--lis-primary-lighter);color:var(--lis-primary);border-color:var(--lis-border)}
+.pr-group-row{cursor:pointer;user-select:text}
+.pr-group-row:hover{background:#fef3c7!important}
 .pr-group-row.is-expanded{background:#fef7e6!important}
 .pr-badge{display:inline-block;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:700;line-height:1.2;white-space:nowrap}
 .pr-badge-norm{background:#dcfce7;color:#15803d}
@@ -3896,7 +3898,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
             ? '<span class="pr-badge pr-badge-abn">含异常</span>'
             : '<span class="pr-badge pr-badge-norm">正常</span>';
 
-        h += `<tr class="pr-group-row ${isExp ? 'is-expanded' : ''}" data-key="${esc(g.key)}" data-gidx="${gIdx}">
+        h += `<tr class="pr-group-row ${isExp ? 'is-expanded' : ''}" data-key="${esc(g.key)}" data-gidx="${gIdx}" title="双击本行展开/折叠明细">
                 <td style="text-align:center">
                   <button type="button" class="pr-expand-btn" data-key="${esc(g.key)}" data-gidx="${gIdx}">
                     ${isExp ? '▾ 折叠' : '▸ 展开'}
@@ -4119,26 +4121,42 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       });
     }
 
-    // 3. 单行折叠/展开
+    // 3. 单行折叠/展开（支持点击展开按钮与双击整行）
+    function toggleGroupRow(row) {
+      if (!row) {return;}
+      const key = row.dataset.key;
+      const gidx = row.dataset.gidx;
+      const btn = row.querySelector('.pr-expand-btn');
+      const sub = document.getElementById('pr-sub-' + gidx);
+      if (_prExpandedKeys.has(key)) {
+        _prExpandedKeys.delete(key);
+        row.classList.remove('is-expanded');
+        if (sub) {sub.style.display = 'none';}
+        if (btn) {btn.textContent = '▸ 展开';}
+      } else {
+        _prExpandedKeys.add(key);
+        row.classList.add('is-expanded');
+        if (sub) {sub.style.display = '';}
+        if (btn) {btn.textContent = '▾ 折叠';}
+      }
+    }
+
     body.querySelectorAll('.pr-expand-btn').forEach(btn => {
       btn.addEventListener('click', e => {
         e.preventDefault();
         e.stopPropagation();
-        const key = btn.dataset.key;
-        const gidx = btn.dataset.gidx;
-        const row = btn.closest('.pr-group-row');
-        const sub = document.getElementById('pr-sub-' + gidx);
-        if (_prExpandedKeys.has(key)) {
-          _prExpandedKeys.delete(key);
-          if (row) {row.classList.remove('is-expanded');}
-          if (sub) {sub.style.display = 'none';}
-          btn.textContent = '▸ 展开';
-        } else {
-          _prExpandedKeys.add(key);
-          if (row) {row.classList.add('is-expanded');}
-          if (sub) {sub.style.display = '';}
-          btn.textContent = '▾ 折叠';
+        toggleGroupRow(btn.closest('.pr-group-row'));
+      });
+    });
+
+    body.querySelectorAll('.pr-group-row').forEach(row => {
+      row.addEventListener('dblclick', e => {
+        if (e.target && e.target.closest('button, a, input, select')) {return;}
+        e.preventDefault();
+        if (window.getSelection) {
+          window.getSelection().removeAllRanges();
         }
+        toggleGroupRow(row);
       });
     });
 
