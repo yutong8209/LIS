@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.26
+// @version      8.10.27
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用/病历直达/组合套折叠） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -818,8 +818,8 @@
 #lis-pr-status.info{color:#a87548;background:#fef9ee}
 #lis-pr-body{flex:1;min-height:0;overflow-y:auto;overflow-x:auto;background:var(--lis-bg);padding:8px;position:relative;z-index:1}
 #lis-pr-body table{width:100%;border-collapse:separate;border-spacing:0;background:var(--lis-surface);border:1px solid var(--lis-border-light);border-radius:8px;overflow:hidden;font-size:12px}
-#lis-pr-body th{position:sticky;top:0;background:var(--lis-bg);color:var(--lis-text-secondary);padding:7px 8px;text-align:left;border-bottom:1px solid #e7e0d8;white-space:nowrap;z-index:1}
-#lis-pr-body td{padding:6px 8px;border-bottom:1px solid #f0ebe5;white-space:nowrap;vertical-align:middle}
+#lis-pr-body th{position:sticky;top:0;background:var(--lis-bg);color:var(--lis-text-secondary);padding:6px 7px;text-align:left;border-bottom:1px solid #e7e0d8;white-space:nowrap;z-index:1}
+#lis-pr-body td{padding:4px 7px;border-bottom:1px solid #f0ebe5;white-space:nowrap;vertical-align:middle}
 #lis-pr-body tr:nth-child(even){background:#fef9ee}
 #lis-pr-body tr:hover{background:#fef3c7}
 #lis-pr-body .pr-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#7b8b96;font-size:13px;text-align:center;line-height:1.7}
@@ -827,25 +827,30 @@
 #lis-pr-body .pr-low{color:#1565c0;font-weight:700}
 #lis-pr-body .pr-high{color:#e65100;font-weight:700}
 #lis-pr-body .pr-critical{color:#b71c1c;font-weight:800}
-.pr-emr-btn{display:inline-flex;align-items:center;gap:2px;padding:1px 6px;margin-left:5px;border:1px solid #93c5fd;border-radius:4px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:700;cursor:pointer;vertical-align:middle;line-height:1.4;transition:all .15s ease}
+.pr-col-diag{max-width:180px;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.pr-col-dept{max-width:120px;min-width:50px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.pr-col-set{max-width:130px;min-width:50px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.pr-col-item{max-width:140px;min-width:50px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.pr-col-mach{max-width:95px;min-width:50px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.pr-emr-btn{display:inline-flex;align-items:center;gap:2px;padding:1px 5px;margin-left:4px;border:1px solid #93c5fd;border-radius:4px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:700;cursor:pointer;vertical-align:middle;line-height:1.3;transition:all .15s ease}
 .pr-emr-btn:hover{background:#dbeafe;border-color:#3b82f6;color:#1e40af}
-.pr-table-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;margin-bottom:8px;background:var(--lis-surface);border:1px solid var(--lis-border-light);border-radius:6px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.pr-table-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 10px;margin-bottom:6px;background:var(--lis-surface);border:1px solid var(--lis-border-light);border-radius:6px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
 .pr-toolbar-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pr-toolbar-right{display:flex;align-items:center;gap:6px;color:#78716c;font-size:11px;margin-left:auto;white-space:nowrap}
-.pr-tool-btn{height:26px;padding:0 8px;border:1px solid var(--lis-border);border-radius:4px;background:var(--lis-surface);color:var(--lis-primary);font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all .15s}
+.pr-tool-btn{height:24px;padding:0 8px;border:1px solid var(--lis-border);border-radius:4px;background:var(--lis-surface);color:var(--lis-primary);font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all .15s}
 .pr-tool-btn:hover{background:var(--lis-primary-lighter);border-color:var(--lis-primary-hover)}
-.pr-expand-btn{padding:2px 7px;border:1px solid #ddd6ce;border-radius:4px;background:#fffdfb;color:#78716c;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap}
+.pr-expand-btn{padding:1px 6px;border:1px solid #ddd6ce;border-radius:4px;background:#fffdfb;color:#78716c;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;line-height:1.3}
 .pr-expand-btn:hover{background:var(--lis-primary-lighter);color:var(--lis-primary);border-color:var(--lis-border)}
 .pr-group-row.is-expanded{background:#fef7e6!important}
-.pr-badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;line-height:1.2;white-space:nowrap}
+.pr-badge{display:inline-block;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:700;line-height:1.2;white-space:nowrap}
 .pr-badge-norm{background:#dcfce7;color:#15803d}
 .pr-badge-abn{background:#ffedd5;color:#c2410c}
 .pr-badge-critical{background:#fee2e2;color:#b91c1c}
-.pr-sub-wrap{padding:4px 10px 10px 32px!important;background:#faf7f2!important;border-bottom:1px solid #e7e0d8!important}
+.pr-sub-wrap{padding:4px 10px 8px 30px!important;background:#faf7f2!important;border-bottom:1px solid #e7e0d8!important}
 .pr-sub-box{background:#fff;border:1px solid #e7e0d8;border-radius:6px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.03)}
 .pr-sub-table{width:100%!important;border-collapse:collapse!important;border:none!important;font-size:11px!important;margin:0!important}
-.pr-sub-table th{background:#f5efe6!important;color:#78716c!important;font-weight:700!important;padding:5px 8px!important;border-bottom:1px solid #e7e0d8!important;white-space:nowrap}
-.pr-sub-table td{padding:5px 8px!important;border-bottom:1px solid #f2ece4!important;white-space:nowrap}
+.pr-sub-table th{background:#f5efe6!important;color:#78716c!important;font-weight:700!important;padding:4px 8px!important;border-bottom:1px solid #e7e0d8!important;white-space:nowrap}
+.pr-sub-table td{padding:4px 8px!important;border-bottom:1px solid #f2ece4!important;white-space:nowrap}
 .pr-sub-table tr:last-child td{border-bottom:none!important}
 .pr-sub-table tr:hover{background:#fefce8!important}
 /* --- 顶部快速切换条 --- */
@@ -3805,20 +3810,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       h += `<table>
               <thead>
                 <tr>
-                  <th style="width:64px;text-align:center">操作</th>
-                  <th>姓名</th>
-                  <th>性别</th>
-                  <th>年龄</th>
-                  <th>类型</th>
-                  <th>科室</th>
-                  <th>诊断</th>
-                  <th>检验号</th>
-                  <th>流水号</th>
-                  <th>标本</th>
-                  <th>组合名称</th>
-                  <th>项目数</th>
-                  <th>状态</th>
-                  <th>核收时间</th>
+                  <th style="width:60px;text-align:center">操作</th>
+                  <th style="width:105px">姓名</th>
+                  <th style="width:38px;text-align:center">性别</th>
+                  <th style="width:42px;text-align:center">年龄</th>
+                  <th style="width:50px;text-align:center">类型</th>
+                  <th style="width:110px">科室</th>
+                  <th style="width:160px">诊断</th>
+                  <th style="width:105px">检验号</th>
+                  <th style="width:52px;text-align:center">流水号</th>
+                  <th style="width:50px;text-align:center">标本</th>
+                  <th style="width:120px">组合名称</th>
+                  <th style="width:60px;text-align:center">项目数</th>
+                  <th style="width:62px;text-align:center">状态</th>
+                  <th style="width:130px">核收时间</th>
                 </tr>
               </thead>
               <tbody>`;
@@ -3841,17 +3846,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                   <strong>${esc(g.patient)}</strong>
                   <button type="button" class="pr-emr-btn" data-labno="${esc(g.labno)}" data-pat="${esc(g.patient)}" data-reg="${esc(g.regNo)}" data-ep="${esc(g.episodeNo)}" title="查看该患者电子病历（Shift+点击：直接唤起原生 32 位 IE）">📄 病历</button>
                 </td>
-                <td>${esc(g.sex)}</td>
-                <td>${esc(g.age)}</td>
-                <td>${esc(g.patientType)}</td>
-                <td>${esc(g.location || g.ward)}</td>
-                <td title="${esc(g.diagnosis)}">${esc(g.diagnosis)}</td>
+                <td style="text-align:center">${esc(g.sex)}</td>
+                <td style="text-align:center">${esc(g.age)}</td>
+                <td style="text-align:center">${esc(g.patientType)}</td>
+                <td title="${esc(g.location || g.ward)}"><div class="pr-col-dept">${esc(g.location || g.ward)}</div></td>
+                <td title="${esc(g.diagnosis)}"><div class="pr-col-diag">${esc(g.diagnosis)}</div></td>
                 <td>${esc(g.labno)}</td>
-                <td>${esc(g.episodeNo)}</td>
-                <td>${esc(g.specimen)}</td>
-                <td><strong>${esc(g.testSet)}</strong></td>
-                <td>${g.items.length} 项</td>
-                <td>${statusBadge}</td>
+                <td style="text-align:center">${esc(g.episodeNo)}</td>
+                <td style="text-align:center">${esc(g.specimen)}</td>
+                <td title="${esc(g.testSet)}"><div class="pr-col-set"><strong>${esc(g.testSet)}</strong></div></td>
+                <td style="text-align:center">${g.items.length} 项</td>
+                <td style="text-align:center">${statusBadge}</td>
                 <td>${esc(g.acceptDT)}</td>
               </tr>
               <tr class="pr-sub-row" id="pr-sub-${gIdx}" style="${isExp ? '' : 'display:none'}">
@@ -3936,24 +3941,24 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       h += `<table>
               <thead>
                 <tr>
-                  <th>姓名</th>
-                  <th>性别</th>
-                  <th>年龄</th>
-                  <th>类型</th>
-                  <th>科室</th>
-                  <th>诊断</th>
-                  <th>检验号</th>
-                  <th>流水号</th>
-                  <th>仪器</th>
-                  <th>标本</th>
-                  <th>组合</th>
-                  <th>项目</th>
-                  <th>结果</th>
-                  <th>参考范围</th>
-                  <th>报告费用</th>
-                  <th>医嘱费用</th>
-                  <th>状态</th>
-                  <th>核收时间</th>
+                  <th style="width:105px">姓名</th>
+                  <th style="width:38px;text-align:center">性别</th>
+                  <th style="width:42px;text-align:center">年龄</th>
+                  <th style="width:50px;text-align:center">类型</th>
+                  <th style="width:110px">科室</th>
+                  <th style="width:160px">诊断</th>
+                  <th style="width:105px">检验号</th>
+                  <th style="width:52px;text-align:center">流水号</th>
+                  <th style="width:90px">仪器</th>
+                  <th style="width:50px;text-align:center">标本</th>
+                  <th style="width:110px">组合</th>
+                  <th style="width:130px">项目</th>
+                  <th style="width:85px">结果</th>
+                  <th style="width:105px">参考范围</th>
+                  <th style="width:65px;text-align:right">报告费用</th>
+                  <th style="width:75px;text-align:right">医嘱费用</th>
+                  <th style="width:60px;text-align:center">状态</th>
+                  <th style="width:130px">核收时间</th>
                 </tr>
               </thead>
               <tbody>`;
@@ -3974,22 +3979,25 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                   <strong>${esc(r.patient)}</strong>
                   <button type="button" class="pr-emr-btn" data-labno="${esc(r.labno)}" data-pat="${esc(r.patient)}" data-reg="${esc(r.regNo)}" data-ep="${esc(r.episodeNo)}" title="查看该患者电子病历（Shift+点击：直接唤起原生 32 位 IE）">📄 病历</button>
                 </td>
-                <td>${esc(r.sex)}</td>
-                <td>${esc(r.age)}</td>
-                <td>${esc(r.patientType)}</td>
-                <td>${esc(r.location || r.ward)}</td>
-                <td>${esc(r.diagnosis)}</td>
+                <td style="text-align:center">${esc(r.sex)}</td>
+                <td style="text-align:center">${esc(r.age)}</td>
+                <td style="text-align:center">${esc(r.patientType)}</td>
+                <td title="${esc(r.location || r.ward)}"><div class="pr-col-dept">${esc(r.location || r.ward)}</div></td>
+                <td title="${esc(r.diagnosis)}"><div class="pr-col-diag">${esc(r.diagnosis)}</div></td>
                 <td>${esc(r.labno)}</td>
-                <td>${esc(r.episodeNo)}</td>
-                <td>${esc(r.machine)}</td>
-                <td>${esc(r.specimen)}</td>
-                <td>${esc(r.testSet)}</td>
-                <td>${esc(r.itemName)}${r.regNo ? '<button type="button" class="pr-hist-btn" data-i="' + rIdx + '" title="查看该项目历史（跨组）">🔎</button>' : ''}</td>
-                <td class="${cls}">${esc(r.result)}${r.unit ? ' ' + esc(r.unit) : ''}</td>
+                <td style="text-align:center">${esc(r.episodeNo)}</td>
+                <td title="${esc(r.machine)}"><div class="pr-col-mach">${esc(r.machine)}</div></td>
+                <td style="text-align:center">${esc(r.specimen)}</td>
+                <td title="${esc(r.testSet)}"><div class="pr-col-set">${esc(r.testSet)}</div></td>
+                <td title="${esc(r.itemName)}">
+                  <div class="pr-col-item" style="display:inline-block">${esc(r.itemName)}</div>
+                  ${r.regNo ? '<button type="button" class="pr-hist-btn" data-i="' + rIdx + '" title="查看该项目历史（跨组）">🔎</button>' : ''}
+                </td>
+                <td class="${cls}"><strong>${esc(r.result)}</strong>${r.unit ? ' ' + esc(r.unit) : ''}</td>
                 <td>${esc(r.refRange)}</td>
-                <td>${esc(r.reportPrice || '')}</td>
-                <td title="${esc(r.feeDetail || '')}">${esc(r.testSetFee || r.feeDetail || '')}</td>
-                <td>${esc(classifyStatusText(r.status))}</td>
+                <td style="text-align:right">${esc(r.reportPrice || '')}</td>
+                <td style="text-align:right" title="${esc(r.feeDetail || '')}">${esc(r.testSetFee || r.feeDetail || '')}</td>
+                <td style="text-align:center">${esc(classifyStatusText(r.status))}</td>
                 <td>${esc(r.acceptDT)}</td>
               </tr>`;
       });
