@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.25
-// @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
+// @version      8.10.26
+// @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（含外送/费用/病历直达/组合套折叠） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -827,6 +827,27 @@
 #lis-pr-body .pr-low{color:#1565c0;font-weight:700}
 #lis-pr-body .pr-high{color:#e65100;font-weight:700}
 #lis-pr-body .pr-critical{color:#b71c1c;font-weight:800}
+.pr-emr-btn{display:inline-flex;align-items:center;gap:2px;padding:1px 6px;margin-left:5px;border:1px solid #93c5fd;border-radius:4px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:700;cursor:pointer;vertical-align:middle;line-height:1.4;transition:all .15s ease}
+.pr-emr-btn:hover{background:#dbeafe;border-color:#3b82f6;color:#1e40af}
+.pr-table-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;margin-bottom:8px;background:var(--lis-surface);border:1px solid var(--lis-border-light);border-radius:6px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.pr-toolbar-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pr-toolbar-right{display:flex;align-items:center;gap:6px;color:#78716c;font-size:11px;margin-left:auto;white-space:nowrap}
+.pr-tool-btn{height:26px;padding:0 8px;border:1px solid var(--lis-border);border-radius:4px;background:var(--lis-surface);color:var(--lis-primary);font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all .15s}
+.pr-tool-btn:hover{background:var(--lis-primary-lighter);border-color:var(--lis-primary-hover)}
+.pr-expand-btn{padding:2px 7px;border:1px solid #ddd6ce;border-radius:4px;background:#fffdfb;color:#78716c;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap}
+.pr-expand-btn:hover{background:var(--lis-primary-lighter);color:var(--lis-primary);border-color:var(--lis-border)}
+.pr-group-row.is-expanded{background:#fef7e6!important}
+.pr-badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;line-height:1.2;white-space:nowrap}
+.pr-badge-norm{background:#dcfce7;color:#15803d}
+.pr-badge-abn{background:#ffedd5;color:#c2410c}
+.pr-badge-critical{background:#fee2e2;color:#b91c1c}
+.pr-sub-wrap{padding:4px 10px 10px 32px!important;background:#faf7f2!important;border-bottom:1px solid #e7e0d8!important}
+.pr-sub-box{background:#fff;border:1px solid #e7e0d8;border-radius:6px;overflow:hidden;box-shadow:inset 0 1px 3px rgba(0,0,0,.03)}
+.pr-sub-table{width:100%!important;border-collapse:collapse!important;border:none!important;font-size:11px!important;margin:0!important}
+.pr-sub-table th{background:#f5efe6!important;color:#78716c!important;font-weight:700!important;padding:5px 8px!important;border-bottom:1px solid #e7e0d8!important;white-space:nowrap}
+.pr-sub-table td{padding:5px 8px!important;border-bottom:1px solid #f2ece4!important;white-space:nowrap}
+.pr-sub-table tr:last-child td{border-bottom:none!important}
+.pr-sub-table tr:hover{background:#fefce8!important}
 /* --- 顶部快速切换条 --- */
 
 /* --- 全屏工作台 --- */
@@ -2615,6 +2636,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let prLastQueryRange = null; // 8.5.82: 本次查询实际使用的日期范围快照（导出文件名用，防止查询后改日期框造成名实不符）
   const PR_MAX_RESULT_ROWS = 200000; // 8.5.82: 结果行数硬顶——「近一年」全组查询无上界时内存可失控
   const prPageSize = 100; // 每页行数
+  let prForceViewMode = null; // 8.10.26: null=自动根据条件判定(项目名称有值=flat,无值=grouped); 'grouped'=强制组合套; 'flat'=强制平铺明细
+  const _prExpandedKeys = new Set(); // 8.10.26: 记录当前展开的组合套 (labno + '||' + testSet)
+  const prGroupPageSize = 50; // 8.10.26: 组合套视图每页套数
   const _prDetailCache = new Map(); // 详情结果 LRU 缓存
   const _prDetailInflight = new Map(); // 正在读取的明细请求，防止重复点击重复请求
   const _prWorkListCache = new Map(); // 标本列表短缓存，切换筛选条件时复用
@@ -3694,37 +3718,262 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return allRows.filter(row => prResultPass(row, filters));
   }
 
+  function prGroupRows(rows) {
+    const groups = [];
+    const map = new Map();
+    rows.forEach(r => {
+      const key = (r.labno || '') + '||' + (r.testSet || '');
+      let g = map.get(key);
+      if (!g) {
+        g = {
+          key,
+          labno: r.labno || '',
+          patient: r.patient || '',
+          sex: r.sex || '',
+          age: r.age || '',
+          patientType: r.patientType || '',
+          location: r.location || '',
+          ward: r.ward || '',
+          doctor: r.doctor || '',
+          diagnosis: r.diagnosis || '',
+          machine: r.machine || '',
+          specimen: r.specimen || '',
+          testSet: r.testSet || '',
+          acceptDT: r.acceptDT || '',
+          reportStatus: r.reportStatus || '',
+          regNo: r.regNo || '',
+          episodeNo: r.episodeNo || '',
+          recordNo: r.recordNo || '',
+          reportPrice: r.reportPrice || '',
+          testSetFee: r.testSetFee || '',
+          feeDetail: r.feeDetail || '',
+          items: [],
+          hasCritical: false,
+          hasAbnormal: false
+        };
+        map.set(key, g);
+        groups.push(g);
+      }
+      g.items.push(r);
+      if (r.status === 'CRITICAL') {
+        g.hasCritical = true;
+      } else if (r.status === 'HIGH' || r.status === 'LOW' || r.status === 'ABNORMAL') {
+        g.hasAbnormal = true;
+      }
+    });
+    return groups;
+  }
+
   function prRenderTable(rows) {
     const body = document.getElementById('lis-pr-body');
     if (!body) {return;}
+    rows = rows || prData;
     if (!rows.length) {
       body.innerHTML = '<div class="pr-empty">暂无结果。<br>请调整筛选条件后点击查询。</div>';
       return;
     }
 
-    const totalRows = rows.length;
-    const totalPages = Math.max(1, Math.ceil(totalRows / prPageSize));
-    if (prPage > totalPages) {prPage = totalPages;}
-    if (prPage < 1) {prPage = 1;}
-    const startIdx = (prPage - 1) * prPageSize;
-    const endIdx = Math.min(startIdx + prPageSize, totalRows);
-    const pageRows = rows.slice(startIdx, endIdx);
+    const filters = prGetFilters();
+    const hasItemFilter = !!(filters.item && filters.item.trim());
+    const effectiveMode = prForceViewMode ? prForceViewMode : (hasItemFilter ? 'flat' : 'grouped');
 
-    let h =
-      '<table><thead><tr><th>姓名</th><th>性别</th><th>年龄</th><th>类型</th><th>科室</th><th>诊断</th><th>检验号</th><th>流水号</th><th>仪器</th><th>标本</th><th>组合</th><th>项目</th><th>结果</th><th>参考范围</th><th>报告费用</th><th>医嘱费用</th><th>状态</th><th>核收时间</th></tr></thead><tbody>';
-    pageRows.forEach(r => {
-      const cls =
-        r.status === 'CRITICAL'
-          ? 'pr-critical'
-          : r.status === 'HIGH'
-            ? 'pr-high'
-            : r.status === 'LOW'
-              ? 'pr-low'
-              : r.status === 'ABNORMAL'
-                ? 'pr-abn'
-                : '';
-      h += `<tr>
-                <td>${esc(r.patient)}</td>
+    let h = '';
+
+    if (effectiveMode === 'grouped') {
+      const groups = prGroupRows(rows);
+      const totalGroups = groups.length;
+      const totalPages = Math.max(1, Math.ceil(totalGroups / prGroupPageSize));
+      if (prPage > totalPages) {prPage = totalPages;}
+      if (prPage < 1) {prPage = 1;}
+      const startIdx = (prPage - 1) * prGroupPageSize;
+      const endIdx = Math.min(startIdx + prGroupPageSize, totalGroups);
+      const pageGroups = groups.slice(startIdx, endIdx);
+
+      h += `<div class="pr-table-toolbar">
+              <div class="pr-toolbar-left">
+                <span style="font-weight:700;color:var(--lis-primary)">📋 组合套聚合视图</span>
+                <button type="button" class="pr-tool-btn" id="lis-pr-toggle-view" title="切换到全部单项平铺视图">📄 切换为全部明细</button>
+                <button type="button" class="pr-tool-btn" id="lis-pr-expand-all" title="一键展开当前页全部组合套明细">▾ 展开本页全部</button>
+                <button type="button" class="pr-tool-btn" id="lis-pr-collapse-all" title="一键折叠当前页全部组合套明细">▸ 折叠本页全部</button>
+              </div>
+              <div class="pr-toolbar-right">
+                <span>当前页：第 ${totalGroups > 0 ? startIdx + 1 : 0} ~ ${endIdx} 套</span>
+                <span>· 共 ${totalGroups} 套组合 (${rows.length} 条项目明细)</span>
+              </div>
+            </div>`;
+
+      h += `<table>
+              <thead>
+                <tr>
+                  <th style="width:64px;text-align:center">操作</th>
+                  <th>姓名</th>
+                  <th>性别</th>
+                  <th>年龄</th>
+                  <th>类型</th>
+                  <th>科室</th>
+                  <th>诊断</th>
+                  <th>检验号</th>
+                  <th>流水号</th>
+                  <th>标本</th>
+                  <th>组合名称</th>
+                  <th>项目数</th>
+                  <th>状态</th>
+                  <th>核收时间</th>
+                </tr>
+              </thead>
+              <tbody>`;
+
+      pageGroups.forEach((g, gIdx) => {
+        const isExp = _prExpandedKeys.has(g.key);
+        const statusBadge = g.hasCritical
+          ? '<span class="pr-badge pr-badge-critical">危急</span>'
+          : g.hasAbnormal
+            ? '<span class="pr-badge pr-badge-abn">含异常</span>'
+            : '<span class="pr-badge pr-badge-norm">正常</span>';
+
+        h += `<tr class="pr-group-row ${isExp ? 'is-expanded' : ''}" data-key="${esc(g.key)}" data-gidx="${gIdx}">
+                <td style="text-align:center">
+                  <button type="button" class="pr-expand-btn" data-key="${esc(g.key)}" data-gidx="${gIdx}">
+                    ${isExp ? '▾ 折叠' : '▸ 展开'}
+                  </button>
+                </td>
+                <td>
+                  <strong>${esc(g.patient)}</strong>
+                  <button type="button" class="pr-emr-btn" data-labno="${esc(g.labno)}" data-pat="${esc(g.patient)}" data-reg="${esc(g.regNo)}" data-ep="${esc(g.episodeNo)}" title="查看该患者电子病历（Shift+点击：直接唤起原生 32 位 IE）">📄 病历</button>
+                </td>
+                <td>${esc(g.sex)}</td>
+                <td>${esc(g.age)}</td>
+                <td>${esc(g.patientType)}</td>
+                <td>${esc(g.location || g.ward)}</td>
+                <td title="${esc(g.diagnosis)}">${esc(g.diagnosis)}</td>
+                <td>${esc(g.labno)}</td>
+                <td>${esc(g.episodeNo)}</td>
+                <td>${esc(g.specimen)}</td>
+                <td><strong>${esc(g.testSet)}</strong></td>
+                <td>${g.items.length} 项</td>
+                <td>${statusBadge}</td>
+                <td>${esc(g.acceptDT)}</td>
+              </tr>
+              <tr class="pr-sub-row" id="pr-sub-${gIdx}" style="${isExp ? '' : 'display:none'}">
+                <td colspan="14" class="pr-sub-wrap">
+                  <div class="pr-sub-box">
+                    <table class="pr-sub-table">
+                      <thead>
+                        <tr>
+                          <th>项目名称</th>
+                          <th>代码/简称</th>
+                          <th>结果</th>
+                          <th>标志</th>
+                          <th>参考范围</th>
+                          <th>单位</th>
+                          <th>单项费用</th>
+                          <th>历史</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${g.items
+                          .map((item, itemIdx) => {
+                            const itemCls =
+                              item.status === 'CRITICAL'
+                                ? 'pr-critical'
+                                : item.status === 'HIGH'
+                                  ? 'pr-high'
+                                  : item.status === 'LOW'
+                                    ? 'pr-low'
+                                    : item.status === 'ABNORMAL'
+                                      ? 'pr-abn'
+                                      : '';
+                            return `<tr>
+                            <td>${esc(item.itemName)}</td>
+                            <td>${esc(item.itemSynonym || item.testCodeDR)}</td>
+                            <td class="${itemCls}"><strong>${esc(item.result)}</strong></td>
+                            <td class="${itemCls}">${esc(item.abFlag)}</td>
+                            <td>${esc(item.refRange)}</td>
+                            <td>${esc(item.unit)}</td>
+                            <td>${esc(item.itemPrice || '')}</td>
+                            <td>${item.regNo ? `<button type="button" class="pr-hist-btn" data-gidx="${gIdx}" data-itemidx="${itemIdx}" title="查看该项目历史（跨组）">🔎</button>` : ''}</td>
+                          </tr>`;
+                          })
+                          .join('')}
+                      </tbody>
+                    </table>
+                  </div>
+                </td>
+              </tr>`;
+      });
+
+      h += '</tbody></table>';
+
+      /* 组合视图分页 */
+      h += `<div id="lis-pr-pagination">
+              <button id="lis-pr-pg-prev" ${prPage <= 1 ? 'disabled' : ''}>上一页</button>
+              <span class="pr-pg-info">第 ${prPage}/${totalPages} 页</span>
+              <button id="lis-pr-pg-next" ${prPage >= totalPages ? 'disabled' : ''}>下一页</button>
+              <span class="pr-pg-jump">跳转到 <input id="lis-pr-pg-input" type="number" min="1" max="${totalPages}" value="${prPage}" placeholder="页码"> 页</span>
+              <span class="pr-pg-total">共 ${totalGroups} 套组合 (${rows.length} 条明细)</span>
+            </div>`;
+    } else {
+      /* 平铺明细模式 */
+      const totalRows = rows.length;
+      const totalPages = Math.max(1, Math.ceil(totalRows / prPageSize));
+      if (prPage > totalPages) {prPage = totalPages;}
+      if (prPage < 1) {prPage = 1;}
+      const startIdx = (prPage - 1) * prPageSize;
+      const endIdx = Math.min(startIdx + prPageSize, totalRows);
+      const pageRows = rows.slice(startIdx, endIdx);
+
+      h += `<div class="pr-table-toolbar">
+              <div class="pr-toolbar-left">
+                <span style="font-weight:700;color:var(--lis-primary)">📄 全部明细视图</span>
+                <button type="button" class="pr-tool-btn" id="lis-pr-toggle-view" title="切换到按组合套聚合视图">📋 切换为组合套聚合</button>
+              </div>
+              <div class="pr-toolbar-right">
+                <span>当前页：第 ${totalRows > 0 ? startIdx + 1 : 0} ~ ${endIdx} 条</span>
+                <span>· 共 ${totalRows} 条项目明细</span>
+              </div>
+            </div>`;
+
+      h += `<table>
+              <thead>
+                <tr>
+                  <th>姓名</th>
+                  <th>性别</th>
+                  <th>年龄</th>
+                  <th>类型</th>
+                  <th>科室</th>
+                  <th>诊断</th>
+                  <th>检验号</th>
+                  <th>流水号</th>
+                  <th>仪器</th>
+                  <th>标本</th>
+                  <th>组合</th>
+                  <th>项目</th>
+                  <th>结果</th>
+                  <th>参考范围</th>
+                  <th>报告费用</th>
+                  <th>医嘱费用</th>
+                  <th>状态</th>
+                  <th>核收时间</th>
+                </tr>
+              </thead>
+              <tbody>`;
+
+      pageRows.forEach((r, rIdx) => {
+        const cls =
+          r.status === 'CRITICAL'
+            ? 'pr-critical'
+            : r.status === 'HIGH'
+              ? 'pr-high'
+              : r.status === 'LOW'
+                ? 'pr-low'
+                : r.status === 'ABNORMAL'
+                  ? 'pr-abn'
+                  : '';
+        h += `<tr>
+                <td>
+                  <strong>${esc(r.patient)}</strong>
+                  <button type="button" class="pr-emr-btn" data-labno="${esc(r.labno)}" data-pat="${esc(r.patient)}" data-reg="${esc(r.regNo)}" data-ep="${esc(r.episodeNo)}" title="查看该患者电子病历（Shift+点击：直接唤起原生 32 位 IE）">📄 病历</button>
+                </td>
                 <td>${esc(r.sex)}</td>
                 <td>${esc(r.age)}</td>
                 <td>${esc(r.patientType)}</td>
@@ -3735,66 +3984,188 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                 <td>${esc(r.machine)}</td>
                 <td>${esc(r.specimen)}</td>
                 <td>${esc(r.testSet)}</td>
-                <td>${esc(r.itemName)}${r.regNo ? '<button class="pr-hist-btn" data-i="' + pageRows.indexOf(r) + '" title="查看该项目历史（跨组）">🔎</button>' : ''}</td>
+                <td>${esc(r.itemName)}${r.regNo ? '<button type="button" class="pr-hist-btn" data-i="' + rIdx + '" title="查看该项目历史（跨组）">🔎</button>' : ''}</td>
                 <td class="${cls}">${esc(r.result)}${r.unit ? ' ' + esc(r.unit) : ''}</td>
                 <td>${esc(r.refRange)}</td>
                 <td>${esc(r.reportPrice || '')}</td>
                 <td title="${esc(r.feeDetail || '')}">${esc(r.testSetFee || r.feeDetail || '')}</td>
                 <td>${esc(classifyStatusText(r.status))}</td>
                 <td>${esc(r.acceptDT)}</td>
-            </tr>`;
-    });
-    h += '</tbody></table>';
+              </tr>`;
+      });
+      h += '</tbody></table>';
 
-    /* 分页控件 */
-    h += `<div id="lis-pr-pagination">
-            <button id="lis-pr-pg-prev" ${prPage <= 1 ? 'disabled' : ''}>上一页</button>
-            <span class="pr-pg-info">第 ${prPage}/${totalPages} 页</span>
-            <button id="lis-pr-pg-next" ${prPage >= totalPages ? 'disabled' : ''}>下一页</button>
-            <span class="pr-pg-jump">跳转到 <input id="lis-pr-pg-input" type="number" min="1" max="${totalPages}" value="${prPage}" placeholder="页码"> 页</span>
-            <span class="pr-pg-total">共 ${totalRows} 条</span>
-        </div>`;
+      /* 平铺视图分页 */
+      h += `<div id="lis-pr-pagination">
+              <button id="lis-pr-pg-prev" ${prPage <= 1 ? 'disabled' : ''}>上一页</button>
+              <span class="pr-pg-info">第 ${prPage}/${totalPages} 页</span>
+              <button id="lis-pr-pg-next" ${prPage >= totalPages ? 'disabled' : ''}>下一页</button>
+              <span class="pr-pg-jump">跳转到 <input id="lis-pr-pg-input" type="number" min="1" max="${totalPages}" value="${prPage}" placeholder="页码"> 页</span>
+              <span class="pr-pg-total">共 ${totalRows} 条</span>
+            </div>`;
+    }
 
     body.innerHTML = h;
 
-    /* 绑定单项目历史按钮 */
-    body.querySelectorAll('.pr-hist-btn').forEach(btn => {
-      const idx = parseInt(btn.getAttribute('data-i'), 10);
-      const r = pageRows[idx];
-      if (!r) { return; }
+    /* 事件绑定 */
+    // 1. 视图切换
+    const toggleViewBtn = document.getElementById('lis-pr-toggle-view');
+    if (toggleViewBtn) {
+      toggleViewBtn.addEventListener('click', () => {
+        prForceViewMode = effectiveMode === 'grouped' ? 'flat' : 'grouped';
+        prPage = 1;
+        prRenderTable(prData);
+      });
+    }
+
+    // 2. 批量展开/折叠
+    const expAllBtn = document.getElementById('lis-pr-expand-all');
+    if (expAllBtn) {
+      expAllBtn.addEventListener('click', () => {
+        body.querySelectorAll('.pr-group-row').forEach(row => {
+          const key = row.dataset.key;
+          const gidx = row.dataset.gidx;
+          if (key) {_prExpandedKeys.add(key);}
+          row.classList.add('is-expanded');
+          const btn = row.querySelector('.pr-expand-btn');
+          if (btn) {btn.textContent = '▾ 折叠';}
+          const sub = document.getElementById('pr-sub-' + gidx);
+          if (sub) {sub.style.display = '';}
+        });
+      });
+    }
+
+    const colAllBtn = document.getElementById('lis-pr-collapse-all');
+    if (colAllBtn) {
+      colAllBtn.addEventListener('click', () => {
+        body.querySelectorAll('.pr-group-row').forEach(row => {
+          const key = row.dataset.key;
+          const gidx = row.dataset.gidx;
+          if (key) {_prExpandedKeys.delete(key);}
+          row.classList.remove('is-expanded');
+          const btn = row.querySelector('.pr-expand-btn');
+          if (btn) {btn.textContent = '▸ 展开';}
+          const sub = document.getElementById('pr-sub-' + gidx);
+          if (sub) {sub.style.display = 'none';}
+        });
+      });
+    }
+
+    // 3. 单行折叠/展开
+    body.querySelectorAll('.pr-expand-btn').forEach(btn => {
       btn.addEventListener('click', e => {
         e.preventDefault();
         e.stopPropagation();
-        histOpenForTest(histCtxFromPRRow(r), { key: r.testCodeDR || '', name: r.itemName || '', syn: r.itemSynonym || '' });
+        const key = btn.dataset.key;
+        const gidx = btn.dataset.gidx;
+        const row = btn.closest('.pr-group-row');
+        const sub = document.getElementById('pr-sub-' + gidx);
+        if (_prExpandedKeys.has(key)) {
+          _prExpandedKeys.delete(key);
+          if (row) {row.classList.remove('is-expanded');}
+          if (sub) {sub.style.display = 'none';}
+          btn.textContent = '▸ 展开';
+        } else {
+          _prExpandedKeys.add(key);
+          if (row) {row.classList.add('is-expanded');}
+          if (sub) {sub.style.display = '';}
+          btn.textContent = '▾ 折叠';
+        }
       });
     });
 
-    /* 绑定分页事件 */
+    // 4. 病历直达按钮（含 Shift+点击 原生 IE 呼出）
+    body.querySelectorAll('.pr-emr-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const labno = btn.dataset.labno;
+        if (!labno) {
+          toast('该记录标本号为空，无法查看病历', 'w');
+          return;
+        }
+        openEnhancedEMR(labno, {
+          labNo: labno,
+          patName: btn.dataset.pat || '',
+          regNo: btn.dataset.reg || '',
+          episodeNo: btn.dataset.ep || '',
+          directNativeIE: !!e.shiftKey
+        });
+      });
+    });
+
+    // 5. 单项目历史按钮
+    if (effectiveMode === 'grouped') {
+      const groups = prGroupRows(rows);
+      const startIdx = (prPage - 1) * prGroupPageSize;
+      const pageGroups = groups.slice(startIdx, startIdx + prGroupPageSize);
+      body.querySelectorAll('.pr-hist-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const gIdx = parseInt(btn.dataset.gidx, 10);
+          const itemIdx = parseInt(btn.dataset.itemidx, 10);
+          const g = pageGroups[gIdx];
+          const item = g && g.items && g.items[itemIdx];
+          if (!item) {return;}
+          histOpenForTest(histCtxFromPRRow(item), {
+            key: item.testCodeDR || '',
+            name: item.itemName || '',
+            syn: item.itemSynonym || ''
+          });
+        });
+      });
+    } else {
+      const startIdx = (prPage - 1) * prPageSize;
+      const pageRows = rows.slice(startIdx, startIdx + prPageSize);
+      body.querySelectorAll('.pr-hist-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const idx = parseInt(btn.getAttribute('data-i'), 10);
+          const r = pageRows[idx];
+          if (!r) {return;}
+          histOpenForTest(histCtxFromPRRow(r), {
+            key: r.testCodeDR || '',
+            name: r.itemName || '',
+            syn: r.itemSynonym || ''
+          });
+        });
+      });
+    }
+
+    // 6. 分页事件
     const prevBtn = document.getElementById('lis-pr-pg-prev');
     const nextBtn = document.getElementById('lis-pr-pg-next');
     const jumpInput = document.getElementById('lis-pr-pg-input');
-    if (prevBtn)
-    {prevBtn.addEventListener('click', () => {
-      prPage--;
-      prRenderTable(prData);
-    });}
-    if (nextBtn)
-    {nextBtn.addEventListener('click', () => {
-      prPage++;
-      prRenderTable(prData);
-    });}
-    if (jumpInput)
-    {jumpInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        // 8.5.82: 阻止冒泡——面板级 Enter 监听会把它当「重新查询」，跳页的同时清空刚查出的结果
-        e.stopPropagation();
-        const v = parseInt(jumpInput.value, 10);
-        if (!isNaN(v) && v >= 1 && v <= totalPages) {
-          prPage = v;
-          prRenderTable(prData);
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => {
+        prPage--;
+        prRenderTable(prData);
+      });
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => {
+        prPage++;
+        prRenderTable(prData);
+      });
+    }
+    if (jumpInput) {
+      jumpInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.stopPropagation();
+          const total =
+            effectiveMode === 'grouped'
+              ? Math.max(1, Math.ceil(prGroupRows(rows).length / prGroupPageSize))
+              : Math.max(1, Math.ceil(rows.length / prPageSize));
+          const v = parseInt(jumpInput.value, 10);
+          if (!isNaN(v) && v >= 1 && v <= total) {
+            prPage = v;
+            prRenderTable(prData);
+          }
         }
-      }
-    });}
+      });
+    }
   }
 
   function prCsvCell(value) {
@@ -4170,6 +4541,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     prLastDetailFailures = 0;
     prDataPartial = false; // 8.5.82
     prLastQueryRange = { start: filters.start, end: filters.end }; // 8.5.82: 查询日期快照（导出文件名用）
+    prForceViewMode = null; // 8.10.26: 每次新查询重置为自动判定视图
+    _prExpandedKeys.clear(); // 8.10.26: 清空旧展开状态
+    prPage = 1;
     prRenderTable([]);
     try {
       /* 阶段1：并行加载标本列表 */
