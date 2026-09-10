@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.7
+// @version      8.11.8
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8024,6 +8024,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let wsSearchQuery = '';
   let wsLoading = false;
   let wsMachineCounts = {}; // { machineDR: {total, normalReady, abnormalReady, incomplete} }
+  // 8.11.8: 详情抽屉打开期间被推迟的整表重建（关闭抽屉时补渲染，避免列表长期停在旧数据快照）
+  let _wsRenderDeferred = false;
+  // 8.11.8: 右栏实时检视器（Live Inspector）专用状态——
+  // 检视器与详情抽屉是两个并行渲染目标，此前共用 _detailLoadSeq 会互相作废对方的加载
+  //（详情抽屉永久卡在「正在加载结果...」的根因）。此处拆出独立序号。
+  let _inspLoadSeq = 0;
+  // 右栏当前已渲染出结果的分类代数（配合 #lis-insp-body[data-rdr] 判断可否跳过重建）
+  let _inspShownVersion = -1;
+  // 整表重建（renderWSTable 会 body.innerHTML 清空右栏）前承接的右栏内容。
+  // 30s 自动刷新走的就是整表重建路径，若不承接，右栏每半分钟闪回「正在加载结果...」
+  // 并丢失滚动位置，审阅长结果集（生化几十项）时被反复打断。
+  let _inspCarry = null;
+  // 正在审核中的标本 ReportDR（精确到条，替代以前「有任一审核在跑」的粗判）
+  let _abnormalAuditingDR = '';
 
   // --- 性能优化：缓存 ---
   const _detailLRU = new Map(); // 详情结果 LRU 缓存，最多 50 条
@@ -8250,8 +8264,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     restoreNativeDateboxToday();
     renderWSTable();
     renderWSCategoryBar();
-    const qi = document.getElementById('lis-qi');
-    if (qi) {qi.textContent = '加载 ' + wsViewDate() + ' 数据中...';}
+    setWSStatusNote('加载 ' + wsViewDate() + ' 数据中...');
     try {
       await loadWSData({ force: true });
       showToast('已切换到 ' + (wsActiveDate ? wsActiveDate : '今天') + '：共 ' + wsData.length + ' 条', 'info');
@@ -8626,6 +8639,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     wsMachineCounts = {};
     _tabsBuilt = false;
     _catBarBuilt = false;
+    _wsRenderDeferred = false; // 8.11.8: 重开工作台时清掉可能残留的延迟渲染标记
     invalidateCaches({ detail: true, raw: true });
     wsEl.classList.add('show');
     // 强制 flex 布局（LIS 系统 CSS 会覆盖）
@@ -8855,8 +8869,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     try {
       wsLoading = true;
-      const qi = document.getElementById('lis-qi');
-      if (qi) {qi.textContent = force ? '强制刷新中...' : '加载中...';}
+      setWSStatusNote(force ? '强制刷新中...' : '加载中...');
 
       // 8.7.0: 本次加载的查询日期窗口（平时=选中单日；自动审核运行中=开启日~今天）
       const [qStart, qEnd] = getWSQueryRange();
@@ -8971,7 +8984,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           _wsDataHealth.failed = true;
           _wsDataHealth.partial = !!partial;
           dbg('刷新返回空数据，保留原有', wsData.length, '条', partial ? '(partial)' : '', dateChanged ? '(跨天但有加载失败，暂不清空)' : '');
-          if (qi) {qi.textContent = `刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`;}
+          setWSStatusNote(`刷新失败，保留 ${wsData.length} 条 | ${new Date().toLocaleTimeString()}`);
           // 8.5.40: 强制刷新的警告只在全量阶段判断（partial 阶段空可能是瞬断，阶段2会恢复）
           if (!partial && force) {showToast('工作台强制刷新仍返回空数据，可能需要重新登录或刷新浏览器页面', 'warning');}
           if (!partial) {_noteWSLoadFailure();} // 8.6.3: 连续失败升级提醒
@@ -9034,11 +9047,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         calcMachineCounts();
         const label = partial ? '优先' : '';
         const warnTag = _machinesUnhealthy ? `⚠${failedMachineNames.length}台加载失败 ` : '';
-        if (qi) {qi.textContent = `${warnTag}${wsData.length} 条${label} | ${new Date().toLocaleTimeString()}`;}
+        setWSStatusNote(`${warnTag}${wsData.length} 条${label} | ${new Date().toLocaleTimeString()}`);
         invalidateCaches({ raw: true, detail: true });
         renderWSTabs();
         renderWSCategoryBar();
-        renderWSTable();
+        // 8.11.8: 详情抽屉打开时不做整表重建——检验人员正在逐项核对结果决定是否审核，
+        // 30s 自动刷新把列表与右栏在手下重建会打断审阅（也是抽屉卡「加载中」的放大因素）。
+        // 数据照常更新，关闭抽屉时再补一次渲染（见 closeDetailPanel）。
+        if (isDetailPanelVisible()) {
+          _wsRenderDeferred = true;
+          dbg('详情抽屉打开中，延迟整表重建');
+        } else {
+          renderWSTable();
+        }
         updateWSFooter();
         return true;
       }
@@ -9059,11 +9080,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       _wsDataHealth.partial = false;
       dbg('loadWSData 异常:', e);
       // 8.10.0: qi 是 try 块内的块级变量，catch 里裸引用会抛 ReferenceError，
-      // 连带 _noteWSLoadFailure()（8.6.3 失败升级提醒）永远执行不到——改为重新查询
-      try {
-        const qiFail = document.getElementById('lis-qi');
-        if (qiFail) {qiFail.textContent = '加载失败';}
-      } catch (_) {}
+      // 连带 _noteWSLoadFailure()（8.6.3 失败升级提醒）永远执行不到——改为独立状态写入
+      setWSStatusNote('加载失败');
       _noteWSLoadFailure(); // 8.6.3: 连续失败升级提醒（wsData 未动，数字保持旧值）
       return { ok: false, error: e, empty: true };
     } finally {
@@ -9143,8 +9161,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     wsAbnormalIndex = -1;
     invalidateCaches({ detail: true, raw: true });
     // 界面立即反馈
-    const qi = document.getElementById('lis-qi');
-    if (qi) {qi.textContent = '强制刷新中...';}
+    setWSStatusNote('强制刷新中...');
     renderWSTabs();
     renderWSCategoryBar();
     renderWSTable();
@@ -10556,7 +10573,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   // --- 渲染：分类标签栏 ---
   function renderWSCategoryBar() {
-    const bar = $('.ws-cat-hd-inline') || $('.ws-cat-row-inline') || $('#lis-ws-bar');
+    // 8.11.8: 兜底目标 #lis-ws-bar 是 display:none 的死容器——一旦筛选行被外部重建导致
+    // .ws-cat-hd-inline 缺失，分类标签会渲染进隐藏容器而整体不可见且无法自愈
+    //（「待审/不完整小标签全没了」的历史同类故障）。改为就地重建容器。
+    let bar = $('.ws-cat-hd-inline') || $('.ws-cat-row-inline');
+    if (!bar) {
+      const host = $('.ws-filter-right') || $('#lis-ws-tabs');
+      if (host) {
+        bar = document.createElement('div');
+        bar.className = 'ws-cat-hd-inline';
+        bar.setAttribute('data-ws-cat-tabs', '');
+        host.appendChild(bar);
+        dbg('分类栏容器缺失，已就地重建');
+      }
+    }
     if (!bar) {return;}
     bar.style.flexShrink = '0';
 
@@ -11273,6 +11303,10 @@ window.addEventListener('keydown',function(e){
       return;
     }
 
+    // 8.11.8: 本函数即将 body.innerHTML 清空整个视图区（含右栏检视器）。
+    // 先清掉上一轮的承接内容，只有 renderAuditView 会在同一次渲染里重新写入，
+    // 避免其它视图/空态残留旧的承接导致错误复用。
+    _inspCarry = null;
     switch (wsCategory) {
     case 'audit':
       renderAuditView(data, body);
@@ -11305,6 +11339,27 @@ window.addEventListener('keydown',function(e){
       };
       document.addEventListener('keydown', _normalKeyHandler);
     }
+  }
+
+  // 8.11.8: 顶栏重构后原状态指示元素 #lis-qi 已不存在，加载/刷新进度提示静默丢失。
+  // 恢复方案：临时占用底栏左侧状态位（默认「本地工作台」），超时自动还原，
+  // 不与右侧 #lis-ws-ft-stat 统计（updateWSFooter 负责）互相覆盖。
+  const WS_FOOTER_IDLE = '本地工作台';
+  let _wsStatusNoteTimer = null;
+  function setWSStatusNote(text, ttlMs) {
+    const el = document.querySelector('#lis-ws-ft > span:first-child');
+    if (!el) {return;}
+    el.textContent = text ? String(text) : WS_FOOTER_IDLE;
+    if (_wsStatusNoteTimer) {
+      clearTimeout(_wsStatusNoteTimer);
+      _wsStatusNoteTimer = null;
+    }
+    if (!text) {return;}
+    _wsStatusNoteTimer = setTimeout(() => {
+      _wsStatusNoteTimer = null;
+      const cur = document.querySelector('#lis-ws-ft > span:first-child');
+      if (cur) {cur.textContent = WS_FOOTER_IDLE;}
+    }, typeof ttlMs === 'number' ? ttlMs : 12000);
   }
 
   function updateWSFooter(counts) {
@@ -11490,7 +11545,11 @@ window.addEventListener('keydown',function(e){
       alertHtml = `<div class="ws-insp-alert normal">✅ <b>指标正常</b>：所有检验项目均在参考区间内，可安全审核。</div>`;
     }
 
-    const isAuditing = _abnormalAuditInProgress && _abnormalFocusDR === String(rdr);
+    // 8.11.8: 必须精确到「正在审核的是不是这一条」——此前判定用 _abnormalFocusDR，
+    // 而它在上方刚被赋值为本标本的 rdr，条件恒真，等价于「有任一审核在跑」。
+    // 后果：审完一条后右栏下一条的「审核此标本」按钮显示「⏳ 审核中…」且被禁用，
+    // clearAbnormalAuditingCard 又因焦点已移走而不复位，直到下一次整表重建才恢复。
+    const isAuditing = _abnormalAuditInProgress && _abnormalAuditingDR === String(rdr);
     let ftHtml = `
       <div class="ws-insp-hint"><kbd>Enter</kbd> 审核当前 · <kbd>Space</kbd> 跳过 · <kbd>↑↓</kbd> 切换 · <kbd>F4</kbd> 批审正常</div>
       <div class="ws-insp-ft-actions">
@@ -11577,6 +11636,28 @@ window.addEventListener('keydown',function(e){
       });
     }
 
+    // 8.11.8: 整表重建前承接的同标本结果 → 直接放回（含滚动位置），不闪白也不重新请求。
+    // 这是 30s 自动刷新路径的实际生效点（整表重建会销毁右栏 DOM，data-rdr 复用判定到不了）。
+    if (_inspCarry) {
+      const _carry = _inspCarry;
+      _inspCarry = null;
+      if (_carry.dr === String(rdr)) {
+        bd.innerHTML = _carry.html;
+        bd.setAttribute('data-rdr', _carry.dr);
+        _inspShownVersion = _classifyVersion;
+        try {bd.scrollTop = _carry.scrollTop;} catch (e) {}
+        dbg('右栏检视器沿用重建前结果，保持滚动位置:', rdr);
+        return;
+      }
+    }
+    // 8.11.8: 同标本 + 同分类代数 + 结果区已就绪 → 只更新头/横幅/按钮，不重建结果区。
+    // 覆盖非整表重建的局部刷新路径（↑↓ 切焦、跳过、点击卡片、审核后推进）。
+    // 判定用 body 上的 data-rdr（DOM 自证已渲染），避免依赖可能过期的全局变量。
+    if (bd.getAttribute('data-rdr') === String(rdr) && _inspShownVersion === _classifyVersion && !bd.querySelector('.ws-insp-loading')) {
+      dbg('右栏检视器复用已有结果，跳过重建:', rdr);
+      return;
+    }
+    bd.removeAttribute('data-rdr');
     bd.innerHTML = `
       <div class="ws-insp-loading">
         <div class="spinner"></div>
@@ -11776,6 +11857,17 @@ window.addEventListener('keydown',function(e){
     // 右栏实时检视器容器
     h += '<div class="ws-split-inspector" id="lis-ws-inspector"></div>';
     h += '</div>'; // close ws-split-wrap
+
+    // 8.11.8: 清空前先承接右栏已渲染好的结果 HTML 与滚动位置——
+    // 若重建后仍是同一条标本（30s 自动刷新的常态），直接放回，不再闪白也不重新拉接口。
+    const _prevInspBody = document.getElementById('lis-insp-body');
+    if (_prevInspBody && _prevInspBody.getAttribute('data-rdr') && _inspShownVersion === _classifyVersion) {
+      _inspCarry = {
+        dr: _prevInspBody.getAttribute('data-rdr'),
+        html: _prevInspBody.innerHTML,
+        scrollTop: _prevInspBody.scrollTop || 0
+      };
+    }
     body.innerHTML = h;
 
     const activeSpecimen = data[wsAbnormalIndex] || data[0] || null;
@@ -11878,10 +11970,17 @@ window.addEventListener('keydown',function(e){
       card.classList.remove('auditing');
       card.removeAttribute('aria-busy');
       const hint = card.querySelector('.ab-card-hint');
-      if (hint && hint.textContent === '正在审核...') {hint.textContent = 'Enter=审核';}
+      if (hint && hint.textContent === '正在审核...') {
+        // 8.11.8: 优先还原 markAbnormalAuditUI 记下的原文案，避免把「🚨 危急值」等提示覆盖掉
+        hint.textContent = hint.dataset.lisHint || 'Enter=审核';
+        delete hint.dataset.lisHint;
+      }
     }
+    // 8.11.8: 审核结束（finally 必经）后右栏按钮一律复位——此前要求 _abnormalFocusDR === reportDR，
+    // 但审核成功后焦点已推进到下一条，条件不成立，导致下一条的按钮永远停在「⏳ 审核中…」且不可点。
+    _abnormalAuditingDR = '';
     const inspBtn = document.getElementById('lis-insp-btn-audit');
-    if (inspBtn && _abnormalFocusDR === String(reportDR || '')) {
+    if (inspBtn) {
       inspBtn.disabled = false;
       inspBtn.classList.remove('disabled');
       inspBtn.textContent = '✓ 审核此标本 (Enter)';
@@ -12022,12 +12121,18 @@ window.addEventListener('keydown',function(e){
     const ft = document.getElementById('lis-ws-ft-stat');
     const name = specimen.PatName || specimen.Labno || targetDR;
     const card = [...document.querySelectorAll('.ws-abnormal-card[data-rdr]')].find(c => c.dataset.rdr === targetDR);
+    if (phase === 'start') {_abnormalAuditingDR = targetDR;} // 8.11.8: 精确标记正在审核的标本
     if (phase === 'start' && ft) {ft.textContent = `审核：准备 ${name}`;}
     if (card && phase === 'start') {
       card.classList.add('auditing');
       card.setAttribute('aria-busy', 'true');
       const hint = card.querySelector('.ab-card-hint');
-      if (hint) {hint.textContent = '正在审核...';}
+      if (hint) {
+        // 8.11.8: 记下原提示文案再改「正在审核...」，失败/跳过时能原样还原
+        // （正常卡是「Enter 审核」、危急卡是「🚨 危急值」，此前一律被还原成「Enter=审核」）
+        if (!hint.dataset.lisHint) {hint.dataset.lisHint = hint.textContent || '';}
+        hint.textContent = '正在审核...';
+      }
     }
     if (phase === 'start') {
       const inspBtn = document.getElementById('lis-insp-btn-audit');
@@ -14139,6 +14244,12 @@ window.addEventListener('keydown',function(e){
     if (wsCategory === 'audit') {
       _rebindAbnormalKeyHandler();
     }
+    // 8.11.8: 抽屉打开期间被推迟的整表重建在此补上，避免列表长期停留在旧快照
+    if (_wsRenderDeferred) {
+      _wsRenderDeferred = false;
+      renderWSTable();
+      renderWSCategoryBar();
+    }
   }
 
   function getStatusText(status) {
@@ -14304,12 +14415,17 @@ window.addEventListener('keydown',function(e){
     const body = targetBody || document.getElementById('lis-detail-body');
     if (!body) {return;}
     const rdr = specimen.ReportDR || '';
-    const seq = ++_detailLoadSeq;
+    // 8.11.8: 检视器与详情抽屉各用独立序号——此前共用 _detailLoadSeq，右栏检视器每次渲染
+    // （含每 30s 自动刷新、列表点击切焦）都会自增该序号，使正在加载的详情抽屉
+    // isCurrentDetail() 判假并提前 return，抽屉永久停在「正在加载结果...」；
+    // 检验人员在看不到结果明细的情况下仍可按 Enter 审核 → 盲审风险。
+    const seq = isInspector ? ++_inspLoadSeq : ++_detailLoadSeq;
     const getDestBody = () => (isInspector ? (document.getElementById('lis-insp-body') || body) : body);
     const isCurrentDetail = () => {
       if (isInspector) {
         const insp = document.getElementById('lis-ws-inspector');
         if (!insp) {return false;}
+        if (seq !== _inspLoadSeq) {return false;}
         return String(_abnormalFocusDR || '') === String(rdr);
       }
       if (seq !== _detailLoadSeq) {return false;}
@@ -14327,7 +14443,11 @@ window.addEventListener('keydown',function(e){
       dbg('详情缓存命中:', rdr);
       if (!isCurrentDetail()) {return;}
       const dBody = getDestBody();
-      if (dBody) {dBody.innerHTML = cached.html;}
+      if (dBody) {
+        dBody.innerHTML = cached.html;
+        if (isInspector) {dBody.setAttribute('data-rdr', String(rdr));}
+      }
+      if (isInspector) {_inspShownVersion = _classifyVersion;}
       return;
     }
 
@@ -14768,7 +14888,10 @@ window.addEventListener('keydown',function(e){
         if (extraEl) {extraEl.textContent = _extraText;}
       }
       const dBody = getDestBody();
-      if (dBody) {dBody.innerHTML = html;}
+      if (dBody) {
+        dBody.innerHTML = html;
+        if (isInspector) {dBody.setAttribute('data-rdr', String(rdr));}
+      }
       const _dp = document.getElementById('lis-detail-panel');
       if (_dp && !isInspector) {
         _dp.dataset.rdr = String(rdr);
@@ -14783,6 +14906,8 @@ window.addEventListener('keydown',function(e){
             al.innerHTML = `<div class="ws-insp-alert warning">⚠️ <b>传染病阳性高亮</b>：包含梅毒/丙肝/HIV等特殊阳性指标，请仔细复核！</div>`;
           }
         }
+        // 8.11.8: 标记「右栏已完整渲染该标本结果」，供 renderLiveInspector 刷新时跳过重建
+        _inspShownVersion = _classifyVersion;
       }
       // 存入 LRU 缓存
       detailLRUSet(rdr, { html, ts: Date.now() });
