@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.30
-// @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（高密零滚动筛选栏/含外送/费用/病历直达/组合套折叠/双击行展开折叠） + 质控录入辅助 + 质控数据导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
+// @version      8.10.31
+// @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（高密零滚动筛选栏/含外送/费用/病历直达/组合套折叠/双击行展开折叠） + 质控录入辅助 + 质控数据导出（含Westgard多规则出控智能核查/靶值SD偏离通报与明细导出） + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -1457,6 +1457,45 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .qe-save-btn{height:28px;border:1px solid var(--lis-primary);background:var(--lis-primary);color:#fff;border-radius:5px;padding:0 16px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s}
 .qe-save-btn:hover{background:var(--lis-primary-hover)}
 .qe-save-btn.saved{background:var(--lis-primary-light);border-color:var(--lis-primary-light)}
+
+/* 质控出控微标与报告卡片 */
+.qe-violation-badge{font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.4;display:inline-block;white-space:nowrap}
+.qe-violation-badge.err{background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5}
+.qe-violation-badge.warn{background:#fef3c7;color:#b45309;border:1px solid #fde68a}
+.qe-violation-badge.ok{background:#dcfce7;color:#15803d;border:1px solid #86efac}
+
+.qe-qc-audit-box{margin-top:10px;border-radius:8px;padding:12px 14px;border:1px solid #e2e8f0;background:#ffffff;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.qe-qc-audit-box.clean{background:#f0fdf4;border-color:#bbf7d0}
+.qe-qc-audit-box.alert{background:#fff;border-color:#fecaca}
+.qe-qc-audit-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.qe-qc-audit-title{display:flex;align-items:center;gap:6px}
+.qe-qc-summary-tag{font-size:11px;color:#475569;font-weight:600;margin-left:4px}
+.qe-qc-audit-sub{font-size:11px;color:#475569;margin-top:4px;line-height:1.5}
+.qe-qc-audit-actions{display:flex;gap:6px;align-items:center}
+.qe-qc-btn{height:26px;border-radius:4px;font-size:11px;font-weight:700;padding:0 10px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all .15s}
+.qe-qc-btn.copy{background:#f1f5f9;border:1px solid #cbd5e1;color:#1e293b}
+.qe-qc-btn.copy:hover{background:#e2e8f0;border-color:#94a3b8}
+.qe-qc-btn.export{background:#ecfdf5;border:1px solid #a7f3d0;color:#047857}
+.qe-qc-btn.export:hover{background:#d1fae5;border-color:#6ee7b7}
+
+.qe-qc-tabs{display:flex;gap:4px;margin-bottom:8px;border-bottom:1px solid #e2e8f0;padding-bottom:6px}
+.qe-qc-tab{background:none;border:none;padding:4px 10px;font-size:11px;font-weight:700;color:#64748b;border-radius:4px;cursor:pointer;transition:all .15s}
+.qe-qc-tab:hover{background:#f1f5f9;color:#334155}
+.qe-qc-tab.active{background:#e2e8f0;color:#0f172a}
+
+.qe-qc-table-wrap{max-height:300px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:6px}
+.qe-qc-table{width:100%;border-collapse:collapse;font-size:11px;text-align:left}
+.qe-qc-table th{background:#f8fafc;color:#475569;padding:6px 8px;font-weight:700;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:1;white-space:nowrap}
+.qe-qc-table td{padding:6px 8px;border-bottom:1px solid #f1f5f9;color:#1e293b;vertical-align:middle}
+.qe-qc-table tr:hover{background:#f8fafc}
+.qe-qc-table tr.row-loss{background:#fff5f5}
+.qe-qc-table tr.row-loss:hover{background:#fee2e2}
+.qe-qc-table tr.row-warn{background:#fffbeb}
+.qe-qc-table tr.row-warn:hover{background:#fef3c7}
+
+.qe-qc-rule-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;white-space:nowrap}
+.qe-qc-rule-badge.loss{background:#fee2e2;color:#b91c1c;border:1px solid #f87171}
+.qe-qc-rule-badge.warn{background:#fef3c7;color:#b45309;border:1px solid #fcd34d}
 
     `);
 
@@ -6235,6 +6274,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   // --- 核心：获取某组的质控数据 ---
   async function qeFetchGroupData(group, cfg, mappings, statusCb) {
     const rows = []; // 最终输出行
+    const groupViolations = []; // 8.10.31: 本组质控出控记录
     const month = cfg._month || new Date().getMonth() + 1;
     const year = cfg._year || new Date().getFullYear();
     const operator = qeGetOperator(cfg, group);
@@ -6283,7 +6323,18 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           const inMonth =
             (y === year && m === month && d > 0) ||
             (String(date).indexOf(year + '-' + String(month).padStart(2, '0')) === 0 && d > 0);
-          if (inMonth) {levels[lv].push({ day: d, value: val });}
+          if (inMonth) {
+            levels[lv].push({
+              day: d,
+              value: val,
+              date: date,
+              time: r.TestTime || r.AddTime || '',
+              target: parseFloat(r.SetUpX),
+              sd: parseFloat(r.SetUpSD),
+              rawTarget: r.SetUpX,
+              rawSd: r.SetUpSD
+            });
+          }
         }
       });
 
@@ -6308,13 +6359,26 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           const lots = qeGetLot(cfg, group);
           lot = proj.isDDimer ? lots._dimer : lots._main;
         }
-        lvData.sort((a, b) => a.day - b.day);
+        lvData.sort((a, b) => (a.day - b.day) || String(a.time || '').localeCompare(String(b.time || '')));
         const daySeq = {};
         lvData.forEach(pt => {
+          pt.lot = lot;
           const seq = (daySeq[pt.day] = (daySeq[pt.day] || 0) + 1);
+          pt.seq = seq;
           rows.push([proj.code, month, pt.day, seq, lot, pt.value, proj.name, operator]);
         });
       }
+
+      // 8.10.31: 智能核查该项目的 Westgard 质控规则（结合当月靶值与标准差）
+      try {
+        const pViolations = qeEvaluateWestgardRules(group, proj, levels, conc, year, month);
+        if (pViolations && pViolations.length) {
+          groupViolations.push(...pViolations);
+        }
+      } catch (err) {
+        dbg('[LIS-QE] Westgard 核查异常:', proj.name, err);
+      }
+
       // 8.5.56: LIS 有比模板声明更多水平（如 3 水平血球质控）时显式告警，不再静默丢弃
       const extraLvs = Object.keys(levels).filter(
         k => /^\d+$/.test(k) && Number(k) > conc && (levels[k] || []).length > 0
@@ -6332,7 +6396,502 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         } catch (e) {}
       }
     }
+
+    rows.rows = rows;
+    rows.violations = groupViolations;
     return rows;
+  }
+
+  // ============================================================
+  //  模块 QE 增强：Westgard 室内质控多规则智能核查引擎 (8.10.31)
+  //  支持规则：
+  //    1-3s (严重失控，单点超 3SD)
+  //    2-2s (连续失控，同水平连续两点同侧超 2SD 或同日跨水平同侧超 2SD)
+  //    R-4s (极差失控，同水平连续两点反向极差超 4SD 或同日跨水平极差超 4SD)
+  //    4-1s (偏倚失控，连续 4 点同侧超 1SD)
+  //    10-x (漂移失控，连续 10 点均值同侧)
+  //    1-2s (质控预警，单点 2 < |Z| <= 3，未触发拒收规则)
+  // ============================================================
+  function qeEvaluateWestgardRules(group, proj, levels, conc, year, month) {
+    const violations = [];
+    const levelPoints = {}; // { lvNo: [ptWithZ, ...] }
+
+    for (let li = 0; li < conc; li++) {
+      const lvNo = String(li + 1);
+      const pts = (levels[lvNo] || []).slice();
+      if (!pts.length) {continue;}
+
+      // 寻找该水平的有效靶值与 SD（优先用行自带，行缺漏时用同水平其它行靶值/SD 兜底）
+      const fallbackTargetPt = pts.find(p => !Number.isNaN(p.target) && !Number.isNaN(p.sd) && p.sd > 0);
+      const defaultTarget = fallbackTargetPt ? fallbackTargetPt.target : NaN;
+      const defaultSd = fallbackTargetPt ? fallbackTargetPt.sd : NaN;
+
+      // 按日期与时间升序排序
+      pts.sort((a, b) => (a.day - b.day) || String(a.time || '').localeCompare(String(b.time || '')));
+
+      // 为每个测定点解析有效靶值、SD 并计算 Z-Score
+      const evaluatedPts = [];
+      pts.forEach(pt => {
+        const target = !Number.isNaN(pt.target) ? pt.target : defaultTarget;
+        const sd = (!Number.isNaN(pt.sd) && pt.sd > 0) ? pt.sd : defaultSd;
+        if (Number.isNaN(target) || Number.isNaN(sd) || sd <= 0) {
+          return;
+        }
+        const diff = pt.value - target;
+        const z = diff / sd;
+        evaluatedPts.push({
+          ...pt,
+          target,
+          sd,
+          diff,
+          z,
+          levelNo: lvNo
+        });
+      });
+
+      levelPoints[lvNo] = evaluatedPts;
+
+      // --- 单水平时序规则检查 ---
+      let streak10x = 0;
+      let sign10x = 0;
+      let streak41s = 0;
+      let sign41s = 0;
+
+      for (let i = 0; i < evaluatedPts.length; i++) {
+        const curr = evaluatedPts[i];
+        const prev = i > 0 ? evaluatedPts[i - 1] : null;
+        const z = curr.z;
+        const absZ = Math.abs(z);
+        const ptViolations = [];
+
+        // 1. 1-3s (严重失控，单点超过 3SD)
+        if (absZ > 3) {
+          ptViolations.push({
+            rule: '1-3s',
+            ruleName: '1-3s (严重失控)',
+            severity: 'loss',
+            detail: `测定值 ${curr.value} 偏离靶值 ${curr.target.toFixed(2)} 达 ${absZ.toFixed(2)} SD（超 3SD 限值）`
+          });
+        }
+
+        // 2. 2-2s (同水平连续两点同侧超 2SD)
+        if (prev) {
+          const prevZ = prev.z;
+          if ((z > 2 && prevZ > 2) || (z < -2 && prevZ < -2)) {
+            ptViolations.push({
+              rule: '2-2s',
+              ruleName: '2-2s (连续失控)',
+              severity: 'loss',
+              detail: `同水平连续 2 点同侧超 2SD（前值 Z=${prevZ > 0 ? '+' : ''}${prevZ.toFixed(2)}, 现值 Z=${z > 0 ? '+' : ''}${z.toFixed(2)}）`
+            });
+          }
+        }
+
+        // 3. R-4s (同水平连续两点反向极差超 4SD)
+        if (prev) {
+          const prevZ = prev.z;
+          const rangeZ = Math.abs(z - prevZ);
+          if (rangeZ >= 4 && ((z > 0 && prevZ < 0) || (z < 0 && prevZ > 0))) {
+            ptViolations.push({
+              rule: 'R-4s',
+              ruleName: 'R-4s (极差失控)',
+              severity: 'loss',
+              detail: `同水平连续 2 点反向极差达 ${rangeZ.toFixed(2)} SD（前值 Z=${prevZ > 0 ? '+' : ''}${prevZ.toFixed(2)}, 现值 Z=${z > 0 ? '+' : ''}${z.toFixed(2)}）`
+            });
+          }
+        }
+
+        // 4. 4-1s (连续 4 点同侧超 1SD)
+        if (absZ > 1) {
+          const curSign = z > 0 ? 1 : -1;
+          if (curSign === sign41s) {
+            streak41s++;
+          } else {
+            sign41s = curSign;
+            streak41s = 1;
+          }
+          if (streak41s >= 4) {
+            ptViolations.push({
+              rule: '4-1s',
+              ruleName: '4-1s (偏倚失控)',
+              severity: 'loss',
+              detail: `同水平连续 ${streak41s} 点同侧超出 1SD（${sign41s > 0 ? '正向' : '负向'}系统偏倚）`
+            });
+          }
+        } else {
+          streak41s = 0;
+          sign41s = 0;
+        }
+
+        // 5. 10-x (连续 10 点均位于均值同一侧)
+        if (z !== 0) {
+          const curSign = z > 0 ? 1 : -1;
+          if (curSign === sign10x) {
+            streak10x++;
+          } else {
+            sign10x = curSign;
+            streak10x = 1;
+          }
+          if (streak10x >= 10) {
+            ptViolations.push({
+              rule: '10-x',
+              ruleName: '10-x (均值漂移)',
+              severity: 'loss',
+              detail: `同水平连续 ${streak10x} 点均位于均值同一侧（${sign10x > 0 ? '正向' : '负向'}均值漂移）`
+            });
+          }
+        } else {
+          streak10x = 0;
+          sign10x = 0;
+        }
+
+        // 6. 1-2s (单点超 2SD 质控预警，未达拒收条件)
+        if (absZ > 2 && absZ <= 3) {
+          const hasLoss = ptViolations.some(v => v.severity === 'loss');
+          if (!hasLoss) {
+            ptViolations.push({
+              rule: '1-2s',
+              ruleName: '1-2s (质控预警)',
+              severity: 'warn',
+              detail: `单点测定值偏离靶值达 ${absZ.toFixed(2)} SD（超 2SD 预警线，未达 3SD）`
+            });
+          }
+        }
+
+        // 记录违规项
+        if (ptViolations.length > 0) {
+          const isLoss = ptViolations.some(v => v.severity === 'loss');
+          const dateStr = curr.date || `${year}-${String(month).padStart(2, '0')}-${String(curr.day).padStart(2, '0')}`;
+          violations.push({
+            groupId: group.id,
+            groupName: group.name,
+            file: group.file,
+            projectCode: proj.code,
+            projectName: proj.name,
+            levelNo: lvNo,
+            lot: curr.lot || '',
+            date: dateStr,
+            day: curr.day,
+            value: curr.value,
+            target: curr.target,
+            sd: curr.sd,
+            z: curr.z,
+            severity: isLoss ? 'loss' : 'warn',
+            rules: ptViolations.map(v => v.rule),
+            ruleNames: ptViolations.map(v => v.ruleName),
+            details: ptViolations.map(v => v.detail)
+          });
+        }
+      }
+    }
+
+    // --- 跨水平同日规则检查 (R-4s 跨水平 与 2-2s 跨水平) ---
+    if (conc >= 2 && levelPoints['1'] && levelPoints['2']) {
+      const dayMap1 = {};
+      levelPoints['1'].forEach(p => { dayMap1[p.day] = p; });
+      levelPoints['2'].forEach(p2 => {
+        const p1 = dayMap1[p2.day];
+        if (!p1) {return;}
+        const z1 = p1.z;
+        const z2 = p2.z;
+        const crossViolations = [];
+
+        // 跨水平 R-4s: 同日双水平极差 >= 4SD
+        const rangeZ = Math.abs(z1 - z2);
+        if (rangeZ >= 4) {
+          crossViolations.push({
+            rule: 'R-4s',
+            ruleName: 'R-4s (跨水平极差)',
+            severity: 'loss',
+            detail: `同日双水平测定值极差达 ${rangeZ.toFixed(2)} SD（L1: ${z1 > 0 ? '+' : ''}${z1.toFixed(2)}SD, L2: ${z2 > 0 ? '+' : ''}${z2.toFixed(2)}SD）`
+          });
+        }
+
+        // 跨水平 2-2s: 同日双水平同时同侧超 2SD
+        if ((z1 > 2 && z2 > 2) || (z1 < -2 && z2 < -2)) {
+          crossViolations.push({
+            rule: '2-2s',
+            ruleName: '2-2s (跨水平连续)',
+            severity: 'loss',
+            detail: `同日双水平测定值同时同侧超 2SD（L1: ${z1 > 0 ? '+' : ''}${z1.toFixed(2)}SD, L2: ${z2 > 0 ? '+' : ''}${z2.toFixed(2)}SD）`
+          });
+        }
+
+        if (crossViolations.length > 0) {
+          const dateStr = p2.date || `${year}-${String(month).padStart(2, '0')}-${String(p2.day).padStart(2, '0')}`;
+          const existing = violations.find(v => v.projectCode === proj.code && v.day === p2.day);
+          if (existing) {
+            crossViolations.forEach(cv => {
+              if (!existing.rules.includes(cv.rule)) {
+                existing.rules.push(cv.rule);
+                existing.ruleNames.push(cv.ruleName);
+                existing.details.push(cv.detail);
+                if (cv.severity === 'loss') {existing.severity = 'loss';}
+              }
+            });
+          } else {
+            violations.push({
+              groupId: group.id,
+              groupName: group.name,
+              file: group.file,
+              projectCode: proj.code,
+              projectName: proj.name,
+              levelNo: 'L1+L2',
+              lot: (p1.lot || '') + (p2.lot ? '/' + p2.lot : ''),
+              date: dateStr,
+              day: p2.day,
+              value: p2.value,
+              target: p2.target,
+              sd: p2.sd,
+              z: p2.z,
+              severity: 'loss',
+              rules: crossViolations.map(v => v.rule),
+              ruleNames: crossViolations.map(v => v.ruleName),
+              details: crossViolations.map(v => v.detail)
+            });
+          }
+        }
+      });
+    }
+
+    return violations;
+  }
+
+  // 渲染质控出控排查报告卡片 (8.10.31)
+  function qeRenderQCAuditReport(violations, year, month, totalGroups, exportedCount) {
+    const host = document.getElementById('lis-qe-audit-section');
+    if (!host) {return;}
+
+    if (!violations || !violations.length) {
+      host.innerHTML = `
+        <div class="qe-qc-audit-box clean">
+            <div class="qe-qc-audit-title">
+                <span style="font-size:16px">🛡️</span>
+                <span style="font-weight:800;color:#059669;font-size:12px">质控规则核查：所有已导出项目在控</span>
+            </div>
+            <div class="qe-qc-audit-sub">
+                已结合 ${year} 年 ${String(month).padStart(2, '0')} 月各项目靶值与 SD，核查 1-3s、2-2s、R-4s、4-1s、10-x 及 1-2s 规则，未发现失控或预警结果。
+            </div>
+        </div>`;
+      return;
+    }
+
+    const lossItems = violations.filter(v => v.severity === 'loss');
+    const warnItems = violations.filter(v => v.severity === 'warn');
+    const uniqueProjects = new Set(violations.map(v => v.projectName)).size;
+
+    let filterMode = 'all';
+
+    function renderTableRows(items) {
+      if (!items.length) {
+        return '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:16px">当前筛选模式下无匹配记录</td></tr>';
+      }
+      return items.map(v => {
+        const isLoss = v.severity === 'loss';
+        const rowCls = isLoss ? 'row-loss' : 'row-warn';
+        const zStr = v.z != null ? (v.z > 0 ? '+' : '') + v.z.toFixed(2) : '-';
+        const targetSdStr = (v.target != null && v.sd != null) ? `${v.target} ± ${v.sd}` : '-';
+        const dateShort = v.date && v.date.length >= 10 ? v.date.slice(5) : (v.date || String(v.day) + '日');
+        const ruleBadges = (v.ruleNames || []).map(r => `<span class="qe-qc-rule-badge ${isLoss ? 'loss' : 'warn'}">${esc(r)}</span>`).join(' ');
+        const detailsStr = (v.details || []).join('<br>');
+        return `
+          <tr class="${rowCls}">
+              <td style="font-weight:700;color:#334155">${esc(v.groupName)}</td>
+              <td style="font-weight:700;color:var(--lis-primary)">${esc(v.projectName)}</td>
+              <td>Level ${esc(v.levelNo)}</td>
+              <td>${esc(dateShort)}</td>
+              <td style="font-weight:800;color:${isLoss ? '#b91c1c' : '#b45309'}">${esc(String(v.value))}</td>
+              <td style="color:#64748b">${esc(targetSdStr)}</td>
+              <td style="font-weight:700;color:${isLoss ? '#b91c1c' : '#b45309'}">${esc(zStr)} SD</td>
+              <td>${ruleBadges}</td>
+              <td style="color:#475569;line-height:1.4">${detailsStr}</td>
+          </tr>`;
+      }).join('');
+    }
+
+    function updateView() {
+      const displayItems = filterMode === 'loss' ? lossItems : filterMode === 'warn' ? warnItems : violations;
+      const tbody = host.querySelector('.qe-qc-table tbody');
+      if (tbody) {
+        tbody.innerHTML = renderTableRows(displayItems);
+      }
+      host.querySelectorAll('.qe-qc-tab').forEach(t => {
+        t.classList.toggle('active', t.getAttribute('data-filter') === filterMode);
+      });
+    }
+
+    host.innerHTML = `
+      <div class="qe-qc-audit-box alert">
+          <div class="qe-qc-audit-header">
+              <div class="qe-qc-audit-title">
+                  <span style="font-size:16px">⚠️</span>
+                  <span style="font-weight:800;font-size:13px;color:#b91c1c">质控出控排查通报</span>
+                  <span class="qe-qc-summary-tag">（共 ${violations.length} 项异常：${lossItems.length > 0 ? `<b style="color:#b91c1c">🔴 ${lossItems.length} 项失控</b>` : ''}${lossItems.length > 0 && warnItems.length > 0 ? '，' : ''}${warnItems.length > 0 ? `<b style="color:#b45309">🟡 ${warnItems.length} 项预警</b>` : ''}，涉及 ${uniqueProjects} 个项目）</span>
+              </div>
+              <div class="qe-qc-audit-actions">
+                  <button id="lis-qe-audit-copy" type="button" class="qe-qc-btn copy" title="复制文本通报，方便微信/钉钉交班">📋 复制出控清单</button>
+                  <button id="lis-qe-audit-export-xlsx" type="button" class="qe-qc-btn export" title="导出专属出控排查明细 Excel">📥 导出出控明细 Excel</button>
+              </div>
+          </div>
+          <div class="qe-qc-tabs">
+              <button type="button" class="qe-qc-tab active" data-filter="all">全部 (${violations.length})</button>
+              <button type="button" class="qe-qc-tab" data-filter="loss">仅看失控 (${lossItems.length})</button>
+              <button type="button" class="qe-qc-tab" data-filter="warn">仅看预警 (${warnItems.length})</button>
+          </div>
+          <div class="qe-qc-table-wrap">
+              <table class="qe-qc-table">
+                  <thead>
+                      <tr>
+                          <th>专业组</th>
+                          <th>项目名称</th>
+                          <th>水平</th>
+                          <th>测定日期</th>
+                          <th>测定值</th>
+                          <th>靶值 ± SD</th>
+                          <th>偏离度 (Z)</th>
+                          <th>触发规则</th>
+                          <th>规则判定说明</th>
+                      </tr>
+                  </thead>
+                  <tbody>
+                      ${renderTableRows(violations)}
+                  </tbody>
+              </table>
+          </div>
+      </div>`;
+
+    // 绑定 Tabs 筛选切换
+    host.querySelectorAll('.qe-qc-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        filterMode = tab.getAttribute('data-filter') || 'all';
+        updateView();
+      });
+    });
+
+    // 绑定一键复制通报按钮
+    const copyBtn = host.querySelector('#lis-qe-audit-copy');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        qeCopyQCReportText(violations, year, month);
+      });
+    }
+
+    // 绑定导出专属 Excel 按钮
+    const exportXlsxBtn = host.querySelector('#lis-qe-audit-export-xlsx');
+    if (exportXlsxBtn) {
+      exportXlsxBtn.addEventListener('click', () => {
+        qeDownloadQCViolationsXlsx(violations, year, month);
+      });
+    }
+  }
+
+  // 复制出控通报纯文本 (8.10.31)
+  function qeCopyQCReportText(violations, year, month) {
+    if (!violations || !violations.length) {
+      toast('暂无出控记录可复制', 'i');
+      return;
+    }
+    const lossCount = violations.filter(v => v.severity === 'loss').length;
+    const warnCount = violations.filter(v => v.severity === 'warn').length;
+
+    const grouped = {};
+    violations.forEach(v => {
+      const k = `${v.groupName} - ${v.projectName}`;
+      if (!grouped[k]) {grouped[k] = [];}
+      grouped[k].push(v);
+    });
+
+    let text = `【室内质控出控排查通报】${year}年${String(month).padStart(2, '0')}月\n`;
+    text += `共发现 ${violations.length} 项质控异常（${lossCount} 项失控，${warnCount} 项预警）：\n\n`;
+
+    let idx = 1;
+    for (const [projKey, items] of Object.entries(grouped)) {
+      text += `${idx++}. 【${projKey}】\n`;
+      items.forEach(it => {
+        const icon = it.severity === 'loss' ? '🔴' : '🟡';
+        const rules = (it.ruleNames || []).join('、');
+        const zStr = it.z != null ? (it.z > 0 ? '+' : '') + it.z.toFixed(2) : '';
+        const targetStr = (it.target != null && it.sd != null) ? `靶值 ${it.target}±${it.sd}` : '';
+        const dateStr = it.date && it.date.length >= 10 ? it.date.slice(5) : it.date;
+        text += `   - ${dateStr} (Level ${it.levelNo}): 测定值 ${it.value} (${targetStr}, Z=${zStr} SD) [${icon} ${rules}]\n`;
+        (it.details || []).forEach(d => {
+          text += `     说明: ${d}\n`;
+        });
+      });
+      text += '\n';
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        toast('已复制质控出控通报清单到剪贴板！', 's');
+      }).catch(() => {
+        qeFallbackCopy(text);
+      });
+    } else {
+      qeFallbackCopy(text);
+    }
+  }
+
+  function qeFallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+      document.execCommand('copy');
+      toast('已复制质控出控通报清单到剪贴板！', 's');
+    } catch (e) {
+      toast('复制失败，请手动选中复制', 'e');
+    }
+    document.body.removeChild(ta);
+  }
+
+  // 导出专属出控明细 Excel 表格 (8.10.31)
+  function qeDownloadQCViolationsXlsx(violations, year, month) {
+    const X = qeXlsxLib || qeGetGlobal('XLSX');
+    if (!X || !X.utils) {
+      toast('SheetJS 未就绪，无法导出 Excel', 'e');
+      return;
+    }
+    const wb = X.utils.book_new();
+    const header = [
+      '专业组', '项目编码', '项目名称', '浓度水平', '质控批号', '测定日期',
+      '测定值', '靶值', '标准差', 'Z偏离得分', '异常级别', '触发规则', '规则判定说明'
+    ];
+    const data = [
+      header,
+      ...violations.map(v => [
+        v.groupName,
+        v.projectCode,
+        v.projectName,
+        'Level ' + v.levelNo,
+        v.lot || '',
+        v.date,
+        v.value,
+        v.target != null ? v.target : '',
+        v.sd != null ? v.sd : '',
+        v.z != null ? Number(v.z.toFixed(2)) : '',
+        v.severity === 'loss' ? '失控' : '预警',
+        (v.ruleNames || []).join('; '),
+        (v.details || []).join('; ')
+      ])
+    ];
+    const ws = X.utils.aoa_to_sheet(data);
+    ws['!cols'] = [
+      { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 10 }, { wch: 16 }, { wch: 12 },
+      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 45 }
+    ];
+    X.utils.book_append_sheet(wb, ws, '质控出控明细');
+    const xlsxData = X.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([xlsxData], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+    const filename = `质控出控排查明细_${year}年${String(month).padStart(2, '0')}月.xlsx`;
+    qeDownloadBlob(blob, filename);
+    toast(`已导出出控排查明细: ${filename}`, 's');
   }
 
   // 油猴沙箱里 vendor 库可能挂在 window/unsafeWindow，不一定是自由变量
@@ -6966,6 +7525,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                     </div>
                     <div class="qe-step-body">
                         <div class="qe-result-list" id="lis-qe-results"></div>
+                        <div id="lis-qe-audit-section"></div>
                     </div>
                 </div>
             </div>`;
@@ -7280,12 +7840,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
       const resultSection = document.getElementById('lis-qe-result-section');
       const resultList = document.getElementById('lis-qe-results');
+      const auditSection = document.getElementById('lis-qe-audit-section');
       if (resultSection) {resultSection.style.display = '';}
       if (resultList) {resultList.innerHTML = '';}
+      if (auditSection) {auditSection.innerHTML = '';}
 
       const groupsToExport = QE_GROUPS.filter(g => cfg.selectedGroups.includes(g.id));
       const totalGroups = groupsToExport.length;
       const results = [];
+      const allExportViolations = []; // 8.10.31: 质控出控全局汇总
 
       // SheetJS：@require 可能失败，导出前兜底补拉（8.8.35 起主源科室 nginx，兜底本机 serve）
       qeSetStatus('正在加载 Excel 组件…', 'info');
@@ -7304,18 +7867,26 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         qeShowProgress(gi, totalGroups, `${group.name} (${gi + 1}/${totalGroups})`);
 
         try {
-          const rows = await qeFetchGroupData(group, cfg, mappings, qeSetStatus);
+          const groupRes = await qeFetchGroupData(group, cfg, mappings, qeSetStatus);
+          const rows = groupRes.rows || groupRes;
+          const groupViolations = groupRes.violations || [];
+          if (groupViolations.length > 0) {
+            allExportViolations.push(...groupViolations);
+          }
+
           if (rows.length > 0) {
             const xlsxData = qeBuildXlsx(group.name, rows);
             const blob = new Blob([xlsxData], {
               type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             });
-            results.push({ name: group.file, blob, rows: rows.length });
-            qeAddResultItem(group.file, rows.length, blob);
-            qeSetStatus(`${group.name}: 导出完成，${rows.length} 行数据`, 'ok');
+            results.push({ name: group.file, blob, rows: rows.length, violations: groupViolations });
+            qeAddResultItem(group.file, rows.length, blob, null, groupViolations);
+            const lossCnt = groupViolations.filter(v => v.severity === 'loss').length;
+            const lossHint = lossCnt > 0 ? ` (🔴 ${lossCnt}项失控)` : '';
+            qeSetStatus(`${group.name}: 导出完成，${rows.length} 行数据${lossHint}`, lossCnt > 0 ? 'error' : 'ok');
           } else {
             qeSetStatus(`${group.name}: 无数据`, 'info');
-            qeAddResultItem(group.file, 0, null);
+            qeAddResultItem(group.file, 0, null, null, groupViolations);
           }
         } catch (e) {
           qeSetStatus(`${group.name}: 导出失败 - ${e.message}`, 'error');
@@ -7327,6 +7898,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       qeUpdateZipButton();
       qeShowProgress(totalGroups, totalGroups, '完成');
 
+      // 8.10.31: 渲染 Westgard 质控出控智能核查报告
+      const curYear = cfg._year || new Date().getFullYear();
+      const curMonth = cfg._month || new Date().getMonth() + 1;
+      qeRenderQCAuditReport(allExportViolations, curYear, curMonth, totalGroups, results.length);
+
       if (!qeAbortFlag) {
         const zipHint = results.length ? ' 可点右上角「打包下载 ZIP」。' : '';
         // 8.5.82: 拉取失败的水平统一提示——此前单水平超时整月数据静默缺失，文件却显示「导出完成」
@@ -7336,7 +7912,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         const failHint = _allQeFails.length
           ? ` ⚠️ 有 ${_allQeFails.length} 项查询失败（${_allQeFails.slice(0, 5).join('、')}${_allQeFails.length > 5 ? ' 等' : ''}），对应数据可能不完整，建议重导`
           : '';
-        qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。${failHint}${zipHint}`, _allQeFails.length ? 'error' : 'ok');
+        const lossTotal = allExportViolations.filter(v => v.severity === 'loss').length;
+        const warnTotal = allExportViolations.filter(v => v.severity === 'warn').length;
+        const auditHint = lossTotal > 0
+          ? ` ⚠️ 发现 ${lossTotal} 项失控（详见下方排查报告）`
+          : (warnTotal > 0 ? ` ⚠️ 发现 ${warnTotal} 项预警（详见下方排查报告）` : ' 🛡️ 质控均在控');
+        qeSetStatus(`导出完成！共 ${results.length}/${totalGroups} 个文件。${auditHint}${failHint}${zipHint}`, (lossTotal > 0 || _allQeFails.length) ? 'error' : 'ok');
       } else {
         qeSetStatus('导出已停止。', 'info');
       }
@@ -7353,13 +7934,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
   }
 
-  function qeAddResultItem(filename, rowCount, blob, error) {
+  function qeAddResultItem(filename, rowCount, blob, error, groupViolations) {
     const list = document.getElementById('lis-qe-results');
     if (!list) {return;}
     const div = document.createElement('div');
     div.className = 'qe-result-item';
     let statusHtml = '';
     let btnHtml = '';
+    let violationHtml = '';
     if (error) {
       statusHtml = `<span class="qe-ri-status err">❌ ${esc(error)}</span>`;
     } else if (rowCount > 0) {
@@ -7367,10 +7949,21 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       if (blob) {
         btnHtml = `<button data-fn="${esc(filename)}">下载</button>`;
       }
+      if (groupViolations && groupViolations.length > 0) {
+        const lossCnt = groupViolations.filter(v => v.severity === 'loss').length;
+        const warnCnt = groupViolations.filter(v => v.severity === 'warn').length;
+        if (lossCnt > 0) {
+          violationHtml = `<span class="qe-violation-badge err" title="包含 ${lossCnt} 项失控结果">🔴 ${lossCnt} 项失控</span>`;
+        } else if (warnCnt > 0) {
+          violationHtml = `<span class="qe-violation-badge warn" title="包含 ${warnCnt} 项预警结果">🟡 ${warnCnt} 项预警</span>`;
+        }
+      } else {
+        violationHtml = '<span class="qe-violation-badge ok" title="质控在控">🟢 在控</span>';
+      }
     } else {
       statusHtml = '<span class="qe-ri-status" style="color:#9e9e9e">无数据</span>';
     }
-    div.innerHTML = `<span class="qe-ri-name">${esc(filename)}</span>${statusHtml}${btnHtml}`;
+    div.innerHTML = `<span class="qe-ri-name">${esc(filename)}</span>${violationHtml}${statusHtml}${btnHtml}`;
     if (btnHtml) {
       const dlBtn = div.querySelector('button');
       dlBtn._blob = blob;
