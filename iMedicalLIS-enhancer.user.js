@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.2
+// @version      8.11.3
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1093,13 +1093,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
 .ws-mach-group-label{font-size:10px;font-weight:700;padding:0 2px;white-space:nowrap;opacity:.8}
 .ws-mach-filter-label{align-self:center;color:var(--lis-text-muted);font-size:11px;font-weight:700;white-space:nowrap;margin-right:2px}
-.ws-mach-row.all-wg{display:flex!important;justify-content:flex-start!important;flex-wrap:nowrap;gap:4px 6px;align-items:center}
+.ws-mach-row.all-wg{display:flex!important;justify-content:flex-start!important;flex-wrap:nowrap;gap:4px 6px;align-items:center;overflow:visible!important}
 .ws-mach-wg-wrap{position:relative;display:inline-flex}
 .ws-mach-wg-btn{border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-text-secondary);padding:3px 9px;border-radius:5px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .ws-mach-wg-btn:hover{border-color:var(--lis-border-strong);color:var(--lis-text)}
 .ws-mach-wg-btn.on{background:var(--lis-primary-light);border-color:#93c5fd;color:var(--lis-primary);font-weight:700}
 .ws-mach-wg-btn.active-open{border-color:var(--lis-primary);box-shadow:0 0 0 2px rgba(37,99,235,.15)}
-.ws-mach-popover{position:absolute;top:calc(100% + 4px);left:0;z-index:1000;background:#fff;border:1px solid var(--lis-border-strong);border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.15);padding:8px 10px;display:flex;flex-direction:column;gap:6px;min-width:210px;max-width:300px}
+.ws-mach-popover{position:fixed!important;z-index:100050!important;background:#fff;border:1px solid var(--lis-border-strong);border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.18);padding:8px 10px;display:none;flex-direction:column;gap:6px;min-width:220px;max-width:320px;box-sizing:border-box}
 .ws-mach-pop-hd{display:flex;align-items:center;justify-content:space-between;padding-bottom:6px;border-bottom:1px solid var(--lis-border);font-size:11.5px}
 .ws-mach-pop-title{font-weight:700;color:var(--lis-text);white-space:nowrap}
 .ws-mach-pop-actions{display:flex;align-items:center;gap:5px;font-size:11px}
@@ -10116,10 +10116,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let _wsMachPopGlobalBound = false;
 
   function closeWSMachPopovers() {
-    const tabs = $('#lis-ws-tabs');
-    if (!tabs) {return;}
-    tabs.querySelectorAll('.ws-mach-popover').forEach(p => {p.style.display = 'none';});
-    tabs.querySelectorAll('.ws-mach-wg-btn').forEach(b => {b.classList.remove('active-open');});
+    document.querySelectorAll('.ws-mach-popover').forEach(p => {p.style.display = 'none';});
+    document.querySelectorAll('.ws-mach-wg-btn').forEach(b => {b.classList.remove('active-open');});
   }
 
   // 8.5.69: 判断当前要显示的机器是否都已存在标签（以「是否有新增仪器」为重建条件，
@@ -10247,11 +10245,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         const wg = btn.dataset.wg;
         const pop = tabs.querySelector(`#lis-mach-pop-${wg}`);
         if (!pop) {return;}
-        const isOpen = pop.style.display !== 'none';
-        tabs.querySelectorAll('.ws-mach-popover').forEach(p => {if (p !== pop) {p.style.display = 'none';}});
-        tabs.querySelectorAll('.ws-mach-wg-btn').forEach(b => {if (b !== btn) {b.classList.remove('active-open');}});
-        pop.style.display = isOpen ? 'none' : 'flex';
-        btn.classList.toggle('active-open', !isOpen);
+        const isOpen = pop.style.display === 'flex';
+        closeWSMachPopovers();
+        if (!isOpen) {
+          pop.style.display = 'flex';
+          btn.classList.add('active-open');
+          const rect = btn.getBoundingClientRect();
+          const popWidth = pop.offsetWidth || 240;
+          const maxLeft = window.innerWidth - popWidth - 12;
+          pop.style.top = `${Math.round(rect.bottom + 4)}px`;
+          pop.style.left = `${Math.max(8, Math.min(Math.round(rect.left), maxLeft))}px`;
+        }
       });
     });
 
@@ -10288,7 +10292,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (!_wsMachPopGlobalBound) {
       _wsMachPopGlobalBound = true;
       document.addEventListener('click', e => {
-        if (!e.target.closest('.ws-mach-wg-wrap')) {
+        if (!e.target.closest('.ws-mach-wg-wrap') && !e.target.closest('.ws-mach-popover')) {
           closeWSMachPopovers();
         }
       });
@@ -10297,12 +10301,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           closeWSMachPopovers();
         }
       });
+      window.addEventListener('resize', () => {
+        closeWSMachPopovers();
+      });
     }
 
     // 滚轮直接在仪器栏横向滚动
     const machRow = tabs.querySelector('.ws-mach-row');
     if (machRow) {
       machRow.addEventListener('wheel', e => {
+        closeWSMachPopovers();
         if (e.deltaY !== 0 && machRow.scrollWidth > machRow.clientWidth) {
           e.preventDefault();
           machRow.scrollLeft += e.deltaY;
