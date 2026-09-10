@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.3
+// @version      8.11.4
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1032,31 +1032,31 @@
 .ws-table-wrap{flex:1;min-height:0;overflow:auto;padding:8px 12px;background:var(--lis-bg);display:flex;flex-direction:column}
 .ws-table-wrap table{width:100%;height:auto!important;border-collapse:separate;border-spacing:0;font-size:12px;background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.02);margin-bottom:auto!important}
 .ws-table-wrap tbody tr{height:34px!important}
-#lis-ws-body thead{position:sticky;top:0;z-index:2}
-#lis-ws-body th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);padding:7px 10px;text-align:left;font-weight:700;font-size:11.5px;white-space:nowrap;cursor:pointer;user-select:none;border-bottom:1px solid var(--lis-border);transition:background .15s}
-#lis-ws-body th:hover{background:#e2e8f0}
-#lis-ws-body th::after{content:' ⇅';font-size:10px;opacity:.42}
-#lis-ws-body th.sort-asc::after{content:' ↑';opacity:1;color:var(--lis-primary)}
-#lis-ws-body th.sort-desc::after{content:' ↓';opacity:1;color:var(--lis-primary)}
-#lis-ws-body td{padding:5px 10px;border-bottom:1px solid var(--lis-border-light);white-space:nowrap;transition:background .12s;vertical-align:middle;color:var(--lis-text)}
-#lis-ws-body tr{cursor:pointer;transition:background .12s}
+.ws-table-wrap thead{position:sticky;top:0;z-index:2}
+.ws-table-wrap th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);padding:7px 10px;text-align:left;font-weight:700;font-size:11.5px;white-space:nowrap;cursor:pointer;user-select:none;border-bottom:1px solid var(--lis-border);transition:background .15s}
+.ws-table-wrap th:hover{background:#e2e8f0}
+.ws-table-wrap th::after{content:' ⇅';font-size:10px;opacity:.42}
+.ws-table-wrap th.sort-asc::after{content:' ↑';opacity:1;color:var(--lis-primary)}
+.ws-table-wrap th.sort-desc::after{content:' ↓';opacity:1;color:var(--lis-primary)}
+.ws-table-wrap td{padding:5px 10px;border-bottom:1px solid var(--lis-border-light);white-space:nowrap;transition:background .12s;vertical-align:middle;color:var(--lis-text)}
+.ws-table-wrap tr{cursor:pointer;transition:background .12s}
 .ws-ignore-btn{background:none;border:1px solid #cfd8e0;border-radius:4px;font-size:11px;color:#64748b;cursor:pointer;padding:1px 6px;white-space:nowrap;vertical-align:middle;transition:all .15s}
 .ws-ignore-btn:hover{border-color:#0f766e;color:#0f766e;background:#ecfdf5}
 .ws-ignore-btn.on{border-color:#a8326a;color:#a8326a;background:#fdf2f5}
 .ws-ignore-btn.on:hover{border-color:#a8326a;color:#a8326a;background:#fce4ec}
 tr.ws-ignored td{opacity:.45;text-decoration:line-through}
 tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
-#lis-ws-body tbody tr:nth-child(even){background:#f8fafc}
-#lis-ws-body tbody tr:nth-child(odd){background:#ffffff}
-#lis-ws-body tbody tr:last-child td{border-bottom:none}
-#lis-ws-body tr:hover{background:#f1f5f9}
-#lis-ws-body tr.sel{background:var(--lis-primary-light);box-shadow:inset 3px 0 0 var(--lis-primary)}
-#lis-ws-body tr.active-row{background:#eff6ff;box-shadow:inset 3px 0 0 var(--lis-primary)}
-#lis-ws-body tr.st-1{box-shadow:inset 3px 0 0 #d97706}
-#lis-ws-body tr.st-2{box-shadow:inset 3px 0 0 #2563eb}
-#lis-ws-body tr.st-3{box-shadow:inset 3px 0 0 #059669}
-#lis-ws-body tr.st-4{box-shadow:inset 3px 0 0 #7c3aed}
-#lis-ws-body tr.st-5{color:#94a3b8;box-shadow:inset 3px 0 0 #cbd5e1}
+.ws-table-wrap tbody tr:nth-child(even){background:#f8fafc}
+.ws-table-wrap tbody tr:nth-child(odd){background:#ffffff}
+.ws-table-wrap tbody tr:last-child td{border-bottom:none}
+.ws-table-wrap tr:hover{background:#f1f5f9}
+.ws-table-wrap tr.sel{background:var(--lis-primary-light);box-shadow:inset 3px 0 0 var(--lis-primary)}
+.ws-table-wrap tr.active-row{background:#eff6ff;box-shadow:inset 3px 0 0 var(--lis-primary)}
+.ws-table-wrap tr.st-1{box-shadow:inset 3px 0 0 #d97706}
+.ws-table-wrap tr.st-2{box-shadow:inset 3px 0 0 #2563eb}
+.ws-table-wrap tr.st-3{box-shadow:inset 3px 0 0 #059669}
+.ws-table-wrap tr.st-4{box-shadow:inset 3px 0 0 #7c3aed}
+.ws-table-wrap tr.st-5{color:#94a3b8;box-shadow:inset 3px 0 0 #cbd5e1}
 .wg-tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;color:#fff}
 .st-tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;line-height:1.3}
 .st-1t{background:#fffbeb;color:#b45309;border:1px solid #fde68a}.st-2t{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}.st-3t{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}.st-4t{background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe}.st-5t{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0}.st-9t{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
@@ -1360,8 +1360,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 #lis-detail-body .result-section{margin-bottom:20px}
 #lis-detail-body .result-section h5{margin:0 0 12px;color:var(--lis-text);font-size:14px;padding-bottom:8px;border-bottom:1px solid var(--lis-border)}
 .result-table{width:100%;border-collapse:collapse;font-size:12px}
-.result-table th{background:var(--lis-bg);color:var(--lis-text-secondary);font-weight:600;padding:5px 8px;text-align:left;font-weight:600;white-space:nowrap;font-size:11px}
-.result-table td{padding:4px 8px;border-bottom:1px solid #eee;overflow:hidden;text-overflow:ellipsis}
+.result-table th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-weight:700;padding:6px 8px;text-align:left;white-space:nowrap;font-size:11px;border-bottom:1px solid var(--lis-border)}
+.result-table th::after{content:none!important}
+.result-table td{padding:4px 8px;border-bottom:1px solid #eee;overflow:hidden;text-overflow:ellipsis;color:var(--lis-text)}
 /* 8.5.19: 双栏紧凑行高——项目多时进一步压缩，减少滚动 */
 /* 8.5.21: 双栏紧凑行高（padding 压缩保留），字号恢复原水平（8.5.19 改小后 1080p 费眼） */
 .result-table.compact th{padding:3px 6px;font-size:11px}
@@ -1369,12 +1370,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table.compact td:nth-child(3){font-size:13px}
 .result-table.compact .hist-tag{padding:1px 4px;font-size:11px;margin:0 1px}
 .result-table.compact tr:last-child td{border-bottom:none}
-.result-table tr:hover{background:#f5f5f5}
-.result-table .abnormal{color:#e74c3c;font-weight:600}
-.result-table .abnormal.critical{color:#b71c1c;font-weight:700;font-size:15px;text-shadow:0 0 1px rgba(231,76,60,.3)}
-.result-table .abnormal.high{color:#e65100}
-.result-table .abnormal.low{color:#1565c0}
-.result-table .normal{color:#43a047}
+.result-table tr:hover{background:rgba(241,245,249,.6)}
+.result-table .abnormal, .result-table td.abnormal{color:#dc2626!important;font-weight:700}
+.result-table .abnormal.critical, .result-table td.abnormal.critical{color:#b91c1c!important;font-weight:800;font-size:14px;text-shadow:0 0 1px rgba(185,28,28,.25)}
+.result-table .abnormal.high, .result-table td.abnormal.high{color:#dc2626!important;font-weight:700}
+.result-table .abnormal.low, .result-table td.abnormal.low{color:#2563eb!important;font-weight:700}
+.result-table .normal, .result-table td.normal{color:var(--lis-text)}
 .result-table .history{background:#f8f9fa}
 .result-table .hist-tag{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:3px;font-size:11px;white-space:nowrap;line-height:1.4}
 .result-table .hist-tag.normal{background:#e8f5e9;color:#2e7d32;border-left:3px solid #4caf50}
@@ -14590,13 +14591,33 @@ window.addEventListener('keydown',function(e){
         }
 
         let statusClass = isAbnormal ? 'abnormal' : 'normal';
-        if (isCritical) {statusClass = 'abnormal critical';}
-        else if (statusText.includes('高')) {statusClass = 'abnormal high';}
-        else if (statusText.includes('低')) {statusClass = 'abnormal low';}
+        let resColor = '';
+        let statusColor = '';
+        if (isCritical) {
+          statusClass = 'abnormal critical';
+          resColor = '#b91c1c';
+          statusColor = '#b91c1c';
+        } else if (statusText.includes('高')) {
+          statusClass = 'abnormal high';
+          resColor = '#dc2626';
+          statusColor = '#dc2626';
+        } else if (statusText.includes('低')) {
+          statusClass = 'abnormal low';
+          resColor = '#2563eb';
+          statusColor = '#2563eb';
+        } else if (isAbnormal) {
+          statusClass = 'abnormal';
+          resColor = '#e11d48';
+          statusColor = '#e11d48';
+        } else {
+          statusColor = '#16a34a';
+        }
 
         // x8 传染病面板：梅毒/丙肝/HIV 阳性统一高亮（区别于乙肝两对半）
         if (isX8Inf && !isCritical && isInfectionSpecialItem(r.CName) && isPositiveResult(result, r)) {
           statusClass = 'inf-special';
+          resColor = '#b45309';
+          statusColor = '#b45309';
           rowStyle =
             'background:' +
             INFECTION_SPECIAL_STYLE.bg +
@@ -14641,12 +14662,15 @@ window.addEventListener('keydown',function(e){
             '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid #bbb;background:#f5f5f5" title="未知"></span>';
         }
 
+        const resStyle = `font-weight:700;font-size:13px;white-space:nowrap;${resColor ? `color:${resColor}!important;` : ''}`;
+        const statusStyle = `white-space:nowrap;font-size:11px;font-weight:700;${statusColor ? `color:${statusColor}!important;` : ''}`;
+
         html += `<tr style="${rowStyle}">
                     <td style="text-align:center">${qcHtml}</td>
                     <td style="font-weight:500;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400"> ' + esc(refRange) + '</span>' : ''}</td>
-                    <td class="${statusClass}" style="font-weight:700;font-size:13px;white-space:nowrap">${esc(result)}${unit ? ' <span style="font-size:10px;color:#999;font-weight:400">' + esc(unit) + '</span>' : ''}</td>
+                    <td class="${statusClass}" style="${resStyle}">${esc(result)}${unit ? ' <span style="font-size:10px;color:#999;font-weight:400">' + esc(unit) + '</span>' : ''}</td>
                     ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:11px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
-                    <td class="${statusClass}" style="white-space:nowrap;font-size:11px">${isCritical ? '<span style="color:#e74c3c;font-weight:700">' + statusText + '</span>' : statusText}</td>
+                    <td class="${statusClass}" style="${statusStyle}">${statusText}</td>
                     <td style="font-size:11px">${hist.cells[0]}</td>
                     <td style="font-size:11px">${hist.cells[1]}</td>
                     <td style="font-size:11px">${hist.cells[2]}</td>
