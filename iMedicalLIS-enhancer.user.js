@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.32
+// @version      8.10.33
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（高密零滚动筛选栏/含外送/费用/病历直达/组合套折叠/双击行展开折叠） + 质控录入辅助 + 质控数据导出（含Westgard多规则出控智能核查/靶值SD偏离通报与明细导出） + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6377,23 +6377,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         }
       } catch (err) {
         dbg('[LIS-QE] Westgard 核查异常:', proj.name, err);
-      }
-
-      // 8.5.56: LIS 有比模板声明更多水平（如 3 水平血球质控）时显式告警，不再静默丢弃
-      const extraLvs = Object.keys(levels).filter(
-        k => /^\d+$/.test(k) && Number(k) > conc && (levels[k] || []).length > 0
-      );
-      if (extraLvs.length) {
-        try {
-          qeAddResultItem(
-            '⚠ ' + proj.name + '（' + group.name + '）',
-            0,
-            null,
-            'LIS 存在 Level ' +
-              extraLvs.map(Number).sort((a, b) => a - b).join('/') +
-              ' 数据，但模板仅声明 ' + conc + ' 个水平，该部分未导出'
-          );
-        } catch (e) {}
       }
     }
 
