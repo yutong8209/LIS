@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.8
+// @version      8.11.9
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6367,6 +6367,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         }
       });
 
+      // 8.11.9: 配置浓度数（group.concentrations）与仪器实际回传的水平号可能不一致。
+      // 下方输出与 Westgard 核查都只遍历 1..concentrations，超出配置的水平会被静默丢弃
+      // （既不出 Excel 也不进核查），用户完全无感知。这里显式提示，避免「数据少了没人知道」。
+      const _extraLv = Object.keys(levels)
+        .filter(k => /^\d+$/.test(k) && Number(k) > (group.concentrations || 1))
+        .sort((a, b) => Number(a) - Number(b));
+      if (_extraLv.length && statusCb) {
+        statusCb(
+          `  ⚠ ${proj.name}：仪器回传了超出配置的浓度水平 L${_extraLv.join('/L')}，本次导出已跳过；若确为实际水平请调高该组「浓度数」`,
+          'error'
+        );
+      }
+
       // 生成输出行
       const conc = group.concentrations || 1;
       for (let li = 0; li < conc; li++) {
@@ -6574,11 +6587,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
     // --- 跨水平同日规则检查 (R-4s 跨水平 与 2-2s 跨水平) ---
     if (conc >= 2 && levelPoints['1'] && levelPoints['2']) {
+      // 8.11.9: 同日 L1 可能有多条测定（重测/多次上机/多批号），此前 `dayMap1[p.day] = p`
+      // 只保留当天最后一条 L1，跨水平 R-4s / 2-2s 仅与那一条比较，
+      // 同日其它 L1 与 L2 的组合被永久漏检（真实失控可能只出现在被覆盖掉的那条上）。
+      // 改为按日收集全部 L1 测点，逐条与同日 L2 比较。
       const dayMap1 = {};
-      levelPoints['1'].forEach(p => { dayMap1[p.day] = p; });
+      levelPoints['1'].forEach(p => {
+        if (!dayMap1[p.day]) {dayMap1[p.day] = [];}
+        dayMap1[p.day].push(p);
+      });
       levelPoints['2'].forEach(p2 => {
-        const p1 = dayMap1[p2.day];
-        if (!p1) {return;}
+        const p1list = dayMap1[p2.day];
+        if (!p1list) {return;}
+        p1list.forEach(p1 => {
         const z1 = p1.z;
         const z2 = p2.z;
         const crossViolations = [];
@@ -6638,6 +6659,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
             });
           }
         }
+        });
       });
     }
 
@@ -15576,6 +15598,19 @@ window.addEventListener('keydown',function(e){
     const t = report.AcceptTime || report.CollectTime || '';
     return (String(d || '').trim() + (t ? ' ' + String(t).trim() : '')).trim();
   }
+  // 8.11.9: 历史报告日期归一化（YYYY-MM-DD[ HH:MM]）——LIS 的 AcceptDate 可能是
+  // 2026-02-05 / 2026/02/05 / 2026.02.05 / 20260205 多种写法，而 histDateCutoff 只产出 ISO。
+  // 此前「近 N 天」过滤与「日期倒序」都直接拿 _histReportDate 的原始串做字符串比较：
+  //   '/' (0x2F) 在 ASCII 上大于 '-' (0x2D)，于是 '2026/02/05' >= '2026-08-01' 恒为真，
+  //   同一年内所有斜杠格式的历史报告都会绕过天数过滤被显示（往年月份也照进），排序也会错乱。
+  // 复用 rowAcceptDateStr（脚本内既有的多格式日期归一化，覆盖 / . 与 YYYYMMDD）后比较/排序。
+  function _histDateKey(report) {
+    const d = rowAcceptDateStr(report);
+    if (!d) {return '';}
+    const t = String((report && (report.AcceptTime || report.CollectTime)) || '').trim();
+    const tm = /(\d{1,2}):(\d{2})/.exec(t);
+    return tm ? d + ' ' + String(tm[1]).padStart(2, '0') + ':' + tm[2] : d;
+  }
   function histDateCutoff(days) {
     if (!days || days <= 0) { return ''; }
     const d = new Date();
@@ -15767,8 +15802,10 @@ window.addEventListener('keydown',function(e){
       const cutoff = histDateCutoff(histFilter.days);
       const inRange = reports.filter(r => {
         if (String(r.ReportDR || '') === histCurrentRDR) { return false; } // 当前报告单独取，作为「本次」锚点
-        const d = _histReportDate(r).split(' ')[0];
-        return d && (!cutoff || d >= cutoff);
+        const d = _histDateKey(r);
+        // 8.11.9: 日期无法解析时不静默丢历史——仅在「不按天数过滤」时保留
+        if (!d) { return !cutoff; }
+        return !cutoff || d >= cutoff;
       });
 
       const currentReport = histCurrentRDR
@@ -23267,7 +23304,8 @@ window.addEventListener('keydown',function(e){
       // 8.10.2: 追加「手工杂项」永久黑名单（临检/免疫各一台）——即使快照是全工作组全仪器也排除
       const candidates = wsData.filter(r => rowIsAutoAuditCandidate(r));
       let normals = candidates.filter(r => getWSAuditBucket(r) === 'normal');
-      let abnormals = candidates.filter(r => getWSAuditBucket(r) === 'abnormal');
+      // 8.11.9: 原 `abnormals` 列表已不再使用——异常逐条段改为按 wsData 实时取候选
+      // （见下方 _aaAbnormalDone），避免"每审完一条重建列表导致跳条"。红线排除改由 _redLineDRs 承担。
 
       let nNormal = 0,
         nAbnormal = 0;
@@ -23282,26 +23320,26 @@ window.addEventListener('keydown',function(e){
       const infPosDRs = _rl.inf;
       const cardiacDRs = _rl.card;
       const _redLineReasonMap = _rl.map;
+      // 8.11.9: 红线标本的 ReportDR 全集——异常逐条段的实时候选必须排除它们，
+      // 否则会在红线预过滤之外被重新纳入（虽然 autoAuditAbnormalGate 会再兜一层，但会白跑一轮）。
+      const _redLineDRs = new Set(_redLineReasonMap.keys());
       negDRs.forEach(dr => {
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, '含负值结果，需人工审核');
       });
       if (negDRs.size) {
         normals = normals.filter(r => !negDRs.has(String(r.ReportDR)));
-        abnormals = abnormals.filter(r => !negDRs.has(String(r.ReportDR)));
       }
       infPosDRs.forEach(dr => {
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, '梅毒/丙肝/艾滋项目阳性，需人工审核');
       });
       if (infPosDRs.size) {
         normals = normals.filter(r => !infPosDRs.has(String(r.ReportDR)));
-        abnormals = abnormals.filter(r => !infPosDRs.has(String(r.ReportDR)));
       }
       cardiacDRs.forEach((reason, dr) => {
         autoAuditSkipOnce(skipped, findWSSpecimenByReportDR(dr) || {}, reason);
       });
       if (cardiacDRs.size) {
         normals = normals.filter(r => !cardiacDRs.has(String(r.ReportDR)));
-        abnormals = abnormals.filter(r => !cardiacDRs.has(String(r.ReportDR)));
       }
 
       // 1) 正常标本：批量审核（统计从 queue.done/failed/skipped 读取）
@@ -23336,14 +23374,28 @@ window.addEventListener('keydown',function(e){
       }
 
       // 2) 异常标本：安全门逐条审核
-      let abnormalIter = abnormals;
-      for (let ai = 0; ai < abnormalIter.length && autoAuditEnabled(); ai++) {
+      // 8.11.9: 跳条缺陷修复——此前是「自增下标 + 每审完一条重建 abnormalIter」。
+      // 审核成功后 auditAbnormalSpecimen 会把该标本移出 wsData，重建的列表整体前移一位，
+      // 而循环下标 ai 仍继续自增，于是每成功一条就跳过紧随其后的一条：
+      //   [A,B,C,D] → 审 A 成功 → 列表变 [B,C,D]，ai 已到 1 → 直接审 C（B 被漏掉）
+      //   → 审 C 成功 → 列表 [B,D]，ai 到 2 → 2<2 结束（D 也被漏掉）
+      // 一轮只能审掉约一半异常标本，剩下的要等下一个 tick 才补，拖慢报告审核及时性。
+      // 改为「已处理集合 + 每次取第一个未处理候选」：重建多少次都不会跳条，
+      // 新到标本仍能在同一轮纳入（与原重建逻辑一致），且每条至多处理一次不会空转。
+      const _aaAbnormalDone = new Set();
+      for (;;) {
+        if (!autoAuditEnabled()) {break;}
         refreshAutoAuditTickLock(); // 8.10.5: 逐条循环中定期续期主锁
         // 用户插入手动操作 → 立即让位
         if (_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress) {break;}
-        const r = abnormalIter[ai];
-        const b = getWSAuditBucket(r);
-        if (b !== 'abnormal') {continue;}
+        const r = wsData.find(
+          x => rowIsAutoAuditCandidate(x) &&
+            getWSAuditBucket(x) === 'abnormal' &&
+            !_redLineDRs.has(String(x.ReportDR || '')) &&
+            !_aaAbnormalDone.has(String(x.ReportDR || ''))
+        );
+        if (!r) {break;}
+        _aaAbnormalDone.add(String(r.ReportDR || ''));
         const live = getLiveClassification(r.ReportDR);
         if (!live) {autoAuditSkipOnce(skipped, r, '分类未完成'); continue;}
         const gate = autoAuditAbnormalGate(live);
@@ -23377,11 +23429,8 @@ window.addEventListener('keydown',function(e){
           skipped.push(entry);
           aaRecordEvent('留人工', entry);
         }
-        // 每审完一条重新取异常候选（成功者已被 auditAbnormalSpecimen 移出 wsData，新到标本纳入）
-        // 8.10.2: 复用统一候选闸门（含手工杂项黑名单），与轮次开头口径一致
-        abnormalIter = wsData.filter(
-          x => rowIsAutoAuditCandidate(x) && getWSAuditBucket(x) === 'abnormal'
-        );
+        // 8.11.9: 候选列表改为循环开头按 wsData 实时取（见上方 _aaAbnormalDone 说明），
+        // 此处不再重建——原重建是跳条缺陷的成因。
       }
 
       // 3) 清理已消失标本的跳过记录（人工审掉/已出范围的标本不再占位）
@@ -24498,7 +24547,12 @@ window.addEventListener('keydown',function(e){
     // 10.0.29.111:1000 (PACS WADO), 10.0.29.111:8088 (PACS Viewer), 10.0.29.111 (RISWeb3), 10.0.29.114:8080 (EKG), 10.0.29.100 (LIS/HIS)
     u = u.replace(/https?:\/\/10\.0\.29\.111:1000/gi, origin);
     u = u.replace(/https?:\/\/10\.0\.29\.111:8088/gi, origin);
-    u = u.replace(/https?:\/\/10\.0\.29\.111(?::80)?(?!\d)/gi, origin);
+    // 8.11.9: 此前的 (?::80)? 只吃 80 端口，遇到其它端口（如 http://10.0.29.111:9000/x）
+    // 会只替换主机部分、把 `:9000` 残留在 origin 之后，产出 `host:9111:9000/x` 这种非法 URL
+    // （后面的 new URL 解析会抛错并被 catch 原样返回）。改为吃掉任意端口。
+    // 只要 10.0.29.111 上的端口都应映射到当前网关 origin（与上面 :1000/:8088 同语义），
+    // 末尾 (?!\d) 仍防止误伤 10.0.29.1111 这类变体。
+    u = u.replace(/https?:\/\/10\.0\.29\.111(?::\d+)?(?!\d)/gi, origin);
     u = u.replace(/https?:\/\/10\.0\.29\.114:8080/gi, origin);
     u = u.replace(/https?:\/\/10\.0\.29\.100(?::\d+)?/gi, origin);
     u = u.replace(/\b10\.0\.29\.111:1000\b/g, location.host);
