@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.6
+// @version      8.11.7
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11422,6 +11422,7 @@ window.addEventListener('keydown',function(e){
     const insp = document.getElementById('lis-ws-inspector');
     if (!insp) {return;}
     if (!specimen) {
+      _abnormalFocusDR = '';
       insp.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--lis-text-muted);font-size:13px;gap:8px">
           <div style="font-size:32px;opacity:.5">📋</div>
@@ -11430,6 +11431,7 @@ window.addEventListener('keydown',function(e){
       return;
     }
     const rdr = specimen.ReportDR || '';
+    _abnormalFocusDR = String(rdr);
     const cached = wsClassifiedCache[rdr];
     const bucket = getWSAuditBucket(specimen);
     const hasCritical = (cached && cached.status === 'CRITICAL') || (cached && cached.items && cached.items.some(it => it.status === 'CRITICAL' || it.critical));
@@ -11591,6 +11593,11 @@ window.addEventListener('keydown',function(e){
       wsAbnormalIndex = idx >= 0 ? idx : data.length ? 0 : -1;
     } else if (wsAbnormalIndex < 0 || wsAbnormalIndex >= data.length) {
       wsAbnormalIndex = data.length ? 0 : -1;
+    }
+    if (wsAbnormalIndex >= 0 && data[wsAbnormalIndex]) {
+      _abnormalFocusDR = String(data[wsAbnormalIndex].ReportDR || '');
+    } else {
+      _abnormalFocusDR = '';
     }
 
     // 分类汇总（基于当前视图数据）
@@ -14298,11 +14305,14 @@ window.addEventListener('keydown',function(e){
     if (!body) {return;}
     const rdr = specimen.ReportDR || '';
     const seq = ++_detailLoadSeq;
+    const getDestBody = () => (isInspector ? (document.getElementById('lis-insp-body') || body) : body);
     const isCurrentDetail = () => {
-      if (seq !== _detailLoadSeq) {return false;}
       if (isInspector) {
-        return _abnormalFocusDR === String(rdr);
+        const insp = document.getElementById('lis-ws-inspector');
+        if (!insp) {return false;}
+        return String(_abnormalFocusDR || '') === String(rdr);
       }
+      if (seq !== _detailLoadSeq) {return false;}
       return (
         detailPanel &&
         detailPanel.classList.contains('show') &&
@@ -14316,7 +14326,8 @@ window.addEventListener('keydown',function(e){
     if (cached) {
       dbg('详情缓存命中:', rdr);
       if (!isCurrentDetail()) {return;}
-      body.innerHTML = cached.html;
+      const dBody = getDestBody();
+      if (dBody) {dBody.innerHTML = cached.html;}
       return;
     }
 
@@ -14756,7 +14767,8 @@ window.addEventListener('keydown',function(e){
         const extraEl = document.getElementById('lis-detail-extra');
         if (extraEl) {extraEl.textContent = _extraText;}
       }
-      body.innerHTML = html;
+      const dBody = getDestBody();
+      if (dBody) {dBody.innerHTML = html;}
       const _dp = document.getElementById('lis-detail-panel');
       if (_dp && !isInspector) {
         _dp.dataset.rdr = String(rdr);
@@ -14793,12 +14805,15 @@ window.addEventListener('keydown',function(e){
     } catch (e) {
       dbg('加载详细结果失败:', e);
       if (!isCurrentDetail()) {return;}
-      body.innerHTML = `
-                <div style="text-align:center;padding:40px;color:#e74c3c">
-                    <p>❌ 加载失败</p>
-                    <p style="font-size:12px">${esc(e.message)}</p>
-                </div>
-            `;
+      const dBody = getDestBody();
+      if (dBody) {
+        dBody.innerHTML = `
+                  <div style="text-align:center;padding:40px;color:#e74c3c">
+                      <p>❌ 加载失败</p>
+                      <p style="font-size:12px">${esc(e.message)}</p>
+                  </div>
+              `;
+      }
     }
   }
 
