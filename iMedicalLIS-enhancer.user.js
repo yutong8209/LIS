@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.31
+// @version      8.10.32
 // @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（高密零滚动筛选栏/含外送/费用/病历直达/组合套折叠/双击行展开折叠） + 质控录入辅助 + 质控数据导出（含Westgard多规则出控智能核查/靶值SD偏离通报与明细导出） + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -6403,12 +6403,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   // ============================================================
-  //  模块 QE 增强：Westgard 室内质控多规则智能核查引擎 (8.10.31)
+  //  模块 QE 增强：Westgard 室内质控多规则智能核查引擎 (8.10.32)
   //  支持规则：
   //    1-3s (严重失控，单点超 3SD)
   //    2-2s (连续失控，同水平连续两点同侧超 2SD 或同日跨水平同侧超 2SD)
   //    R-4s (极差失控，同水平连续两点反向极差超 4SD 或同日跨水平极差超 4SD)
-  //    4-1s (偏倚失控，连续 4 点同侧超 1SD)
   //    10-x (漂移失控，连续 10 点均值同侧)
   //    1-2s (质控预警，单点 2 < |Z| <= 3，未触发拒收规则)
   // ============================================================
@@ -6454,8 +6453,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       // --- 单水平时序规则检查 ---
       let streak10x = 0;
       let sign10x = 0;
-      let streak41s = 0;
-      let sign41s = 0;
 
       for (let i = 0; i < evaluatedPts.length; i++) {
         const curr = evaluatedPts[i];
@@ -6501,29 +6498,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           }
         }
 
-        // 4. 4-1s (连续 4 点同侧超 1SD)
-        if (absZ > 1) {
-          const curSign = z > 0 ? 1 : -1;
-          if (curSign === sign41s) {
-            streak41s++;
-          } else {
-            sign41s = curSign;
-            streak41s = 1;
-          }
-          if (streak41s >= 4) {
-            ptViolations.push({
-              rule: '4-1s',
-              ruleName: '4-1s (偏倚失控)',
-              severity: 'loss',
-              detail: `同水平连续 ${streak41s} 点同侧超出 1SD（${sign41s > 0 ? '正向' : '负向'}系统偏倚）`
-            });
-          }
-        } else {
-          streak41s = 0;
-          sign41s = 0;
-        }
-
-        // 5. 10-x (连续 10 点均位于均值同一侧)
+        // 4. 10-x (连续 10 点均位于均值同一侧)
         if (z !== 0) {
           const curSign = z > 0 ? 1 : -1;
           if (curSign === sign10x) {
@@ -6545,7 +6520,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           sign10x = 0;
         }
 
-        // 6. 1-2s (单点超 2SD 质控预警，未达拒收条件)
+        // 5. 1-2s (单点超 2SD 质控预警，未达拒收条件)
         if (absZ > 2 && absZ <= 3) {
           const hasLoss = ptViolations.some(v => v.severity === 'loss');
           if (!hasLoss) {
@@ -6670,7 +6645,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                 <span style="font-weight:800;color:#059669;font-size:12px">质控规则核查：所有已导出项目在控</span>
             </div>
             <div class="qe-qc-audit-sub">
-                已结合 ${year} 年 ${String(month).padStart(2, '0')} 月各项目靶值与 SD，核查 1-3s、2-2s、R-4s、4-1s、10-x 及 1-2s 规则，未发现失控或预警结果。
+                已结合 ${year} 年 ${String(month).padStart(2, '0')} 月各项目靶值与 SD，核查 1-3s、2-2s、R-4s、10-x 及 1-2s 规则，未发现失控或预警结果。
             </div>
         </div>`;
       return;
