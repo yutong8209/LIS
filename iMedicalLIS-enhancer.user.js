@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.4
+// @version      8.11.5
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1375,7 +1375,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table .abnormal.critical, .result-table td.abnormal.critical{color:#b91c1c!important;font-weight:800;font-size:14px;text-shadow:0 0 1px rgba(185,28,28,.25)}
 .result-table .abnormal.high, .result-table td.abnormal.high{color:#dc2626!important;font-weight:700}
 .result-table .abnormal.low, .result-table td.abnormal.low{color:#2563eb!important;font-weight:700}
-.result-table .normal, .result-table td.normal{color:var(--lis-text)}
+.result-table .normal, .result-table td.normal{color:#16a34a!important}
 .result-table .history{background:#f8f9fa}
 .result-table .hist-tag{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:3px;font-size:11px;white-space:nowrap;line-height:1.4}
 .result-table .hist-tag.normal{background:#e8f5e9;color:#2e7d32;border-left:3px solid #4caf50}
@@ -14610,6 +14610,8 @@ window.addEventListener('keydown',function(e){
           resColor = '#e11d48';
           statusColor = '#e11d48';
         } else {
+          statusClass = 'normal';
+          resColor = '#16a34a';
           statusColor = '#16a34a';
         }
 
