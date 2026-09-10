@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.5
+// @version      8.11.6
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1371,9 +1371,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table.compact .hist-tag{padding:1px 4px;font-size:11px;margin:0 1px}
 .result-table.compact tr:last-child td{border-bottom:none}
 .result-table tr:hover{background:rgba(241,245,249,.6)}
-.result-table .abnormal, .result-table td.abnormal{color:#dc2626!important;font-weight:700}
+.result-table .abnormal, .result-table td.abnormal{color:#c62828!important;font-weight:700}
 .result-table .abnormal.critical, .result-table td.abnormal.critical{color:#b91c1c!important;font-weight:800;font-size:14px;text-shadow:0 0 1px rgba(185,28,28,.25)}
-.result-table .abnormal.high, .result-table td.abnormal.high{color:#dc2626!important;font-weight:700}
+.result-table .abnormal.high, .result-table td.abnormal.high{color:#e65100!important;font-weight:700}
 .result-table .abnormal.low, .result-table td.abnormal.low{color:#2563eb!important;font-weight:700}
 .result-table .normal, .result-table td.normal{color:#16a34a!important}
 .result-table .history{background:#f8f9fa}
@@ -14599,16 +14599,20 @@ window.addEventListener('keydown',function(e){
           statusColor = '#b91c1c';
         } else if (statusText.includes('高')) {
           statusClass = 'abnormal high';
-          resColor = '#dc2626';
-          statusColor = '#dc2626';
+          resColor = '#e65100';
+          statusColor = '#e65100';
         } else if (statusText.includes('低')) {
           statusClass = 'abnormal low';
           resColor = '#2563eb';
           statusColor = '#2563eb';
         } else if (isAbnormal) {
           statusClass = 'abnormal';
-          resColor = '#e11d48';
-          statusColor = '#e11d48';
+          resColor = '#c62828';
+          statusColor = '#c62828';
+        } else if (isEmpty) {
+          statusClass = 'empty';
+          resColor = '#999';
+          statusColor = '#999';
         } else {
           statusClass = 'normal';
           resColor = '#16a34a';
