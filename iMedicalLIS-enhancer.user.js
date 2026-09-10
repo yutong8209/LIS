@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.1
-// @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
+// @version      8.11.2
+// @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -1094,17 +1094,26 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-mach-group-label{font-size:10px;font-weight:700;padding:0 2px;white-space:nowrap;opacity:.8}
 .ws-mach-filter-label{align-self:center;color:var(--lis-text-muted);font-size:11px;font-weight:700;white-space:nowrap;margin-right:2px}
 .ws-mach-row.all-wg{display:flex!important;justify-content:flex-start!important;flex-wrap:nowrap;gap:4px 6px;align-items:center}
-.ws-mach-row.all-wg .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap;margin-right:4px;padding-left:6px;border-left:1px solid var(--lis-border)}
-.ws-mach-row.all-wg .ws-mach-group-label{font-size:10.5px;font-weight:700;color:var(--lis-text-muted);white-space:nowrap;margin-right:2px}
-.ws-mach-row.all-wg .ws-mach-tab{padding:2.5px 6px;font-size:11px}
-.ws-mach-idle-btn{background:var(--lis-surface-subtle);border:1px dashed var(--lis-border-strong);color:var(--lis-text-secondary);font-weight:600}
-.ws-mach-idle-btn:hover{background:#fff;border-color:var(--lis-primary);color:var(--lis-primary)}
-.ws-mach-idle-popover{position:absolute;top:100%;left:240px;z-index:1000;background:#fff;border:1px solid var(--lis-border-strong);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.15);padding:10px 14px;margin-top:6px;display:flex;flex-direction:column;gap:8px}
-.ws-mach-idle-title{font-size:12px;font-weight:700;color:var(--lis-text);display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:6px;border-bottom:1px solid var(--lis-border)}
-.ws-mach-idle-cols{display:flex;gap:14px;align-items:flex-start}
-.ws-mach-idle-col{display:flex;flex-direction:column;gap:4px;min-width:110px}
-.ws-mach-idle-grouplabel{font-size:11px;font-weight:700;padding:2px 4px;border-bottom:1px solid var(--lis-border-light);margin-bottom:2px}
-.ws-mach-idle-item{width:100%;justify-content:flex-start}
+.ws-mach-wg-wrap{position:relative;display:inline-flex}
+.ws-mach-wg-btn{border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-text-secondary);padding:3px 9px;border-radius:5px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.ws-mach-wg-btn:hover{border-color:var(--lis-border-strong);color:var(--lis-text)}
+.ws-mach-wg-btn.on{background:var(--lis-primary-light);border-color:#93c5fd;color:var(--lis-primary);font-weight:700}
+.ws-mach-wg-btn.active-open{border-color:var(--lis-primary);box-shadow:0 0 0 2px rgba(37,99,235,.15)}
+.ws-mach-popover{position:absolute;top:calc(100% + 4px);left:0;z-index:1000;background:#fff;border:1px solid var(--lis-border-strong);border-radius:8px;box-shadow:0 10px 25px rgba(0,0,0,.15);padding:8px 10px;display:flex;flex-direction:column;gap:6px;min-width:210px;max-width:300px}
+.ws-mach-pop-hd{display:flex;align-items:center;justify-content:space-between;padding-bottom:6px;border-bottom:1px solid var(--lis-border);font-size:11.5px}
+.ws-mach-pop-title{font-weight:700;color:var(--lis-text);white-space:nowrap}
+.ws-mach-pop-actions{display:flex;align-items:center;gap:5px;font-size:11px}
+.ws-mach-pop-act{color:var(--lis-primary);cursor:pointer;font-weight:600}
+.ws-mach-pop-act:hover{text-decoration:underline}
+.ws-mach-pop-sep{color:var(--lis-border-strong)}
+.ws-mach-pop-list{display:flex;flex-direction:column;gap:2px;max-height:260px;overflow-y:auto;scrollbar-width:thin}
+.ws-mach-pop-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 7px;border-radius:5px;cursor:pointer;transition:all .12s;background:transparent;user-select:none}
+.ws-mach-pop-item:hover{background:var(--lis-surface-subtle)}
+.ws-mach-pop-item.on{background:var(--lis-primary-light)}
+.ws-mach-pop-item .ws-mach-check{flex-shrink:0}
+.ws-mach-pop-item .ws-mach-pop-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--lis-text)}
+.ws-mach-pop-item.on .ws-mach-pop-name{color:var(--lis-primary);font-weight:600}
+.ws-mach-pop-item.zero-count:not(.on) .ws-mach-pop-name{color:var(--lis-text-muted);opacity:.75}
 
 /* --- 分类标签 --- */
 #lis-ws-bar{display:none}
@@ -8653,6 +8662,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     closeDetailPanel(true); // 关闭详情面板，避免工作台关闭后详情面板残留
     restoreNativeDateboxToday(); // 8.8.2: 工作台关闭兜底——原生日期框若被历史审核切走过，恢复今天
     wsCloseDatePicker(); // 8.8.11: 日历弹层挂在 body 上，关工作台必须一并收起，否则悬浮残留
+    closeWSMachPopovers(); // 收起仪器下拉浮层
     updateAbnormalEnterBridge();
     // 清理键盘监听器
     _removeAbnormalKeyHandler();
@@ -10103,29 +10113,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   let _tabsBuilt = false;
   let _tabsLastActiveWG = undefined;
   let _tabsLastMachineSet = ''; // 上次构建时可见仪器 DR 集合签名
-  let _tabsLastActiveMachSig = '';
+  let _wsMachPopGlobalBound = false;
+
+  function closeWSMachPopovers() {
+    const tabs = $('#lis-ws-tabs');
+    if (!tabs) {return;}
+    tabs.querySelectorAll('.ws-mach-popover').forEach(p => {p.style.display = 'none';});
+    tabs.querySelectorAll('.ws-mach-wg-btn').forEach(b => {b.classList.remove('active-open');});
+  }
 
   // 8.5.69: 判断当前要显示的机器是否都已存在标签（以「是否有新增仪器」为重建条件，
   // 而非机器数量：刷新时部分/全量加载会造成机器列表数量短暂波动，数量变化重建会导致标签闪失（历史 acd7306 同类问题）；
   // 仅当出现 DOM 里尚无标签的新仪器时才重建加标签）
   function wsNeedTabRebuild(tabs) {
     if (!_tabsBuilt || _tabsLastActiveWG !== wsActiveWG) {return true;}
-    if (!wsActiveWG) {
-      // 全部工作组下，检查活跃机器签名是否变化（如空闲机有新标本或被勾选）
-      const activeSig = wsMachines
-        .map(m => {
-          const mdr = String(m.RowID);
-          const cnt = (wsMachineCounts[mdr] || { total: 0 }).total;
-          const sel = WG.some(w => getWSSelectedMachineSet(w.dr).has(mdr));
-          return `${mdr}:${cnt > 0 ? 1 : 0}:${sel ? 1 : 0}`;
-        })
-        .sort()
-        .join(',');
-      if (activeSig !== _tabsLastActiveMachSig) {
-        _tabsLastActiveMachSig = activeSig;
-        return true;
-      }
-    }
     const sig = wsMachines
       .filter(m => (wsActiveWG ? String(m._wg) === String(wsActiveWG) : true))
       .map(m => String(m.RowID))
@@ -10133,17 +10134,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       .join(',');
     if (sig !== _tabsLastMachineSet) {
       // 集合变化：仅当出现「列表里有但 DOM 无标签」的新 DR 才重建；纯减少（如瞬断列表变少）不重建，避免闪
-      if (wsActiveWG) {
-        const has = new Set();
-        tabs.querySelectorAll('.ws-mach-tab[data-multi-m]').forEach(b => has.add(String(b.dataset.multiM)));
-        for (const m of wsMachines) {
-          if (String(m._wg) === String(wsActiveWG) && !has.has(String(m.RowID))) {return true;}
-        }
-      } else {
-        const has = new Set();
-        tabs.querySelectorAll('.ws-mach-tab[data-multi-m]').forEach(b => has.add(String(b.dataset.multiM)));
-        for (const m of wsMachines) {
-          if (!has.has(String(m.RowID))) {return true;}
+      const has = new Set();
+      tabs.querySelectorAll('[data-multi-m]').forEach(b => has.add(String(b.dataset.multiM)));
+      for (const m of wsMachines) {
+        if ((!wsActiveWG || String(m._wg) === String(wsActiveWG)) && !has.has(String(m.RowID))) {
+          return true;
         }
       }
     }
@@ -10202,89 +10197,104 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                 <span class="ws-tab-name">全部仪器</span>
                 <span class="mach-cnt ws-cnt-mach"></span>
             </button>`;
-      // 全部工作组下：智能收敛显示，仅平铺有标本或已被选中的活跃仪器，0 标本仪器折叠进悬浮面板
-      const idleMachines = [];
+      // 全部工作组下：按工作组折叠为下拉菜单，支持跨组快速勾选仪器
       WG.forEach(w => {
         const wgMachines = sortWSMachines(wsMachines.filter(m => m._wg === w.dr));
         if (!wgMachines.length) {return;}
         const selSet = getWSSelectedMachineSet(w.dr);
-        const activeGroup = [];
+        const selCount = selSet.size;
+
+        h += `<div class="ws-mach-wg-wrap" data-wg="${escAttr(w.dr)}">`;
+        h += `<button type="button" class="ws-mach-tab ws-mach-wg-btn${selCount > 0 ? ' on' : ''}" data-wg="${escAttr(w.dr)}" title="点击展开${escAttr(w.name)}仪器列表">
+                <span class="ws-tab-name">${esc(w.name)}${selCount > 0 ? ` · ${selCount}台` : ''} ▾</span>
+              </button>`;
+        h += `<div class="ws-mach-popover" id="lis-mach-pop-${escAttr(w.dr)}" style="display:none">`;
+        h += `<div class="ws-mach-pop-hd">
+                <span class="ws-mach-pop-title" style="color:${w.color || 'var(--lis-text)'}"><b>${esc(w.name)}</b> 仪器 (${wgMachines.length}台)</span>
+                <div class="ws-mach-pop-actions">
+                  <span class="ws-mach-pop-act" data-pop-act="all" data-wg="${escAttr(w.dr)}">全选</span>
+                  <span class="ws-mach-pop-sep">|</span>
+                  <span class="ws-mach-pop-act" data-pop-act="none" data-wg="${escAttr(w.dr)}">清空</span>
+                </div>
+              </div>`;
+        h += '<div class="ws-mach-pop-list">';
         wgMachines.forEach(m => {
           const mdr = String(m.RowID || '');
           const count = (mc[mdr] || { total: 0 }).total;
           const isChecked = selSet.has(mdr);
-          if (count > 0 || isChecked) {
-            activeGroup.push(m);
-          } else {
-            idleMachines.push({ m, w });
-          }
+          h += `<div class="ws-mach-pop-item ws-mach-multi${isChecked ? ' on' : ''}${count === 0 ? ' zero-count' : ''}" data-multi-m="${escAttr(mdr)}" data-wg="${escAttr(w.dr)}">
+                  <span class="ws-mach-check">${isChecked ? '✓' : ''}</span>
+                  <span class="ws-mach-pop-name" title="${escAttr(m.CName || m.Name)}">${esc(m.CName || m.Name)}</span>
+                  <span class="mach-cnt ws-cnt-mach">${count}</span>
+                </div>`;
         });
-
-        if (activeGroup.length) {
-          h += '<div class="ws-mach-group">';
-          h += `<span class="ws-mach-group-label" style="color:${w.color || '#666'}">${esc(w.name)}</span>`;
-          activeGroup.forEach(m => {
-            const mdr = String(m.RowID || '');
-            h += `<button class="ws-mach-tab ws-mach-multi" data-multi-m="${escAttr(mdr)}" data-wg="${escAttr(w.dr)}">
-                          <span class="ws-mach-check"></span>
-                          <span class="ws-tab-name">${esc(m.CName || m.Name)}</span>
-                          <span class="mach-cnt ws-cnt-mach"></span>
-                      </button>`;
-          });
-          h += '</div>';
-        }
+        h += '</div>'; // close .ws-mach-pop-list
+        h += '</div>'; // close .ws-mach-popover
+        h += '</div>'; // close .ws-mach-wg-wrap
       });
-
-      if (idleMachines.length > 0) {
-        h += `<button class="ws-mach-tab ws-mach-idle-btn" id="lis-mach-idle-btn" type="button" title="点击展开/收起空闲仪器">
-                <span class="ws-tab-name">➕ 空闲 (${idleMachines.length}) ▾</span>
-              </button>`;
-      }
     }
     h += '</div>'; // close .ws-mach-row
-
-    // 全部工作组下渲染空闲仪器悬浮小面板
-    if (!wsActiveWG) {
-      h += '<div class="ws-mach-idle-popover" id="lis-mach-idle-popover" style="display:none">';
-      h += '<div class="ws-mach-idle-title"><span>💤 空闲仪器（当前标本数为 0）</span><span style="font-size:11px;color:var(--lis-text-muted)">点击勾选加入主工具栏</span></div>';
-      h += '<div class="ws-mach-idle-cols">';
-      WG.forEach(w => {
-        const idlesInWg = wsMachines.filter(m => m._wg === w.dr && (mc[String(m.RowID)] || { total: 0 }).total === 0 && !getWSSelectedMachineSet(w.dr).has(String(m.RowID)));
-        if (!idlesInWg.length) {return;}
-        h += '<div class="ws-mach-idle-col">';
-        h += `<div class="ws-mach-idle-grouplabel" style="color:${w.color || '#666'}">${esc(w.name)}</div>`;
-        sortWSMachines(idlesInWg).forEach(m => {
-          const mdr = String(m.RowID || '');
-          h += `<button class="ws-mach-tab ws-mach-multi ws-mach-idle-item" data-multi-m="${escAttr(mdr)}" data-wg="${escAttr(w.dr)}">
-                  <span class="ws-mach-check"></span>
-                  <span class="ws-tab-name">${esc(m.CName || m.Name)}</span>
-                  <span class="mach-cnt ws-cnt-mach">0</span>
-                </button>`;
-        });
-        h += '</div>';
-      });
-      h += '</div></div>';
-    }
 
     h += '</div>'; // close .ws-filter-left
 
     h += '<div class="ws-filter-right"><div class="ws-cat-hd-inline" data-ws-cat-tabs></div></div>';
     tabs.innerHTML = h;
 
-    // 空闲仪器浮层展开/收起
-    const idleBtn = tabs.querySelector('#lis-mach-idle-btn');
-    const idlePop = tabs.querySelector('#lis-mach-idle-popover');
-    if (idleBtn && idlePop) {
-      idleBtn.addEventListener('click', e => {
+    // 工作组下拉展开/收起
+    tabs.querySelectorAll('.ws-mach-wg-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
         e.stopPropagation();
-        const isOpen = idlePop.style.display !== 'none';
-        idlePop.style.display = isOpen ? 'none' : 'flex';
-        idleBtn.classList.toggle('on', !isOpen);
+        const wg = btn.dataset.wg;
+        const pop = tabs.querySelector(`#lis-mach-pop-${wg}`);
+        if (!pop) {return;}
+        const isOpen = pop.style.display !== 'none';
+        tabs.querySelectorAll('.ws-mach-popover').forEach(p => {if (p !== pop) {p.style.display = 'none';}});
+        tabs.querySelectorAll('.ws-mach-wg-btn').forEach(b => {if (b !== btn) {b.classList.remove('active-open');}});
+        pop.style.display = isOpen ? 'none' : 'flex';
+        btn.classList.toggle('active-open', !isOpen);
       });
+    });
+
+    // 阻止下拉浮层内点击冒泡关闭
+    tabs.querySelectorAll('.ws-mach-popover').forEach(pop => {
+      pop.addEventListener('click', e => e.stopPropagation());
+    });
+
+    // 下拉浮层内“全选 / 清空”操作
+    tabs.querySelectorAll('.ws-mach-pop-act').forEach(act => {
+      act.addEventListener('click', e => {
+        e.stopPropagation();
+        const wg = act.dataset.wg;
+        const type = act.dataset.popAct;
+        if (!wg) {return;}
+        invalidateCaches();
+        if (type === 'all') {
+          const allM = wsMachines.filter(m => String(m._wg) === String(wg)).map(m => String(m.RowID));
+          setWSSelectedMachineSet(wg, new Set(allM));
+        } else {
+          setWSSelectedMachineSet(wg, new Set());
+        }
+        wsActiveMachine = '';
+        wsAbnormalIndex = -1;
+        wsChecked.clear();
+        saveWSState();
+        renderWSTabs();
+        renderWSCategoryBar();
+        renderWSTable();
+      });
+    });
+
+    // 点击外部或按 Esc 关闭浮层（全局绑定一次）
+    if (!_wsMachPopGlobalBound) {
+      _wsMachPopGlobalBound = true;
       document.addEventListener('click', e => {
-        if (!idlePop.contains(e.target) && !idleBtn.contains(e.target)) {
-          idlePop.style.display = 'none';
-          idleBtn.classList.remove('on');
+        if (!e.target.closest('.ws-mach-wg-wrap')) {
+          closeWSMachPopovers();
+        }
+      });
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+          closeWSMachPopovers();
         }
       });
     }
@@ -10303,6 +10313,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // 工作组标签事件绑定
     tabs.querySelectorAll('.ws-wg-tab').forEach(b =>
       b.addEventListener('click', () => {
+        closeWSMachPopovers();
         invalidateCaches();
         wsActiveWG = b.dataset.wg;
         wsActiveMachine = '';
@@ -10321,7 +10332,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       })
     );
 
-    // 仪器标签事件绑定
+    // 仪器标签事件绑定（全部仪器）
     tabs.querySelectorAll('.ws-mach-all').forEach(b =>
       b.addEventListener('click', () => {
         invalidateCaches();
@@ -10331,13 +10342,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         wsAbnormalIndex = -1;
         wsChecked.clear();
         saveWSState();
+        closeWSMachPopovers();
         renderWSTabs();
         renderWSCategoryBar();
         renderWSTable();
       })
     );
+
+    // 仪器多选事件绑定（单工作组下按钮 或 下拉浮层内选项）
     tabs.querySelectorAll('.ws-mach-multi').forEach(b =>
-      b.addEventListener('click', () => {
+      b.addEventListener('click', e => {
+        e.stopPropagation();
         invalidateCaches();
         const mdr = String(b.dataset.multiM || '');
         const wg = b.dataset.wg || wsActiveWG || '';
@@ -10363,23 +10378,46 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   function updateWSTabsState(tabs, wgCounts, mc) {
     // Workgroup tabs are in header — update via renderWSHeaderWGTabs
     renderWSHeaderWGTabs();
-    tabs.querySelectorAll('.ws-mach-tab').forEach(b => {
-      if (b.classList.contains('ws-mach-all')) {
-        const isOn = wsActiveWG
-          ? getWSSelectedMachineSet(wsActiveWG).size === 0
-          : !WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
-        b.classList.toggle('on', isOn);
-        const el = b.querySelector('.ws-cnt-mach');
-        if (el) {el.textContent = (mc['_all'] || { total: 0 }).total;}
-      } else if (b.classList.contains('ws-mach-multi')) {
-        const mdr = b.dataset.multiM;
-        const wg = b.dataset.wg || wsActiveWG || '';
-        const checked = wg ? getWSSelectedMachineSet(wg).has(mdr) : false;
-        b.classList.toggle('on', checked);
-        const chk = b.querySelector('.ws-mach-check');
-        if (chk) {chk.textContent = checked ? '✓' : '';}
-        const el = b.querySelector('.ws-cnt-mach');
-        if (el) {el.textContent = (mc[mdr] || { total: 0 }).total;}
+
+    // 更新全部仪器按钮
+    const allBtn = tabs.querySelector('.ws-mach-all');
+    if (allBtn) {
+      const isOn = wsActiveWG
+        ? getWSSelectedMachineSet(wsActiveWG).size === 0
+        : !WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
+      allBtn.classList.toggle('on', isOn);
+      const el = allBtn.querySelector('.ws-cnt-mach');
+      if (el) {el.textContent = (mc['_all'] || { total: 0 }).total;}
+    }
+
+    // 全部工作组下更新工作组下拉按钮文字与高亮态
+    if (!wsActiveWG) {
+      WG.forEach(w => {
+        const btn = tabs.querySelector(`.ws-mach-wg-btn[data-wg="${w.dr}"]`);
+        if (btn) {
+          const selCount = getWSSelectedMachineSet(w.dr).size;
+          btn.classList.toggle('on', selCount > 0);
+          const nameSpan = btn.querySelector('.ws-tab-name');
+          if (nameSpan) {
+            nameSpan.textContent = `${w.name}${selCount > 0 ? ` · ${selCount}台` : ''} ▾`;
+          }
+        }
+      });
+    }
+
+    // 更新各个仪器项（平铺药丸 或 下拉浮层内选项）
+    tabs.querySelectorAll('.ws-mach-multi').forEach(b => {
+      const mdr = b.dataset.multiM;
+      const wg = b.dataset.wg || wsActiveWG || '';
+      const checked = wg ? getWSSelectedMachineSet(wg).has(mdr) : false;
+      b.classList.toggle('on', checked);
+      const chk = b.querySelector('.ws-mach-check');
+      if (chk) {chk.textContent = checked ? '✓' : '';}
+      const el = b.querySelector('.ws-cnt-mach');
+      const count = (mc[mdr] || { total: 0 }).total;
+      if (el) {el.textContent = count;}
+      if (b.classList.contains('ws-mach-pop-item')) {
+        b.classList.toggle('zero-count', count === 0);
       }
     });
   }
