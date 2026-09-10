@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.10.33
-// @description  报告审核增强 — 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出（高密零滚动筛选栏/含外送/费用/病历直达/组合套折叠/双击行展开折叠） + 质控录入辅助 + 质控数据导出（含Westgard多规则出控智能核查/靶值SD偏离通报与明细导出） + 患者历史浮层 + 热键（纯本地运行，无任何上传）
+// @version      8.11.0
+// @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -721,28 +721,35 @@
 
   // ==================== 样式 ====================
   GM_addStyle(`
-/* === Design Tokens === */
+/* === Design Tokens (Modern Clinical Pro) === */
 :root{
-  --lis-primary:#c8956c;
-  --lis-primary-hover:#b5845a;
-  --lis-primary-light:#fffbeb;
-  --lis-primary-lighter:#fef9ee;
-  --lis-bg:#faf8f5;
-  --lis-surface:#fffdfb;
-  --lis-border:#e7e0d8;
-  --lis-border-light:#f0ebe5;
-  --lis-text:#292524;
-  --lis-text-secondary:#78716c;
-  --lis-text-muted:#a8a29e;
-  --lis-success:#16a34a;
-  --lis-warning:#d4a574;
-  --lis-error:#dc2626;
-  --lis-info:#c8956c;
-  --lis-wg-hemato:#dc2626;
-  --lis-wg-chemo:#c8956c;
-  --lis-wg-immuno:#16a34a;
-  --lis-wg-outsrc:#7c3aed;
-  --lis-font:-apple-system,BlinkMacSystemFont,'SF Pro Text','PingFang SC','Helvetica Neue','Microsoft YaHei',sans-serif;
+  --lis-primary:#2563eb;
+  --lis-primary-hover:#1d4ed8;
+  --lis-primary-light:#eff6ff;
+  --lis-primary-lighter:#f8fafc;
+  --lis-bg:#f8fafc;
+  --lis-surface:#ffffff;
+  --lis-surface-subtle:#f1f5f9;
+  --lis-border:#e2e8f0;
+  --lis-border-light:#f1f5f9;
+  --lis-border-strong:#cbd5e1;
+  --lis-text:#0f172a;
+  --lis-text-secondary:#475569;
+  --lis-text-muted:#94a3b8;
+  --lis-success:#10b981;
+  --lis-success-light:#ecfdf5;
+  --lis-warning:#f59e0b;
+  --lis-warning-light:#fffbeb;
+  --lis-error:#ef4444;
+  --lis-error-light:#fef2f2;
+  --lis-critical:#dc2626;
+  --lis-critical-bg:#fee2e2;
+  --lis-info:#0284c7;
+  --lis-wg-hemato:#ef4444;
+  --lis-wg-chemo:#f59e0b;
+  --lis-wg-immuno:#10b981;
+  --lis-wg-outsrc:#8b5cf6;
+  --lis-font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'SF Pro Text','PingFang SC','Microsoft YaHei',sans-serif;
 }
 
 /* --- 浮动按钮 --- */
@@ -867,41 +874,40 @@
 /* --- 全屏工作台 --- */
 #lis-ws{position:fixed!important;inset:0!important;z-index:100000!important;background:var(--lis-bg);display:none;color:var(--lis-text);font-family:var(--lis-font)}
 #lis-ws.show{display:flex!important;flex-direction:column!important;height:100vh!important;overflow:hidden!important}
-#lis-ws-hd{background:var(--lis-surface);padding:6px 12px;display:flex;align-items:center;gap:8px;flex-shrink:0!important;border-bottom:1px solid var(--lis-border);box-shadow:0 1px 0 rgba(31,41,51,.04)}
-#lis-ws-hd .ws-title{display:flex;align-items:center;gap:6px;min-width:0}
-#lis-ws-hd .ws-title-dot{width:4px;height:20px;border-radius:2px;background:var(--lis-primary);display:inline-block}
-#lis-ws-hd h3{margin:0;font-size:15px;line-height:1;color:var(--lis-text);font-weight:700;white-space:nowrap;letter-spacing:0}
-#lis-ws-hd .ws-search-wrap{position:relative;flex:0 1 220px;min-width:150px}
-#lis-ws-hd .ws-search-wrap::before{content:'⌕';position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#6b7785;font-size:14px}
-#lis-ws-hd .ws-search{width:100%;box-sizing:border-box;padding:7px 10px 7px 30px;border:1px solid var(--lis-border);border-radius:6px;font-size:12px;outline:none;background:var(--lis-primary-lighter);color:var(--lis-text);transition:border-color .15s,background .15s}
-#lis-ws-hd .ws-search:focus{background:#fffdfb;border-color:var(--lis-primary);box-shadow:0 0 0 2px rgba(180,83,9,.12)}
-#lis-ws-hd .ws-acts{display:flex;gap:6px;margin-left:auto;align-items:center}
-#lis-ws-hd .ws-icon-btn{width:30px;height:30px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:14px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s,color .15s}
-#lis-ws-hd .ws-icon-btn:hover{background:var(--lis-primary-light);border-color:var(--lis-border);color:var(--lis-primary)}
-#lis-ws-hd .ws-icon-btn.danger:hover{border-color:#dc2626;color:var(--lis-error);background:#fef2f2}
+#lis-ws-hd{background:var(--lis-surface);height:44px;padding:0 14px;display:flex;align-items:center;gap:10px;flex-shrink:0!important;border-bottom:1px solid var(--lis-border);box-shadow:0 1px 2px rgba(0,0,0,.02)}
+#lis-ws-hd .ws-title{display:flex;align-items:center;gap:8px;min-width:0;flex-shrink:0}
+#lis-ws-hd .ws-title-dot{width:3.5px;height:18px;border-radius:2px;background:var(--lis-primary);display:inline-block}
+#lis-ws-hd h3{margin:0;font-size:14.5px;line-height:1;color:var(--lis-text);font-weight:800;white-space:nowrap;letter-spacing:-0.01em}
+#lis-ws-hd .ws-search-wrap{position:relative;flex:0 1 240px;min-width:150px}
+#lis-ws-hd .ws-search-wrap::before{content:'⌕';position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--lis-text-muted);font-size:14px}
+#lis-ws-hd .ws-search{width:100%;height:28px;box-sizing:border-box;padding:0 10px 0 26px;border:1px solid var(--lis-border);border-radius:6px;font-size:11.5px;outline:none;background:var(--lis-surface-subtle);color:var(--lis-text);transition:all .15s}
+#lis-ws-hd .ws-search:focus{background:#fff;border-color:var(--lis-primary);box-shadow:0 0 0 2px rgba(37,99,235,.15)}
+#lis-ws-hd .ws-right-group{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0}
+#lis-ws-hd .ws-acts{display:flex;gap:6px;align-items:center}
+#lis-ws-hd .ws-icon-btn{width:28px;height:28px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:13px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;transition:all .15s}
+#lis-ws-hd .ws-icon-btn:hover{background:var(--lis-surface-subtle);border-color:var(--lis-border-strong);color:var(--lis-text)}
+#lis-ws-hd .ws-icon-btn.danger:hover{border-color:#fecaca;color:var(--lis-error);background:var(--lis-error-light)}
 @keyframes lis-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 #lis-ws-hd .ws-icon-btn.spinning{animation:lis-spin .8s linear infinite;pointer-events:none;opacity:.6}
-#lis-ws-hd .ws-aa-btn{padding:4px 9px;height:30px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);color:var(--lis-text-secondary);cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;transition:background .15s,border-color .15s,color .15s;flex-shrink:0}
-#lis-ws-hd .ws-aa-btn:hover{background:var(--lis-primary-light);border-color:var(--lis-border);color:var(--lis-primary)}
-#lis-ws-hd .ws-aa-btn.on{background:#168276;border-color:#168276;color:#fff;box-shadow:0 0 0 1px rgba(22,130,118,.35)}
-#lis-ws-hd .ws-aa-btn.on:hover{background:#0f6b60;border-color:#0f6b60;color:#fff}
-/* 8.8.0: 头部日期控件——单一「日期胶囊」◀ 前一天 / 中间弹出日历 / ▶ 后一天，替代 8.7.0 的 4 个独立按钮省空间 */
-.ws-date-pill{display:flex;align-items:stretch;flex-shrink:0;height:30px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface);overflow:hidden;transition:border-color .15s,background .15s}
-.ws-date-pill:hover{border-color:#c8956c}
-.ws-date-pill .ws-dp-zone{border:none;background:transparent;color:var(--lis-text-secondary);cursor:pointer;font-size:11px;font-weight:700;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,color .15s;white-space:nowrap}
-.ws-date-pill .ws-dp-zone:hover{background:var(--lis-primary-light);color:var(--lis-primary)}
-.ws-date-pill .ws-dp-main{min-width:58px;gap:4px;font-size:12px;padding:0 8px;border-left:1px solid var(--lis-border);border-right:1px solid var(--lis-border)}
-.ws-date-pill .ws-dp-caret{font-size:8px;opacity:.75;margin-top:1px}
+#lis-ws-hd .ws-aa-btn{padding:0 10px;height:28px;border:1px solid #99f6e4;border-radius:6px;background:#f0fdfa;color:#0f766e;cursor:pointer;font-size:11.5px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;transition:all .15s;flex-shrink:0}
+#lis-ws-hd .ws-aa-btn:hover{background:#ccfbf1;border-color:#5eead4}
+#lis-ws-hd .ws-aa-btn.on{background:#0d9488;border-color:#0d9488;color:#fff;box-shadow:0 1px 3px rgba(13,148,136,.3)}
+#lis-ws-hd .ws-aa-btn.on:hover{background:#0f766e}
+.cat-ca{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;font-size:11px;font-weight:600;color:#047857;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:5px}
+.cat-ca::before{content:'';width:6px;height:6px;border-radius:50%;background:#10b981;flex-shrink:0}
+.ws-date-pill{display:flex;align-items:stretch;flex-shrink:0;height:28px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface-subtle);overflow:hidden;transition:all .15s}
+.ws-date-pill:hover{border-color:var(--lis-border-strong)}
+.ws-date-pill .ws-dp-zone{border:none;background:transparent;color:var(--lis-text-secondary);cursor:pointer;font-size:11px;font-weight:600;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;transition:all .15s;white-space:nowrap}
+.ws-date-pill .ws-dp-zone:hover{background:#fff;color:var(--lis-primary)}
+.ws-date-pill .ws-dp-main{min-width:60px;gap:4px;font-size:11.5px;padding:0 8px;border-left:1px solid var(--lis-border);border-right:1px solid var(--lis-border);font-weight:700}
+.ws-date-pill .ws-dp-caret{font-size:8px;opacity:.7;margin-top:1px}
 #lis-ws-date-next:disabled{opacity:.35;cursor:not-allowed}
 #lis-ws-date-next:disabled:hover{background:transparent;color:var(--lis-text-secondary)}
-/* 8.8.3: 「今」按钮——查看历史日期时才出现（8.8.0 合并胶囊时被删，用户要求恢复）
-   8.8.4: 改为胶囊内区段（共享边框），与日期控件永远贴紧，不再隔开 */
 #lis-ws-date-today{border-left:1px solid var(--lis-border)}
-.ws-date-pill.past #lis-ws-date-today{color:#b26a00}
-/* 查看历史日期时琥珀色高亮，提醒当前不是今天的数据 */
-.ws-date-pill.past{border-color:#f0b357;background:#fff7e6}
-.ws-date-pill.past .ws-dp-main{color:#b26a00}
-.ws-date-pill.past .ws-dp-zone:hover{background:#ffefd2;color:#8a5200}
+.ws-date-pill.past #lis-ws-date-today{color:#b45309}
+.ws-date-pill.past{border-color:#fde68a;background:#fffbeb}
+.ws-date-pill.past .ws-dp-main{color:#b45309}
+.ws-date-pill.past .ws-dp-zone:hover{background:#fef3c7;color:#92400e}
 /* 8.8.0: 工作台日历弹层（自绘，不依赖 showPicker——Safari 不支持原生弹出） */
 #lis-ws-date-picker{position:fixed;z-index:100021;width:252px;background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:6px;box-shadow:0 8px 24px rgba(31,45,61,.18);padding:8px;font-family:var(--lis-font)}
 #lis-ws-date-picker .ws-dp-head{display:flex;gap:6px;margin-bottom:8px;align-items:center}
@@ -1021,171 +1027,174 @@
 #lis-auto-audit-log-box .aal-exp-zero .aal-exp-bd{background:#8a6d3b}
 #lis-auto-audit-log-box .aal-row-hd{cursor:pointer}
 
-/* --- 数据表 --- */
-#lis-ws-body{flex:1!important;overflow:auto!important;background:var(--lis-bg);font-family:var(--lis-font);min-height:0!important;position:relative;z-index:1;padding:0 8px 8px}
-#lis-ws-body table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;background:var(--lis-surface);border:1px solid var(--lis-border-light);border-radius:8px;overflow:hidden}
+/* --- 数据表与分屏工作台主容器 --- */
+#lis-ws-body{flex:1!important;min-height:0!important;overflow:hidden!important;background:var(--lis-bg);font-family:var(--lis-font);position:relative;z-index:1;padding:0;display:flex}
+.ws-table-wrap{flex:1;overflow:auto;padding:8px 12px;background:var(--lis-bg)}
+#lis-ws-body table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.02)}
 #lis-ws-body thead{position:sticky;top:0;z-index:2}
-#lis-ws-body th{background:var(--lis-bg);color:var(--lis-text-secondary);padding:7px 9px;text-align:left;font-weight:700;white-space:nowrap;cursor:pointer;user-select:none;border-bottom:1px solid var(--lis-border);transition:background .15s}
-#lis-ws-body th:hover{background:var(--lis-border-light)}
+#lis-ws-body th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);padding:7px 10px;text-align:left;font-weight:700;font-size:11.5px;white-space:nowrap;cursor:pointer;user-select:none;border-bottom:1px solid var(--lis-border);transition:background .15s}
+#lis-ws-body th:hover{background:#e2e8f0}
 #lis-ws-body th::after{content:' ⇅';font-size:10px;opacity:.42}
-#lis-ws-body th.sort-asc::after{content:' ↑';opacity:1}
-#lis-ws-body th.sort-desc::after{content:' ↓';opacity:1}
-#lis-ws-body td{padding:4px 9px;border-bottom:1px solid var(--lis-border-light);white-space:nowrap;transition:background .12s;vertical-align:middle}
+#lis-ws-body th.sort-asc::after{content:' ↑';opacity:1;color:var(--lis-primary)}
+#lis-ws-body th.sort-desc::after{content:' ↓';opacity:1;color:var(--lis-primary)}
+#lis-ws-body td{padding:5px 10px;border-bottom:1px solid var(--lis-border-light);white-space:nowrap;transition:background .12s;vertical-align:middle;color:var(--lis-text)}
 #lis-ws-body tr{cursor:pointer;transition:background .12s}
-/* 8.5.33: 待排/采集忽略按钮 + 已忽略行灰显 */
-.ws-ignore-btn{background:none;border:1px solid #cfd8e0;border-radius:4px;font-size:11px;color:#64748b;cursor:pointer;padding:1px 6px;white-space:nowrap;vertical-align:middle}
+.ws-ignore-btn{background:none;border:1px solid #cfd8e0;border-radius:4px;font-size:11px;color:#64748b;cursor:pointer;padding:1px 6px;white-space:nowrap;vertical-align:middle;transition:all .15s}
 .ws-ignore-btn:hover{border-color:#0f766e;color:#0f766e;background:#ecfdf5}
 .ws-ignore-btn.on{border-color:#a8326a;color:#a8326a;background:#fdf2f5}
 .ws-ignore-btn.on:hover{border-color:#a8326a;color:#a8326a;background:#fce4ec}
 tr.ws-ignored td{opacity:.45;text-decoration:line-through}
 tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
-#lis-ws-body tbody tr:nth-child(even){background:#fef9ee}
-#lis-ws-body tbody tr:nth-child(odd){background:#fffdfb}
+#lis-ws-body tbody tr:nth-child(even){background:#f8fafc}
+#lis-ws-body tbody tr:nth-child(odd){background:#ffffff}
 #lis-ws-body tbody tr:last-child td{border-bottom:none}
-#lis-ws-body tr:hover{background:#fef3c7}
+#lis-ws-body tr:hover{background:#f1f5f9}
 #lis-ws-body tr.sel{background:var(--lis-primary-light);box-shadow:inset 3px 0 0 var(--lis-primary)}
-#lis-ws-body tr.active-row{background:#fef3c7;box-shadow:inset 3px 0 0 #c8956c}
-#lis-ws-body tr.st-1{box-shadow:inset 3px 0 0 #d89000}
-#lis-ws-body tr.st-2{box-shadow:inset 3px 0 0 #2f6fb3}
-#lis-ws-body tr.st-3{box-shadow:inset 3px 0 0 #168276}
-#lis-ws-body tr.st-4{box-shadow:inset 3px 0 0 #8a5db7}
-#lis-ws-body tr.st-5{color:#8a97a6;box-shadow:inset 3px 0 0 #9aa5b1}
-.wg-tag{display:inline-block;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.2)}
-.st-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
-.st-1t{background:#fff3e0;color:#e65100}.st-2t{background:#e3f2fd;color:#1565c0}.st-3t{background:#e8f5e9;color:#2e7d32}.st-4t{background:#f3e5f5;color:#7b1fa2}.st-5t{background:#eeeeee;color:#9e9e9e}.st-9t{background:#fce4ec;color:#a8326a} /* 8.5.31: 采集状态（全部视图徽章） */
-.ws-aa-mark{display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;background:#168276;color:#fff;cursor:pointer} /* 8.5.66: 今日已由自动审核审核（全部视图） */
-.st-0t{background:#e0f7fa;color:#00695c}
-.stars{color:#f39c12;font-size:12px}
-.lis-highlight{background:#fff176;border-radius:2px;padding:0 2px}
+#lis-ws-body tr.active-row{background:#eff6ff;box-shadow:inset 3px 0 0 var(--lis-primary)}
+#lis-ws-body tr.st-1{box-shadow:inset 3px 0 0 #d97706}
+#lis-ws-body tr.st-2{box-shadow:inset 3px 0 0 #2563eb}
+#lis-ws-body tr.st-3{box-shadow:inset 3px 0 0 #059669}
+#lis-ws-body tr.st-4{box-shadow:inset 3px 0 0 #7c3aed}
+#lis-ws-body tr.st-5{color:#94a3b8;box-shadow:inset 3px 0 0 #cbd5e1}
+.wg-tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;color:#fff}
+.st-tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;line-height:1.3}
+.st-1t{background:#fffbeb;color:#b45309;border:1px solid #fde68a}.st-2t{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}.st-3t{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}.st-4t{background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe}.st-5t{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0}.st-9t{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
+.ws-aa-mark{display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;background:#0d9488;color:#fff;cursor:pointer}
+.st-0t{background:#f0fdfa;color:#0f766e;border:1px solid #99f6e4}
+.stars{color:#f59e0b;font-size:12px}
+.lis-highlight{background:#fef08a;border-radius:2px;padding:0 2px}
 
-/* --- 底部 --- */
-#lis-ws-ft{background:var(--lis-surface);padding:4px 14px;display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary);flex-shrink:0!important;border-top:1px solid var(--lis-border)}
+/* --- 底部状态条 --- */
+#lis-ws-ft{background:var(--lis-surface);height:26px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary);flex-shrink:0!important;border-top:1px solid var(--lis-border);box-shadow:0 -1px 2px rgba(0,0,0,.02)}
 
-/* --- 仪器标签栏 --- */
-#lis-ws-tabs{background:var(--lis-surface);padding:4px 10px 3px;display:flex!important;align-items:flex-start!important;justify-content:flex-start!important;text-align:left!important;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
+/* --- 筛选标签栏 (Row 2: 工作组 + 仪器 + 分类) --- */
+#lis-ws-tabs{background:var(--lis-surface);height:38px;padding:0 14px;display:flex!important;align-items:center!important;justify-content:space-between!important;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
 #lis-ws-tabs::-webkit-scrollbar{display:none}
-.ws-ws-row1{display:flex;align-items:center;gap:8px;flex-shrink:0}
-.ws-wg-row{display:none}
-.ws-wg-inline{display:flex;align-items:center;gap:2px;flex-shrink:0;margin-left:2px}
-.ws-wg-inline .ws-wg-tab{padding:4px 7px;border-radius:5px;font-size:12px;font-weight:600}
-.ws-wg-inline .ws-wg-tab .mach-cnt{font-size:10px;padding:0 5px;min-width:15px}
-.ws-right-group{display:flex;align-items:center;gap:6px;margin-left:auto;padding-left:8px;border-left:1px solid var(--lis-border);flex-shrink:0}
-.ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap;min-width:0}
-.ws-ws-row1{display:none}
-.ws-cat-row-inline{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0;flex-wrap:wrap;min-width:0}
-.ws-mach-row{display:flex!important;align-items:center;justify-content:flex-start!important;align-self:flex-start!important;gap:4px;overflow-x:auto;scrollbar-width:none;margin:0!important;padding-top:4px;border-top:1px solid var(--lis-border-light);width:fit-content}
+.ws-filter-left{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none}
+.ws-filter-left::-webkit-scrollbar{display:none}
+.ws-filter-divider{width:1px;height:18px;background:var(--lis-border);flex-shrink:0;margin:0 4px}
+.ws-filter-right{display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto}
+.ws-wg-inline{display:inline-flex;align-items:center;gap:2px;background:var(--lis-surface-subtle);padding:2px;border-radius:6px;border:1px solid var(--lis-border);flex-shrink:0}
+.ws-wg-tab{border:none;background:transparent;color:var(--lis-text-secondary);padding:3px 9px;border-radius:4px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.ws-wg-tab:hover{color:var(--lis-text)}
+.ws-wg-tab.on{background:#fff;color:var(--lis-primary);font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.ws-mach-row{display:inline-flex!important;align-items:center;gap:4px;overflow-x:auto;scrollbar-width:none;margin:0;padding:0;width:fit-content}
 .ws-mach-row::-webkit-scrollbar{display:none}
-.ws-wg-tab,.ws-mach-tab{border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-text);cursor:pointer;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:6px;letter-spacing:0}
-.ws-wg-tab{padding:5px 11px;border-radius:6px;font-size:13px;font-weight:600}
-.ws-wg-tab:hover,.ws-mach-tab:hover{background:var(--lis-primary-lighter);border-color:var(--lis-primary-hover)}
-.ws-wg-tab.on{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff;border-radius:6px}
-.ws-mach-tab{padding:4px 9px;border-radius:5px;font-size:12px;font-weight:500}
-.ws-mach-tab.on{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff}
-.ws-mach-tab.ws-mach-multi{gap:5px}
-.ws-mach-check{width:14px;height:14px;border:1px solid var(--lis-border);border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;line-height:1;background:#fff;color:var(--lis-primary);flex:0 0 14px}
-.ws-mach-tab.ws-mach-multi.on .ws-mach-check{background:rgba(255,255,255,.22);border-color:rgba(255,255,255,.5);color:#fff}
-.ws-tab-name{overflow:hidden;text-overflow:ellipsis;max-width:150px}
-.mach-cnt{background:var(--lis-primary-lighter);color:var(--lis-text-secondary);border-radius:10px;padding:0 6px;font-size:11px;min-width:17px;text-align:center;line-height:1.6;font-weight:700}
-.ws-wg-tab.on .mach-cnt,.ws-mach-tab.on .mach-cnt{background:rgba(255,255,255,.22);color:#fff}
-.ws-tab-stat{display:inline-flex;align-items:center;color:var(--lis-text-secondary);font-size:10px;font-weight:700}
-.ws-mach-wrap{flex-wrap:wrap;gap:3px 4px}
+.ws-mach-tab{border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-text-secondary);padding:3px 8px;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.ws-mach-tab:hover{border-color:var(--lis-border-strong);color:var(--lis-text)}
+.ws-mach-tab.on{background:var(--lis-primary-light);border-color:#93c5fd;color:var(--lis-primary);font-weight:600}
+.ws-mach-check{width:13px;height:13px;border:1px solid var(--lis-border);border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;background:#fff;color:var(--lis-primary);flex:0 0 13px}
+.ws-mach-tab.on .ws-mach-check{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff}
+.ws-tab-name{overflow:hidden;text-overflow:ellipsis;max-width:140px}
+.mach-cnt{background:var(--lis-surface-subtle);color:var(--lis-text-muted);border-radius:10px;padding:0 5px;font-size:10.5px;min-width:16px;text-align:center;line-height:1.5;font-weight:700;font-family:ui-monospace,monospace}
+.ws-wg-tab.on .mach-cnt{background:var(--lis-primary-light);color:var(--lis-primary)}
+.ws-mach-tab.on .mach-cnt{background:#fff;color:var(--lis-primary)}
 .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
 .ws-mach-group-label{font-size:10px;font-weight:700;padding:0 2px;white-space:nowrap;opacity:.8}
-.ws-mach-filter-label{align-self:center;color:var(--lis-text-secondary);font-size:11px;font-weight:700;white-space:nowrap;margin-right:2px}
-/* Compact instrument layout when all workgroups shown */
-.ws-mach-row.all-wg{display:flex!important;justify-content:flex-start!important;flex-wrap:wrap;gap:4px 6px;align-items:center}
-.ws-mach-row.all-wg .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap;margin-right:4px;padding-left:7px;border-left:1px solid var(--lis-border-light)}
-.ws-mach-row.all-wg .ws-mach-group-label{font-size:11px;font-weight:700;color:var(--lis-text-muted);white-space:nowrap;margin-right:3px}
-.ws-mach-row.all-wg .ws-mach-tab{padding:3px 7px;font-size:11px;border-radius:4px;white-space:nowrap}
-.ws-mach-row.all-wg .ws-tab-name{max-width:120px;overflow:hidden;text-overflow:ellipsis}
-.ws-mach-row .ws-mach-all{margin:0 8px 0 0!important}
-.ws-wg-tab.on .ws-tab-stat{color:rgba(255,255,255,.82)}
+.ws-mach-filter-label{align-self:center;color:var(--lis-text-muted);font-size:11px;font-weight:700;white-space:nowrap;margin-right:2px}
+.ws-mach-row.all-wg{display:flex!important;justify-content:flex-start!important;flex-wrap:nowrap;gap:4px 6px;align-items:center}
+.ws-mach-row.all-wg .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap;margin-right:4px;padding-left:6px;border-left:1px solid var(--lis-border)}
+.ws-mach-row.all-wg .ws-mach-group-label{font-size:10.5px;font-weight:700;color:var(--lis-text-muted);white-space:nowrap;margin-right:2px}
+.ws-mach-row.all-wg .ws-mach-tab{padding:2.5px 6px;font-size:11px}
 
-/* --- 分类标签栏 --- */
+/* --- 分类标签 --- */
 #lis-ws-bar{display:none}
-.cat-tab{padding:3px 8px;border-radius:5px;border:1px solid var(--lis-border);background:var(--lis-surface);cursor:pointer;font-size:12px;font-weight:600;transition:background .15s,border-color .15s,color .15s;white-space:nowrap;display:flex;align-items:center;gap:5px;color:var(--lis-text)}
-.cat-tab:hover{border-color:#7ebbb3;background:var(--lis-primary-lighter)}
-.cat-tab.on{border-color:transparent;background:var(--lis-primary);color:#fff}
-.cat-tab .cat-cnt{border-radius:10px;padding:0 6px;font-size:11px;min-width:15px;text-align:center;line-height:1.55;font-weight:700}
-.cat-tab.on .cat-cnt{background:rgba(255,255,255,.22);color:#fff}
-.cat-tab:not(.on) .cat-cnt{background:var(--lis-primary-lighter);color:var(--lis-text-secondary)}
-.cat-tab.cat-normal:not(.on) .cat-cnt{background:var(--lis-primary-light);color:var(--lis-primary-hover)}
-.cat-tab.cat-abnormal:not(.on) .cat-cnt{background:#fde8e8;color:var(--lis-error)}
-.cat-tab.cat-incomplete:not(.on) .cat-cnt{background:#fff2d7;color:#9a5b00}
-.cat-tab.cat-pending:not(.on) .cat-cnt{background:#e7f0fb;color:var(--lis-info)}
-.cat-tab.cat-collected:not(.on) .cat-cnt{background:#fce4ec;color:#a8326a} /* 8.5.31: 血袋红/紫 */
-.cat-sep{width:1px;height:24px;background:#dee2e6;margin:0 4px}
+.ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.cat-tab{padding:3px 9px;border-radius:6px;border:1px solid transparent;background:transparent;cursor:pointer;font-size:12px;font-weight:600;transition:all .15s;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;color:var(--lis-text-secondary)}
+.cat-tab:hover{background:var(--lis-surface-subtle);color:var(--lis-text)}
+.cat-tab.on{border-color:transparent;background:var(--lis-primary);color:#fff;font-weight:700;box-shadow:0 1px 2px rgba(37,99,235,.25)}
+.cat-tab .cat-cnt{border-radius:10px;padding:0.5px 5px;font-size:10.5px;min-width:15px;text-align:center;line-height:1.4;font-weight:700;background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-family:ui-monospace,monospace}
+.cat-tab.on .cat-cnt{background:rgba(255,255,255,.25);color:#fff}
 .cat-right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.cat-stats{color:var(--lis-text-secondary);font-size:11px}
 
-/* --- 一键批审横幅 --- */
-.ws-normal-banner{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid var(--lis-primary);border-radius:8px;padding:8px 12px;margin:8px 0;display:flex;align-items:center;gap:12px;flex-shrink:0}
-.ws-normal-banner .nb-text{font-size:13px;font-weight:700;color:var(--lis-primary-hover);flex:1}
-.ws-normal-banner .nb-btn,.nb-btn{padding:7px 14px;border:none;border-radius:6px;background:var(--lis-primary);color:#fff;font-size:12px;font-weight:800;cursor:pointer;transition:background .15s;white-space:nowrap;box-shadow:none}
-.ws-normal-banner .nb-btn:hover,.nb-btn:hover{background:var(--lis-primary-hover)}
-.ws-normal-banner .nb-btn:active,.nb-btn:active{filter:brightness(.95)}
+/* --- 双栏一体化检视分屏 (Master-Detail) --- */
+.ws-split-wrap{display:flex;width:100%;height:100%;min-height:0;overflow:hidden;background:var(--lis-bg)}
+.ws-split-master{width:42%;max-width:480px;min-width:380px;flex-shrink:0;height:100%;border-right:1px solid var(--lis-border);display:flex;flex-direction:column;background:var(--lis-bg);overflow:hidden}
+.ws-split-inspector{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;background:var(--lis-surface);overflow:hidden}
 
-/* --- 异常标本卡片 --- */
-.ws-abnormal-list{padding:10px 0;display:flex;flex-direction:column;gap:5px;overflow-y:auto;flex:1}
-.ws-abnormal-card{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid var(--lis-error);border-radius:8px;padding:8px 12px;cursor:pointer;transition:background .12s,border-color .12s;display:flex;align-items:center;gap:10px}
-.ws-abnormal-card:hover{background:var(--lis-primary-light);border-color:var(--lis-border)}
-.ws-abnormal-card.focused{border-left-color:#2f6fb3;background:#eef6ff;box-shadow:0 0 0 1px rgba(47,111,179,.12)}
-.ws-abnormal-card.auditing{border-left-color:#168276;background:#eef7f5;box-shadow:0 0 0 1px rgba(22,130,118,.14)}
-.ws-abnormal-card.has-critical{border-left-color:#b91c1c;background:#fff7f7}
-.ws-abnormal-card.has-critical.focused{border-left-color:#b91c1c;background:#ffeded;box-shadow:0 0 0 1px rgba(185,28,28,.14)}
-.ws-abnormal-card.has-infection-warning{border-left-color:#d4a574;background:#fffbeb}
-.ws-abnormal-card.has-infection-warning.focused{border-left-color:#d4a574;background:#fef3c7;box-shadow:0 0 0 1px rgba(212,165,116,.14)}
-.ab-card-top{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
-.ab-card-name{font-size:14px;font-weight:600;color:#2c3e50;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
-.ab-card-no{font-size:12px;color:#888;white-space:nowrap}
-.ab-card-test{font-size:12px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
-.ab-card-items{display:flex;flex-wrap:nowrap;gap:5px;overflow:hidden;flex:1}
-.ab-card-item{padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600;white-space:nowrap}
-.ab-card-item.critical{background:#ffebee;color:#c62828}
-.ab-card-item.high{background:#fff3e0;color:#e65100}
-.ab-card-item.low{background:#e3f2fd;color:#1565c0}
-.ab-card-item.abnormal{background:#fce4ec;color:#e91e63}
-.ab-card-item.infection-warning{background:#fff3e0;color:#e65100;font-weight:700}
-.ab-card-item.uncertain{background:#f5f5f5;color:#757575}
-.ab-card-item.zero{background:#fff8e1;color:#8a6d3b} /* 8.5.58: 疑似堵孔 0 值 */
-.ws-abnormal-card.has-zero{border-left-color:#b7791f;background:#fffdf5}
-.ws-abnormal-card.has-zero.focused{border-left-color:#b7791f;background:#fdf3d7;box-shadow:0 0 0 1px rgba(183,121,31,.14)}
-/* x8 传染病：梅毒/丙肝/HIV 阳性统一高亮（区别于乙肝两对半粉色，亮黄更醒目防漏发） */
-.ab-card-item.inf-special,.result-table .inf-special{background:#fff176;color:#5d3a00;border:1px solid #f9a825;font-weight:800;text-shadow:0 1px 0 rgba(255,255,255,.5)}
-.ab-card-hint{font-size:11px;color:#bbb;white-space:nowrap;margin-left:auto}
-.ws-abnormal-machine{position:sticky;top:0;z-index:2;background:var(--lis-primary-lighter);border:1px solid var(--lis-border);border-radius:5px;padding:4px 10px;margin:8px 0 2px;font-size:11px;font-weight:600;color:#475569;letter-spacing:.02em}
-.ws-abnormal-hint{background:var(--lis-surface);border:1px solid var(--lis-border);border-left:4px solid var(--lis-info);border-radius:6px;padding:7px 10px;margin:10px 0 0;font-size:12px;color:#334155;display:flex;align-items:center;gap:6px}
-.ws-abnormal-hint kbd{background:#f7f9fb;border:1px solid #cbd5df;border-radius:3px;padding:1px 5px;font-size:11px;font-family:monospace}
+/* 队列顶栏批审横幅 */
+.ws-audit-banner{background:var(--lis-surface);border-bottom:1px solid var(--lis-border);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;box-shadow:0 1px 2px rgba(0,0,0,.02)}
+.ws-audit-summary{font-size:12px;font-weight:600;color:var(--lis-text);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.ws-audit-sep{color:var(--lis-border-strong)}
+.ws-audit-critical{color:var(--lis-critical);font-weight:700}
+.nb-btn{padding:5px 12px;border:none;border-radius:6px;background:linear-gradient(135deg,#059669,#0d9488);color:#fff;font-size:11.5px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;box-shadow:0 1px 2px rgba(5,150,105,.25);display:inline-flex;align-items:center;gap:4px}
+.nb-btn:hover{filter:brightness(1.08);transform:translateY(-0.5px)}
+.nb-btn:active{transform:translateY(0);filter:brightness(.95)}
+.ws-abnormal-hint{height:25px;padding:0 10px;font-size:10.5px;color:var(--lis-text-secondary);background:var(--lis-surface-subtle);border-bottom:1px solid var(--lis-border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.ws-abnormal-hint kbd{background:#fff;border:1px solid var(--lis-border-strong);border-radius:3px;padding:0 4px;font-size:9.5px;font-family:ui-monospace,monospace;box-shadow:0 1px 1px rgba(0,0,0,.05)}
 
-/* --- 待审视图（融合正常 + 异常，单队列审核）--- */
-.ws-audit-banner{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid var(--lis-primary);border-radius:8px;padding:8px 12px;margin:8px 0 0;display:flex;align-items:center;gap:12px;flex-shrink:0}
-.ws-audit-summary{font-size:13px;font-weight:600;color:var(--lis-text);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ws-audit-sep{color:var(--lis-border);margin:0 6px;font-weight:400}
-.ws-audit-critical{color:#c62828;font-weight:700}
-.ab-card-badge{font-size:14px;flex:0 0 auto}
-.ab-card-admtype{font-size:12px;font-weight:600;padding:2px 7px;border-radius:3px;flex:0 0 auto;line-height:1.4;white-space:nowrap;vertical-align:middle}
-.ab-card-admtype.outpatient{background:#e6f1fb;color:#185fa5;border:0.5px solid #85b7eb}
-.ab-card-admtype.inpatient{background:#f1efe8;color:#5f5e5a}
-.ab-card-admtype.healthcheck{background:#faeeda;color:#854f0b}
-.ws-abnormal-card.is-normal{border-left-color:#2e7d32;background:#f4fbf6}
-.ws-abnormal-card.is-normal:hover{background:#e9f7ee}
-.ws-abnormal-card.is-normal.focused{border-left-color:#2f6fb3;background:#eef6ff;box-shadow:0 0 0 1px rgba(47,111,179,.12)}
-.ab-card-time{font-size:11px;color:#999;white-space:nowrap}
+/* 标本队列卡片流 */
+.ws-abnormal-list{flex:1;min-height:0;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:5px}
+.ws-abnormal-machine{position:sticky;top:0;z-index:4;background:rgba(248,250,252,.94);backdrop-filter:blur(4px);border:1px solid var(--lis-border);border-radius:5px;padding:3px 8px;font-size:10.5px;font-weight:700;color:var(--lis-text-secondary);margin:4px 0 2px}
+.ws-abnormal-card{background:var(--lis-surface);border:1px solid var(--lis-border);border-left:3px solid #f59e0b;border-radius:7px;padding:7px 10px;cursor:pointer;transition:all .12s ease;display:flex;flex-direction:column;gap:4px;box-shadow:0 1px 2px rgba(0,0,0,.02);position:relative}
+.ws-abnormal-card:hover{border-color:#93c5fd;box-shadow:0 2px 6px rgba(37,99,235,.06)}
+.ws-abnormal-card.focused{border-color:#3b82f6!important;background:#eff6ff!important;box-shadow:0 0 0 2px rgba(59,130,246,.2)!important}
+.ws-abnormal-card.has-critical{border-left-color:#dc2626;background:#fffdfd}
+.ws-abnormal-card.has-critical.focused{border-left-color:#dc2626;background:#fef2f2!important;box-shadow:0 0 0 2px rgba(220,38,38,.2)!important}
+.ws-abnormal-card.has-zero{border-left-color:#d97706;background:#fffdfa}
+.ws-abnormal-card.has-infection-warning{border-left-color:#f59e0b;background:#fffbeb}
+.ws-abnormal-card.is-normal{background:rgba(240,253,244,.5);border:1px solid rgba(167,243,208,.6);border-left:3px solid #10b981;padding:5px 9px;flex-direction:row;align-items:center;gap:8px}
+.ws-abnormal-card.is-normal.focused{border-color:#10b981!important;background:#ecfdf5!important;box-shadow:0 0 0 2px rgba(16,185,129,.2)!important}
+.ab-card-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.ab-card-name{font-size:13.5px;font-weight:700;color:var(--lis-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
+.ab-card-no{font-family:ui-monospace,monospace;font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
+.ab-card-test{font-size:11.5px;color:var(--lis-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
+.ab-card-items{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.ab-card-item{padding:1.5px 6px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap;border:1px solid transparent}
+.ab-card-item.critical{background:#fee2e2;color:#b91c1c;border-color:#fecaca;font-weight:700}
+.ab-card-item.high{background:#fff7ed;color:#c2410c;border-color:#fed7aa}
+.ab-card-item.low{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}
+.ab-card-item.abnormal{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
+.ab-card-item.zero{background:#fffbeb;color:#b45309;border-color:#fde68a}
+.ab-card-item.infection-warning{background:#fff7ed;color:#c2410c;border-color:#fed7aa;font-weight:700}
+.ab-card-item.uncertain{background:#f1f5f9;color:#64748b}
+.ab-card-item.inf-special{background:#fef08a;color:#713f12;border-color:#facc15;font-weight:700}
+.ab-card-badge{font-size:13px;flex:0 0 auto}
+.ab-card-admtype{font-size:11px;font-weight:600;padding:1px 5px;border-radius:3px;line-height:1.3;white-space:nowrap}
+.ab-card-admtype.outpatient{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.ab-card-admtype.inpatient{background:#f1f5f9;color:#475569;border:1px solid #e2e8f0}
+.ab-card-admtype.healthcheck{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+.ab-card-hint{font-size:11px;color:var(--lis-text-muted);white-space:nowrap;margin-left:auto}
 
-/* --- 不完整提示 --- */
-.ws-incomplete-banner{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid var(--lis-warning);border-radius:6px;padding:8px 12px;margin:10px 0;font-size:13px;color:#8a5600;font-weight:700}
-.ws-collected-banner{background:var(--lis-surface);border:1px solid var(--lis-border-light);border-left:3px solid #a8326a;border-radius:6px;padding:8px 12px;margin:10px 0;font-size:13px;color:#a8326a;font-weight:700} /* 8.5.31: 采集状态 — 仅追踪，不可审核 */
+/* --- 右栏实时检验结果检视器 (Live Inspector) --- */
+.ws-insp-hd{padding:10px 16px;background:var(--lis-surface-subtle);border-bottom:1px solid var(--lis-border);flex-shrink:0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.insp-hd-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.insp-hd-pat{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.insp-pat-name{font-size:16px;font-weight:800;color:var(--lis-text)}
+.insp-pat-meta{font-size:12px;color:var(--lis-text-secondary);background:#fff;border:1px solid var(--lis-border);border-radius:4px;padding:1px 6px}
+.insp-hd-sub{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--lis-text-secondary);flex-wrap:wrap}
+.insp-mono{font-family:ui-monospace,monospace;color:var(--lis-text);font-weight:600}
+.insp-hd-extra{font-size:11px;color:var(--lis-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+.insp-hd-acts{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.insp-tool-btn{height:26px;padding:0 8px;border:1px solid var(--lis-border);border-radius:5px;background:#fff;color:var(--lis-text-secondary);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s}
+.insp-tool-btn:hover{border-color:var(--lis-primary);color:var(--lis-primary);background:var(--lis-primary-light)}
+.ws-insp-alert{padding:7px 16px;font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:8px;flex-shrink:0;border-bottom:1px solid transparent}
+.ws-insp-alert.critical{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.ws-insp-alert.warning{background:#fffbeb;border-color:#fde68a;color:#92400e}
+.ws-insp-alert.normal{background:#f0fdf4;border-color:#bbf7d0;color:#166534}
+.ws-insp-body{flex:1;min-height:0;overflow-y:auto;overflow-x:auto;padding:12px 16px;background:#fff}
+.ws-insp-loading{display:flex;align-items:center;justify-content:center;height:180px;gap:8px;color:var(--lis-text-muted);font-size:12px}
+.ws-insp-ft{padding:8px 16px;background:#fff;border-top:1px solid var(--lis-border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;box-shadow:0 -2px 8px rgba(0,0,0,.03)}
+.ws-insp-hint{font-size:11px;color:var(--lis-text-muted)}
+.ws-insp-ft-actions{display:flex;align-items:center;gap:8px}
+.ws-insp-btn-skip{height:32px;padding:0 14px;border:1px solid var(--lis-border);border-radius:6px;background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.ws-insp-btn-skip:hover{background:#e2e8f0;color:var(--lis-text)}
+.ws-insp-btn-audit{height:32px;padding:0 20px;border:none;border-radius:6px;background:var(--lis-primary);color:#fff;font-size:12.5px;font-weight:700;cursor:pointer;box-shadow:0 1px 3px rgba(37,99,235,.25);transition:all .15s;display:inline-flex;align-items:center;gap:6px}
+.ws-insp-btn-audit:hover{background:var(--lis-primary-hover);transform:translateY(-0.5px)}
+.ws-insp-btn-audit:active{transform:translateY(0);filter:brightness(.95)}
+.ws-insp-btn-audit.disabled{background:#cbd5e1;color:#64748b;cursor:not-allowed;box-shadow:none}
 
-/* --- 分类加载中 --- */
-.ws-category-loading{text-align:center;padding:40px;color:#999;font-size:14px}
-.ws-category-loading .cat-prog{font-size:12px;color:#bbb;margin-top:8px}
+/* 提示横幅 */
+.ws-incomplete-banner{background:var(--lis-surface);border:1px solid #fde68a;border-left:3px solid var(--lis-warning);border-radius:6px;padding:8px 12px;margin:10px 12px;font-size:12px;color:#92400e;font-weight:700}
+.ws-collected-banner{background:var(--lis-surface);border:1px solid #fce7f3;border-left:3px solid #be185d;border-radius:6px;padding:8px 12px;margin:10px 12px;font-size:12px;color:#be185d;font-weight:700}
+.ws-category-loading{text-align:center;padding:40px;color:var(--lis-text-muted);font-size:13px}
+.ws-category-loading .cat-prog{font-size:11px;color:var(--lis-text-muted);margin-top:6px}
 
-/* --- 确保内容可滚动 --- */
-#lis-ws-body::-webkit-scrollbar{width:9px;height:9px}
-#lis-ws-body::-webkit-scrollbar-track{background:var(--lis-border-light)}
-#lis-ws-body::-webkit-scrollbar-thumb{background:#d6c9bc;border-radius:5px}
-#lis-ws-body::-webkit-scrollbar-thumb:hover{background:#b8a99a}
-#lis-ws-body table{min-height:0}
+/* 滚动条美化 */
+#lis-ws-body::-webkit-scrollbar,.ws-insp-body::-webkit-scrollbar,.ws-abnormal-list::-webkit-scrollbar{width:6px;height:6px}
+#lis-ws-body::-webkit-scrollbar-track,.ws-insp-body::-webkit-scrollbar-track,.ws-abnormal-list::-webkit-scrollbar-track{background:transparent}
+#lis-ws-body::-webkit-scrollbar-thumb,.ws-insp-body::-webkit-scrollbar-thumb,.ws-abnormal-list::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
+#lis-ws-body::-webkit-scrollbar-thumb:hover,.ws-insp-body::-webkit-scrollbar-thumb:hover,.ws-abnormal-list::-webkit-scrollbar-thumb:hover{background:#94a3b8}
 
 /* --- 批审操作条样式已随 8.9.0 死代码删除（操作条从未启用，#lis-batch 勿复用）--- */
 
@@ -9988,34 +9997,31 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return result;
   }
 
-  // --- 渲染：头部（简化版）---
+  // --- 渲染：头部（精简全局顶栏 Row 1）---
   function renderWSHeader() {
     const hd = $('#lis-ws-hd');
     hd.style.flexShrink = '0';
-    let wgHTML = '';
-    WG.forEach(w => {
-      wgHTML += `<button class="ws-wg-tab" data-wg="${w.dr}"><span class="ws-tab-name">${w.name}</span><span class="mach-cnt ws-cnt-total"></span></button>`;
-    });
-    wgHTML += `<button class="ws-wg-tab" data-wg=""><span class="ws-tab-name">全部</span><span class="mach-cnt ws-cnt-total"></span></button>`;
     hd.innerHTML = `
-            <div class="ws-title"><span class="ws-title-dot"></span><h3>审核工作台</h3></div>
-            <div class="ws-search-wrap">
-                <input type="text" class="ws-search" id="lis-ws-search" placeholder="姓名 / 检验号 / 流水号" />
-            </div>
+            <div class="ws-title"><span class="ws-title-dot"></span><h3>标本审核工作台</h3></div>
             <div class="ws-date-pill" id="lis-ws-date-pill">
                 <button class="ws-dp-zone" id="lis-ws-date-prev" title="前一天">◀</button>
                 <button class="ws-dp-zone ws-dp-main" id="lis-ws-date-btn" title="点击弹出日历选择日期（可查看/审核历史标本）"><span id="lis-ws-date-label">今天</span><span class="ws-dp-caret">▾</span></button>
                 <button class="ws-dp-zone" id="lis-ws-date-next" title="后一天">▶</button>
                 <button type="button" class="ws-dp-zone ws-dp-now" id="lis-ws-date-today" title="回到今天" style="display:none">今</button>
             </div>
-            <div class="ws-wg-inline">${wgHTML}</div>
-            <div class="ws-right-group"><div class="ws-cat-hd-inline" data-ws-cat-tabs></div><div class="ws-acts">
-                <button class="ws-aa-btn" id="lis-ws-autoaudit" title="自动审核：按设定时长自动审核当前筛选范围的标本（正常批量+异常逐条；危急值/堵孔0值/传染病阳性等留人工）">🤖 自动审核</button>
-                <button class="ws-icon-btn" id="lis-ws-aalog" title="查看自动审核记录（最近自动审核了哪些样本）">🕘</button>
-                <button class="ws-icon-btn" id="lis-ws-refresh" title="强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）">↻</button>
-                <button class="ws-icon-btn" id="lis-ws-pwd" title="CA密码">钥</button>
-                <button class="ws-icon-btn danger" id="lis-ws-close" title="关闭">×</button>
-            </div></div>`;
+            <div class="ws-search-wrap">
+                <input type="text" class="ws-search" id="lis-ws-search" placeholder="快速定位 姓名 / 检验号 / 流水号" />
+            </div>
+            <div class="ws-right-group">
+                <span class="cat-stats cat-ca" title="当前 CA 认证账号（审核者）"></span>
+                <div class="ws-acts">
+                    <button class="ws-aa-btn" id="lis-ws-autoaudit" title="自动审核：按设定时长自动审核当前筛选范围的标本（正常批量+异常逐条；危急值/堵孔0值/传染病阳性等留人工）">🤖 自动审核</button>
+                    <button class="ws-icon-btn" id="lis-ws-aalog" title="查看自动审核记录（最近自动审核了哪些样本）">🕘</button>
+                    <button class="ws-icon-btn" id="lis-ws-refresh" title="强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）">↻</button>
+                    <button class="ws-icon-btn" id="lis-ws-pwd" title="CA密码">钥</button>
+                    <button class="ws-icon-btn danger" id="lis-ws-close" title="关闭">×</button>
+                </div>
+            </div>`;
 
     document.getElementById('lis-ws-refresh').addEventListener('click', () => {
       dbg('刷新按钮被点击');
@@ -10025,7 +10031,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         btn.title = '刷新中…';
       }
       forceRefreshWS().finally(() => {
-        // 若已触发整页刷新，按钮会随页面销毁
         if (btn && document.body.contains(btn)) {
           btn.classList.remove('spinning');
           btn.title = '强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）';
@@ -10034,10 +10039,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     });
     document.getElementById('lis-ws-close').addEventListener('click', closeWS);
     document.getElementById('lis-ws-pwd').addEventListener('click', openPwdDlg);
-    // 8.5.61: 自动审核按钮 + 记录查看按钮（移至头部最右侧，刷新/CA密码旁）
     document.getElementById('lis-ws-autoaudit').addEventListener('click', () => openAutoAuditDialog());
     document.getElementById('lis-ws-aalog').addEventListener('click', () => openAutoAuditLogViewer());
-    // 8.8.0: 日期胶囊——◀ 前一天 / 中间点击直接弹出日历 / ▶ 后一天（到今天禁用）
     document.getElementById('lis-ws-date-prev').addEventListener('click', () => {
       setWSActiveDate(addDays(wsViewDate(), -1));
     });
@@ -10047,11 +10050,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       if (v < td) {setWSActiveDate(addDays(v, 1));}
     });
     document.getElementById('lis-ws-date-btn').addEventListener('click', () => {
-      // 点「今天」直接弹日历选日期；已开着则收起（开关切换）
       if (document.getElementById('lis-ws-date-picker')) {wsCloseDatePicker();}
       else {wsOpenDatePicker();}
     });
-    // 8.8.3: 「今」按钮——快速回到今天（查看历史日期时才显示）
     document.getElementById('lis-ws-date-today').addEventListener('click', () => {
       wsCloseDatePicker();
       setWSActiveDate('');
@@ -10062,34 +10063,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       clearTimeout(_wsSearchTimer);
       _wsSearchTimer = setTimeout(() => { renderWSTable(); updateWSFooter(); }, 200);
     });
-    // Header workgroup tab events
-    hd.querySelectorAll('.ws-wg-tab').forEach(b =>
-      b.addEventListener('click', () => {
-        invalidateCaches();
-        wsActiveWG = b.dataset.wg;
-        wsActiveMachine = '';
-        // 8.5.68: 单工作组模式只保留当前组的仪器勾选，其他组勾选清空（跨组勾选只能在「全部工作组」下进行）
-        if (wsActiveWG) {
-          WG.forEach(w => {
-            if (String(w.dr) !== String(wsActiveWG)) {delete wsSelectedMachinesByWG[String(w.dr)];}
-          });
-        }
-        wsAbnormalIndex = -1;
-        wsChecked.clear();
-        saveWSState();
-        renderWSHeaderWGTabs();
-        renderWSTabs();
-        renderWSCategoryBar();
-        renderWSTable();
-      })
-    );
   }
 
   function renderWSHeaderWGTabs() {
-    const hd = $('#lis-ws-hd');
-    if (!hd) {return;}
+    const root = $('#lis-ws-tabs') || $('#lis-ws-hd');
+    if (!root) {return;}
     const wgCounts = calcWSTabCounts();
-    hd.querySelectorAll('.ws-wg-tab').forEach(b => {
+    root.querySelectorAll('.ws-wg-tab').forEach(b => {
       const wg = b.dataset.wg;
       const isOn = wg ? wsActiveWG === wg : !wsActiveWG;
       b.classList.toggle('on', isOn);
@@ -10166,10 +10146,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   function buildWSTabsDOM(tabs, wgCounts, mc) {
-    // One row: instruments left + category tabs right
-    let h = '';
+    let wgHTML = '';
+    WG.forEach(w => {
+      wgHTML += `<button class="ws-wg-tab" data-wg="${w.dr}"><span class="ws-tab-name">${w.name}</span><span class="mach-cnt ws-cnt-total"></span></button>`;
+    });
+    wgHTML += '<button class="ws-wg-tab" data-wg=""><span class="ws-tab-name">全部</span><span class="mach-cnt ws-cnt-total"></span></button>';
 
-    h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}"><span class="ws-mach-filter-label">仪器</span>`;
+    let h = '<div class="ws-filter-left">';
+    h += `<div class="ws-wg-inline">${wgHTML}</div>`;
+    h += '<div class="ws-filter-divider"></div>';
+
+    h += `<div class="ws-mach-row${wsActiveWG ? '' : ' all-wg'}"><span class="ws-mach-filter-label">仪器:</span>`;
     if (wsActiveWG) {
       h += `<button class="ws-mach-tab ws-mach-all" data-action="all">
                 <span class="ws-tab-name">全部仪器</span>
@@ -10204,12 +10191,34 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         h += '</div>';
       });
     }
-    h += '</div>';
+    h += '</div>'; // close .ws-mach-row
+    h += '</div>'; // close .ws-filter-left
+
+    h += '<div class="ws-filter-right"><div class="ws-cat-hd-inline" data-ws-cat-tabs></div></div>';
     tabs.innerHTML = h;
 
-    // 事件绑定（只绑一次）
-    // 8.10.0: 删除 .ws-wg-tab 绑定——本函数生成的 DOM 里没有该类元素
-    // （工作组标签在 renderWSHeader），querySelectorAll 恒空，属死代码且易误导
+    // 工作组标签事件绑定
+    tabs.querySelectorAll('.ws-wg-tab').forEach(b =>
+      b.addEventListener('click', () => {
+        invalidateCaches();
+        wsActiveWG = b.dataset.wg;
+        wsActiveMachine = '';
+        if (wsActiveWG) {
+          WG.forEach(w => {
+            if (String(w.dr) !== String(wsActiveWG)) {delete wsSelectedMachinesByWG[String(w.dr)];}
+          });
+        }
+        wsAbnormalIndex = -1;
+        wsChecked.clear();
+        saveWSState();
+        renderWSHeaderWGTabs();
+        renderWSTabs();
+        renderWSCategoryBar();
+        renderWSTable();
+      })
+    );
+
+    // 仪器标签事件绑定
     tabs.querySelectorAll('.ws-mach-all').forEach(b =>
       b.addEventListener('click', () => {
         invalidateCaches();
@@ -10244,6 +10253,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       })
     );
     updateWSTabsState(tabs, wgCounts, mc);
+    renderWSCategoryBar();
   }
 
   // 仅更新数字和选中态（不重建 DOM，不闪烁）
@@ -11027,6 +11037,10 @@ window.addEventListener('keydown',function(e){
         moveAbnormalFocus(-1, curData);
       } else if (e.key === 'Enter' && !e.shiftKey) {
         handleAbnormalEnterAudit(e);
+      } else if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        advanceAbnormalFocusAfterSkip(wsAbnormalIndex);
       } else if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -11248,6 +11262,173 @@ window.addEventListener('keydown',function(e){
     } catch (e) {return false;}
   }
 
+  // --- 右栏实时检验结果检视器 (Live Inspector) ---
+  function renderLiveInspector(specimen) {
+    const insp = document.getElementById('lis-ws-inspector');
+    if (!insp) {return;}
+    if (!specimen) {
+      insp.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--lis-text-muted);font-size:13px;gap:8px">
+          <div style="font-size:32px;opacity:.5">📋</div>
+          <div>请在左侧列表选择标本查看结果</div>
+        </div>`;
+      return;
+    }
+    const rdr = specimen.ReportDR || '';
+    const cached = wsClassifiedCache[rdr];
+    const bucket = getWSAuditBucket(specimen);
+    const hasCritical = (cached && cached.status === 'CRITICAL') || (cached && cached.items && cached.items.some(it => it.status === 'CRITICAL' || it.critical));
+    const hasZeroSuspect = cached && cached.status === 'ZERO';
+    const hasInfectionWarning = cached && cached.infectionWarning;
+
+    const _cr = (cached && cached.row) || specimen;
+    const name = esc(specimen.PatName || '未知');
+    const sex = esc(_cr.Sex || _cr.Species || specimen.Sex || specimen.Species || '');
+    const age = esc((_cr.Age || specimen.Age || '') + (_cr.AgeUnit || specimen.AgeUnit || ''));
+    const labno = esc(specimen.Labno || '-');
+    const regNo = esc(_cr.RegNo || specimen.RegNo || '-');
+    const admNo = esc(_cr.AdmNo || specimen.AdmNo || '');
+    const bed = esc(formatDetailBedNo(_cr.BedNo || specimen.BedNo));
+    const dept = esc(_cr.Location || _cr.LocationName || specimen.LocDesc || '');
+    const doc = esc(_cr.Doctor || _cr.DoctorName || specimen.Doctor || '');
+    const testSet = esc(specimen.TestSetDesc || '');
+    const machine = esc(specimen._mn || prWorkGroupMachineDR(specimen) || '');
+    const admBadge = admTypeBadgeHTML(specimen);
+    const recheckTag = recheckTagHTML(specimen);
+    const extraText = buildDetailExtraText(_cr, specimen);
+
+    let hdHtml = `
+      <div class="insp-hd-main">
+        <div class="insp-hd-pat">
+          <span class="insp-pat-name">${name}</span>
+          ${sex || age ? `<span class="insp-pat-meta">${[sex, age].filter(Boolean).join(' · ')}</span>` : ''}
+          ${admBadge}
+          ${recheckTag}
+        </div>
+        <div class="insp-hd-sub">
+          <span>检验号: <span class="insp-mono">${labno}</span></span>
+          <span>登记号: <span class="insp-mono">${regNo}</span></span>
+          ${admNo ? `<span>住院号: <span class="insp-mono">${admNo}</span></span>` : ''}
+          ${bed ? `<span>${bed}</span>` : ''}
+          ${dept ? `<span>${dept}</span>` : ''}
+          ${doc ? `<span>医生: ${doc}</span>` : ''}
+          <span>仪器: ${machine}</span>
+        </div>
+        ${extraText ? `<div class="insp-hd-extra" title="${escAttr(extraText)}">${esc(extraText)}</div>` : ''}
+      </div>
+      <div class="insp-hd-acts">
+        <button class="insp-tool-btn" id="lis-insp-tool-native" type="button" title="在原生 LIS 界面打开此标本">📂 原生</button>
+        <button class="insp-tool-btn" id="lis-insp-tool-drawer" type="button" title="打开完整历史抽屉">📋 抽屉</button>
+      </div>
+    `;
+
+    let alertHtml = '';
+    if (hasCritical) {
+      alertHtml = `<div class="ws-insp-alert critical">🚨 <b>危急值警告</b>：此标本包含危急值指标，须在原始 LIS 复查登记后再审核！</div>`;
+    } else if (hasInfectionWarning) {
+      alertHtml = `<div class="ws-insp-alert warning">⚠️ <b>历史不一致</b>：${esc(cached.infectionWarning)}</div>`;
+    } else if (hasZeroSuspect) {
+      alertHtml = `<div class="ws-insp-alert warning">⚠️ <b>可疑 0 值（疑似堵孔）</b>：检测到 0 值或断崖式异常，请务必核实原始仪器吸样状态！</div>`;
+    } else if (bucket === 'normal') {
+      alertHtml = `<div class="ws-insp-alert normal">✅ <b>指标正常</b>：所有检验项目均在参考区间内，可安全审核。</div>`;
+    }
+
+    const isAuditing = _abnormalAuditInProgress && _abnormalFocusDR === String(rdr);
+    let ftHtml = `
+      <div class="ws-insp-hint"><kbd>Enter</kbd> 审核当前 · <kbd>Space</kbd> 跳过 · <kbd>↑↓</kbd> 切换 · <kbd>F4</kbd> 批审正常</div>
+      <div class="ws-insp-ft-actions">
+        <button class="ws-insp-btn-skip" id="lis-insp-btn-skip" type="button" title="跳过当前标本 (Space)">↷ 跳过 (Space)</button>
+        <button class="ws-insp-btn-audit${isAuditing ? ' disabled' : ''}" id="lis-insp-btn-audit" type="button" ${isAuditing ? 'disabled' : ''}>
+          ${isAuditing ? '⏳ 审核中...' : '✓ 审核此标本 (Enter)'}
+        </button>
+      </div>
+    `;
+
+    let hd = document.getElementById('lis-insp-hd');
+    let al = document.getElementById('lis-insp-alert');
+    let bd = document.getElementById('lis-insp-body');
+    let ft = document.getElementById('lis-insp-ft');
+
+    if (!hd || !al || !bd || !ft) {
+      insp.innerHTML = `
+        <div class="ws-insp-hd" id="lis-insp-hd"></div>
+        <div id="lis-insp-alert"></div>
+        <div class="ws-insp-body" id="lis-insp-body"></div>
+        <div class="ws-insp-ft" id="lis-insp-ft"></div>
+      `;
+      hd = document.getElementById('lis-insp-hd');
+      al = document.getElementById('lis-insp-alert');
+      bd = document.getElementById('lis-insp-body');
+      ft = document.getElementById('lis-insp-ft');
+
+      bd.addEventListener('click', e => {
+        const btn = e.target && e.target.closest ? e.target.closest('.detail-hist-item') : null;
+        if (!btn) { return; }
+        e.preventDefault();
+        e.stopPropagation();
+        const curData = filteredData();
+        const sp = getAbnormalFocusSpecimen(curData);
+        if (!sp) { toast('当前没有选中的标本', 'warning'); return; }
+        histOpenForTest(
+          {
+            RegNo: sp.RegNo || '',
+            PatName: sp.PatName || '',
+            Labno: sp.Labno || '',
+            EpisodeNo: sp.EpisodeNo || '',
+            _wg: sp._wg || '',
+            _mdr: sp._mdr || '',
+            ReportDR: sp.ReportDR || '',
+            Status: sp.Status || sp.ReportStatus || '',
+            AcceptDT: sp.AcceptDT || '',
+            TransmitDate: sp.TransmitDate || '',
+            MachineParameterDR: sp.MachineParameterDR || '',
+            TestSetDesc: sp.TestSetDesc || ''
+          },
+          btn.dataset.key || '',
+          btn.dataset.name || '',
+          btn.dataset.syn || ''
+        );
+      });
+    }
+
+    hd.innerHTML = hdHtml;
+    al.innerHTML = alertHtml;
+    ft.innerHTML = ftHtml;
+
+    const nativeBtn = document.getElementById('lis-insp-tool-native');
+    if (nativeBtn) {
+      nativeBtn.addEventListener('click', () => {
+        navigateToSpecimen(specimen);
+      });
+    }
+    const drawerBtn = document.getElementById('lis-insp-tool-drawer');
+    if (drawerBtn) {
+      drawerBtn.addEventListener('click', () => {
+        openDetailPanel(specimen, bucket === 'normal' ? 'normal' : 'abnormal', wsAbnormalIndex);
+      });
+    }
+    const skipBtn = document.getElementById('lis-insp-btn-skip');
+    if (skipBtn) {
+      skipBtn.addEventListener('click', () => {
+        advanceAbnormalFocusAfterSkip(wsAbnormalIndex);
+      });
+    }
+    const auditBtn = document.getElementById('lis-insp-btn-audit');
+    if (auditBtn) {
+      auditBtn.addEventListener('click', () => {
+        triggerAbnormalEnterAudit();
+      });
+    }
+
+    bd.innerHTML = `
+      <div class="ws-insp-loading">
+        <div class="spinner"></div>
+        <span>正在加载结果...</span>
+      </div>
+    `;
+    loadDetailResults(specimen, bd);
+  }
+
   // --- 待审视图（融合正常 + 异常，单队列审核）---
   function renderAuditView(data, body) {
     if (_abnormalFocusDR) {
@@ -11271,7 +11452,9 @@ window.addEventListener('keydown',function(e){
       }
     });
 
-    let h = `<div class="ws-audit-banner">
+    let h = '<div class="ws-split-wrap">';
+    h += '<div class="ws-split-master">';
+    h += `<div class="ws-audit-banner">
             <span class="ws-audit-summary">
                 ✅ 正常 <b>${nNormal}</b>
                 <span class="ws-audit-sep">·</span>
@@ -11282,7 +11465,8 @@ window.addEventListener('keydown',function(e){
         </div>`;
 
     h += `<div class="ws-abnormal-hint">
-            <kbd>Enter</kbd> 审核当前条 <kbd>F4</kbd> 批审正常 <kbd>↑↓</kbd> 切换 <kbd>点击</kbd> 详情 · 按仪器分组，审完一台再换下一台
+            <span><kbd>Enter</kbd> 审核 <kbd>Space</kbd> 跳过 <kbd>↑↓</kbd> 移动 <kbd>F4</kbd> 批审</span>
+            <span>按仪器分组</span>
         </div>`;
     h += '<div class="ws-abnormal-list">';
 
@@ -11300,15 +11484,19 @@ window.addEventListener('keydown',function(e){
         // --- 正常行：信任分类结果，Enter 直接单条审核；F4 整批 ---
         const focused = i === wsAbnormalIndex ? ' focused' : '';
         h += `<div class="ws-abnormal-card is-normal${focused}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+        h += '<div class="ab-card-top">';
+        h += '<div style="display:flex;align-items:center;gap:6px;min-width:0">';
         h += '<span class="ab-card-badge ok">✅</span>';
         h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
         h += recheckTagHTML(r);
         h += admTypeBadgeHTML(r);
+        h += '</div>';
         h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
+        h += '</div>';
+        h += `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--lis-text-secondary)">`;
         h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || '', wsSearchQuery)}</span>`;
-        h += `<span class="ab-card-time">${esc(r.AcceptDT || '')}</span>`;
-        // 8.5.52: 复检标本可审核（危急值除外），提示恢复 Enter=审核
-        h += '<span class="ab-card-hint">Enter=审核</span>';
+        h += `<span class="ab-card-hint" style="color:#059669;font-weight:600">Enter 审核</span>`;
+        h += '</div>';
         h += '</div>';
         return;
       }
@@ -11323,6 +11511,8 @@ window.addEventListener('keydown',function(e){
       const focused = i === wsAbnormalIndex ? ' focused' : '';
 
       h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}${hasZeroSuspect ? ' has-zero' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      h += '<div class="ab-card-top">';
+      h += '<div style="display:flex;align-items:center;gap:6px;min-width:0">';
       h += hasCritical
         ? '<span class="ab-card-badge critical">🚨</span>'
         : hasZeroSuspect
@@ -11331,15 +11521,18 @@ window.addEventListener('keydown',function(e){
       h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
       h += recheckTagHTML(r);
       h += admTypeBadgeHTML(r);
+      h += '</div>';
       h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
-      h += `<span class="ab-card-test">${highlightText(r._mn || '', wsSearchQuery)}</span>`;
+      h += '</div>';
+      h += `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--lis-text-secondary)">`;
+      h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || r._mn || '', wsSearchQuery)}</span>`;
+      h += `<span class="ab-card-time" style="font-size:10.5px;color:var(--lis-text-muted)">${esc(r.AcceptDT || '')}</span>`;
+      h += '</div>';
       h += '<div class="ab-card-items">';
       // 如果分类缓存没有具体项目，尝试从详情缓存获取
       let displayItems = abnormalItems;
       if (displayItems.length === 0 && !hasInfectionWarning) {
-        const detailCached = detailLRUGet(r.ReportDR); // 需要提升优先级，因为用户可能点击查看
-        // 8.9.0: 解析结果连同所依据的详情 HTML 一起缓存进分类缓存条目——此前每 30s 刷新
-        // 对每张异常卡都把整份详情 HTML 全量塞进临时 DOM 重新解析一遍，还顺带污染 LRU 访问序
+        const detailCached = detailLRUGet(r.ReportDR);
         const _cacheEntry = wsClassifiedCache[r.ReportDR];
         if (
           detailCached && detailCached.html &&
@@ -11347,7 +11540,6 @@ window.addEventListener('keydown',function(e){
         ) {
           displayItems = _cacheEntry._displayItems;
         } else if (detailCached && detailCached.html) {
-          // 从详情缓存 HTML 中提取异常项目
           const extracted = [];
           const _tmp = document.createElement('div');
           _tmp.innerHTML = detailCached.html;
@@ -11371,7 +11563,6 @@ window.addEventListener('keydown',function(e){
           if (_cacheEntry) {_cacheEntry._displayItems = extracted; _cacheEntry._displayItemsFrom = detailCached.html;}
           displayItems = extracted;
         }
-        // 如果仍然没有，显示所有有结果的项目（可能 AbFlag 未标记）
         if (displayItems.length === 0 && items.length > 0) {
           displayItems = items.filter(it => !isEmptyResultValue(it, it.result));
         }
@@ -11383,8 +11574,7 @@ window.addEventListener('keydown',function(e){
         else if (st === 'HIGH') {cls = 'high';}
         else if (st === 'LOW') {cls = 'low';}
         else if (st === 'ABNORMAL') {cls = 'abnormal';}
-        else if (st === 'ZERO') {cls = 'zero';} // 8.5.58: 疑似堵孔 0 值
-        // x8 传染病面板：梅毒/丙肝/HIV 阳性统一高亮（区别于乙肝两对半）
+        else if (st === 'ZERO') {cls = 'zero';}
         if (
           st === 'ABNORMAL' &&
           isX8InfectionPanel(r) &&
@@ -11418,8 +11608,16 @@ window.addEventListener('keydown',function(e){
       }
       h += '</div>';
     });
-    h += '</div>';
+    h += '</div>'; // close ws-abnormal-list
+    h += '</div>'; // close ws-split-master
+
+    // 右栏实时检视器容器
+    h += '<div class="ws-split-inspector" id="lis-ws-inspector"></div>';
+    h += '</div>'; // close ws-split-wrap
     body.innerHTML = h;
+
+    const activeSpecimen = data[wsAbnormalIndex] || data[0] || null;
+    renderLiveInspector(activeSpecimen);
 
     // 横幅一键批审按钮（与顶栏 / F4 共用 openWorkbenchBatchAudit）
     const auditBatchBtn = document.getElementById('lis-audit-batch');
@@ -11429,18 +11627,13 @@ window.addEventListener('keydown',function(e){
       });
     }
 
-    // 卡片点击 → 更新聚焦 + 打开详情；空白处点击 → 收回详情
-    // 移除旧委托，防止刷新累积多个处理器
+    // 卡片点击 → 更新聚焦与实时检视器
     if (body._abnormalClickHandler) {
       body.removeEventListener('click', body._abnormalClickHandler);
     }
     body._abnormalClickHandler = e => {
       const card = e.target.closest('.ws-abnormal-card');
-      if (!card) {
-        // 点击空白处，收回详情面板
-        if (isDetailPanelVisible()) {closeDetailPanel();}
-        return;
-      }
+      if (!card) {return;}
       const specimen = findWSSpecimenByReportDR(card.dataset.rdr);
       if (!specimen) {return;}
       _abnormalFocusDR = String(specimen.ReportDR || '');
@@ -11451,11 +11644,11 @@ window.addEventListener('keydown',function(e){
         0,
         filteredData().findIndex(r => String(r.ReportDR) === String(specimen.ReportDR))
       );
-      openDetailPanel(specimen, getWSAuditBucket(specimen) === 'normal' ? 'normal' : 'abnormal', wsAbnormalIndex);
+      renderLiveInspector(specimen);
     };
     body.addEventListener('click', body._abnormalClickHandler);
 
-    // 键盘导航（详情面板打开时不重绑列表 handler，避免与详情 Enter/F4 双重注册）
+    // 键盘导航
     if (!isDetailPanelVisible()) {_rebindAbnormalKeyHandler();}
 
     // 滚动到聚焦卡片
@@ -11480,6 +11673,7 @@ window.addEventListener('keydown',function(e){
     );
     if (card) {card.classList.add('focused');}
     _scrollAbnormalFocus();
+    renderLiveInspector(data[idx]);
     scheduleAbnormalAuditPrewarm();
   }
 
@@ -11503,7 +11697,10 @@ window.addEventListener('keydown',function(e){
       wsAbnormalIndex = (wsAbnormalIndex + 1) % data.length;
     }
     if (cards[wsAbnormalIndex]) {cards[wsAbnormalIndex].classList.add('focused');}
-    if (data[wsAbnormalIndex]) {_abnormalFocusDR = String(data[wsAbnormalIndex].ReportDR || '');}
+    if (data[wsAbnormalIndex]) {
+      _abnormalFocusDR = String(data[wsAbnormalIndex].ReportDR || '');
+      renderLiveInspector(data[wsAbnormalIndex]);
+    }
     _scrollAbnormalFocus();
   }
 
@@ -11515,11 +11712,18 @@ window.addEventListener('keydown',function(e){
     const card = [...document.querySelectorAll('.ws-abnormal-card[data-rdr]')].find(
       c => String(c.dataset.rdr || '') === String(reportDR || '')
     );
-    if (!card) {return;}
-    card.classList.remove('auditing');
-    card.removeAttribute('aria-busy');
-    const hint = card.querySelector('.ab-card-hint');
-    if (hint && hint.textContent === '正在审核...') {hint.textContent = 'Enter=审核';}
+    if (card) {
+      card.classList.remove('auditing');
+      card.removeAttribute('aria-busy');
+      const hint = card.querySelector('.ab-card-hint');
+      if (hint && hint.textContent === '正在审核...') {hint.textContent = 'Enter=审核';}
+    }
+    const inspBtn = document.getElementById('lis-insp-btn-audit');
+    if (inspBtn && _abnormalFocusDR === String(reportDR || '')) {
+      inspBtn.disabled = false;
+      inspBtn.classList.remove('disabled');
+      inspBtn.textContent = '✓ 审核此标本 (Enter)';
+    }
   }
 
   function auditTargetContext(iframeWin, reportDR) {
@@ -11662,6 +11866,14 @@ window.addEventListener('keydown',function(e){
       card.setAttribute('aria-busy', 'true');
       const hint = card.querySelector('.ab-card-hint');
       if (hint) {hint.textContent = '正在审核...';}
+    }
+    if (phase === 'start') {
+      const inspBtn = document.getElementById('lis-insp-btn-audit');
+      if (inspBtn && _abnormalFocusDR === targetDR) {
+        inspBtn.disabled = true;
+        inspBtn.classList.add('disabled');
+        inspBtn.textContent = '⏳ 审核中...';
+      }
     }
   }
 
@@ -11942,6 +12154,7 @@ window.addEventListener('keydown',function(e){
       cards[wsAbnormalIndex].classList.add('focused');
       _abnormalFocusDR = String(cards[wsAbnormalIndex].dataset.rdr || '');
       _scrollAbnormalFocus();
+      renderLiveInspector(newData[wsAbnormalIndex]);
     } else {
       renderWSTable();
       return;
@@ -13924,17 +14137,24 @@ window.addEventListener('keydown',function(e){
     return items;
   }
 
-  async function loadDetailResults(specimen) {
-    const body = document.getElementById('lis-detail-body');
+  async function loadDetailResults(specimen, targetBody) {
+    const isInspector = !!targetBody;
+    const body = targetBody || document.getElementById('lis-detail-body');
     if (!body) {return;}
     const rdr = specimen.ReportDR || '';
     const seq = ++_detailLoadSeq;
-    const isCurrentDetail = () =>
-      detailPanel &&
-      detailPanel.classList.contains('show') &&
-      currentDetailSpecimen &&
-      String(currentDetailSpecimen.ReportDR || '') === String(rdr) &&
-      seq === _detailLoadSeq;
+    const isCurrentDetail = () => {
+      if (seq !== _detailLoadSeq) {return false;}
+      if (isInspector) {
+        return _abnormalFocusDR === String(rdr);
+      }
+      return (
+        detailPanel &&
+        detailPanel.classList.contains('show') &&
+        currentDetailSpecimen &&
+        String(currentDetailSpecimen.ReportDR || '') === String(rdr)
+      );
+    };
 
     // LRU 缓存命中
     const cached = detailLRUGet(rdr);
@@ -14348,15 +14568,25 @@ window.addEventListener('keydown',function(e){
       }
 
       if (!isCurrentDetail()) {return;}
-      if (_extraText !== null) {
+      if (_extraText !== null && !isInspector) {
         const extraEl = document.getElementById('lis-detail-extra');
         if (extraEl) {extraEl.textContent = _extraText;}
       }
       body.innerHTML = html;
       const _dp = document.getElementById('lis-detail-panel');
-      if (_dp) {
+      if (_dp && !isInspector) {
         _dp.dataset.rdr = String(rdr);
         _dp.dataset.hasCritical = critItems > 0 ? '1' : '0';
+      }
+      if (isInspector) {
+        const al = document.getElementById('lis-insp-alert');
+        if (al) {
+          if (critItems > 0) {
+            al.innerHTML = `<div class="ws-insp-alert critical">🚨 <b>危急值警告</b>：此标本包含危急值指标 (${critItems} 项)，须在原始 LIS 复查登记后再审核！</div>`;
+          } else if (hasInfSpecialPos) {
+            al.innerHTML = `<div class="ws-insp-alert warning">⚠️ <b>传染病阳性高亮</b>：包含梅毒/丙肝/HIV等特殊阳性指标，请仔细复核！</div>`;
+          }
+        }
       }
       // 存入 LRU 缓存
       detailLRUSet(rdr, { html, ts: Date.now() });
