@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.14.0
+// @version      8.14.1
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19078,6 +19078,16 @@ window.addEventListener('keydown',function(e){
     return parseReferenceRange(item.RefRanges || item.RefRange || item.ReferenceRange || '');
   }
 
+  // 8.14.1: RefRanges 是否为「多段/性别年龄分段」文本——parseReferenceRange 只能取第一段，
+  // 结构化上下限（ValueLow/ValueHigh）又缺失时无法确定唯一 ULN/LLN，轻微带一律留人工。
+  function isAmbiguousRangeText(txt) {
+    const s = String(txt || '');
+    if (!s) {return false;}
+    const segs = s.match(/\d+(?:\.\d+)?\s*[-~～至]\s*\d+(?:\.\d+)?/g);
+    if (segs && segs.length > 1) {return true;}          // 两段及以上「数字-数字」
+    return /[男女]|岁|月龄|经期|卵泡|黄体|妊娠/.test(s);   // 性别/年龄/经期分段标记
+  }
+
   function getItemPanicRangeValues(item) {
     const low = item.PanicLow || item.CriticalLow || item.CrisisLow || item.DangerLow || '';
     const high = item.PanicHigh || item.CriticalHigh || item.CrisisHigh || item.DangerHigh || '';
@@ -19656,9 +19666,21 @@ window.addEventListener('keydown',function(e){
   ];
 
   function matchMildRule(it) {
-    const candidates = [it && it.CName, it && it.name, it && it.Synonym, it && it.Code];
+    if (!it) {return null;}
+    // 8.14.1: 两轮匹配，中文名优先于编码——杜绝裸编码串味：
+    //   CRP 编码=CR 不再命中「肌酐 ^cr$」；血小板压积 编码=PCT 不再命中「降钙素原 ^pct$」。
+    //   每轮内部仍按 MILD_ALLOW_RULES 数组顺序首条命中，保留既有靠顺序的保护（如 载脂蛋白A1 早于 脂蛋白(a)）。
+    // 第一轮：只按中文/项目名（唯一性最高）
+    const nameCands = [it.CName, it.name];
     for (const rule of MILD_ALLOW_RULES) {
-      for (const c of candidates) {
+      for (const c of nameCands) {
+        if (c && rule.re.test(String(c).trim())) {return rule;}
+      }
+    }
+    // 第二轮：中文名缺失或为变体时，才回退同义词 + 编码
+    const codeCands = [it.Synonym, it.Code];
+    for (const rule of MILD_ALLOW_RULES) {
+      for (const c of codeCands) {
         if (c && rule.re.test(String(c).trim())) {return rule;}
       }
     }
@@ -19678,7 +19700,17 @@ window.addEventListener('keydown',function(e){
     const p = parseComparableNumber(it && it.result);
     if (!p || p.op || isNaN(p.value)) {return { ok: false, reason: `${name} 结果非纯数值，不放行` };}
     if (p.value < 0) {return { ok: false, reason: `${name} ${p.value} 含负值，不放行` };}
-    const range = getItemRangeValues(it || {});
+    // 8.14.1: 上下限取自原始 LIS 条目（it.preResult 带 ValueLow/ValueHigh，按患者性别年龄，
+    // 与 LIS 判 H/L 同源）。分类对象只拷了 RefRanges 文本，直接传 it 会恒落文本解析、多段取第一段。
+    const _rngSrc = (it && it.preResult) || it || {};
+    const range = getItemRangeValues(_rngSrc);
+    // 结构化上下限缺失且 RefRanges 为分段文本时，无法确定唯一 ULN/LLN，宁可留人工
+    const _hasStruct = !!(_rngSrc.ValueLow || _rngSrc.ValueHigh || _rngSrc.LowValue ||
+                          _rngSrc.HighValue || _rngSrc.RefLow || _rngSrc.RefHigh ||
+                          _rngSrc.ReferenceLow || _rngSrc.ReferenceHigh);
+    if (!_hasStruct && isAmbiguousRangeText(_rngSrc.RefRanges || _rngSrc.RefRange || _rngSrc.ReferenceRange || it.RefRanges)) {
+      return { ok: false, reason: `${name} 参考范围为分段文本且无结构化上下限，留人工` };
+    }
     if (st === 'HIGH') {
       if (rule.high === undefined) {return { ok: false, reason: `${name} 偏高不放行` };}
       let limit = Infinity;
