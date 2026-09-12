@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.12
+// @version      8.11.13
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1176,6 +1176,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ab-card-item.zero{background:#fffbeb;color:#b45309;border-color:#fde68a}
 .ab-card-item.infection-warning{background:#fff7ed;color:#c2410c;border-color:#fed7aa;font-weight:700}
 .ab-card-item.uncertain{background:var(--lis-surface-subtle);color:var(--lis-slate-500)}
+/* 8.11.13: 血常规次要异常折叠计数 chip（比率/分布宽度/MPV 等），悬停看被折叠项全量 */
+.ab-card-item.minor-more{background:transparent;color:var(--lis-text-muted);border:1px dashed var(--lis-border-strong);font-weight:500}
 .ab-card-item.inf-special{background:#fef08a;color:#713f12;border-color:#facc15;font-weight:700}
 .ab-card-badge{font-size:13px;flex:0 0 auto}
 .ab-card-admtype{font-size:11px;font-weight:600;padding:1px 5px;border-radius:3px;line-height:1.3;white-space:nowrap}
@@ -11910,7 +11912,18 @@ window.addEventListener('keydown',function(e){
       h += '</div>';
       h += '<div class="ab-card-items">';
       const displayItems = getAbnormalDisplayItems(r, hasInfectionWarning);
+      // 8.11.13: 血常规次要异常按自动审核推送同款口径折叠——core 必显 / cond 超阈值才显 /
+      // skip（比率、分布宽度、MPV 等衍生项）折叠为「+N 次要」；危急值永显、非血常规组合
+      // 不受影响、参考范围解析失败时 fail-open 显示（与推送摘要 aaPushItemVisible 同一函数，
+      // 卡片与推送看到的口径永远一致）。被折叠项在「+N 次要」悬停 title 里可看全量
+      const _testKey = r.TestSetDesc || r._mn || '';
+      const visibleItems = [];
+      const hiddenMinor = [];
       displayItems.forEach(it => {
+        if (aaPushItemVisible(_testKey, it)) {visibleItems.push(it);}
+        else {hiddenMinor.push(it);}
+      });
+      visibleItems.forEach(it => {
         let cls = 'uncertain';
         const st = it.status || '';
         if (st === 'CRITICAL') {cls = 'critical';}
@@ -11934,10 +11947,16 @@ window.addEventListener('keydown',function(e){
         const chipText = prefix + abbrName + ' ' + it.result + (it.unit || '') + dirMark;
         h += `<span class="ab-card-item ${cls}" title="${escAttr(it.name + ' ' + it.result + (it.unit || '') + (dirMark ? '（' + (st === 'HIGH' ? '偏高' : '偏低') + '）' : ''))}">${esc(chipText)}</span>`;
       });
+      if (hiddenMinor.length > 0) {
+        const hiddenText = hiddenMinor
+          .map(it => `${it.name || ''} ${it.result || ''}${it.unit || ''}`.trim())
+          .join('；');
+        h += `<span class="ab-card-item minor-more" title="${escAttr('次要异常已折叠（' + hiddenText + '）')}">+${hiddenMinor.length} 次要</span>`;
+      }
       if (hasInfectionWarning) {
         h += `<span class="ab-card-item infection-warning">⚠ ${esc(cached.infectionWarning)}</span>`;
       }
-      if (hasCritical && !displayItems.some(it => it.status === 'CRITICAL' || it.critical)) {
+      if (hasCritical && !visibleItems.some(it => it.status === 'CRITICAL' || it.critical)) {
         h += '<span class="ab-card-item critical">🚨 危急值</span>';
       }
       if (displayItems.length === 0 && !hasInfectionWarning) {
