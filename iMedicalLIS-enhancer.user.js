@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.0
+// @version      8.15.1
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19658,14 +19658,14 @@ window.addEventListener('keydown',function(e){
     { re: /^三碘甲状(腺)?原氨酸|^总t3$|^tt3$/i, tier: 'b', group: 'TT3', high: 1.15, low: 0.85 },
     // ---- 乙类：性激素六项（8.15.0 起按性别取基准范围）----
     // sexRanges: [m]=男性范围；[f]=「各期汇总包络」（各期下限取最低、上限取最高，基准值取自 LIS 参考分段文本）。
-    // 基准上再乘 high/low 倍数；性别取不到 → 留人工。倍数取 1.5/0.7（激素日间波动大、且包络本身已覆盖各期）。
+    // 基准上再乘 high/low 倍数；性别取不到 → 留人工。倍数取 2/0.5（激素日间波动大、且包络本身已覆盖各期，8.15.1 用户确认放宽）。
     // 注意：绝经后女性 FSH/LH 显著高于育龄期包络，会按超带留人工（保守正确）；如需放行需把绝经后期范围并入包络
-    { re: /促卵泡|^fsh$/i, tier: 'b', group: 'FSH', sexRanges: { m: [1.27, 19.26], f: [1.79, 22.51] }, high: 1.5, low: 0.7 },
-    { re: /黄体生成素|^lh$/i, tier: 'b', group: 'LH', sexRanges: { m: [1.24, 8.62], f: [1.20, 103.03] }, high: 1.5, low: 0.7 },
-    { re: /泌乳素|^prl$/i, tier: 'b', group: 'PRL', sexRanges: { m: [2.64, 13.13], f: [2.74, 26.72] }, high: 1.5, low: 0.7 },
-    { re: /雌二醇|^e2$/i, tier: 'b', group: 'E2', sexRanges: { m: [0, 143], f: [0, 1624] }, high: 1.5, low: null },
-    { re: /^(血清)?孕酮(测定)?[\*＊]?$/i, tier: 'b', group: 'PROG', sexRanges: { m: [0.45, 6.55], f: [0.25, 64] }, high: 1.5, low: null },
-    { re: /^(血清)?睾酮(测定)?[\*＊]?$|^tsto$/i, tier: 'b', group: 'TSTO', sexRanges: { m: [2.12, 23.15], f: [0, 2.6] }, high: 1.5, low: 0.7 },
+    { re: /促卵泡|^fsh$/i, tier: 'b', group: 'FSH', sexRanges: { m: [1.27, 19.26], f: [1.79, 22.51] }, high: 2, low: 0.5 },
+    { re: /黄体生成素|^lh$/i, tier: 'b', group: 'LH', sexRanges: { m: [1.24, 8.62], f: [1.20, 103.03] }, high: 2, low: 0.5 },
+    { re: /泌乳素|^prl$/i, tier: 'b', group: 'PRL', sexRanges: { m: [2.64, 13.13], f: [2.74, 26.72] }, high: 2, low: 0.5 },
+    { re: /雌二醇|^e2$/i, tier: 'b', group: 'E2', sexRanges: { m: [0, 143], f: [0, 1624] }, high: 2, low: null },
+    { re: /^(血清)?孕酮(测定)?[\*＊]?$/i, tier: 'b', group: 'PROG', sexRanges: { m: [0.45, 6.55], f: [0.25, 59] }, high: 2, low: null },
+    { re: /^(血清)?睾酮(测定)?[\*＊]?$|^tsto$/i, tier: 'b', group: 'TSTO', sexRanges: { m: [2.12, 23.15], f: [0, 2.6] }, high: 2, low: 0.5 },
     // ---- 乙类：发光心肌/肿瘤/铁蛋白/炎症 ----
     { re: /^肌红蛋白[\*＊]?$|^myo$/i, tier: 'b', group: 'MYO', high: 1.25, low: null },
     { re: /甲胎蛋白|^afp$/i, tier: 'b', group: 'AFP', high: 1.3, low: null },
