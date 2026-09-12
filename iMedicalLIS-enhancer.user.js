@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.10
+// @version      8.11.11
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10749,15 +10749,43 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     renderAutoAuditButtonState();
   }
 
+  // 8.11.11: 批审前置安全校验（分类完成 / 无失效分类 / 全部可自动审核 / 非空）——
+  // 直审路径（F4/横幅按钮）与确认弹窗路径共用，未过校验一律不启动批审
+  function validateBatchAudit(normalData) {
+    if (wsClassifying) {
+      showToast('标本正在分类中，请等候分类完成后再批审', 'warning');
+      return false;
+    }
+    const stale = normalData.filter(sp => !isLiveNormalForBatch(sp.reportDR || (sp.row && sp.row.ReportDR)));
+    if (stale.length > 0) {
+      const first = stale[0].row || stale[0];
+      showToast(`分类状态已变化或未完成：${first.PatName || first.Labno || ''}，请刷新工作台后重试`, 'error');
+      return false;
+    }
+    const blocked = normalData.filter(r => !isAutoAuditableClassified(r));
+    if (blocked.length > 0) {
+      const first = blocked[0];
+      showToast(getAutoAuditBlockReason(first, first.row) || '包含不可自动审核的标本', 'error');
+      return false;
+    }
+    if (normalData.length === 0) {
+      showToast('没有可审核的标本', 'warning');
+      return false;
+    }
+    return true;
+  }
+
   // 工作台「正常可审」一键批审入口（按钮 / F4 共用）
   // 有勾选则只审勾选中的正常标本，否则审当前筛选下全部正常可审
+  // 8.11.11: 免确认——F4/按钮校验通过后直接批审（危急值/异常/不可自动审核标本本就被排除，
+  // 且批审中有进度条 + ⏹停止按钮兜底），不再要求「再按一次 F4 确认」
   function openWorkbenchBatchAudit() {
     try {
       if (_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress) {
         showToast('正在审核中，请稍候', 'warning');
         return false;
       }
-      // 批审确认框已打开时不重复弹出（由 F4 走确认）
+      // 旧确认框（Alt+B 路径）还开着时不叠加启动
       const existing = document.getElementById('lis-audit-confirm');
       if (existing && existing.classList.contains('show')) {return false;}
 
@@ -10794,12 +10822,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         }
         return false;
       }
-      // 分类未完成时只含已识别 NORMAL，避免用户以为是「全部正常」
-      if (wsClassifying) {
-        showToast(`分类仍在进行，本次仅批审已识别的 ${normalData.length} 个正常标本`, 'warning');
-      }
-      dbg('一键批审:', normalData.length, '个标本');
-      confirmAndBatchAudit(normalData);
+      if (!validateBatchAudit(normalData)) {return false;}
+      dbg('一键批审(直审):', normalData.length, '个标本');
+      showToast(`⚡ 开始批审 ${normalData.length} 个正常标本（首条自动 CA 认证，进度条可停止）`, 'success');
+      // 与旧确认弹窗路径同款排序：按审核视图顺序（仪器分组、危急→异常→正常）逐条审
+      const sorted = [...normalData].sort((a, b) => compareSpecimensForAudit(a.row || a, b.row || b));
+      executeBatchAudit(sorted).catch(e => {
+        console.error('[LIS] 批审异常:', e);
+        showToast('批审出错: ' + e.message, 'error');
+      });
       return true;
     } catch (e) {
       dbg('一键批审错误:', e);
@@ -11014,8 +11045,8 @@ window.addEventListener('keydown',function(e){
   }
 
   // F4 统一入口优先级：
-  // 1) 批审确认框 → 确认批审
-  // 2) 待审视图（正常+异常已合并 8.5.0）→ 弹出批审确认（批审全部正常，再按一次 F4 确认）
+  // 1) 批审确认框（Alt+B 旧通道仍会弹）→ 确认批审
+  // 2) 待审视图（正常+异常已合并 8.5.0）→ 直接批审正常标本（8.11.11 免确认）
   // 注：详情面板内 F4 已取消（8.5.1），由 _f4BridgeHandler 直接吞掉
   function triggerF4Audit() {
     // 批审确认对话框（含一键批审详细信息页）
@@ -11074,7 +11105,7 @@ window.addEventListener('keydown',function(e){
         return;
       }
       if (e.key !== 'F4') {return;}
-      // 待审列表：F4 打开一键批审确认（再按 F4 确认）
+      // 待审列表：F4 直接批审正常标本（8.11.11 免确认弹窗）
       if (isWSVisible() && wsCategory === 'audit') {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -11811,7 +11842,7 @@ window.addEventListener('keydown',function(e){
                 ⚠️ 异常 <b>${nAbnormal}</b>
                 ${nCritical ? `<span class="ws-audit-sep">·</span><span class="ws-audit-critical">🚨 危急 <b>${nCritical}</b></span>` : ''}
             </span>
-            ${nNormal > 0 ? `<button class="nb-btn" id="lis-audit-batch" title="F4 打开确认 · 再按 F4 确认批审">⚡ 一键批审正常 ${nNormal} · F4</button>` : ''}
+            ${nNormal > 0 ? `<button class="nb-btn" id="lis-audit-batch" title="直接批审当前筛选范围全部正常标本（异常/危急值/不可自动审核者除外）· F4 同 · 批审中可点进度条 ⏹ 停止">⚡ 一键批审正常 ${nNormal} · F4</button>` : ''}
         </div>`;
 
     h += `<div class="ws-abnormal-hint">
@@ -13148,27 +13179,9 @@ window.addEventListener('keydown',function(e){
   // --- 确认并批量审核 ---
   function confirmAndBatchAudit(normalData) {
     dbg('confirmAndBatchAudit 被调用, normalData.length:', normalData.length);
-    if (wsClassifying) {
-      showToast('标本正在分类中，请等候分类完成后再批审', 'warning');
-      return;
-    }
+    // 8.11.11: 前置校验抽到 validateBatchAudit 与直审路径共用
+    if (!validateBatchAudit(normalData)) {return;}
     normalData = [...(normalData || [])].sort((a, b) => compareSpecimensForAudit(a.row || a, b.row || b));
-    const stale = normalData.filter(sp => !isLiveNormalForBatch(sp.reportDR || (sp.row && sp.row.ReportDR)));
-    if (stale.length > 0) {
-      const first = stale[0].row || stale[0];
-      showToast(`分类状态已变化或未完成：${first.PatName || first.Labno || ''}，请刷新工作台后重试`, 'error');
-      return;
-    }
-    const blocked = normalData.filter(r => !isAutoAuditableClassified(r));
-    if (blocked.length > 0) {
-      const first = blocked[0];
-      showToast(getAutoAuditBlockReason(first, first.row) || '包含不可自动审核的标本', 'error');
-      return;
-    }
-    if (normalData.length === 0) {
-      showToast('没有可审核的标本', 'warning');
-      return;
-    }
     const existing = document.getElementById('lis-audit-confirm');
     if (existing) {existing.remove();}
 
