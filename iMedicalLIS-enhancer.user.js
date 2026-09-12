@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.15
+// @version      8.11.16
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1320,22 +1320,43 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
 
     
-/* --- 登录页优化 --- */
-#lis-login-box{position:fixed;top:50%;right:40px;transform:translateY(-50%);z-index:99999;background:rgba(255,255,255,.97);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.15);padding:20px 24px;width:300px;font-family:var(--lis-font)}
-#lis-login-box.dragging{opacity:.96;transform:none}
-#lis-login-box h4{margin:0 0 14px;font-size:15px;color:#2c3e50;text-align:center;cursor:move;user-select:none;padding:2px 0}
-#lis-login-box .lis-lb-row{margin-bottom:10px}
-#lis-login-box .lis-lb-row label{display:block;font-size:12px;color:#666;margin-bottom:3px}
-#lis-login-box .lis-lb-row input{width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box}
-#lis-login-box .lis-lb-row input:focus{border-color:#3498db;outline:none;box-shadow:0 0 0 2px rgba(52,152,219,.15)}
-#lis-login-box .lis-lb-wg{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
-#lis-login-box .lis-lb-wg button{flex:1;min-width:70px;padding:6px 8px;border:2px solid #e0e0e0;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;font-weight:600;transition:.2s}
-#lis-login-box .lis-lb-wg button:hover{border-color:#3498db;background:#eaf2f8}
-#lis-login-box .lis-lb-wg button.sel{border-color:#3498db;background:#3498db;color:#fff}
-#lis-login-box .lis-lb-login{width:100%;padding:9px;border:none;border-radius:6px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;font-size:14px;font-weight:600;cursor:pointer;margin-top:8px;transition:.2s}
-#lis-login-box .lis-lb-login:hover{filter:brightness(1.05);transform:none}
-#lis-login-box .lis-lb-login:disabled{opacity:.6;cursor:not-allowed}
-#lis-login-box .lis-lb-tip{font-size:11px;color:#999;text-align:center;margin-top:10px;line-height:1.4}
+/* --- 登录页优化（8.11.16 重设计：Modern Clinical Pro 风格 · 整头部可拖拽 · 记忆位置不变） --- */
+#lis-login-box{position:fixed;top:50%;right:40px;transform:translateY(-50%);z-index:99999;background:#fff;border-radius:16px;box-shadow:0 24px 64px rgba(15,23,42,.18),0 2px 8px rgba(15,23,42,.08);width:316px;font-family:var(--lis-font);overflow:hidden;box-sizing:border-box}
+#lis-login-box::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#3b82f6,#8b5cf6 60%,#ec4899)}
+#lis-login-box.dragging{opacity:.97;transform:none;box-shadow:0 32px 72px rgba(15,23,42,.24),0 4px 12px rgba(15,23,42,.1)}
+/* 头部 = 整体拖拽手柄 */
+#lis-login-box .lb-head{display:flex;align-items:center;gap:10px;padding:16px 16px 12px;cursor:move;user-select:none;touch-action:none}
+#lis-login-box .lb-logo{width:36px;height:36px;flex:0 0 36px;border-radius:10px;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;letter-spacing:.5px;box-shadow:0 3px 8px rgba(37,99,235,.3)}
+#lis-login-box .lb-title{flex:1;min-width:0;line-height:1.25}
+#lis-login-box .lb-title b{display:block;font-size:14.5px;color:var(--lis-text);font-weight:700}
+#lis-login-box .lb-title span{display:block;font-size:10.5px;color:var(--lis-text-muted);letter-spacing:.4px}
+#lis-login-box .lb-grip{flex:0 0 auto;color:#cbd5e1;font-size:14px;letter-spacing:1px;transition:color .15s}
+#lis-login-box .lb-head:hover .lb-grip{color:#94a3b8}
+#lis-login-box .lb-body{padding:0 16px 16px}
+#lis-login-box .lis-lb-row{margin-bottom:12px}
+#lis-login-box .lis-lb-row label{display:block;font-size:11px;font-weight:700;color:var(--lis-text-secondary);letter-spacing:.6px;margin-bottom:5px}
+/* 输入域：图标内嵌 + focus-within 聚焦环 */
+#lis-login-box .lb-field{display:flex;align-items:center;gap:8px;height:38px;padding:0 10px;border:1px solid var(--lis-border-strong);border-radius:9px;background:var(--lis-surface);transition:border-color .15s,box-shadow .15s}
+#lis-login-box .lb-field:focus-within{border-color:var(--lis-primary);box-shadow:0 0 0 3px rgba(37,99,235,.14)}
+#lis-login-box .lb-field .lb-ficon{flex:0 0 auto;font-size:13px;opacity:.55}
+#lis-login-box .lb-field input{flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:13.5px;color:var(--lis-text);height:100%}
+#lis-login-box .lb-field input::placeholder{color:#b6c0cc}
+#lis-login-box .lb-eye,#lis-login-box .lb-arrow{flex:0 0 auto;border:none;background:none;cursor:pointer;color:var(--lis-text-muted);font-size:12px;padding:3px 4px;border-radius:5px;line-height:1}
+#lis-login-box .lb-eye:hover,#lis-login-box .lb-arrow:hover{color:var(--lis-primary);background:rgba(37,99,235,.08)}
+/* 工作组：分段选择（选中 = 组色描边 + 同色浅底，圆点实心） */
+#lis-login-box .lis-lb-wg{display:flex;gap:8px;margin-top:2px}
+#lis-login-box .lis-lb-wg button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;height:36px;border:1.5px solid var(--lis-border-strong);border-radius:9px;background:var(--lis-surface);cursor:pointer;font-size:12.5px;font-weight:700;color:var(--lis-text-secondary);transition:all .15s;padding:0}
+#lis-login-box .lis-lb-wg button:hover{border-color:var(--wgc,#94a3b8)}
+#lis-login-box .lis-lb-wg button .lb-dot{width:8px;height:8px;border-radius:50%;background:var(--wgc,#94a3b8);opacity:.35;transition:opacity .15s,box-shadow .15s}
+#lis-login-box .lis-lb-wg button.sel{border-color:var(--wgc,#2563eb);background:var(--wgc-bg,#eff6ff);color:var(--lis-text)}
+#lis-login-box .lis-lb-wg button.sel .lb-dot{opacity:1;box-shadow:0 0 0 3px var(--wgc-bg,#eff6ff)}
+/* 登录按钮 */
+#lis-login-box .lis-lb-login{width:100%;height:40px;border:none;border-radius:9px;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-top:4px;letter-spacing:6px;text-indent:6px;box-shadow:0 4px 12px rgba(37,99,235,.32);transition:filter .15s,box-shadow .15s,transform .1s}
+#lis-login-box .lis-lb-login:hover{filter:brightness(1.07);box-shadow:0 6px 16px rgba(37,99,235,.4)}
+#lis-login-box .lis-lb-login:active{transform:translateY(1px);box-shadow:0 2px 8px rgba(37,99,235,.3)}
+#lis-login-box .lis-lb-login:disabled{opacity:.6;cursor:not-allowed;letter-spacing:0;text-indent:0}
+#lis-login-box .lis-lb-tip{font-size:10.5px;color:var(--lis-text-muted);text-align:center;margin-top:10px;line-height:1.5}
+#lis-login-box .lis-lb-tip kbd{background:var(--lis-surface-subtle);border:1px solid var(--lis-border);border-radius:3px;padding:0 4px;font-family:inherit;font-size:10px}
 #lis-login-box .lis-lb-remember{display:flex;align-items:center;gap:6px;font-size:12px;color:#666;margin-top:6px}
 #lis-login-box .lis-lb-remember input{width:auto}
 
@@ -16203,44 +16224,54 @@ window.addEventListener('keydown',function(e){
     box.id = 'lis-login-box';
 
     // 8.5.77: 与 WG 常量顺序保持一致：临检 → 生化 → 免疫
+    // 8.11.16: 组色对齐工作台 --lis-wg-* token（生化从旧蓝改琥珀，与审核工作台一致）
     const wgs = [
-      { dr: '1', name: '临检', color: '#e74c3c', icon: '🩸' },
-      { dr: '3', name: '生化', color: '#3498db', icon: '🧪' },
-      { dr: '4', name: '免疫', color: '#2ecc71', icon: '🛡️' }
+      { dr: '1', name: '临检', color: '#ef4444', icon: '🩸' },
+      { dr: '3', name: '生化', color: '#f59e0b', icon: '🧪' },
+      { dr: '4', name: '免疫', color: '#10b981', icon: '🛡️' }
     ];
 
     let wgHTML = '';
     wgs.forEach(w => {
-      wgHTML += `<button type="button" data-dr="${w.dr}" style="border-color:${w.dr === lastWG ? w.color : '#e0e0e0'};background:${w.dr === lastWG ? w.color : '#fff'};color:${w.dr === lastWG ? '#fff' : '#333'}">${w.icon} ${w.name}</button>`;
+      // 选中态全部交给 CSS（--wgc 组色变量 + .sel），JS 只切换类
+      wgHTML += `<button type="button" data-dr="${w.dr}" style="--wgc:${w.color};--wgc-bg:${w.color}1a" class="${w.dr === lastWG ? 'sel' : ''}"><span class="lb-dot"></span>${w.icon} ${w.name}</button>`;
     });
 
     box.innerHTML = `
-            <h4>⚡ 快速登录 — iMedicalLIS</h4>
-            <div class="lis-lb-row">
-                <label>用户名 <span style="color:#9aa5b1;font-weight:400">（可下拉选已存 CA 账号，或手输）</span></label>
-                <div style="position:relative;display:flex;align-items:center">
-                    <input type="text" id="lis-lu" placeholder="用户名" value="${creds ? esc(creds.user) : ''}" autocomplete="username" list="lis-ca-accounts" style="flex:1" />
-                    <datalist id="lis-ca-accounts"></datalist>
-                    <button type="button" id="lis-lu-arrow" title="选择已存 CA 账号" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:12px;color:#999;padding:4px 6px">▾</button>
+            <div class="lb-head" title="按住拖动到任意位置（自动记忆）">
+                <span class="lb-logo">LIS</span>
+                <div class="lb-title"><b>快速登录</b><span>iMedicalLIS · 审核助手</span></div>
+                <span class="lb-grip">⠿</span>
+            </div>
+            <div class="lb-body">
+                <div class="lis-lb-row">
+                    <label>账号</label>
+                    <div class="lb-field">
+                        <span class="lb-ficon">👤</span>
+                        <input type="text" id="lis-lu" placeholder="用户名（点 ▾ 选已存 CA 账号）" value="${creds ? esc(creds.user) : ''}" autocomplete="username" list="lis-ca-accounts" />
+                        <datalist id="lis-ca-accounts"></datalist>
+                        <button type="button" class="lb-arrow" id="lis-lu-arrow" title="选择已存 CA 账号">▾</button>
+                    </div>
                 </div>
-            </div>
-            <div class="lis-lb-row">
-                <label>密码</label>
-                <input type="password" id="lis-lp" placeholder="密码" autocomplete="current-password" />
-            </div>
-            <div class="lis-lb-row">
-                <label>工作组</label>
-                <div class="lis-lb-wg" id="lis-lwg">${wgHTML}</div>
-            </div>
-            <button class="lis-lb-login" id="lis-lbtn">🚀 登录</button>
-            <div class="lis-lb-tip">
-                🔒 仅保存用户名，密码需每次输入<br>
-                快捷键: Enter 直接登录
+                <div class="lis-lb-row">
+                    <label>密码</label>
+                    <div class="lb-field">
+                        <span class="lb-ficon">🔑</span>
+                        <input type="password" id="lis-lp" placeholder="密码" autocomplete="current-password" />
+                        <button type="button" class="lb-eye" id="lis-lp-eye" title="显示 / 隐藏密码">👁</button>
+                    </div>
+                </div>
+                <div class="lis-lb-row">
+                    <label>工作组</label>
+                    <div class="lis-lb-wg" id="lis-lwg">${wgHTML}</div>
+                </div>
+                <button class="lis-lb-login" id="lis-lbtn">登录</button>
+                <div class="lis-lb-tip">🔒 仅保存用户名，密码需每次输入 · <kbd>Enter</kbd> 快捷登录</div>
             </div>`;
     document.body.appendChild(box);
 
-    // 拖拽移动（标题栏作为拖拽手柄）
-    const dragHead = box.querySelector('h4');
+    // 拖拽移动（8.11.16: 整个头部区域作为拖拽手柄）
+    const dragHead = box.querySelector('.lb-head');
     let boxUserMoved = false;
     dragHead.addEventListener('pointerdown', e => {
       e.preventDefault();
@@ -16290,23 +16321,27 @@ window.addEventListener('keydown',function(e){
       }
     } catch (x) {}
 
-    // 工作组选择
+    // 工作组选择（8.11.16: 选中态纯 CSS 类切换，--wgc/--wgc-bg 变量驱动组色）
     let selectedWG = lastWG;
     box.querySelectorAll('.lis-lb-wg button').forEach(btn => {
       btn.addEventListener('click', () => {
-        box.querySelectorAll('.lis-lb-wg button').forEach(b => {
-          b.classList.remove('sel');
-          b.style.background = '#fff';
-          b.style.color = '#333';
-          b.style.borderColor = '#e0e0e0';
-        });
+        box.querySelectorAll('.lis-lb-wg button').forEach(b => {b.classList.remove('sel');});
         btn.classList.add('sel');
-        btn.style.background = btn.style.borderColor =
-          (wgs.find(w => w.dr === btn.dataset.dr) || {}).color || '#e0e0e0';
-        btn.style.color = '#fff';
         selectedWG = btn.dataset.dr;
       });
     });
+
+    // 8.11.16: 密码显示/隐藏
+    const lpInput = document.getElementById('lis-lp');
+    const eyeBtn = document.getElementById('lis-lp-eye');
+    if (lpInput && eyeBtn) {
+      eyeBtn.addEventListener('click', () => {
+        const show = lpInput.type === 'password';
+        lpInput.type = show ? 'text' : 'password';
+        eyeBtn.style.opacity = show ? '1' : '.55';
+        lpInput.focus();
+      });
+    }
 
     // 登录按钮
     const loginBtn = document.getElementById('lis-lbtn');
