@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.13.6
+// @version      8.14.0
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1165,6 +1165,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-abnormal-card.has-infection-warning{border-left-color:#f59e0b;background:#fffbeb}
 .ws-abnormal-card.is-normal{background:rgba(240,253,244,.5);border:1px solid rgba(167,243,208,.6);border-left:3px solid #10b981;padding:3px 8px;flex-direction:row;align-items:center;gap:8px}
 .ws-abnormal-card.is-normal.focused{border-color:#10b981!important;background:#ecfdf5!important;box-shadow:0 0 0 2px rgba(16,185,129,.2)!important}
+/* 8.14.0: 待审卡片四色分层——危急红/超带橙/轻微可批蓝/正常绿(is-normal)。
+   cls-* 置于 has-* 之后，同类冲突时以分层色为准；focused 变体保留本类色相保证聚焦时不「变色盲」 */
+.ws-abnormal-card.cls-critical{border-left-color:#dc2626;background:#fef2f2}
+.ws-abnormal-card.cls-critical.focused{border-color:#dc2626!important;background:#fef2f2!important;box-shadow:0 0 0 2px rgba(220,38,38,.2)!important}
+.ws-abnormal-card.cls-beyond{border-left-color:#f59e0b;background:#fffbeb}
+.ws-abnormal-card.cls-beyond.focused{border-color:#f59e0b!important;background:#fffbeb!important;box-shadow:0 0 0 2px rgba(245,158,11,.25)!important}
+.ws-abnormal-card.cls-mild{border-left-color:#2563eb;background:#f0f6ff}
+.ws-abnormal-card.cls-mild.focused{border-color:#2563eb!important;background:#eff6ff!important;box-shadow:0 0 0 2px rgba(37,99,235,.2)!important}
+.ab-card-badge.mild{color:#2563eb}
+.ws-audit-normal{color:#059669}
+.ws-audit-beyond{color:#d97706}
 .ab-card-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .ab-card-name{font-size:13px;font-weight:700;color:var(--lis-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
 .ab-card-no{font-family:ui-monospace,monospace;font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
@@ -9957,6 +9968,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           mdr: String(prWorkGroupMachineDR(r)),
           mn: String(r._mn || ''),
           crit: b === 'normal' ? 2 : (cached && cached.status === 'CRITICAL' ? 0 : 1),
+          // 8.14.0: 四色分层排序——危急(0)→超带异常(1)→轻微可批(2)→正常(3)，与卡片颜色同源，
+          // 同色标本在仪器段内自然聚拢；不跨仪器全局聚色（那会让原生页在仪器间来回跳选行）
+          clsRank: ({critical: 0, beyond: 1, mild: 2, normal: 3})[wsAuditCardClass(r)],
           fv: (r[field] || '').toString()
         };
       });
@@ -9970,6 +9984,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         const mnCmp = a.mn.localeCompare(b.mn, 'zh');
         if (mnCmp) {return mnCmp;}
         if (a.crit !== b.crit) {return a.crit - b.crit;}
+        if (a.clsRank !== b.clsRank) {return a.clsRank - b.clsRank;}
         return asc ? a.fv.localeCompare(b.fv, 'zh') : b.fv.localeCompare(a.fv, 'zh');
       });
       d = _dec.map(x => x.r);
@@ -11856,6 +11871,17 @@ window.addEventListener('keydown',function(e){
     return displayItems;
   }
 
+  // 8.14.0: 待审卡片四色分层——critical(危急·红)/beyond(超带异常·橙)/mild(轻微可批·蓝)/normal(正常·绿)。
+  // 与 filteredData 的 audit 排序共用同一口径：卡片颜色 = 排序分层 = 横幅计数，三处永远一致
+  function wsAuditCardClass(r) {
+    const b = getWSAuditBucket(r);
+    if (b === 'normal') {return 'normal';}
+    const cached = wsClassifiedCache[r.ReportDR];
+    if (cached && cached.status === 'CRITICAL') {return 'critical';}
+    const m = cached ? classifyMildAbnormal(cached) : null;
+    return m && m.ok ? 'mild' : 'beyond';
+  }
+
   // --- 待审视图（融合正常 + 异常，单队列审核）---
   function renderAuditView(data, body) {
     if (_abnormalFocusDR) {
@@ -11900,9 +11926,9 @@ window.addEventListener('keydown',function(e){
           : `⚡ 一键批审轻微异常 ${nMild} · F4`;
     h += `<div class="ws-audit-banner">
             <span class="ws-audit-summary">
-                ✅ 正常 <b>${nNormal}</b>
+                <span class="ws-audit-normal">✅ 正常 <b>${nNormal}</b></span>
                 <span class="ws-audit-sep">·</span>
-                ⚠️ 异常 <b>${nAbnormal}</b>
+                <span class="ws-audit-beyond">⚠️ 异常 <b>${nAbnormal}</b></span>
                 ${nMild ? `<span class="ws-audit-sep">·</span><span class="ws-audit-mild" title="整管异常都在轻微放行带内，F4 可一并批审">⚡ 轻微 <b>${nMild}</b></span>` : ''}
                 ${nCritical ? `<span class="ws-audit-sep">·</span><span class="ws-audit-critical">🚨 危急 <b>${nCritical}</b></span>` : ''}
             </span>
@@ -11952,16 +11978,20 @@ window.addEventListener('keydown',function(e){
       const hasInfectionWarning = cached && cached.infectionWarning;
       // 8.5.58: 堵孔 0 值可疑（ZERO）标本
       const hasZeroSuspect = cached && cached.status === 'ZERO';
+      // 8.14.0: 四色分层——cls-* 类驱动色条/底色，轻微可批卡用 ⚡ 徽章与超带 ⚠️ 区分
+      const _cardCls = wsAuditCardClass(r);
       const focused = i === wsAbnormalIndex ? ' focused' : '';
 
-      h += `<div class="ws-abnormal-card${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}${hasZeroSuspect ? ' has-zero' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      h += `<div class="ws-abnormal-card cls-${_cardCls}${focused}${hasCritical ? ' has-critical' : ''}${hasInfectionWarning ? ' has-infection-warning' : ''}${hasZeroSuspect ? ' has-zero' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += '<div class="ab-card-top">';
       h += '<div style="display:flex;align-items:center;gap:6px;min-width:0">';
       h += hasCritical
         ? '<span class="ab-card-badge critical">🚨</span>'
         : hasZeroSuspect
           ? '<span class="ab-card-badge zero" title="含 0 值结果，疑似堵孔，需人工确认">0?</span>'
-          : '<span class="ab-card-badge warn">⚠️</span>';
+          : _cardCls === 'mild'
+            ? '<span class="ab-card-badge mild" title="整管异常都在轻微放行带内，F4 可批审">⚡</span>'
+            : '<span class="ab-card-badge warn">⚠️</span>';
       h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
       h += recheckTagHTML(r);
       h += admTypeBadgeHTML(r);
