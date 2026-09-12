@@ -466,6 +466,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
 
+    def _reply_400(self):
+        self.send_response(400)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(b'{"error":"invalid json object"}')
+
     def do_POST(self):
         global _stats_data, _cmd_data, _notify_last
         path = unquote(urlparse(self.path).path)
@@ -479,6 +485,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = self._read_json_body()
                 if data is None:
                     self._reply_413()
+                    return
+                # 8.15.4: JSON 合法但不是对象（数组/字符串/数字）时，data['ts']=... 会抛
+                # TypeError 落到 500——错误码有误导性。显式判类型回 400（与 bark_relay 口径一致）
+                if not isinstance(data, dict):
+                    self._reply_400()
                     return
                 data['ts'] = int(time.time())
                 data['ok'] = True
@@ -501,6 +512,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = self._read_json_body()
                 if data is None:
                     self._reply_413()
+                    return
+                if not isinstance(data, dict):
+                    self._reply_400()
                     return
                 cmd = {
                     'id': int(time.time() * 1000),
@@ -527,6 +541,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = self._read_json_body()
                 if data is None:
                     self._reply_413()
+                    return
+                if not isinstance(data, dict):
+                    self._reply_400()
                     return
                 cmd_id = data.get('id')
                 claimed = False
@@ -607,6 +624,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = self._read_json_body()
                 if data is None:
                     self._reply_413()
+                    return
+                if not isinstance(data, dict):
+                    self._reply_400()
                     return
                 title = str(data.get('title') or '自动审核')
                 body = str(data.get('body') or '')

@@ -361,6 +361,15 @@ def _read_lis(path: Path) -> pd.DataFrame:
 
     orig_cols = [str(c) for c in df.columns]
     n_before_fill = len(df)
+    # 8.15.4: LIS 侧一行都没有时直接报错。原守卫（下方 n_before_fill > 0 and df.empty）
+    # 只覆盖「源有行但被过滤空」，漏掉「导出本身就是空表（表头之后无数据行）」——
+    # 此时 n_before_fill == 0，守卫不触发，脚本仍会「成功」输出「所有机构行未匹配、
+    # 少收额=机构总额」，对账场景下等于把机构总额谎报成少收金额。宁可报错让用户核对导出范围。
+    if n_before_fill == 0:
+        raise SystemExit(
+            "LIS CSV 没有任何数据行（表头之后为空）——请确认导出日期范围与筛选条件；"
+            "若该期间确实无外送标本，机构表也应为空，请勿据本次结果判断少收金额"
+        )
     missing = []
     for c, default in [
         ("姓名", ""),

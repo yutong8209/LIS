@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.3
+// @version      8.15.4
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19654,7 +19654,11 @@ window.addEventListener('keydown',function(e){
     { re: /^低密度脂蛋白|^ldl/i, tier: 'b', group: 'LDL', high: 1.15, low: null },
     { re: /载脂蛋白a1|载脂蛋白ai|^apo-?a1/i, tier: 'b', group: 'APOA', high: null, low: 0.85 },
     { re: /载脂蛋白b|^apo-?b$/i, tier: 'b', group: 'APOB', high: 1.15, low: null },
-    { re: /脂蛋白[(（]?\s*a/i, tier: 'b', group: 'LPA', high: 1.5, low: null },
+    // 8.15.4: 必须排除「载脂蛋白」——原 /脂蛋白[(（]?\s*a/ 未锚定，会命中「载脂蛋白A」「载脂蛋白A2」，
+    // 使其按 LPA 的 high:1.5 放行高值；而 APOA 口径只放低值（high:null）。此前仅靠本表顺序
+    // （载脂蛋白A1 规则在前）侥幸挡住 A1/AI，A/A2 变体则直接漏成过度放行。
+    // 现要求「脂蛋白」前不得是「载」，结构上杜绝误吞；真·载脂蛋白变体落回未配规则→留人工（保守）。
+    { re: /(?:^|[^载])脂蛋白[(（]?\s*a/i, tier: 'b', group: 'LPA', high: 1.5, low: null },
     { re: /同型半胱氨酸|^hcy$/i, tier: 'b', group: 'HCY', high: 1.5, low: null },
     // ---- 乙类：生化糖/电解质 ----
     { re: /^(血清)?葡萄糖[\*＊]?$|^血糖/i, tier: 'b', group: 'GLU', high: 1.15, low: 0.92 },

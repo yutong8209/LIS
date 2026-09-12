@@ -9,11 +9,15 @@ serve_running() {
   lsof -tiTCP:8765 -sTCP:LISTEN >/dev/null 2>&1
 }
 
+# 8.15.4: 去掉硬编码的 /Users/yutong/脚本/——脚本被改名/搬目录/换机器后原路径即失效
+# （serve.py 找不到 → 静默起不来）。改为按本脚本所在目录定位。
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # 1) 启动 serve.py（若未运行）
 if serve_running; then
   echo "✅ serve.py 已在运行 (http://localhost:8765)"
 else
-  nohup /usr/bin/python3 "/Users/yutong/脚本/serve.py" >/tmp/lis-serve.log 2>&1 &
+  nohup /usr/bin/python3 "$DIR/serve.py" >/tmp/lis-serve.log 2>&1 &
   sleep 1
   if serve_running; then
     echo "✅ serve.py 已启动 (http://localhost:8765)"

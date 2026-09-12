@@ -13,8 +13,16 @@ import urllib.request
 from pathlib import Path
 
 LOG_FILE = Path(__file__).parent / "mcp.log"
+# 8.15.4: 日志轮转——此前只 append 不轮转，长跑后无限增长（每次识图都写若干行）。
+# 超过 1MB 时整体轮转为 mcp.log.1（只保留一代，覆盖旧的），避免占用磁盘/拖慢编辑器。
+LOG_MAX_BYTES = 1024 * 1024
 
 def log(msg):
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX_BYTES:
+            os.replace(LOG_FILE, LOG_FILE.parent / (LOG_FILE.name + ".1"))
+    except Exception:
+        pass
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"[{__import__('datetime').datetime.now()}] {msg}\n")
 

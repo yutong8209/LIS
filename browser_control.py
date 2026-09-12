@@ -28,7 +28,15 @@ def fail(msg):
 
 def _deps_err():
     if _DEPS_MISSING:
-        return fail(f"missing dependency: {_DEPS_MISSING}（pip3 install -r requirements.txt）")
+        # 8.15.4: 回显「正在运行本脚本的解释器」——本机 pip3 可能指向另一个 Python
+        # （实测指向 WorkBuddy 托管解释器，与 .command 里用的 /usr/bin/python3 不是同一个），
+        # 照 requirements.txt 的 pip3 install 装会装进错误的解释器，报错依旧。
+        # 直接给出该装到哪，避免在解释器迷宫上浪费时间。
+        py = sys.executable or 'python3'
+        return fail(
+            f"missing dependency: {_DEPS_MISSING}"
+            f'（请装到当前解释器："{py}" -m pip install -r requirements.txt）'
+        )
     return None
 
 
