@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.14.2
+// @version      8.14.3
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -21976,6 +21976,16 @@ window.addEventListener('keydown',function(e){
     else if (rc && typeof rc === 'object') {Object.keys(rc).forEach(k => {out[k] = (out[k] || 0) + (rc[k] || 0);});}
     return out;
   }
+  // 8.14.3: 危急判级排除「白天留人工」——它是白天方案下的方案性跳过（超轻微带），不是红线事件。
+  // 标题/正文分解表照常显示该类别，但不触发 critical 级别 / alarm 警报音 / 危急告警分组 / 绕过合并窗口：
+  // 普通超带异常（如血糖 7.72）只发中性提示音，刺耳警报只留给危急值/堵孔/负值/传染病/心肌红线
+  const AA_NON_ALARM_CAT = '白天留人工';
+  function aaAlarmRedCats(rc) {
+    const norm = _aaNormRedCats(rc);
+    const out = {};
+    Object.keys(norm).forEach(k => {if (k !== AA_NON_ALARM_CAT && norm[k] > 0) {out[k] = norm[k];}});
+    return out;
+  }
   // 标本条目幂等键：报告DR → 检验号 → 流水号；都缺给随机 id（保量不合并）
   function _aaPushEntryId(e) {
     const id = String((e && (e.d || e.reportDR || e.labno || e.l || e.seq)) || '');
@@ -22153,7 +22163,8 @@ window.addEventListener('keydown',function(e){
   function queueAutoAuditPush(data) {
     try {
       const d = data || {};
-      const hasRed = Object.keys(_aaNormRedCats(d.redCats)).length > 0;
+      // 8.14.3: 白天留人工不视为红线——不立即结清推送，走正常合并窗口（普通异常中性提示）
+      const hasRed = Object.keys(aaAlarmRedCats(d.redCats)).length > 0;
       const winMin = autoAuditMergeWindowMin();
       if (d.immediate || hasRed || !winMin) {return flushAutoAuditPushBuffer(d);}
       _aaPushBufEnsure(); // 刷新后内存为空但盘上可能还攒着，先认领再判前沿
@@ -22655,7 +22666,7 @@ window.addEventListener('keydown',function(e){
     });
     // 8.10.5: 已审标本（noSlim=false）只统计因行宽限制被截断的可见项；主动 skip 的项不计入 +N
     const more = noSlim ? Math.max(0, abnAll.length - take.length) : Math.max(0, vis.length - take.length);
-    return {seg: segs.join(' '), shown: take.length, more, total: abnAll.length, visN: vis.length};
+    return {seg: segs.join(' '), segs, shown: take.length, more, total: abnAll.length, visN: vis.length};
   }
   // 一个标本 → 一行。sym 为处置符号（🚨 危急 / ⓿ 堵孔 / ⚠️ 其他留人工或异常已审 / ✅ 正常）
   function aaPushSpecLine(e, sym, maxItems, withRange, tailNote, noSlim) {
@@ -22675,6 +22686,34 @@ window.addEventListener('keydown',function(e){
     if (it.more > 0) {line += ' +' + it.more;}
     if (tailNote) {line += ' ' + tailNote;}
     return aaClipW(line, AA_PUSH_LINE_MAX_W);
+  }
+  // 8.14.3: 留人工/已审行完整版——异常项目全部展开并按显示宽度自动折行（此前单行 56 列硬截断，
+  // 白天方案超带标本 4~6 个异常项被截成「HC…」，拦下的理由看不全）。返回行数组：
+  // 首行=符号+编号+组合，续行=全角空格缩进续排项目；tailNote 附在末行（放不下则独占一行）
+  function aaPushSpecLines(e, sym, maxItems, withRange, tailNote, noSlim) {
+    const info = aaPushSpecItemSegs(e, maxItems, withRange, noSlim);
+    const segs = (info.segs || []).slice();
+    if (info.more > 0) {segs.push('+' + info.more);}
+    const seq = String((e && (e.seq || e.EpisodeNo || e.episodeNo)) || '').trim();
+    const labno = String((e && (e.labno || e.l || e.Labno)) || '').trim();
+    const id = seq || labno || '标本';
+    const test = aaPushTestAbbr(e && e.test);
+    const lines = [];
+    let cur = sym + ' ' + id + (test ? ' ' + test : '');
+    let hasItem = false; // 首段与头部之间用全角空格（与单行版排版一致），续段用半角空格
+    segs.forEach(sg => {
+      const cand = cur + (hasItem ? ' ' : '　') + sg;
+      if (aaDispW(cand) <= AA_PUSH_LINE_MAX_W) {cur = cand;}
+      else {lines.push(aaClipW(cur, AA_PUSH_LINE_MAX_W)); cur = '　' + sg;}
+      hasItem = true;
+    });
+    if (tailNote) {
+      const cand = cur + ' ' + tailNote;
+      if (aaDispW(cand) <= AA_PUSH_LINE_MAX_W) {cur = cand;}
+      else {lines.push(aaClipW(cur, AA_PUSH_LINE_MAX_W)); cur = '　' + tailNote;}
+    }
+    lines.push(aaClipW(cur, AA_PUSH_LINE_MAX_W));
+    return lines;
   }
   // 留人工原因 → 处置符号与尾注（红线类别一眼可辨）
   function aaPushSkipSym(reason) {
@@ -22732,7 +22771,8 @@ window.addEventListener('keydown',function(e){
     });
     const redN = Object.keys(redCats).reduce((s, k) => s + redCats[k], 0);
     const skipN = redN + otherFailN;
-    const hasRed = redN > 0;
+    // 8.14.3: 判级只看真红线——「白天留人工」是方案性跳过，不触发 🚨 前缀/critical/alarm/危急分组
+    const hasRed = Object.keys(aaAlarmRedCats(redCats)).length > 0;
     const doneN = passN + abnPassN;
 
     // ── 标题：先说要动手的事，再说已审总数 ──
@@ -22797,9 +22837,10 @@ window.addEventListener('keydown',function(e){
       if (overview) {L.push(overview);} // 8.10.4: 概览（仪器+时间）放正文首行，手机/手表一眼可见
       skips.forEach(en => {
         const info = aaPushSkipSym(en.e && en.e.reason);
-        L.push(aaPushSpecLine(en.e, info.sym, 4, true, info.note, true)); // 需人工：不瘦身
+        // 8.14.3: 需人工行完整展开——全部异常项目自动折行，不再单行截断（拦代理由必须看得全）
+        aaPushSpecLines(en.e, info.sym, 99, true, info.note, true).forEach(l => L.push(l));
       });
-      abns.forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, true, ''))); // 8.10.7: 已审标本同样带参考范围
+      abns.forEach(en => aaPushSpecLines(en.e, '⚠️', 6, true, '').forEach(l => L.push(l))); // 已审异常同样折行，最多带 6 项 + N
       const fseqs = nors.map(x => aaPushSeqOf(x.e)).filter(Boolean);
       if (fseqs.length) {
         L.push(aaClipW('✅ 全正常：' + fseqs.join(' '), AA_PUSH_LINE_MAX_W));
@@ -22821,7 +22862,8 @@ window.addEventListener('keydown',function(e){
       const showSkip = Math.min(skips.length, AA_PUSH_SKIP_MAX_LINES);
       skips.slice(0, showSkip).forEach(en => {
         const info = aaPushSkipSym(en.e && en.e.reason);
-        L.push(aaPushSpecLine(en.e, info.sym, 4, true, info.note, true)); // 需人工：不瘦身，拦下的理由必须看得见
+        // 8.14.3: 需人工行完整展开（不瘦身不截断，拦代理由必须看得全）；折行行数计入行预算
+        aaPushSpecLines(en.e, info.sym, 99, true, info.note, true).forEach(l => L.push(l));
       });
       if (skips.length > showSkip) {
         L.push(aaClipW('　…另 ' + (skips.length - showSkip) + ' 例需人工：' + skips.slice(showSkip).map(x => aaPushSeqOf(x.e)).join(' '), AA_PUSH_LINE_MAX_W));
@@ -22852,8 +22894,8 @@ window.addEventListener('keydown',function(e){
         }
         const show = Math.min(arr.length, Math.max(1, spare - (single ? 1 : 2)));
         if (!single) {L.push('〔' + mn + ' 异常 ' + arr.length + '〕');}
-        // 8.10.7: 已审标本同样带参考范围（紧凑格式如 WBC 3.4🔽(4-10)）
-        arr.slice(0, show).forEach(en => L.push(aaPushSpecLine(en.e, '⚠️', 4, true, '')));
+        // 8.10.7: 已审标本同样带参考范围（紧凑格式如 WBC 3.4🔽(4-10)）；8.14.3: 折行完整展示
+        arr.slice(0, show).forEach(en => aaPushSpecLines(en.e, '⚠️', 6, true, '').forEach(l => L.push(l)));
         if (arr.length > show) {
           L.push(aaClipW('　…另 ' + (arr.length - show) + ' 例：' + arr.slice(show).map(x => aaPushSeqOf(x.e)).join(' '), AA_PUSH_LINE_MAX_W));
         }
@@ -23017,7 +23059,9 @@ window.addEventListener('keydown',function(e){
       }
       if (passN + abnPassN + skipN <= 0) {return false;} // 空转轮次：不落日志也不推送
       const redEntries = Object.entries(redCats);
-      const hasRed = redEntries.length > 0;
+      // 8.14.3: 白天留人工不算红线判级（emoji/音效/level 用过滤后的 alarmRedEntries）
+      const alarmRedEntries = Object.entries(aaAlarmRedCats(redCats));
+      const hasRed = alarmRedEntries.length > 0;
       // 日志总是落（off/blocked 不推也要有记录），明细截断口径与实时轮一致
       try {autoAuditLogAdd({normal: passN, abnormal: abnPassN, skipped: skips.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX), audited: auds.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX)});} catch (e) {}
       // 推送模式快照语义（8.8.29 固化的策略在此生效）：all=有动作即推；blocked=只有未成功才推；off=不推
@@ -23277,14 +23321,14 @@ window.addEventListener('keydown',function(e){
           try {
             // 8.10.3: 暂停推送用新排版逐条列拦下的标本（一标本一行，不瘦身）；
             // 8.10.4: 「拦下 N 例」并入正文首行（不再用 Bark subtitle，加密下不显示）
-            const _pl = _realSpecs.map(s => {
+            const _pl = _realSpecs.slice(0, 8).map(s => {
               const _si = aaPushSkipSym(s.reason);
-              return aaPushSpecLine(s, _si.sym, 3, true, _si.note, true);
-            }).slice(0, 8);
+              return aaPushSpecLines(s, _si.sym, 6, true, _si.note, true);
+            }).flat();
             let _pb = '工作台数据未确认最新，自动审核已暂停（恢复数据后自动继续）';
             if (_realSpecs.length) {_pb = '当前拦下 ' + _realSpecs.length + ' 例待人工\n' + _pb;}
             if (_pl.length) {_pb += '\n' + _pl.join('\n');}
-            if (_realSpecs.length > _pl.length) {_pb += '\n…另 ' + (_realSpecs.length - _pl.length) + ' 例，详见工作台记录';}
+            if (_realSpecs.length > 8) {_pb += '\n…另 ' + (_realSpecs.length - 8) + ' 例，详见工作台记录';}
             pushAutoAuditNotify({
               title: '⚠️ 自动审核暂停',
               body: _pb,
