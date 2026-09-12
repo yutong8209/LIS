@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.4
+// @version      8.15.5
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -636,9 +636,39 @@
     document.body.appendChild(panel);
   }
   function lisDebugLog() {return _dbgLog.join('\n');}
+  // 8.15.5: 轻微异常放行留痕的读取/导出。留痕原本只写 localStorage.LIS_MildAuditLog（环形 500、
+  // 不推送），除了开发者没人看得到，且清缓存即丢。这里给现场一个只读出口：先导出再清，
+  // 也便于把「这条按哪条规则放行」发给开发核对。控制台：lisMildAuditLog() / lisExportMildAuditLog()
+  function lisMildAuditLog() {
+    try {
+      const a = JSON.parse(localStorage.getItem(K.mildLog) || '[]');
+      return Array.isArray(a) ? a : [];
+    } catch (e) {return [];}
+  }
+  function lisExportMildAuditLog() {
+    const rows = lisMildAuditLog();
+    if (!rows.length) {return '（轻微异常放行留痕为空）';}
+    const txt = rows.map(r =>
+      [r.t, r.labno, r.name, r.test, r.mn, `乙类${r.tierB || 0}项`, (r.hits || []).join('；')]
+        .map(v => String(v === undefined || v === null ? '' : v)).join('\t')
+    ).join('\n');
+    try {
+      const blob = new Blob([txt], {type: 'text/plain;charset=utf-8'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'LIS轻微异常放行留痕_' + new Date().toISOString().slice(0, 10) + '.txt';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {URL.revokeObjectURL(a.href); a.remove();}, 1000);
+      return '已导出 ' + rows.length + ' 条';
+    } catch (e) {return txt;}
+  }
   try {
     uw().showDebugPanel = showDebugPanel;
     uw().lisDebugLog = lisDebugLog;
+    uw().lisMildAuditLog = lisMildAuditLog;
+    uw().lisExportMildAuditLog = lisExportMildAuditLog;
+    uw().lisSelfTestMildRules = lisSelfTestMildRules; // 规则表自检（返回未通过项数组，空数组=通过）
   } catch (e) {}
 
   async function fetchJ(u, timeoutMs, externalSignal) {
@@ -19729,6 +19759,89 @@ window.addEventListener('keydown',function(e){
     return null;
   }
 
+  // 8.15.5: 规则表自检——MILD_ALLOW_RULES 是「按数组顺序首条命中」，插入/重排规则会**静默**改变
+  // 分类结果（8.15.4 修的正是 脂蛋白(a) 未锚定误吞载脂蛋白A/A2 造成过度放行）。这里用一组
+  // 代表性项目名跑一遍，断言各自落到预期规则；不符只 console.warn + 记调试日志，**不阻断运行**
+  // （医院现场不能因自检停摆）。期望值由实际规则表跑出，改规则后若报警即说明有回归。
+  // 手动复跑：控制台 lisSelfTestMildRules()。
+  // 局限（实测确认）：自检只能覆盖「用例覆盖到的名字」——把某条正则放宽到吞掉用例之外的项目，
+  // 它抓不到（如把「降钙素原」放宽成 pct，仍能正确匹配 PCT，无干扰名可触发）。
+  // 所以加用例比改自检更有效；改规则表时优先往 NONE/CODE 两组补名字。
+  const MILD_RULE_SELFTEST = [
+    ['红细胞分布宽度', 'a'], ['平均血小板体积', 'a'], ['血小板分布宽度', 'a'],
+    ['血小板压积', 'a'], ['大型血小板比率', 'a'], ['谷草/谷丙', 'a'],
+    ['间接胆红素', 'a'], ['球蛋白', 'a'], ['白球比', 'a'],
+    ['肾小球滤过率', 'a'], ['小而密低密度脂蛋白胆固醇', 'a'], ['中性粒细胞百分比', 'a'],
+    ['白细胞', 'WBC'], ['中性粒细胞绝对值', 'NEUT'], ['淋巴细胞绝对值', 'LYM'],
+    ['单核细胞绝对值', 'MON'], ['嗜酸性粒细胞绝对值', 'EOS'], ['嗜碱性粒细胞绝对值', 'BAS'],
+    ['红细胞计数', 'RBC'], ['血红蛋白', 'HGB'], ['红细胞压积', 'HCT'],
+    ['平均红细胞体积', 'MCV'], ['平均红细胞血红蛋白量', 'MCH'], ['平均红细胞血红蛋白浓度', 'MCHC'],
+    ['血小板计数', 'PLT'], ['丙氨酸氨基转移酶', 'ALT'], ['天门冬氨酸氨基转移酶', 'AST'],
+    ['碱性磷酸酶', 'ALP'], ['谷氨酰转肽酶', 'GGT'], ['岩藻糖苷酶', 'AFU'],
+    ['5-核苷酸酶', 'ALP5NT'], ['胆碱酯酶', 'CHE'], ['腺苷脱氨酶', 'ADA'],
+    ['总胆汁酸', 'TBA'], ['总胆红素', 'TBIL'], ['直接胆红素', 'DBIL'],
+    ['总蛋白', 'TP'], ['白蛋白', 'ALB'], ['前白蛋白', 'PA'],
+    ['甘胆酸', 'CG'], ['谷胱甘肽还原酶', 'GR'], ['尿素', 'UREA'],
+    ['肌酐', 'CR'], ['尿酸', 'UA'], ['胱抑素C', 'CYSC'],
+    ['β2微球蛋白', 'B2MG'], ['视黄醇结合蛋白', 'RBP'], ['尿微量白蛋白', 'MALB'],
+    ['总胆固醇', 'TC'], ['甘油三酯', 'TG'], ['高密度脂蛋白胆固醇', 'HDL'],
+    ['低密度脂蛋白胆固醇', 'LDL'], ['载脂蛋白A1', 'APOA'], ['载脂蛋白B', 'APOB'],
+    ['脂蛋白(a)', 'LPA'], ['同型半胱氨酸', 'HCY'], ['葡萄糖', 'GLU'],
+    ['糖化血红蛋白', 'HBA1C'], ['钾', 'K'], ['钠', 'NA'],
+    ['氯', 'CL'], ['钙', 'CA'], ['磷', 'P'],
+    ['镁', 'MG'], ['二氧化碳结合力', 'CO2'], ['肌酸激酶', 'CK'],
+    ['肌酸激酶同工酶', 'CKMB'], ['乳酸脱氢酶', 'LDH'], ['羟基丁酸脱氢酶', 'HBDH'],
+    ['淀粉酶', 'AMY'], ['脂肪酶', 'LIP'], ['促甲状腺素', 'TSH'],
+    ['游离甲状腺素', 'FT4'], ['游离三碘甲状原氨酸', 'FT3'], ['甲状腺素', 'TT4'],
+    ['三碘甲状原氨酸', 'TT3'], ['促卵泡', 'FSH'], ['黄体生成素', 'LH'],
+    ['泌乳素', 'PRL'], ['雌二醇', 'E2'], ['孕酮', 'PROG'],
+    ['睾酮', 'TSTO'], ['肌红蛋白', 'MYO'], ['甲胎蛋白', 'AFP'],
+    ['癌胚抗原', 'CEA'], ['糖类抗原19-9', 'CA199'], ['糖类抗原125', 'CA125'],
+    ['糖类抗原15-3', 'CA153'], ['前列腺特异性抗原', 'PSA'], ['铁蛋白', 'FER'],
+    ['超敏C反应蛋白', 'CRP'], ['C反应蛋白', 'CRP'], ['降钙素原', 'PCT']
+  ];
+  // 负向组：**不得命中任何规则**。这一组才是真正抓得住「正则失去锚定/边界」类回归的——
+  // 8.15.4 修的正是 脂蛋白(a) 未锚定误吞 载脂蛋白A/A2（会让高值按 LPA 的 1.5× 放行）。
+  // 实测教训：只断言正向名字的话，正则变松时正向项全部不变，自检会「静默通过」（已复现）。
+  const MILD_RULE_SELFTEST_NONE = [
+    '载脂蛋白A', '载脂蛋白A2', '脂蛋白相关磷脂酶A2', '氧化低密度脂蛋白',
+    '纤维蛋白原', 'D-二聚体', '免疫球蛋白G', '补体C3', '类风湿因子', '抗链球菌溶血素O'
+  ];
+  // 编码轮（第二轮匹配）：覆盖历史上踩过的裸编码串味（如 CRP 编码=CR 命中「肌酐 ^cr$」）
+  const MILD_RULE_SELFTEST_CODE = [
+    ['CR', 'CR'], ['CRP', 'CRP'], ['PCT', 'PCT'], ['GGT', 'GGT'],
+    ['APOA1', 'APOA'], ['sdLDL', 'a'], ['ALT', 'ALT'], ['HCY', 'HCY']
+  ];
+  function lisSelfTestMildRules() {
+    const bad = [];
+    const gotOf = it => {
+      const r = matchMildRule(it);
+      return !r ? 'NONE' : (r.tier === 'a' ? 'a' : (r.group || '?'));
+    };
+    for (const pair of MILD_RULE_SELFTEST) {
+      const g = gotOf({ CName: pair[0] });
+      if (g !== pair[1]) {bad.push(pair[0] + '：期望 ' + pair[1] + '，实际 ' + g);}
+    }
+    for (const name of MILD_RULE_SELFTEST_NONE) {
+      const g = gotOf({ CName: name });
+      if (g !== 'NONE') {bad.push(name + '：不应命中任何规则，实际 ' + g + '（过度放行风险）');}
+    }
+    for (const pair of MILD_RULE_SELFTEST_CODE) {
+      const it = {Code: pair[0]};
+      const g = gotOf(it);
+      if (g !== pair[1]) {bad.push('编码 ' + pair[0] + '：期望 ' + pair[1] + '，实际 ' + g);}
+    }
+    const total = MILD_RULE_SELFTEST.length + MILD_RULE_SELFTEST_NONE.length + MILD_RULE_SELFTEST_CODE.length;
+    if (bad.length) {
+      console.warn('[LIS] 轻微放行规则表自检未通过（规则表被改动/重排，分类结果可能已变）：\n' + bad.join('\n'));
+      dbg('轻微放行规则表自检未通过:', bad.join(' | '));
+    } else {
+      dbg('轻微放行规则表自检通过：' + total + ' 项');
+    }
+    return bad;
+  }
+  lisSelfTestMildRules();
+
   // 单个异常项目是否可按轻微异常放行。HIGH/LOW 按幅度带判；定性 ABNORMAL（flag A）一律不放行
   // 8.15.0: 患者性别（m/f/''）——取分类行 Sex/Species；取不到返回 ''（性别化规则落回保守留人工）
   function mildSexOf(live) {
@@ -21421,13 +21534,16 @@ window.addEventListener('keydown',function(e){
 
       if (queue.current >= queue.items.length) {clearAuditQueue();}
       // 提示仅供参考；以列表是否消失为准
+      // 8.15.5: 补上跳过数——此前结束 toast 只报成功/失败，跳过（留人工）只在进度条那行
+      // 一闪而过，批审一结束就看不到「有多少条被安全门拦下、需要人工过一遍」。
+      const _skipHint = skipCount > 0 ? `，跳过 ${skipCount} 条（需人工过一遍）` : '';
       if (successCount > 0) {
         showToast(
-          `批审结束（以列表为准）成功约 ${successCount}` + (failCount ? `，仍有 ${failCount} 条请核对` : ''),
-          failCount ? 'warning' : 'success'
+          `批审结束（以列表为准）成功约 ${successCount}` + (failCount ? `，仍有 ${failCount} 条请核对` : '') + _skipHint,
+          (failCount || skipCount) ? 'warning' : 'success'
         );
       } else {
-        showToast('❌ 审核全部失败', 'error');
+        showToast('❌ 审核全部失败' + _skipHint, 'error');
       }
 
       // 8.8.27: 若本批审为切组独立续跑（无外层 autoAuditTick 正在等待），在结束或切回原组前主动触发推送与日志结算
@@ -21522,9 +21638,13 @@ window.addEventListener('keydown',function(e){
     return (m === 'blocked' || m === 'off') ? m : 'all';
   }
   // 8.13.0: 审核方案（手工切换，立即生效）——day=白天（异常逐条仅限轻微带内，同 F4 批审口径，
-  // 超带异常留人工）；night=夜间（异常逐条全放，红线除外 = 8.5.58 起原行为）。缺省一律夜间。
+  // 超带异常留人工）；night=夜间（异常逐条全放，红线除外 = 8.5.58 起原行为）。
+  // 8.15.5: 缺省改为「白天」——安全默认必须落在保守侧。此前缺省/非法一律夜间，等于
+  // 「忘记切换」或状态被重置（清缓存、schema 变更、默认对象无 profile 字段）会静默落回
+  // 最宽松口径，异常只靠红线名单兜底。用户显式选过夜间则照旧持久保存、不受影响；
+  // 要夜间全放，在自动审核弹窗里点一下「夜间」即可（会存下来）。
   function autoAuditProfile() {
-    return (_autoAudit && _autoAudit.profile === 'day') ? 'day' : 'night';
+    return (_autoAudit && _autoAudit.profile === 'night') ? 'night' : 'day';
   }
   function autoAuditProfileText(p) {
     return (p || autoAuditProfile()) === 'day' ? '☀️ 白天方案（异常逐条仅限轻微带内）' : '🌙 夜间方案（异常逐条全放，红线除外）';
@@ -21606,8 +21726,9 @@ window.addEventListener('keydown',function(e){
         _autoAudit.notifyMode = 'all';
       }
       // 8.13.0: 审核方案 profile——day=白天（异常逐条仅限轻微带内，同 F4 批审口径）/
-      // night=夜间（异常逐条全放，红线除外，=8.5.58 起原行为）。缺省/非法一律按夜间，升级零行为变化
-      if (_autoAudit.profile !== 'day' && _autoAudit.profile !== 'night') {_autoAudit.profile = 'night';}
+      // night=夜间（异常逐条全放，红线除外，=8.5.58 起原行为）。
+      // 8.15.5: 缺省/非法改按「白天」（保守侧）。原按夜间，状态重置后会静默落回最宽松口径。
+      if (_autoAudit.profile !== 'day' && _autoAudit.profile !== 'night') {_autoAudit.profile = 'day';}
       // 8.9.6: mergeWindowMin（分钟）——0=不合并（每轮立即推）；非法值回退默认 2，上限 30
       // 8.10.2: 语义改为「连续做标本时的最短推送间隔」（原为「最长攒多久」），取值范围与存储不变
       const _mw = Number(_autoAudit.mergeWindowMin);
