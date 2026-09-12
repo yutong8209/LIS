@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.14.1
+// @version      8.14.2
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19576,11 +19576,13 @@ window.addEventListener('keydown',function(e){
     // ---- 乙类：血常规主参数与细胞分类 ----
     { re: /^(白细胞(计数|数目|数)?|wbc)[\*＊]?$/i, tier: 'b', group: 'WBC', high: 1.2, low: 0.85 },
     { re: /^(中性粒细胞?(绝对值|绝对数|计数|数目|数)?|neut#|neu#)[\*＊#]?$/i, tier: 'b', group: 'NEUT', high: 1.2, low: 0.8 },
-    { re: /^(中性粒细胞?(百分比|比率)|neut%|neu%)[\*＊]?$/i, tier: 'b', group: 'NEUT', high: 1.15, low: 0.8 },
+    // 8.14.2: 白细胞比率分层调整（用户定稿）——中性粒/淋巴/单核「比率」转甲类全放行（不设幅度、
+    // 不占计数，孤立比率波动直接放行；绝对值 NEUT#/LYM#/MON# 仍是乙类带把关）；嗜酸/嗜碱比率保留乙类
+    { re: /^(中性粒细胞?(百分比|比率)|neut%|neu%)[\*＊]?$/i, tier: 'a' },
     { re: /^(淋巴(细胞)?(绝对值|绝对数|计数|数目|数)?|lymph#|lym#)[\*＊#]?$/i, tier: 'b', group: 'LYM', high: 1.2, low: 0.8 },
-    { re: /^(淋巴(细胞)?(百分比|比率)|lymph%|lym%)[\*＊]?$/i, tier: 'b', group: 'LYM', high: 1.2, low: 0.8 },
+    { re: /^(淋巴(细胞)?(百分比|比率)|lymph%|lym%)[\*＊]?$/i, tier: 'a' },
     { re: /^(单核(细胞)?(绝对值|绝对数|计数|数目|数)?|mono#|mon#)[\*＊#]?$/i, tier: 'b', group: 'MON', high: 1.5, low: null },
-    { re: /^(单核(细胞)?(百分比|比率)|mono%|mon%)[\*＊]?$/i, tier: 'b', group: 'MON', high: 1.5, low: null },
+    { re: /^(单核(细胞)?(百分比|比率)|mono%|mon%)[\*＊]?$/i, tier: 'a' },
     { re: /^(嗜酸(性)?(粒细胞?)?(绝对值|绝对数|计数|数目|数)?|eos#|eo#)[\*＊#]?$/i, tier: 'b', group: 'EOS', high: 1.5, low: null },
     { re: /^(嗜酸(性)?(粒细胞?)?(百分比|比率)|eos%|eo%)[\*＊]?$/i, tier: 'b', group: 'EOS', high: 1.5, low: null },
     { re: /^(嗜碱(性)?(粒细胞?)?(绝对值|绝对数|计数|数目|数)?|baso#|bas#)[\*＊#]?$/i, tier: 'b', group: 'BAS', high: null, highAbs: 0.1, low: null },
