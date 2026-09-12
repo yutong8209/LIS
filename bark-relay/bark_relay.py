@@ -419,7 +419,7 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
             _log(f'[security] 拒绝非白名单 Origin 的 POST {path}: {self.headers.get("Origin")}')
             self._send_json({'error': 'Origin not allowed'}, code=403)
             return
-        global _notify_last_accept_ts, _notify_inflight
+        global _notify_last_accept_ts, _notify_inflight, _notify_last
         try:
             length = int(self.headers.get('Content-Length', 0) or 0)
             # 8.10.0: 请求体上限 + 拒绝负值（read(-n) 会挂到 EOF）
@@ -439,27 +439,39 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
                     return
                 _notify_last_accept_ts = now
                 _notify_inflight += 1
-            raw = self.rfile.read(length) if length else b'{}'
-            data = json.loads(raw.decode('utf-8'))
-            title = str(data.get('title') or '自动审核')
-            body = str(data.get('body') or '')
-            level = str(data.get('level') or 'active')
-            # 8.10.3: subtitle；8.10.6: group / sound
-            subtitle = str(data.get('subtitle') or '')
-            group = str(data.get('group') or '')
-            sound = str(data.get('sound') or '')
-            cfg = _load_notify_config()
-            key = (cfg.get('bark_key') or '').strip()
-            if not key or not cfg.get('enabled', True):
-                _log(f'[notify] 未配置 bark_key 或 enabled=false，忽略推送: {title} - {body[:80]}')
-                with _notify_lock:
-                    _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': '未配置 bark_key 或 enabled=false，已忽略'}
-                with _notify_rate_lock:
-                    _notify_inflight -= 1
-                self._send_json({'accepted': False})
-                return
-            threading.Thread(target=_notify_guarded, args=(key, title, body, level, subtitle, group, sound), daemon=True).start()
-            self._send_json({'accepted': True})
+            # 8.10.1: 名额已占，之后任何异常路径都必须归还——此前 json.loads 抛错走最外层
+            # except 时没有递减，实测 8 次畸形 JSON 后 _notify_inflight 恒为 8，
+            # 合法推送被永久 429（须重启进程才恢复）。现用 handed_off + finally 保证恰好归还一次：
+            # 只有真正把推送交给 _notify_guarded 线程时才由线程侧归还，其余路径在此归还。
+            handed_off = False
+            try:
+                raw = self.rfile.read(length) if length else b'{}'
+                data = json.loads(raw.decode('utf-8'))
+                if not isinstance(data, dict):
+                    self._send_json({'error': 'invalid json object'}, code=400)
+                    return
+                title = str(data.get('title') or '自动审核')
+                body = str(data.get('body') or '')
+                level = str(data.get('level') or 'active')
+                # 8.10.3: subtitle；8.10.6: group / sound
+                subtitle = str(data.get('subtitle') or '')
+                group = str(data.get('group') or '')
+                sound = str(data.get('sound') or '')
+                cfg = _load_notify_config()
+                key = (cfg.get('bark_key') or '').strip()
+                if not key or not cfg.get('enabled', True):
+                    _log(f'[notify] 未配置 bark_key 或 enabled=false，忽略推送: {title} - {body[:80]}')
+                    with _notify_lock:
+                        _notify_last = {'ts': time.time(), 'ok': False, 'title': str(title)[:60], 'detail': '未配置 bark_key 或 enabled=false，已忽略'}
+                    self._send_json({'accepted': False})
+                    return
+                threading.Thread(target=_notify_guarded, args=(key, title, body, level, subtitle, group, sound), daemon=True).start()
+                handed_off = True
+                self._send_json({'accepted': True})
+            finally:
+                if not handed_off:
+                    with _notify_rate_lock:
+                        _notify_inflight -= 1
         except Exception as e:
             _log(f'/notify 处理异常: {e}')
             self._send_json({'error': str(e)[:120]}, code=500)

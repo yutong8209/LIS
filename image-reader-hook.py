@@ -15,7 +15,7 @@ IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.tiff', '
 _EXT = r'(?:png|jpg|jpeg|gif|bmp|webp|tiff|tif)'
 
 def find_image_files(text):
-    """在文本中查找图片文件路径（支持引号包裹的含空格路径，如 Mac 截屏文件名）。
+    r"""在文本中查找图片文件路径（支持引号包裹的含空格路径，如 Mac 截屏文件名）。
 
     正则刻意不使用反斜杠转义（用否定字符类代替 \s、[/\\]），保证跨平台/跨写入方式稳定。
     """

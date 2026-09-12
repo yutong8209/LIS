@@ -1,5 +1,18 @@
 export default [
   {
+    // 8.15.3: 必须显式忽略——此前无 ignores，`eslint .` 会去 lint vendor/ 下的压缩库
+    // （xlsx.full.min.js 951KB），实测 193978 problems / 20635 errors 全是噪音，
+    // 真正的 error 被淹没，lint.sh 长期红着形同虚设。.prettierignore 早已忽略这些。
+    ignores: [
+      'vendor/**',
+      'cache/**',
+      '.cache/**',
+      'node_modules/**',
+      '**/*.min.js',
+      '**/*.min.css',
+    ],
+  },
+  {
     files: ['**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',
@@ -246,6 +259,31 @@ export default [
       'comma-dangle': ['warn', 'never'],
       'no-multiple-empty-lines': ['warn', { max: 2 }],
       'no-trailing-spaces': 'warn'
+    }
+  },
+  {
+    // 8.15.3: 本配置文件自身是 ESM；主配置的 sourceType:'script' 会把它判成
+    // Parsing error（'import' and 'export' may appear only with 'sourceType: module'）
+    files: ['eslint.config.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module'
+    }
+  },
+  {
+    // 8.15.3: Node 侧脚本（serve.js / show.js）需要 Node 全局，否则 require/__dirname/module
+    // 一律报 no-undef，把真正的问题淹掉
+    files: ['serve.js', 'show.js'],
+    languageOptions: {
+      globals: {
+        require: 'readonly',
+        module: 'readonly',
+        exports: 'readonly',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+        process: 'readonly',
+        Buffer: 'readonly'
+      }
     }
   }
 ];

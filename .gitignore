@@ -77,6 +77,8 @@ FORMAT_SUMMARY.md
 # Agent 临时产物（勿提交）
 .pi-subagents/
 .workbuddy/
+# 8.15.3: agent 工作区记忆/日志（含代码复查笔记等本机内部信息，不进医院仓库）
+.workbuddy-ai/
 
 # Bark 推送配置（本地密钥，勿提交；模板见 notify_config.example.json）
 notify_config.json

@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul 2>nul
 setlocal
 rem 卸载计划任务并停止 relay 进程（按端口 8766 精确结束，不误杀其它 python）
 set "TASK=LIS-BarkRelay"

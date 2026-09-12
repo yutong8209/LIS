@@ -27,7 +27,13 @@ const server = http.createServer((req, res) => {
     if (!file && reqPath.startsWith('/vendor/')) {
         const name = path.basename(reqPath);
         const candidate = path.join(VENDOR, name);
-        if (candidate.startsWith(VENDOR + path.sep) && fs.existsSync(candidate)) file = candidate;
+        // 8.15.3: 与 serve.py 对齐——用 resolve 归一化后再比对前缀（VENDOR 本身含符号链接时
+        // 原 startsWith 判断会失真）；补花括号修掉 eslint curly error
+        const vendorRoot = path.resolve(VENDOR);
+        const resolved = path.resolve(candidate);
+        if ((resolved === vendorRoot || resolved.startsWith(vendorRoot + path.sep)) && fs.existsSync(resolved)) {
+            file = resolved;
+        }
     }
     if (!file || !fs.existsSync(file)) {
         res.writeHead(404);

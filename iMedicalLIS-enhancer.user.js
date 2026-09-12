@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.2
+// @version      8.15.3
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -611,14 +611,17 @@
   const DEBUG = false;
   const _dbgLog = [];
   const dbg = (...args) => {
-    // 8.9.0: 环形缓冲始终写入（500 条上限）——生产 DEBUG=false 时 Alt+D 面板此前永远是空的，
+    // 8.9.0: 环形缓冲始终写入（500 条上限）——生产 DEBUG=false 时面板此前永远是空的，
     // 医院现场排障没有抓手；console 输出仍受 DEBUG 控制
     const msg = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
     if (DEBUG) {console.log('[LIS]', msg);}
     _dbgLog.push(msg);
     if (_dbgLog.length > 500) {_dbgLog.splice(0, _dbgLog.length - 500);}
   };
-  // 在页面底部显示调试面板（控制台调用 showDebugPanel()）
+  // 在页面底部显示/隐藏调试面板（控制台调用 showDebugPanel()）。
+  // 8.15.3: 必须挂到 unsafeWindow——原 Alt+D 绑定已在 8.11.x 移除，而函数留在 IIFE 闭包内，
+  // 既无调用方也无导出，导致 500 条环形日志只进不出、现场排障彻底没有抓手。
+  // 现在控制台执行 showDebugPanel() 开关面板，lisDebugLog() 取纯文本（便于复制发给开发）。
   function showDebugPanel() {
     let panel = document.getElementById('lis-debug-panel');
     if (panel) {
@@ -632,6 +635,11 @@
     panel.innerHTML = '<b>LIS Debug Log</b><br>' + _dbgLog.map(l => esc(l)).join('<br>');
     document.body.appendChild(panel);
   }
+  function lisDebugLog() {return _dbgLog.join('\n');}
+  try {
+    uw().showDebugPanel = showDebugPanel;
+    uw().lisDebugLog = lisDebugLog;
+  } catch (e) {}
 
   async function fetchJ(u, timeoutMs, externalSignal) {
     const ctrl = new AbortController();
@@ -10562,7 +10570,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (!isWSVisible() || isDetailPanelVisible() || histIsOpen()) {return false;}
     if (e.ctrlKey || e.altKey || e.metaKey) {return false;}
     const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || t.closest?.('textarea,[contenteditable]'))) {return false;}
+    // 8.15.3: SELECT 一并排除——日期选择器的年/月是原生 <select>，聚焦时按 1-5 会被
+    // preventDefault + stopImmediatePropagation 吞掉，导致下拉选不中年月（误切分类）
+    if (
+      t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' ||
+        t.isContentEditable || t.closest?.('textarea,[contenteditable]'))
+    ) {return false;}
+    // 日期选择器打开时不劫持数字键（下拉/日期按钮在上层，避免误切分类）
+    if (document.getElementById('lis-ws-date-picker')) {return false;}
     const cat = { '1': 'audit', '2': 'incomplete', '3': 'pending', '4': 'collected', '5': 'all' }[e.key];
     if (!cat) {return false;}
     e.preventDefault();
@@ -10913,7 +10928,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         return false;
       }
       if (!validateBatchAudit(normalData)) {return false;}
-      if (nMildQ > 0) {recordMildAuditLog(normalData.filter(x => String(x.status) === 'MILD'));}
       dbg('一键批审(直审):', normalData.length, '个标本（正常', nNormQ, '· 轻微异常', nMildQ, '）');
       showToast(
         `⚡ 开始批审 ${nNormQ} 个正常${nMildQ ? ` + ${nMildQ} 个轻微异常` : ''}（首条自动 CA 认证，进度条可停止）`,
@@ -10921,10 +10935,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       );
       // 与旧确认弹窗路径同款排序：按审核视图顺序（仪器分组、危急→异常→正常）逐条审
       const sorted = [...normalData].sort((a, b) => compareSpecimensForAudit(a.row || a, b.row || b));
-      executeBatchAudit(sorted).catch(e => {
-        console.error('[LIS] 批审异常:', e);
-        showToast('批审出错: ' + e.message, 'error');
-      });
+      // 8.15.3: 轻微异常留痕改到批审结束后、且只记真正审过的（queue.done）——此前在批审启动前
+      // 就全量记账，中途点 ⏹ 停止或失败时日志里仍留下「已放行」，回溯会与实际审核结果不符
+      const mildQueue = nMildQ > 0 ? normalData.filter(x => String(x.status) === 'MILD') : [];
+      executeBatchAudit(sorted)
+        .then(q => {
+          if (!mildQueue.length || !q || !Array.isArray(q.done)) {return;}
+          const doneSet = new Set(q.done.map(it => String(it.reportDR)));
+          recordMildAuditLog(mildQueue.filter(sp => doneSet.has(String(sp.reportDR || (sp.row && sp.row.ReportDR)))));
+        })
+        .catch(e => {
+          console.error('[LIS] 批审异常:', e);
+          showToast('批审出错: ' + e.message, 'error');
+        });
       return true;
     } catch (e) {
       dbg('一键批审错误:', e);
@@ -25129,23 +25152,35 @@ window.addEventListener('keydown',function(e){
       }
     });
 
-    const doCopyUrl = (silent = false) => {
+    // 8.15.3: writeText 返回 Promise，必须 await 才知道是否真复制成功。此前不 await 就
+    // toast「已复制」并 return true——失败时既向用户谎报成功，又留下未处理的 Promise rejection
+    //（外层 try 只拦同步异常）。原生 IE 路径还会写死「链接已同步复制」。
+    const doCopyUrl = async (silent = false) => {
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(targetUrl);
-          if (!silent) toast('已复制患者病历直达链接到剪贴板', 's');
+          await navigator.clipboard.writeText(targetUrl);
+          if (!silent) {toast('已复制患者病历直达链接到剪贴板', 's');}
           return true;
         }
-      } catch (e) {}
-      if (!silent) prompt('请手动复制病历链接：', targetUrl);
+      } catch (e) {
+        dbg('复制病历链接失败:', e && e.message);
+      }
+      if (!silent) {prompt('请手动复制病历链接：', targetUrl);}
       return false;
     };
 
     if (btnNativeIE) {
-      btnNativeIE.addEventListener('click', () => {
-        doCopyUrl(true);
+      btnNativeIE.addEventListener('click', async () => {
+        // 先 await 复制再跳转：跳走会失焦，clipboard 写入可能被拒；也让提示与真实结果一致
+        const copied = await doCopyUrl(true);
         window.location.href = 'lis-ie:' + targetUrl;
-        toast('正在唤起原生 32 位 IE 打开病历（链接已同步复制）', 's', 3500);
+        toast(
+          copied
+            ? '正在唤起原生 32 位 IE 打开病历（链接已复制）'
+            : '正在唤起原生 32 位 IE 打开病历（链接复制失败，可点「复制链接」手动复制）',
+          copied ? 's' : 'w',
+          3500
+        );
       });
     }
 
@@ -25522,7 +25557,7 @@ window.addEventListener('keydown',function(e){
   // LIS 会话只在「长时间完全不操作」后才过期（实测数小时）。夜间/无人时段工作台关闭、自动审核
   // 间隙，整页可能数小时无任何请求 → 会话悄悄过期 → 自动审核走断流暂停→整页刷新链路（还连带掉 CA）。
   // 每 4 分钟对 LIS 发一次极轻量只读请求维持会话活跃（单次 <2KB，远小于工作台一次刷新的请求量）。
-  // 设计约束：完全静音——失败只进调试日志（Alt+D 可见），会话真过期仍由自动审核健康预检按既有
+  // 设计约束：完全静音——失败只进调试日志（控制台 showDebugPanel() 可见），会话真过期仍由自动审核健康预检按既有
   // 链路处理，不新增任何推送/toast 噪音。仅保活 Web 会话；CA 认证绑在页面内存（切组/刷新即失效），
   // 请求保活管不到，维持 8.9.4「每断流期至多一次整页刷新」的既有代价模型
   const LIS_KEEPALIVE_INTERVAL = 4 * 60 * 1000;
