@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.13.0
+// @version      8.13.1
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -11626,20 +11626,29 @@ window.addEventListener('keydown',function(e){
     const hasInfectionWarning = cached && cached.infectionWarning;
 
     const _cr = (cached && cached.row) || specimen;
+    // 8.13.1: 分类缓存带回的 LabInfo（GetReportInfoAll）——申请医生/标本类型等工作台行数据
+    // 缺失的字段从这里补全（回退链与病人结果导出模块同源）
+    const _labInfo = (cached && cached.labInfo) || {};
     const name = esc(specimen.PatName || '未知');
     const sex = esc(_cr.Sex || _cr.Species || specimen.Sex || specimen.Species || '');
-    const age = esc((_cr.Age || specimen.Age || '') + (_cr.AgeUnit || specimen.AgeUnit || ''));
+    const age = esc((_cr.Age || specimen.Age || _labInfo.Age || '') + (_cr.AgeUnit || specimen.AgeUnit || ''));
     const labno = esc(specimen.Labno || '-');
     const regNo = esc(_cr.RegNo || specimen.RegNo || '-');
-    const admNo = esc(_cr.AdmNo || specimen.AdmNo || '');
-    const bed = esc(formatDetailBedNo(_cr.BedNo || specimen.BedNo));
-    const dept = esc(_cr.Location || _cr.LocationName || specimen.LocDesc || '');
-    const doc = esc(_cr.Doctor || _cr.DoctorName || specimen.Doctor || '');
+    const admNo = esc(_cr.AdmNo || specimen.AdmNo || _labInfo.AdmNo || _labInfo.InHospNo || '');
+    const bed = esc(formatDetailBedNo(_cr.BedNo || specimen.BedNo || _labInfo.BedNo || _labInfo.Bed));
+    const dept = esc(_cr.Location || _cr.LocationName || specimen.LocDesc || _labInfo.Location || _labInfo.LocationName || '');
+    const doc = esc(
+      _cr.Doctor || _cr.DoctorName || _cr.ReqDoctorName || _cr.ApplyDoctorName ||
+      specimen.Doctor || specimen.DoctorName || specimen.ReqDoctorName || specimen.ApplyDoctorName ||
+      _labInfo.Doctor || _labInfo.DoctorName || _labInfo.ReqDoctorName || _labInfo.ApplyDoctorName || ''
+    );
+    const specimenDesc = esc(_cr.Specimen || _cr.SpecimenDesc || specimen.Specimen || specimen.SpecimenDesc || _labInfo.Specimen || _labInfo.SpecimenDesc || '');
+    const episodeNo = esc(specimen.EpisodeNo || _cr.EpisodeNo || _labInfo.EpisodeNo || '');
     const testSet = esc(specimen.TestSetDesc || '');
     const machine = esc(specimen._mn || prWorkGroupMachineDR(specimen) || '');
     const admBadge = admTypeBadgeHTML(specimen);
     const recheckTag = recheckTagHTML(specimen);
-    const extraText = buildDetailExtraText(_cr, specimen);
+    const extraText = buildDetailExtraText(_cr, specimen, _labInfo);
 
     let hdHtml = `
       <div class="insp-hd-main">
@@ -11655,7 +11664,9 @@ window.addEventListener('keydown',function(e){
           ${admNo ? `<span>住院号: <span class="insp-mono">${admNo}</span></span>` : ''}
           ${bed ? `<span>${bed}</span>` : ''}
           ${dept ? `<span>${dept}</span>` : ''}
-          ${doc ? `<span>医生: ${doc}</span>` : ''}
+          ${doc ? `<span>申请医生: ${doc}</span>` : ''}
+          ${specimenDesc ? `<span>标本: ${specimenDesc}</span>` : ''}
+          ${episodeNo ? `<span>流水号: <span class="insp-mono">${episodeNo}</span></span>` : ''}
           <span>仪器: ${machine}</span>
         </div>
         ${extraText ? `<div class="insp-hd-extra" title="${escAttr(extraText)}">${esc(extraText)}</div>` : ''}
@@ -13868,9 +13879,12 @@ window.addEventListener('keydown',function(e){
     return /^床/.test(bed) || /床$/.test(bed) ? bed : '床' + bed;
   }
 
-  function buildDetailExtraText(info, fallback) {
+  // 8.13.1: 第三参 labInfo 为可选回退（检视器传入分类缓存带回的 GetReportInfoAll LabInfo）——
+  // 申请医生/标本类型等工作台行数据常缺的字段从这层兜底
+  function buildDetailExtraText(info, fallback, labInfo) {
     const r = info || {};
     const fb = fallback || {};
+    const li = labInfo || {};
     const parts = [];
     const sex = r.Sex || r.Species || fb.Sex || fb.Species;
     const age = r.Age || fb.Age;
@@ -13881,8 +13895,10 @@ window.addEventListener('keydown',function(e){
     const recordNo = r.RecordNo || fb.RecordNo;
     const regNo = r.RegNo || fb.RegNo;
     const bed = formatDetailBedNo(r.BedNo || fb.BedNo);
-    const specimen = r.Specimen || r.SpecimenDesc || fb.Specimen || fb.SpecimenDesc;
-    const doctor = r.Doctor || r.DoctorName || fb.Doctor || fb.DoctorName;
+    const specimen = r.Specimen || r.SpecimenDesc || fb.Specimen || fb.SpecimenDesc || li.Specimen || li.SpecimenDesc;
+    const doctor = r.Doctor || r.DoctorName || r.ReqDoctorName || r.ApplyDoctorName ||
+      fb.Doctor || fb.DoctorName || fb.ReqDoctorName || fb.ApplyDoctorName ||
+      li.Doctor || li.DoctorName || li.ReqDoctorName || li.ApplyDoctorName;
     const diagnose = r.Diagnose || fb.Diagnose;
     const collectTime = detailTimeFrom(r, 'CollectDT', 'CollectDate', 'CollectTime', fb.CollectDT);
     const receiveTime = detailTimeFrom(r, 'ReceiveDT', 'ReceiveDate', 'ReceiveTime', fb.ReceiveDT);
