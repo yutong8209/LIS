@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.14.5
+// @version      8.15.0
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19552,8 +19552,11 @@ window.addEventListener('keydown',function(e){
   //     （K 是唯一必须做绝对钳的项目——不同机器范围 3.5-5.3 / 3.5-5.5 并存，纯比例会在宽范围机器放过头）
   //   · 定性异常（项目级 flag A → status 'ABNORMAL'）与负值结果一律不放行
   //   · 整管乙类轻微异常 ≤8 项（同项目 #/% 合并计 1，如 NEUT# 6.9 + NEUT% 78 是同一个信号）
-  //   · 未配规则的项目（血锂/NH3/性激素六项/fPSA/肌钙蛋白/前白蛋白/转铁蛋白等）任何异常都留人工——
-  //     性激素参考范围是「性别;经期」多段文本，getItemRangeValues 只能解析出第一段，判定必然失真，故意不配
+  //   · 性激素六项（8.15.0）按性别取基准范围：男=男性范围；女=「各期汇总包络」（各期下限取最低、
+  //     上限取最高），基准上乘 high/low 倍数；性别取不到一律留人工。孕酮女性包络上限 64 为
+  //     黄体期估算值（LIS 分段文本被截），待与 LIS 实际配置核对
+  //   · 未配规则的项目（血锂/NH3/fPSA/肌钙蛋白/转铁蛋白等）任何异常都留人工——
+  //     多段参考范围文本由 8.14.1 歧义守卫兜底：无结构化上下限且分段 → 留人工
   // 紧急停用：把 MILD_ALLOW_ENABLED 置 false 即整体回到「只批审严格正常」。
   const MILD_ALLOW_ENABLED = true;
   const MILD_TIER_B_MAX_ITEMS = 8;
@@ -19653,6 +19656,16 @@ window.addEventListener('keydown',function(e){
     { re: /^游离三碘甲状(腺)?原氨酸|^游离t3|^ft3$/i, tier: 'b', group: 'FT3', high: 1.15, low: 0.9 },
     { re: /^甲状腺素[\*＊]?$|^总甲状腺素|^总t4$|^tt4$/i, tier: 'b', group: 'TT4', high: 1.15, low: 0.85 },
     { re: /^三碘甲状(腺)?原氨酸|^总t3$|^tt3$/i, tier: 'b', group: 'TT3', high: 1.15, low: 0.85 },
+    // ---- 乙类：性激素六项（8.15.0 起按性别取基准范围）----
+    // sexRanges: [m]=男性范围；[f]=「各期汇总包络」（各期下限取最低、上限取最高，基准值取自 LIS 参考分段文本）。
+    // 基准上再乘 high/low 倍数；性别取不到 → 留人工。倍数取 1.5/0.7（激素日间波动大、且包络本身已覆盖各期）。
+    // 注意：绝经后女性 FSH/LH 显著高于育龄期包络，会按超带留人工（保守正确）；如需放行需把绝经后期范围并入包络
+    { re: /促卵泡|^fsh$/i, tier: 'b', group: 'FSH', sexRanges: { m: [1.27, 19.26], f: [1.79, 22.51] }, high: 1.5, low: 0.7 },
+    { re: /黄体生成素|^lh$/i, tier: 'b', group: 'LH', sexRanges: { m: [1.24, 8.62], f: [1.20, 103.03] }, high: 1.5, low: 0.7 },
+    { re: /泌乳素|^prl$/i, tier: 'b', group: 'PRL', sexRanges: { m: [2.64, 13.13], f: [2.74, 26.72] }, high: 1.5, low: 0.7 },
+    { re: /雌二醇|^e2$/i, tier: 'b', group: 'E2', sexRanges: { m: [0, 143], f: [0, 1624] }, high: 1.5, low: null },
+    { re: /^(血清)?孕酮(测定)?[\*＊]?$/i, tier: 'b', group: 'PROG', sexRanges: { m: [0.45, 6.55], f: [0.25, 64] }, high: 1.5, low: null },
+    { re: /^(血清)?睾酮(测定)?[\*＊]?$|^tsto$/i, tier: 'b', group: 'TSTO', sexRanges: { m: [2.12, 23.15], f: [0, 2.6] }, high: 1.5, low: 0.7 },
     // ---- 乙类：发光心肌/肿瘤/铁蛋白/炎症 ----
     { re: /^肌红蛋白[\*＊]?$|^myo$/i, tier: 'b', group: 'MYO', high: 1.25, low: null },
     { re: /甲胎蛋白|^afp$/i, tier: 'b', group: 'AFP', high: 1.3, low: null },
@@ -19690,7 +19703,14 @@ window.addEventListener('keydown',function(e){
   }
 
   // 单个异常项目是否可按轻微异常放行。HIGH/LOW 按幅度带判；定性 ABNORMAL（flag A）一律不放行
-  function mildAllowItem(it) {
+  // 8.15.0: 患者性别（m/f/''）——取分类行 Sex/Species；取不到返回 ''（性别化规则落回保守留人工）
+  function mildSexOf(live) {
+    const s = String((live && live.row && (live.row.Sex || live.row.Species)) || '').trim();
+    if (/男/.test(s)) {return 'm';}
+    if (/女/.test(s)) {return 'f';}
+    return '';
+  }
+  function mildAllowItem(it, sex) {
     const st = String((it && it.status) || '');
     const name = String((it && (it.CName || it.name)) || '');
     if (st !== 'HIGH' && st !== 'LOW') {
@@ -19710,16 +19730,25 @@ window.addEventListener('keydown',function(e){
     const _hasStruct = !!(_rngSrc.ValueLow || _rngSrc.ValueHigh || _rngSrc.LowValue ||
                           _rngSrc.HighValue || _rngSrc.RefLow || _rngSrc.RefHigh ||
                           _rngSrc.ReferenceLow || _rngSrc.ReferenceHigh);
-    if (!_hasStruct && isAmbiguousRangeText(_rngSrc.RefRanges || _rngSrc.RefRange || _rngSrc.ReferenceRange || it.RefRanges)) {
+    // 8.15.0: 性激素六项按性别取基准范围（男=男性范围；女=「各期汇总包络」——各期下限取最低、
+    // 上限取最高），在此基准上套 high/low 倍数。性别取不到 → 走原路径 → 多段文本被下方守卫拦下留人工
+    const _sexRange = (rule.sexRanges && sex) ? (sex === 'm' ? rule.sexRanges.m : rule.sexRanges.f) : null;
+    if (!_sexRange && !_hasStruct && isAmbiguousRangeText(_rngSrc.RefRanges || _rngSrc.RefRange || _rngSrc.ReferenceRange || it.RefRanges)) {
       return { ok: false, reason: `${name} 参考范围为分段文本且无结构化上下限，留人工` };
     }
     if (st === 'HIGH') {
       if (rule.high === undefined) {return { ok: false, reason: `${name} 偏高不放行` };}
       let limit = Infinity;
       if (rule.high !== null) {
-        const uln = parseComparableNumber(range.high);
-        if (!uln || isNaN(uln.value) || uln.value <= 0) {return { ok: false, reason: `${name} 参考上限缺失，不放行` };}
-        limit = uln.value * rule.high;
+        let ulnV = NaN;
+        if (_sexRange) {ulnV = Number(_sexRange[1]);}
+        else {
+          const uln = parseComparableNumber(range.high);
+          if (!uln || isNaN(uln.value) || uln.value <= 0) {return { ok: false, reason: `${name} 参考上限缺失，不放行` };}
+          ulnV = uln.value;
+        }
+        if (!Number.isFinite(ulnV) || ulnV <= 0) {return { ok: false, reason: `${name} 性别基准上限缺失，不放行` };}
+        limit = ulnV * rule.high;
       }
       if (rule.highAbs !== undefined) {limit = Math.min(limit, rule.highAbs);}
       if (!(p.value <= limit)) {return { ok: false, reason: `${name} ${it.result} 超出轻微带（≤${limit}）` };}
@@ -19729,9 +19758,12 @@ window.addEventListener('keydown',function(e){
     if (rule.low === undefined && rule.lowAbs === undefined) {return { ok: false, reason: `${name} 偏低不放行` };}
     let floor = null;
     if (rule.low !== undefined && rule.low !== null) {
-      const lln = parseComparableNumber(range.low);
-      if (!lln || isNaN(lln.value)) {return { ok: false, reason: `${name} 参考下限缺失，不放行` };}
-      floor = lln.value * rule.low;
+      if (_sexRange) {floor = Number(_sexRange[0]) * rule.low;}
+      else {
+        const lln = parseComparableNumber(range.low);
+        if (!lln || isNaN(lln.value)) {return { ok: false, reason: `${name} 参考下限缺失，不放行` };}
+        floor = lln.value * rule.low;
+      }
     }
     if (rule.lowAbs !== undefined) {floor = floor === null ? rule.lowAbs : Math.max(floor, rule.lowAbs);}
     if (floor !== null && !(p.value >= floor)) {return { ok: false, reason: `${name} ${it.result} 低于轻微带（≥${floor}）` };}
@@ -19759,13 +19791,14 @@ window.addEventListener('keydown',function(e){
     if (live.infectionWarning) {return { ok: false, reason: '传染病历史不符，不放行' };}
     const items = live.items || [];
     if (items.length === 0) {return null;}
+    const sex = mildSexOf(live); // 8.15.0: 性别化基准范围用
     const seenGroups = new Set();
     let tierBCount = 0;
     const evalItems = [];
     for (const it of items) {
       const st = String((it && it.status) || '');
       if (st === 'NORMAL' || st === 'ZERO') {continue;}
-      const v = mildAllowItem(it);
+      const v = mildAllowItem(it, sex);
       evalItems.push({
         name: String((it && (it.CName || it.name)) || ''),
         result: String((it && it.result) || ''),
