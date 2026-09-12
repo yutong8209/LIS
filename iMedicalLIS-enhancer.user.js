@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.13.1
+// @version      8.13.2
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -24243,7 +24243,8 @@ window.addEventListener('keydown',function(e){
           resume: {icon: '▶', cls: 'resume', label: '恢复'},
           start: {icon: '🤖', cls: 'start', label: '开启'},
           stop: {icon: '🛑', cls: 'stop', label: '关闭'},
-          expire: {icon: '⏰', cls: 'expire', label: '到期'}
+          expire: {icon: '⏰', cls: 'expire', label: '到期'},
+          profile: {icon: '🔀', cls: 'start', label: '方案切换'} // 8.13.0: 白天/夜间手工切换
         };
         const _todayD = fmtDay(now);
         const _yestD = fmtDay(new Date(now.getTime() - 86400000));
