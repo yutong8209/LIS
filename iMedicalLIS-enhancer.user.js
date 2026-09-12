@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.18
+// @version      8.12.0
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -97,7 +97,8 @@
     aalFolds: 'LIS_AAL_Folds', // 8.9.8: 折叠偏好键（8.9.11 起不再读写，仅打开弹窗时清一次旧值）
     notifyRetryQueue: 'LIS_NotifyRetryQueue', // 8.8.34: 推送发送失败的待补发队列（serve 未运行/网络瞬断不再丢推送）
     autoAuditPushBuf: 'LIS_AA_PushBuf', // 8.9.6: 连续结果合并推送缓冲区（连续做标本时攒单，防手机连响）
-    autoAuditPushLast: 'LIS_AA_PushLastTs' // 8.10.2: 上一条轮次推送发出时刻（前沿即发 + 最短间隔节奏，跨刷新存续）
+    autoAuditPushLast: 'LIS_AA_PushLastTs', // 8.10.2: 上一条轮次推送发出时刻（前沿即发 + 最短间隔节奏，跨刷新存续）
+    mildLog: 'LIS_MildAuditLog' // 8.12.0: F4 轻微异常放行留痕（本地环形 500，不推送不进自动审核日志）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -1145,6 +1146,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-audit-summary{font-size:12px;font-weight:600;color:var(--lis-text);display:flex;align-items:center;gap:6px;white-space:nowrap}
 .ws-audit-sep{color:var(--lis-border-strong)}
 .ws-audit-critical{color:var(--lis-critical);font-weight:700}
+.ws-audit-mild{color:var(--lis-primary);font-weight:700}
 .nb-btn{padding:5px 12px;border:none;border-radius:6px;background:linear-gradient(135deg,#059669,#0d9488);color:#fff;font-size:11.5px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;box-shadow:0 1px 2px rgba(5,150,105,.25);display:inline-flex;align-items:center;gap:4px}
 .nb-btn:hover{filter:brightness(1.08);transform:translateY(-0.5px)}
 .nb-btn:active{transform:translateY(0);filter:brightness(.95)}
@@ -10016,6 +10018,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // 8.9.0: 同一遍顺带产出「当前仪器过滤」范围的分类计数（分类栏/页脚/菜单栏用）——
     // 此前 renderWSCategoryBar 对全量 wsData 又单独跑一遍 getWSAuditBucket
     let fTotal = 0, fNormal = 0, fAbnormal = 0, fIncomplete = 0, fPending = 0, fCollected = 0;
+    let fMild = 0; // 8.12.0: 当前过滤范围内可被 F4 一并批审的轻微异常条数
     const _machFilterActive = !!(wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0));
     // 全部仪器汇总
     const machCounts = {};
@@ -10063,7 +10066,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         machCounts[mdr].abnormalReady++;
         machCounts['_all'].abnormalReady++;
         abnormalCount++;
-        if (inScope) {fAbnormal++;}
+        if (inScope) {
+          fAbnormal++;
+          // 8.12.0: 统计轻微异常可批审数（classifyMildAbnormal 带 _classifyVersion 记忆，无重复开销）
+          const _mildCached = wsClassifiedCache[r.ReportDR];
+          const _mildEval = _mildCached ? classifyMildAbnormal(_mildCached) : null;
+          if (_mildEval && _mildEval.ok) {fMild++;}
+        }
       } else if (bucket === 'normal') {
         if (wgCounts[wg]) {wgCounts[wg].normalReady++;}
         machCounts[mdr].normalReady++;
@@ -10076,7 +10085,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const result = {
       wgCounts, machCounts, normalCount, abnormalCount, incompleteCount, pendingCount,
       // 8.9.0: 当前仪器过滤范围（分类栏 renderWSCategoryBar 消费）
-      fTotal, fNormal, fAbnormal, fIncomplete, fPending, fCollected
+      fTotal, fNormal, fAbnormal, fIncomplete, fPending, fCollected, fMild
     };
     _countsCache = result;
     _countsCacheKey = ck;
@@ -10715,6 +10724,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       normalReady: normalCount,
       abnormalReady: abnormalCount,
       auditReady: normalCount + abnormalCount,
+      mildReady: _uc.fMild || 0, // 8.12.0: 轻微异常可批审数（F4 队列扩容部分）
       pending: pendingCount,
       incomplete: incompleteCount,
       collected: collectedCount, // 8.5.31
@@ -10795,13 +10805,20 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       showToast('标本正在分类中，请等候分类完成后再批审', 'warning');
       return false;
     }
-    const stale = normalData.filter(sp => !isLiveNormalForBatch(sp.reportDR || (sp.row && sp.row.ReportDR)));
+    // 8.12.0: MILD 条目用轻微带口径做失效校验（isLiveMildForBatch），NORMAL 口径不变
+    const stale = normalData.filter(sp => {
+      const dr = sp.reportDR || (sp.row && sp.row.ReportDR);
+      if (String(sp.status) === 'MILD') {return !isLiveMildForBatch(dr);}
+      return !isLiveNormalForBatch(dr);
+    });
     if (stale.length > 0) {
       const first = stale[0].row || stale[0];
       showToast(`分类状态已变化或未完成：${first.PatName || first.Labno || ''}，请刷新工作台后重试`, 'error');
       return false;
     }
-    const blocked = normalData.filter(r => !isAutoAuditableClassified(r));
+    const blocked = normalData.filter(
+      r => !isAutoAuditableClassified(r) && !(String(r.status) === 'MILD' && r.mild && r.mild.ok)
+    );
     if (blocked.length > 0) {
       const first = blocked[0];
       showToast(getAutoAuditBlockReason(first, first.row) || '包含不可自动审核的标本', 'error');
@@ -10836,17 +10853,40 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
       // 与视图口径统一：用 getWSAuditBucket 判定（含 Status!=0 待排过滤），
       // 避免「全部视图勾选的待排标本」被批审而待审视图不显示（8.5.x 批审数与显示数不一致）
+      // 8.12.0: 队列扩容——严格 NORMAL 之外，纳入「整管异常都在轻微带内且乙类 ≤4 项」的
+      // ABNORMAL 标本（classifyMildAbnormal，带 _classifyVersion 记忆）。分类桶不动：
+      // 这些标本在工作台仍显示为异常、夜里机器人照旧按异常逐条口径处理
+      const mildEvalOf = r => {
+        const c = wsClassifiedCache[r.ReportDR];
+        const m = c ? classifyMildAbnormal(c) : null;
+        return m && m.ok ? m : null;
+      };
       const normalData = sourceData
-        .filter(r => getWSAuditBucket(r) === 'normal')
+        .filter(r => {
+          const b = getWSAuditBucket(r);
+          if (b === 'normal') {return true;}
+          return b === 'abnormal' && !!mildEvalOf(r);
+        })
         .map(r => {
           const cached = wsClassifiedCache[r.ReportDR];
+          if (getWSAuditBucket(r) === 'normal') {
+            return {
+              status: 'NORMAL',
+              items: (cached && cached.items) || [],
+              row: r,
+              reportDR: r.ReportDR
+            };
+          }
           return {
-            status: 'NORMAL',
+            status: 'MILD',
+            mild: mildEvalOf(r),
             items: (cached && cached.items) || [],
             row: r,
             reportDR: r.ReportDR
           };
         });
+      const nMildQ = normalData.filter(x => String(x.status) === 'MILD').length;
+      const nNormQ = normalData.length - nMildQ;
       if (normalData.length === 0) {
         if (wsClassifying) {
           showToast('标本正在分类中，请稍候再试', 'warning');
@@ -10858,8 +10898,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         return false;
       }
       if (!validateBatchAudit(normalData)) {return false;}
-      dbg('一键批审(直审):', normalData.length, '个标本');
-      showToast(`⚡ 开始批审 ${normalData.length} 个正常标本（首条自动 CA 认证，进度条可停止）`, 'success');
+      if (nMildQ > 0) {recordMildAuditLog(normalData.filter(x => String(x.status) === 'MILD'));}
+      dbg('一键批审(直审):', normalData.length, '个标本（正常', nNormQ, '· 轻微异常', nMildQ, '）');
+      showToast(
+        `⚡ 开始批审 ${nNormQ} 个正常${nMildQ ? ` + ${nMildQ} 个轻微异常` : ''}（首条自动 CA 认证，进度条可停止）`,
+        'success'
+      );
       // 与旧确认弹窗路径同款排序：按审核视图顺序（仪器分组、危急→异常→正常）逐条审
       const sorted = [...normalData].sort((a, b) => compareSpecimensForAudit(a.row || a, b.row || b));
       executeBatchAudit(sorted).catch(e => {
@@ -11816,29 +11860,42 @@ window.addEventListener('keydown',function(e){
     }
 
     // 分类汇总（基于当前视图数据）
+    // 8.12.0: nMild = 异常中「整管在轻微带内、可被 F4 批审」的条数（classifyMildAbnormal 带版本记忆）
     let nNormal = 0,
       nAbnormal = 0,
-      nCritical = 0;
+      nCritical = 0,
+      nMild = 0;
     data.forEach(r => {
       const b = getWSAuditBucket(r);
       if (b === 'normal') {nNormal++;}
       else {
         const cached = wsClassifiedCache[r.ReportDR];
         if (cached && cached.status === 'CRITICAL') {nCritical++;}
-        else {nAbnormal++;}
+        else {
+          nAbnormal++;
+          const m = cached ? classifyMildAbnormal(cached) : null;
+          if (m && m.ok) {nMild++;}
+        }
       }
     });
 
     let h = '<div class="ws-split-wrap">';
     h += '<div class="ws-split-master">';
+    const _batchBtnText =
+      nNormal > 0 && nMild > 0
+        ? `⚡ 一键批审正常 ${nNormal} · 轻微 ${nMild} · F4`
+        : nNormal > 0
+          ? `⚡ 一键批审正常 ${nNormal} · F4`
+          : `⚡ 一键批审轻微异常 ${nMild} · F4`;
     h += `<div class="ws-audit-banner">
             <span class="ws-audit-summary">
                 ✅ 正常 <b>${nNormal}</b>
                 <span class="ws-audit-sep">·</span>
                 ⚠️ 异常 <b>${nAbnormal}</b>
+                ${nMild ? `<span class="ws-audit-sep">·</span><span class="ws-audit-mild" title="整管异常都在轻微放行带内，F4 可一并批审">⚡ 轻微 <b>${nMild}</b></span>` : ''}
                 ${nCritical ? `<span class="ws-audit-sep">·</span><span class="ws-audit-critical">🚨 危急 <b>${nCritical}</b></span>` : ''}
             </span>
-            ${nNormal > 0 ? `<button class="nb-btn" id="lis-audit-batch" title="直接批审当前筛选范围全部正常标本（异常/危急值/不可自动审核者除外）· F4 同 · 批审中可点进度条 ⏹ 停止">⚡ 一键批审正常 ${nNormal} · F4</button>` : ''}
+            ${nNormal > 0 || nMild > 0 ? `<button class="nb-btn" id="lis-audit-batch" title="直接批审当前筛选范围全部正常标本 + 轻微异常标本（超出轻微带的异常/危急值/传染病/待定等仍留人工）· F4 同 · 批审中可点进度条 ⏹ 停止">${_batchBtnText}</button>` : ''}
         </div>`;
 
     h += `<div class="ws-abnormal-hint">
@@ -13375,7 +13432,9 @@ window.addEventListener('keydown',function(e){
       const row = sp.row || sp;
       const reportDR = sp.reportDR || row.ReportDR;
       if (!reportDR || !row) {return;}
-      if (!isAutoAuditableClassified(sp)) {return;}
+      // 8.12.0: 放行两类——严格 NORMAL，或 F4 队列标记 MILD 且构建时轻微带校验通过；
+      // 机器人路径只构造 NORMAL 条目，行为零变化
+      if (!isAutoAuditableClassified(sp) && !(String(sp.status) === 'MILD' && sp.mild && sp.mild.ok)) {return;}
       items.push({
         reportDR: String(reportDR),
         wg: row._wg || resolveCurrentWG(),
@@ -19141,6 +19200,16 @@ window.addEventListener('keydown',function(e){
     return true;
   }
 
+  // 8.12.0: 轻微异常条目的批审前失效校验——最新分类仍为 ABNORMAL 且整管仍在轻微带内
+  function isLiveMildForBatch(reportDR) {
+    const live = getLiveClassification(reportDR);
+    if (!live) {return false;}
+    const row = live.row || findWSSpecimenByReportDR(reportDR);
+    if (row && isClassificationStale(row)) {return false;}
+    const m = classifyMildAbnormal(live);
+    return !!(m && m.ok);
+  }
+
   function validateAuditClassification(reportDR, context) {
     const live = getLiveClassification(reportDR);
     if (!live) {return { ok: false, msg: '分类未完成，请稍候刷新' };}
@@ -19413,6 +19482,252 @@ window.addEventListener('keydown',function(e){
       },
       row
     );
+  }
+
+  // ==================== 8.12.0: 轻微异常放行规则引擎 ====================
+  // 只作用于 F4/横幅手动批审（openWorkbenchBatchAudit 队列构建 + continueAuditQueue 逐条活体复检）；
+  // 自动审核机器人（正常批量 + 异常逐条 autoAuditAbnormalGate）零改动——夜间宽松口径维持原设计：
+  // 夜里急诊标本多有异常，机器人异常逐条照旧全放（红线除外），轻微带只管白天人手触发的批审。
+  // 判定口径（2026-09 与检验科逐组定稿）：
+  //   · 仅适用于分类为 ABNORMAL 的标本——CRITICAL/ZERO/UNCERTAIN 在分类层就被挡住，进不到这里
+  //   · 甲类（tier 'a'，衍生/计算值）：H/L 任意放行，不占计数
+  //   · 乙类（tier 'b'，主参数）：偏高 ≤high×ULN、偏低 ≥low×LLN 才放行；high/low 为 null 表示该方向
+  //     直接放行、缺省(undefined)表示该方向不放行；highAbs/lowAbs 绝对钳与倍数同时生效取更严者
+  //     （K 是唯一必须做绝对钳的项目——不同机器范围 3.5-5.3 / 3.5-5.5 并存，纯比例会在宽范围机器放过头）
+  //   · 定性异常（项目级 flag A → status 'ABNORMAL'）与负值结果一律不放行
+  //   · 整管乙类轻微异常 ≤4 项（同项目 #/% 合并计 1，如 NEUT# 6.9 + NEUT% 78 是同一个信号）
+  //   · 未配规则的项目（血锂/NH3/性激素六项/fPSA/肌钙蛋白/前白蛋白/转铁蛋白等）任何异常都留人工——
+  //     性激素参考范围是「性别;经期」多段文本，getItemRangeValues 只能解析出第一段，判定必然失真，故意不配
+  // 紧急停用：把 MILD_ALLOW_ENABLED 置 false 即整体回到「只批审严格正常」。
+  const MILD_ALLOW_ENABLED = true;
+  const MILD_TIER_B_MAX_ITEMS = 4;
+
+  // 规则表按顺序首条命中生效；re 依次测 CName/name → Synonym → Code
+  const MILD_ALLOW_RULES = [
+    // ---- 甲类：血常规衍生/分布宽度（不占计数） ----
+    { re: /^红细胞分布宽度|^rdw/i, tier: 'a' },
+    { re: /^平均血小板体积[\*＊]?$/i, tier: 'a' },
+    { re: /^血小板分布宽度[\*＊]?$/i, tier: 'a' },
+    { re: /^血小板压积[\*＊]?$/i, tier: 'a' }, // 注意与降钙素原（缩写同为 PCT）中文名完全不同，互不误伤
+    { re: /^大血小板(比率|百分比)[\*＊]?$/i, tier: 'a' },
+    // ---- 甲类：生化衍生/计算值 ----
+    { re: /谷草[/／]谷丙|谷丙[/／]谷草|ast[/／]alt|alt[/／]ast/i, tier: 'a' },
+    { re: /^间接胆红素[\*＊]?$/i, tier: 'a' },
+    { re: /^球蛋白[\*＊]?$/i, tier: 'a' },
+    { re: /白球比|白蛋白[/／]球蛋白/i, tier: 'a' },
+    { re: /肾小球滤过率|^egfr$/i, tier: 'a' },
+    { re: /小而密低密度|^sdldl/i, tier: 'a' },
+    // ---- 乙类：血常规主参数与细胞分类 ----
+    { re: /^(白细胞(计数|数目|数)?|wbc)[\*＊]?$/i, tier: 'b', group: 'WBC', high: 1.2, low: 0.85 },
+    { re: /^(中性粒细胞?(绝对值|绝对数|计数|数目|数)?|neut#|neu#)[\*＊#]?$/i, tier: 'b', group: 'NEUT', high: 1.2, low: 0.8 },
+    { re: /^(中性粒细胞?(百分比|比率)|neut%|neu%)[\*＊]?$/i, tier: 'b', group: 'NEUT', high: 1.15, low: 0.8 },
+    { re: /^(淋巴(细胞)?(绝对值|绝对数|计数|数目|数)?|lymph#|lym#)[\*＊#]?$/i, tier: 'b', group: 'LYM', high: 1.2, low: 0.8 },
+    { re: /^(淋巴(细胞)?(百分比|比率)|lymph%|lym%)[\*＊]?$/i, tier: 'b', group: 'LYM', high: 1.2, low: 0.8 },
+    { re: /^(单核(细胞)?(绝对值|绝对数|计数|数目|数)?|mono#|mon#)[\*＊#]?$/i, tier: 'b', group: 'MON', high: 1.5, low: null },
+    { re: /^(单核(细胞)?(百分比|比率)|mono%|mon%)[\*＊]?$/i, tier: 'b', group: 'MON', high: 1.5, low: null },
+    { re: /^(嗜酸(性)?(粒细胞?)?(绝对值|绝对数|计数|数目|数)?|eos#|eo#)[\*＊#]?$/i, tier: 'b', group: 'EOS', high: 1.5, low: null },
+    { re: /^(嗜酸(性)?(粒细胞?)?(百分比|比率)|eos%|eo%)[\*＊]?$/i, tier: 'b', group: 'EOS', high: 1.5, low: null },
+    { re: /^(嗜碱(性)?(粒细胞?)?(绝对值|绝对数|计数|数目|数)?|baso#|bas#)[\*＊#]?$/i, tier: 'b', group: 'BAS', high: null, highAbs: 0.1, low: null },
+    { re: /^(嗜碱(性)?(粒细胞?)?(百分比|比率)|baso%|bas%)[\*＊]?$/i, tier: 'b', group: 'BAS', high: null, highAbs: 2, low: null },
+    { re: /^(红细胞(计数|数目|数)?|rbc)[\*＊]?$/i, tier: 'b', group: 'RBC', high: 1.1, low: 0.93 },
+    { re: /^血红蛋白(浓度)?[\*＊]?$/i, tier: 'b', group: 'HGB', high: 1.1, low: 0.93 },
+    { re: /^红细胞(压积|比容)[\*＊]?$/i, tier: 'b', group: 'HCT', high: 1.1, low: 0.93 },
+    { re: /^平均红细胞体积|^mcv$/i, tier: 'b', group: 'MCV', high: 1.1, low: 0.93 },
+    { re: /^平均(红细胞)?血红蛋白含量[\*＊]?$|^mch$/i, tier: 'b', group: 'MCH', high: 1.1, low: 0.93 },
+    { re: /^平均(红细胞)?血红蛋白浓度[\*＊]?$|^mchc$/i, tier: 'b', group: 'MCHC', high: 1.08, low: 0.93 },
+    { re: /^(血小板(计数|数目|数)?|plt)[\*＊#]?$/i, tier: 'b', group: 'PLT', high: 1.15, low: null, lowAbs: 100 },
+    // ---- 乙类：生化肝功 ----
+    { re: /^丙氨酸氨基转移酶[\*＊]?$|^alt$/i, tier: 'b', group: 'ALT', high: 1.2, low: null },
+    { re: /^天门冬氨酸氨基转移酶[\*＊]?$|^ast$/i, tier: 'b', group: 'AST', high: 1.2, low: null },
+    { re: /^碱性磷酸酶[\*＊]?$|^alp$/i, tier: 'b', group: 'ALP', high: 1.2, low: null },
+    { re: /谷氨酰(基)?(转肽|转移)酶|^ggt$/i, tier: 'b', group: 'GGT', high: 1.2, low: null },
+    { re: /岩藻糖苷酶|^afu$/i, tier: 'b', group: 'AFU', high: 1.3, low: null },
+    { re: /核苷酸酶|5['’]?-?nt/i, tier: 'b', group: 'ALP5NT', high: 1.3, low: null },
+    { re: /胆碱酯酶|^che$/i, tier: 'b', group: 'CHE', high: null, low: 0.9 },
+    { re: /腺苷脱氨酶|^ada$/i, tier: 'b', group: 'ADA', high: 1.3, low: null },
+    { re: /总胆汁酸|^tba$/i, tier: 'b', group: 'TBA', high: 1.3, low: null },
+    { re: /^总胆红素[\*＊]?$|^tbil$/i, tier: 'b', group: 'TBIL', high: 1.3, low: null },
+    { re: /^直接胆红素[\*＊]?$|^dbil$/i, tier: 'b', group: 'DBIL', high: 1.3, low: null },
+    { re: /^总蛋白[\*＊]?$|^tp$/i, tier: 'b', group: 'TP', high: 1.1, low: 0.95 },
+    { re: /^(血清)?白蛋白[\*＊]?$|^alb$/i, tier: 'b', group: 'ALB', high: null, low: 0.93 },
+    // ---- 乙类：生化肾功 ----
+    { re: /^(血清)?尿素(氮)?[\*＊]?$|^urea$|^bun$/i, tier: 'b', group: 'UREA', high: 1.15, low: null },
+    { re: /^肌酐[\*＊]?$|^cr$|^crea$/i, tier: 'b', group: 'CR', high: 1.05, low: null },
+    { re: /^尿酸[\*＊]?$|^ua$/i, tier: 'b', group: 'UA', high: 1.2, low: null },
+    { re: /胱抑素|^cys-?c$/i, tier: 'b', group: 'CYSC', high: 1.1, low: null },
+    { re: /β2-?微球蛋白|β2-?mg/i, tier: 'b', group: 'B2MG', high: 1.3, low: null },
+    { re: /视黄醇结合蛋白|^rbp$/i, tier: 'b', group: 'RBP', high: 1.3, low: null },
+    // ---- 乙类：生化血脂 ----
+    { re: /^总胆固醇[\*＊]?$|^tc$/i, tier: 'b', group: 'TC', high: 1.15, low: null },
+    { re: /^甘油三酯[\*＊]?$|^tg$/i, tier: 'b', group: 'TG', high: 1.5, low: null },
+    { re: /^高密度脂蛋白|^hdl/i, tier: 'b', group: 'HDL', high: null, low: 0.85 },
+    { re: /^低密度脂蛋白|^ldl/i, tier: 'b', group: 'LDL', high: 1.15, low: null },
+    { re: /载脂蛋白a1|载脂蛋白ai|^apo-?a1/i, tier: 'b', group: 'APOA', high: null, low: 0.85 },
+    { re: /载脂蛋白b|^apo-?b$/i, tier: 'b', group: 'APOB', high: 1.15, low: null },
+    { re: /脂蛋白[(（]?\s*a/i, tier: 'b', group: 'LPA', high: 1.5, low: null },
+    { re: /同型半胱氨酸|^hcy$/i, tier: 'b', group: 'HCY', high: 1.5, low: null },
+    // ---- 乙类：生化糖/电解质 ----
+    { re: /^(血清)?葡萄糖[\*＊]?$|^血糖/i, tier: 'b', group: 'GLU', high: 1.15, low: 0.92 },
+    { re: /糖化血红蛋白|^hba1c$/i, tier: 'b', group: 'HBA1C', high: 1.1, low: null },
+    { re: /^钾(离子)?[\*＊]?$|^k$/i, tier: 'b', group: 'K', high: 1.02, highAbs: 5.6, low: 0.97, lowAbs: 3.3 },
+    { re: /^钠(离子)?[\*＊]?$|^na$/i, tier: 'b', group: 'NA', high: 1.03, low: 0.97 },
+    { re: /^氯(离子)?[\*＊]?$|^cl$/i, tier: 'b', group: 'CL', high: 1.05, low: 0.95 },
+    { re: /^钙(离子)?[\*＊]?$|^ca$/i, tier: 'b', group: 'CA', high: 1.1, low: 0.93 },
+    { re: /^磷(离子)?[\*＊]?$|^p$/i, tier: 'b', group: 'P', high: 1.2, low: 0.8 },
+    { re: /^镁(离子)?[\*＊]?$|^mg$/i, tier: 'b', group: 'MG', high: 1.15, low: 0.85 },
+    { re: /二氧化碳(结合力)?[\*＊]?$|^co2/i, tier: 'b', group: 'CO2', high: 1.1, low: 0.9 },
+    // ---- 乙类：心肌酶/胰腺（cTnI/Myo 中 cTnI 故意不配=不放行；Myo 见发光段；CK-MB mass/活力同名共用 1.3） ----
+    { re: /^肌酸激酶[\*＊]?$|^ck$/i, tier: 'b', group: 'CK', high: 2, low: null },
+    { re: /^肌酸激酶同工酶|^ck-?mb$/i, tier: 'b', group: 'CKMB', high: 1.3, low: null },
+    { re: /乳酸脱氢酶|^ldh$/i, tier: 'b', group: 'LDH', high: 1.3, low: null },
+    { re: /羟基丁酸脱氢酶|^hbdh$/i, tier: 'b', group: 'HBDH', high: 1.3, low: null },
+    { re: /淀粉酶|^amy$/i, tier: 'b', group: 'AMY', high: 1.5, low: null },
+    { re: /^脂肪酶[\*＊]?$|^lip$|^lps$/i, tier: 'b', group: 'LIP', high: 1.5, low: null },
+    // ---- 乙类：发光甲功 ----
+    { re: /^促甲状腺(激)?素[\*＊]?$/i, tier: 'b', group: 'TSH', high: 1.6, low: 0.5 },
+    { re: /^游离甲状腺素|^游离t4|^ft4$/i, tier: 'b', group: 'FT4', high: 1.15, low: 0.9 },
+    { re: /^游离三碘甲状(腺)?原氨酸|^游离t3|^ft3$/i, tier: 'b', group: 'FT3', high: 1.15, low: 0.9 },
+    { re: /^甲状腺素[\*＊]?$|^总甲状腺素|^总t4$|^tt4$/i, tier: 'b', group: 'TT4', high: 1.15, low: 0.85 },
+    { re: /^三碘甲状(腺)?原氨酸|^总t3$|^tt3$/i, tier: 'b', group: 'TT3', high: 1.15, low: 0.85 },
+    // ---- 乙类：发光心肌/肿瘤/铁蛋白/炎症 ----
+    { re: /^肌红蛋白[\*＊]?$|^myo$/i, tier: 'b', group: 'MYO', high: 1.25, low: null },
+    { re: /甲胎蛋白|^afp$/i, tier: 'b', group: 'AFP', high: 1.3, low: null },
+    { re: /癌胚抗原|^cea$/i, tier: 'b', group: 'CEA', high: 1.3, low: null },
+    { re: /糖类抗原19-?9|ca19-?9/i, tier: 'b', group: 'CA199', high: 1.3, low: null },
+    { re: /糖类抗原125|ca125/i, tier: 'b', group: 'CA125', high: 1.3, low: null },
+    { re: /糖类抗原15-?3|ca15-?3/i, tier: 'b', group: 'CA153', high: 1.3, low: null },
+    { re: /^前列腺特异(性)?抗原[\*＊]?$|^psa$/i, tier: 'b', group: 'PSA', high: 1.25, low: null },
+    { re: /^铁蛋白[\*＊]?$|^ferritin$/i, tier: 'b', group: 'FER', high: 1.5, low: 0.9 },
+    { re: /^超敏c[-－]?反应蛋白|^hscrp/i, tier: 'b', group: 'CRP', high: 3, low: null },
+    { re: /^c[-－]?反应蛋白[\*＊]?$|^crp$/i, tier: 'b', group: 'CRP', high: 3, low: null },
+    { re: /降钙素原|^pct$/i, tier: 'b', group: 'PCT', high: null, highAbs: 0.5, low: null }
+  ];
+
+  function matchMildRule(it) {
+    const candidates = [it && it.CName, it && it.name, it && it.Synonym, it && it.Code];
+    for (const rule of MILD_ALLOW_RULES) {
+      for (const c of candidates) {
+        if (c && rule.re.test(String(c).trim())) {return rule;}
+      }
+    }
+    return null;
+  }
+
+  // 单个异常项目是否可按轻微异常放行。HIGH/LOW 按幅度带判；定性 ABNORMAL（flag A）一律不放行
+  function mildAllowItem(it) {
+    const st = String((it && it.status) || '');
+    const name = String((it && (it.CName || it.name)) || '');
+    if (st !== 'HIGH' && st !== 'LOW') {
+      return { ok: false, reason: `${name} 定性异常，不放行` };
+    }
+    const rule = matchMildRule(it);
+    if (!rule) {return { ok: false, reason: `${name} 未配轻微放行规则` };}
+    if (rule.tier === 'a') {return { ok: true, rule, tier: 'a' };}
+    const p = parseComparableNumber(it && it.result);
+    if (!p || p.op || isNaN(p.value)) {return { ok: false, reason: `${name} 结果非纯数值，不放行` };}
+    if (p.value < 0) {return { ok: false, reason: `${name} ${p.value} 含负值，不放行` };}
+    const range = getItemRangeValues(it || {});
+    if (st === 'HIGH') {
+      if (rule.high === undefined) {return { ok: false, reason: `${name} 偏高不放行` };}
+      let limit = Infinity;
+      if (rule.high !== null) {
+        const uln = parseComparableNumber(range.high);
+        if (!uln || isNaN(uln.value) || uln.value <= 0) {return { ok: false, reason: `${name} 参考上限缺失，不放行` };}
+        limit = uln.value * rule.high;
+      }
+      if (rule.highAbs !== undefined) {limit = Math.min(limit, rule.highAbs);}
+      if (!(p.value <= limit)) {return { ok: false, reason: `${name} ${it.result} 超出轻微带（≤${limit}）` };}
+      return { ok: true, rule, tier: 'b' };
+    }
+    // LOW
+    if (rule.low === undefined && rule.lowAbs === undefined) {return { ok: false, reason: `${name} 偏低不放行` };}
+    let floor = null;
+    if (rule.low !== undefined && rule.low !== null) {
+      const lln = parseComparableNumber(range.low);
+      if (!lln || isNaN(lln.value)) {return { ok: false, reason: `${name} 参考下限缺失，不放行` };}
+      floor = lln.value * rule.low;
+    }
+    if (rule.lowAbs !== undefined) {floor = floor === null ? rule.lowAbs : Math.max(floor, rule.lowAbs);}
+    if (floor !== null && !(p.value >= floor)) {return { ok: false, reason: `${name} ${it.result} 低于轻微带（≥${floor}）` };}
+    return { ok: true, rule, tier: 'b' };
+  }
+
+  // 标本级轻微异常判定。输入分类缓存对象（wsClassifiedCache 项），返回：
+  //   null                —— 不适用（非 ABNORMAL / 无明细）
+  //   {ok:false, reason}  —— 含超带异常/超计数，必须人审
+  //   {ok:true, tierB, items} —— 整管可放行（items 供留痕日志）
+  // 结果按 _classifyVersion 记忆在分类对象上，渲染/计数高频调用零重复开销
+  function classifyMildAbnormal(live) {
+    if (!MILD_ALLOW_ENABLED) {return null;}
+    if (!live || live.status !== 'ABNORMAL') {return null;}
+    if (live._mildEval && live._mildEvalVer === _classifyVersion) {return live._mildEval;}
+    const result = _evaluateMildAbnormal(live);
+    try {
+      live._mildEval = result;
+      live._mildEvalVer = _classifyVersion;
+    } catch (e) {}
+    return result;
+  }
+
+  function _evaluateMildAbnormal(live) {
+    if (live.infectionWarning) {return { ok: false, reason: '传染病历史不符，不放行' };}
+    const items = live.items || [];
+    if (items.length === 0) {return null;}
+    const seenGroups = new Set();
+    let tierBCount = 0;
+    const evalItems = [];
+    for (const it of items) {
+      const st = String((it && it.status) || '');
+      if (st === 'NORMAL' || st === 'ZERO') {continue;}
+      const v = mildAllowItem(it);
+      evalItems.push({
+        name: String((it && (it.CName || it.name)) || ''),
+        result: String((it && it.result) || ''),
+        status: st,
+        ok: !!v.ok,
+        tier: v.tier || '',
+        reason: v.reason || ''
+      });
+      if (!v.ok) {return { ok: false, reason: v.reason, items: evalItems };}
+      if (v.tier === 'b') {
+        const gk = (v.rule && v.rule.group) || 'item:' + String((it && (it.CName || it.name)) || '');
+        if (!seenGroups.has(gk)) {seenGroups.add(gk); tierBCount++;}
+      }
+    }
+    if (tierBCount > MILD_TIER_B_MAX_ITEMS) {
+      return { ok: false, reason: `乙类轻微异常 ${tierBCount} 项，超过上限 ${MILD_TIER_B_MAX_ITEMS}`, items: evalItems };
+    }
+    return { ok: true, tierB: tierBCount, items: evalItems };
+  }
+
+  // 8.12.0: F4 轻微异常放行留痕——只落本地日志（不推送、不进自动审核日志），供回溯「这条按哪条规则放行」
+  function recordMildAuditLog(mildEntries) {
+    try {
+      let log = [];
+      try {log = JSON.parse(localStorage.getItem(K.mildLog) || '[]');} catch (e2) {log = [];}
+      if (!Array.isArray(log)) {log = [];}
+      const now = new Date();
+      const p2 = n => String(n).padStart(2, '0');
+      const stamp = `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
+      (mildEntries || []).forEach(sp => {
+        const row = (sp && sp.row) || {};
+        const hits = ((sp && sp.mild && sp.mild.items) || [])
+          .filter(x => x.ok && x.tier)
+          .map(x => `${x.name} ${x.result} ${x.status === 'HIGH' ? '↑' : '↓'}${x.tier === 'a' ? '甲' : '乙'}`);
+        log.push({
+          t: stamp,
+          labno: row.Labno || '',
+          name: row.PatName || '',
+          test: row.TestSetDesc || '',
+          mn: row._mn || row.MachineName || '',
+          wg: row._wg || '',
+          tierB: (sp && sp.mild && sp.mild.tierB) || 0,
+          hits
+        });
+      });
+      if (log.length > 500) {log = log.slice(log.length - 500);}
+      localStorage.setItem(K.mildLog, JSON.stringify(log));
+    } catch (e) {dbg('轻微异常留痕写入失败:', e);}
   }
 
   // --- 获取标本详情并分类 ---
@@ -20538,8 +20853,14 @@ window.addEventListener('keydown',function(e){
           saveAuditQueueNow(queue);
           continue;
         }
-        if (!isAutoAuditableClassified(liveClassified)) {
-          const _reason = classifyStatusText(liveClassified.status) + '标本不可自动审核';
+        // 8.12.0: 逐条活体复检——NORMAL 走原口径；F4 轻微异常条目（status MILD）用最新分类重跑
+        // 轻微带判定（classifyMildAbnormal 内部有 _classifyVersion 记忆），数据变了会如实拦下
+        const _mildLiveEval = String(item.status) === 'MILD' ? classifyMildAbnormal(liveClassified) : null;
+        if (!isAutoAuditableClassified(liveClassified) && !(_mildLiveEval && _mildLiveEval.ok)) {
+          const _reason =
+            _mildLiveEval && _mildLiveEval.reason
+              ? '轻微带校验未过：' + _mildLiveEval.reason
+              : classifyStatusText(liveClassified.status) + '标本不可自动审核';
           queue.skipped.push({ ...item, reason: _reason });
           _aaRecordQueueItem('留人工', item, _reason);
           skipCount++;

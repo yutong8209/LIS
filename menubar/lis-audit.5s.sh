@@ -44,6 +44,7 @@ fi
 # 防止恶意值混入 SwiftBar 行协议（行内第一个 | 之后是参数区，注入 bash= 点击即执行）
 AR=$(echo "$J" | jq -r '(.auditReady // ((.normalReady // 0) + (.abnormalReady // 0))) | tonumber? // 0')
 NR=$(echo "$J" | jq -r '(.normalReady // 0) | tonumber? // 0')
+MR=$(echo "$J" | jq -r '(.mildReady // 0) | tonumber? // 0') # 8.12.0: 轻微异常可批审数（F4 队列扩容部分）
 PD=$(echo "$J" | jq -r '(.pending // 0) | tonumber? // 0')
 CL=$(echo "$J" | jq -r '(.collected // 0) | tonumber? // 0') # 8.5.31: 病房采集中、未送到科室
 IC=$(echo "$J" | jq -r '(.incomplete // 0) | tonumber? // 0')
@@ -91,6 +92,10 @@ row() {
 }
 
 row "checkmark.seal.fill" "待审" "$AR" "$L_GREEN" "audit"
+# 8.12.0: 轻微异常可批审数——有才显示（整管异常都在轻微放行带内，F4 可一并批审）
+if [ "$MR" -gt 0 ]; then
+  row "bolt.horizontal.circle.fill" "└ 轻微可批" "$MR" "$L_ORANGE" "audit"
+fi
 row "doc.fill" "不完整" "$IC" "$L_TEAL" "incomplete"
 row "tray.fill" "待排样" "$PD" "$L_INDIGO" "pending"
 row "drop.fill" "采集" "$CL" "$L_PINK" "collected" # 8.5.33: 病房采集（已采未送达）
