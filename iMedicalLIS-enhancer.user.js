@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.13.3
+// @version      8.13.4
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5769,8 +5769,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     Plt: ['血小板计数', '血小板', 'PLT', 'Plt'],
     Hct: ['红细胞压积', '红细胞比容', 'HCT', 'Hct'],
     MCV: ['平均红细胞体积', 'MCV'],
-    MCH: ['平均红细胞血红蛋白含量', 'MCH', '平均血红蛋白含量'],
-    MCHC: ['平均红细胞血红蛋白浓度', 'MCHC'],
+    MCH: ['平均红细胞血红蛋白含量', '平均红细胞血红蛋白量', 'MCH', '平均血红蛋白含量', '平均血红蛋白量'],
+    MCHC: ['平均红细胞血红蛋白浓度', 'MCHC', '平均血红蛋白浓度'],
     // 凝血
     INR: ['国际标准化比值', 'INR'],
     APTT: ['活化部分凝血活酶时间', 'APTT', '活化部份凝血活酶时间'],
@@ -19549,7 +19549,7 @@ window.addEventListener('keydown',function(e){
     { re: /^血红蛋白(浓度)?[\*＊]?$/i, tier: 'b', group: 'HGB', high: 1.1, low: 0.93 },
     { re: /^红细胞(压积|比容)[\*＊]?$/i, tier: 'b', group: 'HCT', high: 1.1, low: 0.93 },
     { re: /^平均红细胞体积|^mcv$/i, tier: 'b', group: 'MCV', high: 1.1, low: 0.93 },
-    { re: /^平均(红细胞)?血红蛋白含量[\*＊]?$|^mch$/i, tier: 'b', group: 'MCH', high: 1.1, low: 0.93 },
+    { re: /^平均(红细胞)?血红蛋白(含量|量)[\*＊]?$|^mch$/i, tier: 'b', group: 'MCH', high: 1.1, low: 0.93 }, // 8.13.4: 补「平均红细胞血红蛋白量」变体（LIS 实名用「量」不用「含量」，此前误拦）
     { re: /^平均(红细胞)?血红蛋白浓度[\*＊]?$|^mchc$/i, tier: 'b', group: 'MCHC', high: 1.08, low: 0.93 },
     { re: /^(血小板(计数|数目|数)?|plt)[\*＊#]?$/i, tier: 'b', group: 'PLT', high: 1.15, low: null, lowAbs: 100 },
     // ---- 乙类：生化肝功 ----
@@ -22425,8 +22425,8 @@ window.addEventListener('keydown',function(e){
     [/^嗜碱[性]?[粒]?细胞*(绝对值|计数|数目|绝对数|数)?[\*＊#]?$/i, 'BAS#'],
     [/^红细胞[压比][积容][\*＊#]?$/i, 'HCT'],
     [/^平均红细胞体积[\*＊#]?$/i, 'MCV'],
-    [/^平均血红蛋白含量[\*＊#]?$/i, 'MCH'],
-    [/^平均血红蛋白浓度[\*＊#]?$/i, 'MCHC'],
+    [/^平均(红细胞)?血红蛋白(含量|量)[\*＊#]?$/i, 'MCH'],
+    [/^平均(红细胞)?血红蛋白浓度[\*＊#]?$/i, 'MCHC'],
     [/^血小板分布宽度[\*＊#]?$/i, 'PDW'],
     [/^平均血小板体积[\*＊#]?$/i, 'MPV'],
     [/^大(型)?血小板(比率|百分比|比例)[\*＊#]?$/i, 'P-LCR'],
