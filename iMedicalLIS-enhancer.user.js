@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.12.0
+// @version      8.13.0
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10118,7 +10118,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
             <div class="ws-right-group">
                 <span class="cat-stats cat-ca" title="当前 CA 认证账号（审核者）"></span>
                 <div class="ws-acts">
-                    <button class="ws-aa-btn" id="lis-ws-autoaudit" title="自动审核：按设定时长自动审核当前筛选范围的标本（正常批量+异常逐条；危急值/堵孔0值/传染病阳性等留人工）">🤖 自动审核</button>
+                    <button class="ws-aa-btn" id="lis-ws-autoaudit" title="自动审核：按设定时长自动审核当前筛选范围的标本（正常批量 + 异常逐条按当前方案：白天仅轻微带内 / 夜间全放；危急值/堵孔0值/传染病阳性等留人工）">🤖 自动审核</button>
                     <button class="ws-icon-btn" id="lis-ws-aalog" title="查看自动审核记录（最近自动审核了哪些样本）">🕘</button>
                     <button class="ws-icon-btn" id="lis-ws-refresh" title="强制刷新（全0/会话失效时等同浏览器刷新，并自动重开工作台）">↻</button>
                     <button class="ws-icon-btn" id="lis-ws-pwd" title="CA密码">钥</button>
@@ -21370,25 +21370,43 @@ window.addEventListener('keydown',function(e){
   }
   function autoAuditEnabled() {return !!(_autoAudit && _autoAudit.enabled);}
   // 8.8.18: 通知推送模式。all=成功+未成功都推；blocked=只推未成功/红线留人工；off=不推。
-  // 8.9.15: 新增 blocked_abn=只推「未成功」+「有可见异常的异常标本」（全推送去掉全部正常
-  //   与只有忽略项目异常的标本——后者在推送里本来就没有内容行）。
+  // 8.13.0: 三档化——blocked_abn（推送不成功+有异常标本）已删除，旧值在 loadAutoAuditState 迁移为 all。
   function autoAuditNotifyMode() {
     const m = _autoAudit && _autoAudit.notifyMode;
-    return (m === 'blocked' || m === 'blocked_abn' || m === 'off') ? m : 'all';
+    return (m === 'blocked' || m === 'off') ? m : 'all';
+  }
+  // 8.13.0: 审核方案（手工切换，立即生效）——day=白天（异常逐条仅限轻微带内，同 F4 批审口径，
+  // 超带异常留人工）；night=夜间（异常逐条全放，红线除外 = 8.5.58 起原行为）。缺省一律夜间。
+  function autoAuditProfile() {
+    return (_autoAudit && _autoAudit.profile === 'day') ? 'day' : 'night';
+  }
+  function autoAuditProfileText(p) {
+    return (p || autoAuditProfile()) === 'day' ? '☀️ 白天方案（异常逐条仅限轻微带内）' : '🌙 夜间方案（异常逐条全放，红线除外）';
+  }
+  function autoAuditProfileShort(p) {
+    return (p || autoAuditProfile()) === 'day' ? '白天' : '夜间';
+  }
+  function setAutoAuditProfile(p) {
+    if (p !== 'day' && p !== 'night') {return;}
+    const prev = autoAuditProfile();
+    if (!_autoAudit) {_autoAudit = { schema: 2, enabled: false, until: 0, durationMin: AUTO_AUDIT_DEFAULT_MIN, rules: {} };}
+    _autoAudit.profile = p;
+    saveAutoAuditState();
+    if (prev !== p) {
+      aaStateEventAdd('profile', '已切换为' + autoAuditProfileShort(p) + '方案（异常逐条口径' + (p === 'day' ? '收紧为轻微带内' : '恢复全放') + '）');
+      renderAutoAuditButtonState();
+      showToast('已切换为' + autoAuditProfileShort(p) + '方案' + (autoAuditEnabled() ? '，下一轮自动审核即生效' : ''), 'success');
+    }
   }
   // 8.8.28: 推送模式中文文案与彩色徽章展示
   function autoAuditNotifyModeText(mode) {
     const m = mode || autoAuditNotifyMode();
-    if (m === 'blocked_abn') {return '推送不成功+有异常标本（正常的与仅忽略项目异常的不推）';}
     if (m === 'blocked') {return '只推送未成功的标本';}
     if (m === 'off') {return '不推送（已关闭）';}
     return '推送所有（成功+未成功标本）';
   }
   function autoAuditNotifyModeBadgeHTML(mode) {
     const m = mode || autoAuditNotifyMode();
-    if (m === 'blocked_abn') {
-      return '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:#ffe8d9;color:#a35200;font-weight:700;font-size:11px;border:1px solid #ffd0a8">🟠 未成功+有异常</span>';
-    }
     if (m === 'blocked') {
       return '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:#fff3cd;color:#856404;font-weight:700;font-size:11px;border:1px solid #ffeeba">⚠️ 只推未成功标本</span>';
     }
@@ -21407,8 +21425,9 @@ window.addEventListener('keydown',function(e){
     const min = Math.floor(ms / 60000);
     const sec = Math.floor((ms % 60000) / 1000);
     const mode = autoAuditNotifyMode();
-    const modeShort = mode === 'blocked_abn' ? '未成功+异常' : mode === 'blocked' ? '仅未成功' : mode === 'off' ? '免打扰' : '全推';
-    return '🤖自动审核 ' + min + ':' + String(sec).padStart(2, '0') + ' (' + modeShort + ')';
+    const modeShort = mode === 'blocked' ? '仅未成功' : mode === 'off' ? '免打扰' : '全推';
+    // 8.13.0: 带当前方案，按钮/弹窗一眼可见跑的是白天还是夜间口径
+    return '🤖自动审核(' + autoAuditProfileShort() + ') ' + min + ':' + String(sec).padStart(2, '0') + ' (' + modeShort + ')';
   }
 
   function loadAutoAuditState() {
@@ -21431,9 +21450,18 @@ window.addEventListener('keydown',function(e){
         _autoAudit.rules || {}
       );
       // 8.8.18: 通知推送模式——all(成功+未成功标本都推) / blocked(只推未成功/红线) / off(不推)。旧状态无此字段按 all。
-      if (!_autoAudit.notifyMode || !['all', 'blocked', 'blocked_abn', 'off'].includes(_autoAudit.notifyMode)) {
+      // 8.13.0: 三档化——blocked_abn（推送不成功+有异常标本）已删除；旧存储值迁移为 all
+      //（保留「夜间已审异常」可见性，原档位语义的超集；嫌吵可手动降为「只推未成功」）
+      if (_autoAudit.notifyMode === 'blocked_abn') {
+        _autoAudit.notifyMode = 'all';
+        try {localStorage.setItem(K.autoAudit, JSON.stringify(_autoAudit));} catch (e) {}
+      }
+      if (!_autoAudit.notifyMode || !['all', 'blocked', 'off'].includes(_autoAudit.notifyMode)) {
         _autoAudit.notifyMode = 'all';
       }
+      // 8.13.0: 审核方案 profile——day=白天（异常逐条仅限轻微带内，同 F4 批审口径）/
+      // night=夜间（异常逐条全放，红线除外，=8.5.58 起原行为）。缺省/非法一律按夜间，升级零行为变化
+      if (_autoAudit.profile !== 'day' && _autoAudit.profile !== 'night') {_autoAudit.profile = 'night';}
       // 8.9.6: mergeWindowMin（分钟）——0=不合并（每轮立即推）；非法值回退默认 2，上限 30
       // 8.10.2: 语义改为「连续做标本时的最短推送间隔」（原为「最长攒多久」），取值范围与存储不变
       const _mw = Number(_autoAudit.mergeWindowMin);
@@ -21471,6 +21499,8 @@ window.addEventListener('keydown',function(e){
       rules: autoAuditRules(),
       // 8.8.18: 通知推送模式沿用当前设置（不随开启/停止重置）
       notifyMode: autoAuditNotifyMode(),
+      // 8.13.0: 审核方案沿用当前设置（白天/夜间手工切换，不随开启/停止重置）
+      profile: autoAuditProfile(),
       // 8.9.6: 合并推送窗口随开启固化（弹窗里选择；0=不合并，默认 2 分钟）
       mergeWindowMin: autoAuditMergeWindowMin(),
       // 8.5.67: 开启时刻固定审核范围（工作组+勾选仪器快照），之后勾选新仪器不再纳入
@@ -21508,6 +21538,7 @@ window.addEventListener('keydown',function(e){
       durationMin: (_autoAudit && _autoAudit.durationMin) || AUTO_AUDIT_DEFAULT_MIN,
       rules: {},
       notifyMode: autoAuditNotifyMode(), // 8.8.18: 通知推送模式保留，停止不重置
+      profile: autoAuditProfile(), // 8.13.0: 审核方案保留，停止不重置
       mergeWindowMin: autoAuditMergeWindowMin() // 8.9.6: 合并推送窗口保留，停止不重置
     };
     saveAutoAuditState();
@@ -22223,8 +22254,8 @@ window.addEventListener('keydown',function(e){
   }
 
   // 8.9.15: 推送可见性判定——某个异常项在推送摘要里会不会被展示（危急值/core 必显，
-  // cond 达阈值显，skip 不显；非血常规标本任何异常项都显）。摘要过滤与 blocked_abn
-  // 模式的触发判定共用此口径，两边永远一致。
+  // cond 达阈值显，skip 不显；非血常规标本任何异常项都显）。8.13.0 起只服务推送摘要展示
+  //（原与 blocked_abn 档位触发共用的口径已随三档化取消档位侧用途）。
   function aaPushItemVisible(test, it) {
     const st = it.s || it.status || '';
     if (st === 'CRITICAL') {return true;}
@@ -22237,25 +22268,13 @@ window.addEventListener('keydown',function(e){
     }
     return false;
   }
-  // 8.9.15: 一个（异常通过自动审核的）标本在推送里是否含有「可见异常」——
-  // 「只有忽略项目异常」（如仅 RDW/比率类异常的血常规）视为无可见异常。
-  function aaEntryHasVisibleAbn(entry) {
-    if (!entry) {return false;}
-    const test = entry.test || '';
-    const list = (entry.items && entry.items.length) ? entry.items : (entry.abn || []);
-    return list.some(it => {
-      const st = it.s || it.status || '';
-      return st && st !== 'NORMAL' && aaPushItemVisible(test, it);
-    });
-  }
+  // 8.13.0: aaEntryHasVisibleAbn 已随 blocked_abn 档位删除而移除（全推档不再需要「可见异常」判定）；
+  // 推送摘要里异常项的展示瘦身口径保留在 aaPushItemVisible。
   // 8.9.15: 按推送模式决定哪些条目进推送明细（聚合计数不受影响）——
-  //   all: 全部；blocked: 只有留人工；blocked_abn: 留人工 + 有可见异常的异常通过标本
+  //   all: 全部；blocked: 只有留人工（8.13.0 三档化：blocked_abn 已删，全推档不再做「可见异常」过滤）
   //   （「只有忽略项目异常」的标本不进明细，避免推送里出现无内容的占位行）
   function aaEventEntriesForPush(mode, evEntries) {
     if (mode === 'all') {return evEntries;}
-    if (mode === 'blocked_abn') {
-      return evEntries.filter(en => en.k === 's' || (en.k === 'a' && aaEntryHasVisibleAbn(en.e)));
-    }
     return evEntries.filter(en => en.k === 's'); // blocked / off 兜底
   }
 
@@ -22267,7 +22286,7 @@ window.addEventListener('keydown',function(e){
   // 删除原因：两行制在合并推送里行数翻倍（8 标本 = 14 行），iOS 通知装不下；
   // 新排版把头行与项目行合并、按处置分区、容量自适应折叠，同样信息占一半行数。
 
-  // 8.8.13: 红线留人工原因 → 类别计数（危急值/含负值/传染病阳性/心肌标志物/疑似堵孔）
+  // 8.8.13: 红线留人工原因 → 类别计数（危急值/含负值/传染病阳性/心肌标志物/疑似堵孔/白天留人工）
   function autoAuditRedLineBreakdown(skipped) {
     const cats = [
       ['危急值', /危急值/],
@@ -22275,7 +22294,8 @@ window.addEventListener('keydown',function(e){
       ['传染病阳性', /梅毒|丙肝|艾滋/],
       ['传染病阴阳不符', /传染病历史不符/], // 8.10.0: 8.9.15 在 autoAuditReasonCat 加了此类，分解表漏跟上
       ['心肌标志物', /心肌标志物/],
-      ['疑似堵孔', /疑似堵孔/]
+      ['疑似堵孔', /疑似堵孔/],
+      ['白天留人工', /白天方案留人工/] // 8.13.0: 白天方案超带异常留人工，单独成类
     ];
     const parts = [];
     cats.forEach(([label, re]) => {
@@ -22288,6 +22308,7 @@ window.addEventListener('keydown',function(e){
   // 8.8.24: 跳过原因 → 红线类别名（供推送标题分组）；非红线返回 ''（归入「审核失败」）
   function autoAuditReasonCat(reason) {
     const s = String(reason || '');
+    if (/白天方案留人工/.test(s)) {return '白天留人工';} // 8.13.0: 先于红线词匹配，防轻微带原因文案误归类
     if (/传染病历史不符/.test(s)) {return '传染病阴阳不符';} // 8.9.15: 双向转换单独归类,别混进「阳性」
     if (/危急值/.test(s)) {return '危急值';}
     if (/含负值/.test(s)) {return '含负值';}
@@ -22572,6 +22593,7 @@ window.addEventListener('keydown',function(e){
   // 留人工原因 → 处置符号与尾注（红线类别一眼可辨）
   function aaPushSkipSym(reason) {
     const s = String(reason || '');
+    if (/白天方案留人工/.test(s)) {return {sym: '☀️', note: aaClipW(s.replace(/^白天方案留人工：?/, '') || '超轻微带', 16)};}
     if (/危急值/.test(s)) {return {sym: '🚨', note: ''};}
     if (/疑似堵孔|0 ?值结果/.test(s)) {return {sym: '⓿', note: '疑似堵孔'};}
     if (/梅毒|丙肝|艾滋/.test(s)) {return {sym: '🩸', note: '传染病阳性'};}
@@ -22913,13 +22935,9 @@ window.addEventListener('keydown',function(e){
       // 日志总是落（off/blocked 不推也要有记录），明细截断口径与实时轮一致
       try {autoAuditLogAdd({normal: passN, abnormal: abnPassN, skipped: skips.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX), audited: auds.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX)});} catch (e) {}
       // 推送模式快照语义（8.8.29 固化的策略在此生效）：all=有动作即推；blocked=只有未成功才推；off=不推
-      // 8.9.15: blocked_abn 触发——有未成功 OR 有「可见异常」的异常通过标本（口径与主循环一致）
-      const _hasVisAbn = m === 'blocked_abn' &&
-        (evEntries ? evEntries.some(en => en.k === 'a' && aaEntryHasVisibleAbn(en.e))
-                   : auds.some(x => x.t === 'abnormal' && aaEntryHasVisibleAbn(x)));
+      // 8.13.0: 三档化——blocked_abn 已删，触发条件只剩 all/blocked 两分支
       const shouldPush = m === 'all' ? true
-        : (m === 'blocked' ? skipN > 0
-        : (m === 'blocked_abn' ? (skipN > 0 || _hasVisAbn) : false));
+        : (m === 'blocked' ? skipN > 0 : false);
       if (!shouldPush) {return false;}
       if (a.v === 3 && evEntries) {
         // 8.9.15/8.10.2: 走合并推送队列——补报（opts.immediate）立即结清；续跑/跨组结算按
@@ -22929,7 +22947,7 @@ window.addEventListener('keydown',function(e){
         return true;
       }
       // v2 遗留形态（8.8.25~8.8.29 升级前遗留的聚合计数，无明细条目）：保持旧直推行为
-      const emoji = hasRed ? '🚨' : ((m === 'blocked' || m === 'blocked_abn') ? '⚠️' : '🤖');
+      const emoji = hasRed ? '🚨' : (m === 'blocked' ? '⚠️' : '🤖');
       const title0 = autoAuditPushTitle(passByMn, redEntries, otherFailN, emoji);
       if (!title0) {return false;}
       const title = title0 + (opts.suffix ? opts.suffix : '');
@@ -23377,18 +23395,15 @@ window.addEventListener('keydown',function(e){
           nNormal + nAbnormal > 0 ? 'success' : 'info'
         );
         // 8.8.13: 本轮有审核动作 → 手机推送关键事件（8.9.6 起统一走合并推送队列）。
-        // 推送模式开关 autoAuditNotifyMode()：all=成功+未成功都推（本轮有动作即推）；
+        // 推送模式开关 autoAuditNotifyMode()（8.13.0 三档）：all=成功+未成功都推（本轮有动作即推）；
         // blocked=只推未成功自动审核的标本（有留人工才推，全部通过则不推）；off=完全不推。
         // 8.9.6/8.9.15/8.10.2: 合并推送——单个单个做标本时前沿即发（缓冲区空且距上次推送已过
         // 最短间隔 → 本轮直接发）；连续做时进缓冲区，按「最短间隔」合并成一条，同批做完提前收尾。
         // 红线（危急值/堵孔0值/传染病阳性/心肌标志物/含负值）不受任何等待限制，立即把缓冲与本轮合并成一条 critical 发出。
         // 隐私红线：用户已确认标本号与接收时间可进推送；姓名/住院号/床号/科室等身份信息绝不含。
         const _notifyMode = autoAuditNotifyMode();
-        // 8.9.15: blocked_abn 触发条件——有未成功 OR 有「可见异常」的异常通过标本
-        // （仅忽略项目异常的血常规标本不算有异常，与推送摘要展示口径一致）
-        const _hasVisAbn = _notifyMode === 'blocked_abn' &&
-          audited.some(a => a.t === 'abnormal' && aaEntryHasVisibleAbn(a));
-        if (_notifyMode !== 'off' && (_notifyMode === 'all' || (_notifyMode === 'blocked_abn' ? (skipped.length > 0 || _hasVisAbn) : skipped.length > 0))) {
+        // 8.13.0: 三档化——all=有动作即推；blocked=有留人工才推；off=不推
+        if (_notifyMode !== 'off' && (_notifyMode === 'all' || skipped.length > 0)) {
           // 标题分组统计：红线按类别、其余失败归「审核失败」
           const _redCats = [];
           let _otherFailN = 0;
@@ -23399,8 +23414,7 @@ window.addEventListener('keydown',function(e){
               if (hit) {hit[1]++;} else {_redCats.push([cat, 1]);}
             } else {_otherFailN++;}
           });
-          // 8.9.15: 明细条目按模式过滤（聚合计数不受影响）——all 全带；blocked 只带留人工；
-          // blocked_abn 带留人工 + 有可见异常的异常通过标本
+          // 8.13.0: 明细条目按模式过滤（聚合计数不受影响）——all 全带；blocked 只带留人工
           const _evEntries = [];
           skipped.forEach(s => {_evEntries.push({id: _aaPushEntryId(s), k: 's', e: s});});
           audited.forEach(a => {_evEntries.push({id: _aaPushEntryId(a), k: a.t === 'abnormal' ? 'a' : 'n', e: a});});
@@ -23508,6 +23522,15 @@ window.addEventListener('keydown',function(e){
     if (cardiac) {return { ok: false, reason: cardiac };}
     if (items.some(it => it.status === 'UNCERTAIN' || isEmptyResultValue(it, it.result))) {
       return { ok: false, reason: '存在结果缺失/待定项目，需人工确认' };
+    }
+    // 8.13.0: 白天方案——异常逐条仅放行「整管在轻微放行带内」的标本（classifyMildAbnormal，
+    // 与 F4 批审同口径，含乙类 ≤4 项计数）；超带异常留人工。夜间方案不进此分支，维持原宽松口径
+    //（夜里急诊标本多有异常，用户确认维持全放）。白天留人工原因单独归类，推送/日志一眼可辨。
+    if (autoAuditProfile() === 'day') {
+      const _mild = classifyMildAbnormal(live);
+      if (!(_mild && _mild.ok)) {
+        return { ok: false, reason: '白天方案留人工：' + ((_mild && _mild.reason) || '超出轻微放行带') };
+      }
     }
     return { ok: true };
   }
@@ -23637,15 +23660,16 @@ window.addEventListener('keydown',function(e){
       const sec = Math.floor((ms % 60000) / 1000);
       const timeStr = min + ':' + String(sec).padStart(2, '0');
       const mode = autoAuditNotifyMode();
-      const modeShort = mode === 'blocked_abn' ? '未成功+异常' : mode === 'blocked' ? '仅未成功' : mode === 'off' ? '免打扰' : '全推';
-      const modeLong = mode === 'blocked_abn' ? '推送不成功+有异常标本' : mode === 'blocked' ? '只推未成功标本' : mode === 'off' ? '不推送' : '全量推送（成功+未成功）';
+      const modeShort = mode === 'blocked' ? '仅未成功' : mode === 'off' ? '免打扰' : '全推';
+      const modeLong = mode === 'blocked' ? '只推未成功标本' : mode === 'off' ? '不推送' : '全量推送（成功+未成功）';
+      const profShort = autoAuditProfileShort();
       btn.classList.add('on');
-      btn.textContent = '🤖 自动审核中 ' + timeStr + ' (' + modeShort + ')';
-      btn.title = '自动审核进行中，剩余 ' + timeStr + ' · 推送策略：' + modeLong + ' · 点击查看/设置/停止';
+      btn.textContent = '🤖 自动审核(' + profShort + ') ' + timeStr + ' (' + modeShort + ')';
+      btn.title = '自动审核进行中（' + autoAuditProfileText() + '），剩余 ' + timeStr + ' · 推送策略：' + modeLong + ' · 点击查看/设置/停止';
     } else {
       btn.classList.remove('on');
       btn.textContent = '🤖 自动审核';
-      btn.title = '自动审核：按设定时长自动审核当前筛选范围的标本（正常批量+异常逐条；危急值/堵孔0值/传染病阳性等留人工）';
+      btn.title = '自动审核：按设定时长自动审核当前筛选范围的标本（正常批量 + 异常逐条按当前方案：白天仅轻微带内 / 夜间全放；危急值/堵孔0值/传染病阳性等留人工）';
     }
   }
 
@@ -23672,14 +23696,25 @@ window.addEventListener('keydown',function(e){
         </div>
         <div class="ab-body" style="font-size:12px;line-height:1.7;color:#2c3e50">
           <p style="margin:4px 0 10px;color:#5c6b7a">按设定时长自动审核<b>开启时固定的筛选范围</b>（工作组+勾选仪器，可跨组；中途勾选新仪器<b>不会</b>纳入）：
-            正常标本批量秒审；异常标本按安全门逐条审核。<b>危急值 / 堵孔0值 / 传染病阳性</b> 一律跳过留人工。
-            范围外标本与忽略标本不审。工作台关闭时保持运行（自动重开）。</p>
+            正常标本批量秒审；异常标本按<b>当前方案</b>逐条审核（☀️白天仅轻微带内 / 🌙夜间全放，见下方「审核方案」）。
+            <b>危急值 / 堵孔0值 / 传染病阳性</b> 一律跳过留人工。范围外标本与忽略标本不审。工作台关闭时保持运行（自动重开）。</p>
           <div id="lis-aa-scope" style="margin:8px 0;padding:6px 10px;background:#f0f7ff;border:1px solid #d0e4f7;border-radius:4px;color:#2c5f8a;font-size:12px;font-weight:600;line-height:1.8"></div>
           <div style="display:${enabled ? 'block' : 'none'}" id="lis-aa-running">
             <div style="margin:6px 0;padding:8px 12px;background:#eef7f5;border:1px solid #bfe3dd;border-radius:4px;color:#0d6655;font-weight:600;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-              <span>⏳ 自动审核进行中 · 剩余 <b id="lis-aa-running-remain">${remain ? remain.replace('🤖自动审核 ', '') : '—'}</b></span>
+              <span>⏳ 自动审核进行中 · 剩余 <b id="lis-aa-running-remain">${remain ? remain.replace(/^🤖自动审核\([^)]*\)\s*/, '') : '—'}</b></span>
               <span id="lis-aa-running-badge">${autoAuditNotifyModeBadgeHTML(curNotifyMode)} <span style="color:#0d6655;font-weight:700">（开启时固定）</span></span>
             </div>
+          </div>
+          <div class="ab-section" style="margin-top:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <label style="font-weight:600">🔀 审核方案</label>
+              <span id="lis-aa-profile-cur" style="font-size:12px;color:#666">当前：${autoAuditProfile() === 'day' ? '☀️ 白天' : '🌙 夜间'}</span>
+            </div>
+            <div id="lis-aa-profile-opts" style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 10px;background:#fafbfc;border:1px solid #e1e4e8;border-radius:4px">
+              <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-profile" value="night" ${autoAuditProfile() === 'night' ? 'checked' : ''}> 🌙 夜间（异常逐条全放，红线除外）</label>
+              <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-profile" value="day" ${autoAuditProfile() === 'day' ? 'checked' : ''}> ☀️ 白天（异常逐条仅限轻微带内）</label>
+            </div>
+            <div style="color:#999;margin-top:4px;line-height:1.6">方案<b>点选即生效</b>（无需「更新并继续」），跨刷新记忆，默认夜间——升级后不切换则行为与旧版完全一致。☀️ 白天方案 = 自动审核只审 F4 一键批审规则允许的结果：正常批量 + 整管异常都在轻微放行带内（甲类衍生项全放、乙类幅度带、乙类 ≤4 项）的标本，超带异常白天留人工；🌙 夜间方案 = 原行为，异常逐条全放（红线除外），适合夜间急诊标本多有异常的场景。</div>
           </div>
           <div class="ab-section" style="margin-top:8px">
             <label style="display:block;margin-bottom:6px">⏱ 时长（分钟）</label>
@@ -23693,7 +23728,6 @@ window.addEventListener('keydown',function(e){
             </div>
             <div id="lis-aa-notify-opts" style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 10px;background:#fafbfc;border:1px solid #e1e4e8;border-radius:4px">
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="all" ${curNotifyMode === 'all' ? 'checked' : ''}> 📲 推送所有（成功+未成功标本）</label>
-              <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="blocked_abn" ${curNotifyMode === 'blocked_abn' ? 'checked' : ''}> 🟠 推送不成功+有异常标本</label>
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="blocked" ${curNotifyMode === 'blocked' ? 'checked' : ''}> ⚠️ 只推送未成功的标本</label>
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-notify" value="off" ${curNotifyMode === 'off' ? 'checked' : ''}> 🔕 不推送</label>
             </div>
@@ -23743,6 +23777,15 @@ window.addEventListener('keydown',function(e){
     };
     document.querySelectorAll('#lis-aa-notify-opts input[name="lis-aa-notify"]').forEach(radio => {
       radio.addEventListener('change', onRadioChange);
+    });
+
+    // 8.13.0: 审核方案——点选即生效（持久化 + 状态日志 + 按钮刷新），不走「更新并继续」
+    document.querySelectorAll('#lis-aa-profile-opts input[name="lis-aa-profile"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        setAutoAuditProfile(radio.value);
+        const cur = document.getElementById('lis-aa-profile-cur');
+        if (cur) {cur.textContent = '当前：' + (radio.value === 'day' ? '☀️ 白天' : '🌙 夜间');}
+      });
     });
 
     // 8.5.64: 当前审核范围（工作组 + 勾选仪器；全选只显示「全选」）——与 rowPassWSMachineFilter 语义一致
