@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.13.4
+// @version      8.13.5
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19566,6 +19566,10 @@ window.addEventListener('keydown',function(e){
     { re: /^直接胆红素[\*＊]?$|^dbil$/i, tier: 'b', group: 'DBIL', high: 1.3, low: null },
     { re: /^总蛋白[\*＊]?$|^tp$/i, tier: 'b', group: 'TP', high: 1.1, low: 0.95 },
     { re: /^(血清)?白蛋白[\*＊]?$|^alb$/i, tier: 'b', group: 'ALB', high: null, low: 0.93 },
+    // 8.13.5: 定稿清单漏配的三个非重点项目，用户确认按宽松口径补齐
+    { re: /^(血清)?前白蛋白[\*＊]?$|^pa$/i, tier: 'b', group: 'PA', high: null, low: 0.8 },
+    { re: /甘胆酸/i, tier: 'b', group: 'CG', high: 1.5, low: null },
+    { re: /谷胱甘肽还原酶/i, tier: 'b', group: 'GR', high: 1.5, low: null },
     // ---- 乙类：生化肾功 ----
     { re: /^(血清)?尿素(氮)?[\*＊]?$|^urea$|^bun$/i, tier: 'b', group: 'UREA', high: 1.15, low: null },
     { re: /^肌酐[\*＊]?$|^cr$|^crea$/i, tier: 'b', group: 'CR', high: 1.05, low: null },
