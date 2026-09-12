@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.13.5
+// @version      8.13.6
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19577,6 +19577,8 @@ window.addEventListener('keydown',function(e){
     { re: /胱抑素|^cys-?c$/i, tier: 'b', group: 'CYSC', high: 1.1, low: null },
     { re: /β2-?微球蛋白|β2-?mg/i, tier: 'b', group: 'B2MG', high: 1.3, low: null },
     { re: /视黄醇结合蛋白|^rbp$/i, tier: 'b', group: 'RBP', high: 1.3, low: null },
+    // 8.13.6: 1600 仪器微量白蛋白——宽松口径；锚定避免误吞「尿微量白蛋白/肌酐比值」(ACR 比值类留人审)
+    { re: /^(尿)?微量白蛋白(测定)?[\*＊]?$|^malb$/i, tier: 'b', group: 'MALB', high: 1.5, low: null },
     // ---- 乙类：生化血脂 ----
     { re: /^总胆固醇[\*＊]?$|^tc$/i, tier: 'b', group: 'TC', high: 1.15, low: null },
     { re: /^甘油三酯[\*＊]?$|^tg$/i, tier: 'b', group: 'TG', high: 1.5, low: null },
