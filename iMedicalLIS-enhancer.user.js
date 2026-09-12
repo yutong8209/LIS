@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.14.4
+// @version      8.14.5
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10868,7 +10868,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
       // 与视图口径统一：用 getWSAuditBucket 判定（含 Status!=0 待排过滤），
       // 避免「全部视图勾选的待排标本」被批审而待审视图不显示（8.5.x 批审数与显示数不一致）
-      // 8.12.0: 队列扩容——严格 NORMAL 之外，纳入「整管异常都在轻微带内且乙类 ≤4 项」的
+      // 8.12.0: 队列扩容——严格 NORMAL 之外，纳入「整管异常都在轻微带内且乙类 ≤8 项」的
       // ABNORMAL 标本（classifyMildAbnormal，带 _classifyVersion 记忆）。分类桶不动：
       // 这些标本在工作台仍显示为异常、夜里机器人照旧按异常逐条口径处理
       const mildEvalOf = r => {
@@ -19551,12 +19551,12 @@ window.addEventListener('keydown',function(e){
   //     直接放行、缺省(undefined)表示该方向不放行；highAbs/lowAbs 绝对钳与倍数同时生效取更严者
   //     （K 是唯一必须做绝对钳的项目——不同机器范围 3.5-5.3 / 3.5-5.5 并存，纯比例会在宽范围机器放过头）
   //   · 定性异常（项目级 flag A → status 'ABNORMAL'）与负值结果一律不放行
-  //   · 整管乙类轻微异常 ≤4 项（同项目 #/% 合并计 1，如 NEUT# 6.9 + NEUT% 78 是同一个信号）
+  //   · 整管乙类轻微异常 ≤8 项（同项目 #/% 合并计 1，如 NEUT# 6.9 + NEUT% 78 是同一个信号）
   //   · 未配规则的项目（血锂/NH3/性激素六项/fPSA/肌钙蛋白/前白蛋白/转铁蛋白等）任何异常都留人工——
   //     性激素参考范围是「性别;经期」多段文本，getItemRangeValues 只能解析出第一段，判定必然失真，故意不配
   // 紧急停用：把 MILD_ALLOW_ENABLED 置 false 即整体回到「只批审严格正常」。
   const MILD_ALLOW_ENABLED = true;
-  const MILD_TIER_B_MAX_ITEMS = 4;
+  const MILD_TIER_B_MAX_ITEMS = 8;
 
   // 规则表按顺序首条命中生效；re 依次测 CName/name → Synonym → Code
   const MILD_ALLOW_RULES = [
@@ -22594,12 +22594,18 @@ window.addEventListener('keydown',function(e){
     [/糖化血红蛋白/, '糖化'], [/^血气分析/, '血气']
   ];
   function aaPushTestAbbr(test) {
-    // 8.14.4: 先剥掉尾部的（门诊）（急诊）等括注再匹配——此前「肝功能（门诊）」缩写失配，
-    // 硬截成「肝功能（门…」；剥注后命中「肝功」。匹配不到仍按原串截 12 列兜底
+    // 8.14.4/8.14.5: 组合名缩写两轮剥括注——先剥尾部（门诊）（急诊），再剥全部括注，
+    // 「肝功能（门诊）」→「肝功」；两轮都匹配不到时兜底列宽 12→16（「肝功能（门诊）」14 列可完整放下）
     const s0 = String(test || '').trim();
-    const s = (s0.replace(/[（(][^）)]*[)）]\s*$/, '').trim()) || s0;
-    for (const [re, a] of AA_PUSH_TEST_ABBR) {if (re.test(s)) {return a;}}
-    return aaClipW(s0, 12);
+    const noTail = (s0.replace(/[（(][^）)]*[)）]\s*$/, '').trim()) || s0;
+    const noParen = (s0.replace(/[（(][^）)]*[)）]/g, '').trim()) || s0;
+    for (const [re, a] of AA_PUSH_TEST_ABBR) {
+      if (re.test(noTail)) {return a;}
+    }
+    for (const [re, a] of AA_PUSH_TEST_ABBR) {
+      if (re.test(noParen)) {return a;}
+    }
+    return aaClipW(s0, 16);
   }
   // 仪器名压缩为分组标签（「血细胞分析仪」→「血细胞」；「DXI800化学发光仪」→「DXI800」；
   // 「Getein1600荧光定量」→「Getein1600」——型号后缀一并去掉，副标题里不再出现「荧…」这种截断）
@@ -23658,7 +23664,7 @@ window.addEventListener('keydown',function(e){
       return { ok: false, reason: '存在结果缺失/待定项目，需人工确认' };
     }
     // 8.13.0: 白天方案——异常逐条仅放行「整管在轻微放行带内」的标本（classifyMildAbnormal，
-    // 与 F4 批审同口径，含乙类 ≤4 项计数）；超带异常留人工。夜间方案不进此分支，维持原宽松口径
+    // 与 F4 批审同口径，含乙类 ≤8 项计数）；超带异常留人工。夜间方案不进此分支，维持原宽松口径
     //（夜里急诊标本多有异常，用户确认维持全放）。白天留人工原因单独归类，推送/日志一眼可辨。
     if (autoAuditProfile() === 'day') {
       const _mild = classifyMildAbnormal(live);
@@ -23848,7 +23854,7 @@ window.addEventListener('keydown',function(e){
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-profile" value="night" ${autoAuditProfile() === 'night' ? 'checked' : ''}> 🌙 夜间（异常逐条全放，红线除外）</label>
               <label style="cursor:pointer;display:flex;align-items:center;gap:4px"><input type="radio" name="lis-aa-profile" value="day" ${autoAuditProfile() === 'day' ? 'checked' : ''}> ☀️ 白天（异常逐条仅限轻微带内）</label>
             </div>
-            <div style="color:#999;margin-top:4px;line-height:1.6">方案<b>点选即生效</b>（无需「更新并继续」），跨刷新记忆，默认夜间——升级后不切换则行为与旧版完全一致。☀️ 白天方案 = 自动审核只审 F4 一键批审规则允许的结果：正常批量 + 整管异常都在轻微放行带内（甲类衍生项全放、乙类幅度带、乙类 ≤4 项）的标本，超带异常白天留人工；🌙 夜间方案 = 原行为，异常逐条全放（红线除外），适合夜间急诊标本多有异常的场景。</div>
+            <div style="color:#999;margin-top:4px;line-height:1.6">方案<b>点选即生效</b>（无需「更新并继续」），跨刷新记忆，默认夜间——升级后不切换则行为与旧版完全一致。☀️ 白天方案 = 自动审核只审 F4 一键批审规则允许的结果：正常批量 + 整管异常都在轻微放行带内（甲类衍生项全放、乙类幅度带、乙类 ≤8 项）的标本，超带异常白天留人工；🌙 夜间方案 = 原行为，异常逐条全放（红线除外），适合夜间急诊标本多有异常的场景。</div>
           </div>
           <div class="ab-section" style="margin-top:8px">
             <label style="display:block;margin-bottom:6px">⏱ 时长（分钟）</label>
