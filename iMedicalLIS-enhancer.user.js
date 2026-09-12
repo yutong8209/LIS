@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.14.3
+// @version      8.14.4
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -22594,10 +22594,12 @@ window.addEventListener('keydown',function(e){
     [/糖化血红蛋白/, '糖化'], [/^血气分析/, '血气']
   ];
   function aaPushTestAbbr(test) {
-    const s = String(test || '').trim();
-    if (!s) {return '';}
+    // 8.14.4: 先剥掉尾部的（门诊）（急诊）等括注再匹配——此前「肝功能（门诊）」缩写失配，
+    // 硬截成「肝功能（门…」；剥注后命中「肝功」。匹配不到仍按原串截 12 列兜底
+    const s0 = String(test || '').trim();
+    const s = (s0.replace(/[（(][^）)]*[)）]\s*$/, '').trim()) || s0;
     for (const [re, a] of AA_PUSH_TEST_ABBR) {if (re.test(s)) {return a;}}
-    return aaClipW(s, 12);
+    return aaClipW(s0, 12);
   }
   // 仪器名压缩为分组标签（「血细胞分析仪」→「血细胞」；「DXI800化学发光仪」→「DXI800」；
   // 「Getein1600荧光定量」→「Getein1600」——型号后缀一并去掉，副标题里不再出现「荧…」这种截断）
@@ -22718,7 +22720,9 @@ window.addEventListener('keydown',function(e){
   // 留人工原因 → 处置符号与尾注（红线类别一眼可辨）
   function aaPushSkipSym(reason) {
     const s = String(reason || '');
-    if (/白天方案留人工/.test(s)) {return {sym: '☀️', note: aaClipW(s.replace(/^白天方案留人工：?/, '') || '超轻微带', 16)};}
+    // 8.14.4: 白天留人工的拦代理由不再预截断（此前 16 列截成「血清胱抑素C 1.2…」）——
+    // aaPushSpecLines 会把它作为 tailNote 自动折行适配行宽
+    if (/白天方案留人工/.test(s)) {return {sym: '☀️', note: s.replace(/^白天方案留人工：?/, '') || '超轻微带'};}
     if (/危急值/.test(s)) {return {sym: '🚨', note: ''};}
     if (/疑似堵孔|0 ?值结果/.test(s)) {return {sym: '⓿', note: '疑似堵孔'};}
     if (/梅毒|丙肝|艾滋/.test(s)) {return {sym: '🩸', note: '传染病阳性'};}
