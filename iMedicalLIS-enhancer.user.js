@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.11
+// @version      8.11.12
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1152,23 +1152,23 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-abnormal-hint kbd{background:#fff;border:1px solid var(--lis-border-strong);border-radius:3px;padding:0 4px;font-size:9.5px;font-family:ui-monospace,monospace;box-shadow:0 1px 1px rgba(0,0,0,.05)}
 
 /* 标本队列卡片流 */
-.ws-abnormal-list{flex:1;min-height:0;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:5px}
+.ws-abnormal-list{flex:1;min-height:0;overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:4px}
 .ws-abnormal-machine{position:sticky;top:0;z-index:4;background:rgba(248,250,252,.94);backdrop-filter:blur(4px);border:1px solid var(--lis-border);border-radius:5px;padding:3px 8px;font-size:10.5px;font-weight:700;color:var(--lis-text-secondary);margin:4px 0 2px}
-.ws-abnormal-card{background:var(--lis-surface);border:1px solid var(--lis-border);border-left:3px solid #f59e0b;border-radius:7px;padding:7px 10px;cursor:pointer;transition:all .12s ease;display:flex;flex-direction:column;gap:4px;box-shadow:0 1px 2px rgba(0,0,0,.02);position:relative}
+.ws-abnormal-card{background:var(--lis-surface);border:1px solid var(--lis-border);border-left:3px solid #f59e0b;border-radius:7px;padding:4px 8px;cursor:pointer;transition:all .12s ease;display:flex;flex-direction:column;gap:2px;box-shadow:0 1px 2px rgba(0,0,0,.02);position:relative}
 .ws-abnormal-card:hover{border-color:#93c5fd;box-shadow:0 2px 6px rgba(37,99,235,.06)}
 .ws-abnormal-card.focused{border-color:#3b82f6!important;background:#eff6ff!important;box-shadow:0 0 0 2px rgba(59,130,246,.2)!important}
 .ws-abnormal-card.has-critical{border-left-color:#dc2626;background:#fffdfd}
 .ws-abnormal-card.has-critical.focused{border-left-color:#dc2626;background:#fef2f2!important;box-shadow:0 0 0 2px rgba(220,38,38,.2)!important}
 .ws-abnormal-card.has-zero{border-left-color:#d97706;background:#fffdfa}
 .ws-abnormal-card.has-infection-warning{border-left-color:#f59e0b;background:#fffbeb}
-.ws-abnormal-card.is-normal{background:rgba(240,253,244,.5);border:1px solid rgba(167,243,208,.6);border-left:3px solid #10b981;padding:5px 9px;flex-direction:row;align-items:center;gap:8px}
+.ws-abnormal-card.is-normal{background:rgba(240,253,244,.5);border:1px solid rgba(167,243,208,.6);border-left:3px solid #10b981;padding:3px 8px;flex-direction:row;align-items:center;gap:8px}
 .ws-abnormal-card.is-normal.focused{border-color:#10b981!important;background:#ecfdf5!important;box-shadow:0 0 0 2px rgba(16,185,129,.2)!important}
 .ab-card-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
-.ab-card-name{font-size:13.5px;font-weight:700;color:var(--lis-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
+.ab-card-name{font-size:13px;font-weight:700;color:var(--lis-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
 .ab-card-no{font-family:ui-monospace,monospace;font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
-.ab-card-test{font-size:11.5px;color:var(--lis-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
-.ab-card-items{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
-.ab-card-item{padding:1.5px 6px;border-radius:4px;font-size:11px;font-weight:600;white-space:nowrap;border:1px solid transparent}
+.ab-card-test{font-size:11px;color:var(--lis-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
+.ab-card-items{display:flex;flex-wrap:wrap;gap:2px 3px;margin-top:1px}
+.ab-card-item{padding:0 4px;border-radius:3px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid transparent;line-height:1.55}
 .ab-card-item.critical{background:#fee2e2;color:#b91c1c;border-color:#fecaca;font-weight:700}
 .ab-card-item.high{background:#fff7ed;color:#c2410c;border-color:#fed7aa}
 .ab-card-item.low{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}
@@ -11874,7 +11874,7 @@ window.addEventListener('keydown',function(e){
         h += '</div>';
         h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
         h += '</div>';
-        h += `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--lis-text-secondary)">`;
+        h += `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary)">`;
         h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || '', wsSearchQuery)}</span>`;
         h += `<span class="ab-card-hint" style="color:#059669;font-weight:600">Enter 审核</span>`;
         h += '</div>';
@@ -11904,7 +11904,7 @@ window.addEventListener('keydown',function(e){
       h += '</div>';
       h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
       h += '</div>';
-      h += `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--lis-text-secondary)">`;
+      h += `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary)">`;
       h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || r._mn || '', wsSearchQuery)}</span>`;
       h += `<span class="ab-card-time" style="font-size:10.5px;color:var(--lis-text-muted)">${esc(r.AcceptDT || '')}</span>`;
       h += '</div>';
@@ -11927,7 +11927,12 @@ window.addEventListener('keydown',function(e){
           cls = 'inf-special';
         }
         const prefix = st === 'CRITICAL' ? '危急 ' : '';
-        h += `<span class="ab-card-item ${cls}">${esc(prefix + it.name + ' ' + it.result + (it.unit || ''))}</span>`;
+        // 8.11.12: 长中文名压成规范缩写（MPV/NEU#…，复用推送侧字典），悬停 title 看全称；
+        // 高/低贴 ↑/↓ 方向箭头，多异常项时一排短 chip 扫读更快
+        const dirMark = st === 'HIGH' ? '↑' : st === 'LOW' ? '↓' : '';
+        const abbrName = aaPushItemAbbr(it.name);
+        const chipText = prefix + abbrName + ' ' + it.result + (it.unit || '') + dirMark;
+        h += `<span class="ab-card-item ${cls}" title="${escAttr(it.name + ' ' + it.result + (it.unit || '') + (dirMark ? '（' + (st === 'HIGH' ? '偏高' : '偏低') + '）' : ''))}">${esc(chipText)}</span>`;
       });
       if (hasInfectionWarning) {
         h += `<span class="ab-card-item infection-warning">⚠ ${esc(cached.infectionWarning)}</span>`;
@@ -22561,8 +22566,13 @@ window.addEventListener('keydown',function(e){
     [/^平均血红蛋白含量[\*＊#]?$/i, 'MCH'],
     [/^平均血红蛋白浓度[\*＊#]?$/i, 'MCHC'],
     [/^血小板分布宽度[\*＊#]?$/i, 'PDW'],
+    [/^平均血小板体积[\*＊#]?$/i, 'MPV'],
+    [/^大血小板(比率|百分比)[\*＊#]?$/i, 'P-LCR'],
+    [/^血小板压积[\*＊#]?$/i, 'PCT'],
+    [/^有核红细胞(计数|绝对值|#)?[\*＊#]?$/i, 'NRBC#'],
     [/^红细胞分布宽度.*$/i, 'RDW'],
     [/^网织红细胞(计数|绝对值|#)?[\*＊#]?$/i, 'RET#'],
+    [/^网织红细胞(比率|百分比|%)[\*＊#]?$/i, 'RET%'],
     // 凝血
     [/^凝血酶原时间[\*＊#]?$/, 'PT'],
     [/^(活化部分|部分)?凝血活酶时间[\*＊#]?$/, 'APTT'],
