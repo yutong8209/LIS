@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.11.13
+// @version      8.11.14
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -617,7 +617,7 @@
     _dbgLog.push(msg);
     if (_dbgLog.length > 500) {_dbgLog.splice(0, _dbgLog.length - 500);}
   };
-  // 在页面底部显示调试面板（Alt+D 切换）
+  // 在页面底部显示调试面板（控制台调用 showDebugPanel()）
   function showDebugPanel() {
     let panel = document.getElementById('lis-debug-panel');
     if (panel) {
@@ -628,7 +628,7 @@
     panel.id = 'lis-debug-panel';
     panel.style.cssText =
       'position:fixed;bottom:0;left:0;right:0;z-index:999999;background:#1e1e1e;color:#0f0;font:12px monospace;padding:10px;max-height:40vh;overflow:auto';
-    panel.innerHTML = '<b>LIS Debug Log (Alt+D 关闭)</b><br>' + _dbgLog.map(l => esc(l)).join('<br>');
+    panel.innerHTML = '<b>LIS Debug Log</b><br>' + _dbgLog.map(l => esc(l)).join('<br>');
     document.body.appendChild(panel);
   }
 
@@ -10510,6 +10510,22 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (wsCategory === 'audit') {prefetchAbnormalAuditContext();}
   }
 
+  // 8.11.14: 数字键 1-5 快速切换工作台分类标签（1 待审 / 2 不完整 / 3 待排 / 4 采集 / 5 全部）。
+  // 工作台未打开 / 详情面板或历史浮层打开 / 焦点在输入框（搜索框打数字）时不劫持；
+  // 命中但与当前分类相同则吞掉按键不重复渲染。返回 true 表示按键已消费
+  function handleWSCategoryHotkey(e) {
+    if (!isWSVisible() || isDetailPanelVisible() || histIsOpen()) {return false;}
+    if (e.ctrlKey || e.altKey || e.metaKey) {return false;}
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || t.closest?.('textarea,[contenteditable]'))) {return false;}
+    const cat = { '1': 'audit', '2': 'incomplete', '3': 'pending', '4': 'collected', '5': 'all' }[e.key];
+    if (!cat) {return false;}
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (cat !== wsCategory) {switchWSCategory(cat);}
+    return true;
+  }
+
   // 菜单栏跳转：工作台关闭时先打开，再显示目标分类。
   function gotoWSCategoryFromMenubar(cat) {
     if (!cat) {return;}
@@ -10787,10 +10803,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         showToast('正在审核中，请稍候', 'warning');
         return false;
       }
-      // 旧确认框（Alt+B 路径）还开着时不叠加启动
-      const existing = document.getElementById('lis-audit-confirm');
-      if (existing && existing.classList.contains('show')) {return false;}
-
       let currentFiltered = wsData;
       if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
       {currentFiltered = currentFiltered.filter(rowPassWSMachineFilter);}
@@ -11019,55 +11031,12 @@ window.addEventListener('keydown',function(e){
     });
   }
 
-  // 批审确认框打开时：F4 / Enter = 点「确认审核」（单条正常时省鼠标）
-  function tryConfirmBatchDialogByHotkey(e) {
-    const dialog = document.getElementById('lis-audit-confirm');
-    if (!dialog || !dialog.classList.contains('show')) {return false;}
-    if (!e || (e.key !== 'F4' && !(e.key === 'Enter' && !e.shiftKey))) {return false;}
-    // 确认框内勾选「我确认…」时 Enter 留给勾选框，F4 仍触发确认
-    if (e.key === 'Enter') {
-      const t = e.target;
-      if (t && (t.id === 'lis-ab-check' || (t.tagName === 'INPUT' && t.type === 'checkbox'))) {return false;}
-    }
-    const btn = document.getElementById('lis-ab-confirm');
-    if (!btn) {return false;}
-    // F4：自动勾选「我确认…」（若有）后确认
-    if (e.key === 'F4') {
-      const checkBtn = document.getElementById('lis-ab-check');
-      if (checkBtn && !checkBtn.checked) {
-        checkBtn.checked = true;
-        btn.disabled = false;
-      }
-    }
-    if (btn.disabled) {return false;}
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    btn.click();
-    return true;
-  }
 
   // F4 统一入口优先级：
-  // 1) 批审确认框（Alt+B 旧通道仍会弹）→ 确认批审
   // 2) 待审视图（正常+异常已合并 8.5.0）→ 直接批审正常标本（8.11.11 免确认）
   // 注：详情面板内 F4 已取消（8.5.1），由 _f4BridgeHandler 直接吞掉
   function triggerF4Audit() {
-    // 批审确认对话框（含一键批审详细信息页）
-    const dialog = document.getElementById('lis-audit-confirm');
-    if (dialog && dialog.classList.contains('show')) {
-      const btn = document.getElementById('lis-ab-confirm');
-      const checkBtn = document.getElementById('lis-ab-check');
-      // 需勾选的确认框：F4 自动勾选并确认
-      if (checkBtn && !checkBtn.checked) {
-        checkBtn.checked = true;
-        if (btn) {btn.disabled = false;}
-      }
-      if (btn && !btn.disabled) {
-        btn.click();
-        return;
-      }
-      // 确认框已打开则不再落到其它 F4 语义
-      return;
-    }
+    // 8.11.14: 确认弹窗链路（Alt+B 旧通道）已随 Alt 快捷键一并移除，F4 一律直审
     if (isWSVisible() && wsCategory === 'audit') {
       openWorkbenchBatchAudit();
       return;
@@ -11087,8 +11056,6 @@ window.addEventListener('keydown',function(e){
     }
     _f4BridgeHandler = e => {
       if (histIsOpen()) {return;} // 历史浮层打开时 F4/Enter 全部让位（避免隔层误审）
-      // 批审确认框：任意分类下 F4/Enter 均可确认
-      if (tryConfirmBatchDialogByHotkey(e)) {return;}
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
       // 详情面板打开时：Enter 审当前详情（焦点常在原生 iframe，Enter 必须靠桥捕获）；
       // F4 在详情面板内已取消（8.5.1），只保留 Enter + 面板「审核」按钮
@@ -11269,6 +11236,8 @@ window.addEventListener('keydown',function(e){
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
       if (histIsOpen()) {return;} // 历史浮层打开时工作台按键全部让位
       if (wsCategory !== 'audit') {return;}
+      // 8.11.14: 数字键 1-5 切分类（输入框聚焦时不劫持，见 handleWSCategoryHotkey）
+      if (handleWSCategoryHotkey(e)) {return;}
       // F4：无论面板是否打开都处理（待审视图处理器已挂到 iframe，可捕获原生页焦点下的按键）
       // 面板打开时用 currentDetailSpecimen 调面板同款审核；面板未开时用列表焦点标本。
       if (e.key === 'F4') {
@@ -11378,6 +11347,8 @@ window.addEventListener('keydown',function(e){
       if (!isDetailPanelVisible()) {
         _normalKeyHandler = e => {
           if (isPatientResultPanelEvent(e)) {return;}
+          // 8.11.14: 数字键 1-5 切分类（空态下也可用）
+          if (handleWSCategoryHotkey(e)) {return;}
           if (e.key === 'Escape') {
             e.preventDefault();
             closeWS();
@@ -11426,6 +11397,8 @@ window.addEventListener('keydown',function(e){
     if (wsCategory !== 'audit' && !isDetailPanelVisible()) {
       _normalKeyHandler = e => {
         if (isPatientResultPanelEvent(e)) {return;}
+        // 8.11.14: 数字键 1-5 切分类
+        if (handleWSCategoryHotkey(e)) {return;}
         if (e.key === 'Escape') {
           e.preventDefault();
           closeWS();
@@ -11645,7 +11618,7 @@ window.addEventListener('keydown',function(e){
     // clearAbnormalAuditingCard 又因焦点已移走而不复位，直到下一次整表重建才恢复。
     const isAuditing = _abnormalAuditInProgress && _abnormalAuditingDR === String(rdr);
     let ftHtml = `
-      <div class="ws-insp-hint"><kbd>Enter</kbd> 审核当前 · <kbd>Space</kbd> 跳过 · <kbd>↑↓</kbd> 切换 · <kbd>F4</kbd> 批审正常</div>
+      <div class="ws-insp-hint"><kbd>Enter</kbd> 审核当前 · <kbd>Space</kbd> 跳过 · <kbd>↑↓</kbd> 切换 · <kbd>F4</kbd> 批审正常 · <kbd>1-5</kbd> 切分类</div>
       <div class="ws-insp-ft-actions">
         <button class="ws-insp-btn-skip" id="lis-insp-btn-skip" type="button" title="跳过当前标本 (Space)">↷ 跳过 (Space)</button>
         <button class="ws-insp-btn-audit${isAuditing ? ' disabled' : ''}" id="lis-insp-btn-audit" type="button" ${isAuditing ? 'disabled' : ''}>
@@ -11848,7 +11821,7 @@ window.addEventListener('keydown',function(e){
         </div>`;
 
     h += `<div class="ws-abnormal-hint">
-            <span><kbd>Enter</kbd> 审核 <kbd>Space</kbd> 跳过 <kbd>↑↓</kbd> 移动 <kbd>F4</kbd> 批审</span>
+            <span><kbd>Enter</kbd> 审核 <kbd>Space</kbd> 跳过 <kbd>↑↓</kbd> 移动 <kbd>F4</kbd> 批审 <kbd>1-5</kbd> 切分类</span>
             <span>按仪器分组</span>
         </div>`;
     h += '<div class="ws-abnormal-list">';
@@ -13200,109 +13173,6 @@ window.addEventListener('keydown',function(e){
     body._delegatedHandler = handlers;
   }
 
-  // --- 确认并批量审核 ---
-  function confirmAndBatchAudit(normalData) {
-    dbg('confirmAndBatchAudit 被调用, normalData.length:', normalData.length);
-    // 8.11.11: 前置校验抽到 validateBatchAudit 与直审路径共用
-    if (!validateBatchAudit(normalData)) {return;}
-    normalData = [...(normalData || [])].sort((a, b) => compareSpecimensForAudit(a.row || a, b.row || b));
-    const existing = document.getElementById('lis-audit-confirm');
-    if (existing) {existing.remove();}
-
-    const wgNames = [
-      ...new Set(
-        normalData.map(r => {
-          const wg = r.row._wg;
-          return (WG_MAP[wg] || {}).name || wg || '当前组';
-        })
-      )
-    ];
-    const flowHint =
-      wgNames.length > 1
-        ? `<p style="margin:8px 0 0;font-size:12px;color:#5c6b7a;line-height:1.55">含 <b>${wgNames.length}</b> 个工作组（${esc(wgNames.join('、'))}），将自动切换；<b>每组首条</b>自动 CA 认证，同组后续秒审，无需手动预审。</p>`
-        : '<p style="margin:8px 0 0;font-size:12px;color:#5c6b7a;line-height:1.55"><b>首条</b>将自动触发 CA 认证（capping 登录），同组后续秒审，<b>无需</b>手动先审一条。</p>';
-    const hotkeyHint = '<p style="margin:10px 0 0;font-size:12px;color:#0d6655;line-height:1.5"><kbd style="background:#e8f5e9;padding:1px 6px;border-radius:3px">F4</kbd> 或 <kbd style="background:#e8f5e9;padding:1px 6px;border-radius:3px">Enter</kbd> 确认审核 · Esc 取消</p>';
-
-    const dialog = document.createElement('div');
-    dialog.id = 'lis-audit-confirm';
-    dialog.innerHTML = `
-            <div id="lis-audit-box">
-                <div class="ab-hd">
-                    <h4>确认批量审核</h4>
-                    <button class="ab-close" id="lis-ab-close">✕</button>
-                </div>
-                <div class="ab-body">
-                    <div class="ab-section">
-                        <h5><span class="ab-count" style="background:#27ae60">${normalData.length}</span> 正常标本（将自动审核）</h5>
-                        ${flowHint}
-                        ${hotkeyHint}
-                        <div class="ab-list" style="max-height:300px;overflow-y:auto">
-                            ${normalData
-    .map(
-      r => `<div class="ab-item">
-                                <span class="ab-name">${esc(r.row.PatName || '未知')}</span>
-                                <span class="ab-detail">${esc(r.row.Labno || '')} | ${esc(r.row.TestSetDesc || '')}</span>
-                                <span class="ab-tag" style="background:#e8f5e9;color:#2e7d32">✓ 正常</span>
-                            </div>`
-    )
-    .join('')}
-                        </div>
-                    </div>
-                </div>
-                <div class="ab-ft">
-                    <button class="ab-cancel" id="lis-ab-cancel">取消</button>
-                    <button class="ab-confirm ok" id="lis-ab-confirm">确认审核 (${normalData.length}) · F4</button>
-                </div>
-            </div>`;
-    document.body.appendChild(dialog);
-    dialog.classList.add('show');
-
-    const confirmBtn = document.getElementById('lis-ab-confirm');
-    let closed = false;
-    const closeDialog = () => {
-      if (closed) {return;}
-      closed = true;
-      document.removeEventListener('keydown', keyHandler, true);
-      dialog.remove();
-    };
-    const doConfirm = () => {
-      if (closed || !confirmBtn || confirmBtn.disabled) {return;}
-      closeDialog();
-      executeBatchAudit(normalData).catch(e => {
-        console.error('[LIS] 批审异常:', e);
-      });
-    };
-    const keyHandler = e => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        closeDialog();
-        return;
-      }
-      if (e.key === 'F4' || (e.key === 'Enter' && !e.shiftKey)) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        doConfirm();
-      }
-    };
-    document.addEventListener('keydown', keyHandler, true);
-    document.getElementById('lis-ab-close').addEventListener('click', closeDialog);
-    document.getElementById('lis-ab-cancel').addEventListener('click', closeDialog);
-    dialog.addEventListener('click', e => {
-      if (e.target === dialog) {closeDialog();}
-    });
-    confirmBtn.addEventListener('click', doConfirm);
-    // 焦点便于直接按键
-    try {
-      confirmBtn.focus();
-    } catch (e) {}
-  }
-
-  // --- 批审操作条 ---
-  // 8.9.0: updateBatchBar/auditSelectedSpecimens 已删除——操作条从未被调用（底部浮动条
-  // 永远不出现），F5 审核也从未绑定；批量审核入口统一走「一键批审 F4」/详情面板 Enter
-
-
   // --- 导航到原生界面 ---
   // 8.9.0: 延迟在原生工作列表中按 ReportDR/Labno 选中对应行——
   // navigateToSpecimen 与 checkNavigateTarget（跨组跳转恢复）各有一份相同逻辑，抽为共用
@@ -13612,11 +13482,9 @@ window.addEventListener('keydown',function(e){
     clearAuditQueue();
   }
 
-  // (showAuditConfirmDialog 和 performAudit 已删除，使用 confirmAndBatchAudit 替代)
   // 8.9.0: auditSelectedSpecimens（F5 审核选中）已删除——仅被已删除的 updateBatchBar 调用，
   // 且 F5 快捷键从未注册；勾选批量审核入口由「一键批审 F4」承担
 
-  // (showAuditConfirmDialog 和 performAudit 已删除，使用 confirmAndBatchAudit 替代)
 
   // ============================================================
   //  标本详情面板
@@ -16756,36 +16624,6 @@ window.addEventListener('keydown',function(e){
 .lis-emr-spinner-icon{width:36px;height:36px;border:3px solid var(--lis-border);border-top-color:#3b82f6;border-radius:50%;animation:lisEmrSpin .8s linear infinite}
 @keyframes lisEmrSpin{to{transform:rotate(360deg)}}
 
-/* --- 审核确认对话框 --- */
-#lis-audit-confirm,#lis-queue-resume{position:fixed;inset:0;z-index:100020;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
-#lis-audit-confirm.show,#lis-queue-resume.show{display:flex}
-#lis-audit-box{background:#fff;border-radius:12px;width:560px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.4)}
-#lis-audit-box .ab-hd{padding:16px 20px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between}
-#lis-audit-box .ab-hd h4{margin:0;font-size:16px;color:#2c3e50}
-#lis-audit-box .ab-hd .ab-close{background:none;border:none;font-size:20px;cursor:pointer;color:#999;padding:4px 8px;border-radius:4px}
-#lis-audit-box .ab-hd .ab-close:hover{background:#f0f0f0}
-#lis-audit-box .ab-body{flex:1;overflow-y:auto;padding:16px 20px}
-#lis-audit-box .ab-section{margin-bottom:16px}
-#lis-audit-box .ab-section h5{margin:0 0 8px;font-size:13px;display:flex;align-items:center;gap:6px}
-#lis-audit-box .ab-section .ab-count{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;color:#fff}
-#lis-audit-box .ab-section .ab-list{max-height:150px;overflow-y:auto;border:1px solid #eee;border-radius:6px;font-size:12px}
-#lis-audit-box .ab-section .ab-list .ab-item{padding:6px 10px;border-bottom:1px solid #f5f5f5;display:flex;align-items:center;gap:8px}
-#lis-audit-box .ab-section .ab-list .ab-item:last-child{border-bottom:none}
-#lis-audit-box .ab-section .ab-list .ab-item:hover{background:#f8f9fa}
-#lis-audit-box .ab-section .ab-list .ab-item .ab-name{font-weight:600;color:#2c3e50;min-width:60px}
-#lis-audit-box .ab-section .ab-list .ab-item .ab-detail{color:#666;flex:1;font-size:11px}
-#lis-audit-box .ab-section .ab-list .ab-item .ab-tag{padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600}
-#lis-audit-box .ab-ft{padding:12px 20px;border-top:1px solid #eee;display:flex;align-items:center;gap:10px}
-#lis-audit-box .ab-ft .ab-confirm{padding:8px 20px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:.2s}
-#lis-audit-box .ab-ft .ab-confirm:disabled{opacity:.5;cursor:not-allowed}
-#lis-audit-box .ab-ft .ab-confirm.ok{background:#27ae60;color:#fff}
-#lis-audit-box .ab-ft .ab-confirm.ok:hover:not(:disabled){background:#1e8449}
-#lis-audit-box .ab-ft .ab-cancel{padding:8px 20px;border:none;border-radius:6px;font-size:13px;cursor:pointer;background:#95a5a6;color:#fff}
-#lis-audit-box .ab-ft .ab-export{padding:8px 16px;border:1px solid #ddd;border-radius:6px;font-size:12px;cursor:pointer;background:#fff;margin-right:auto}
-#lis-audit-box .ab-ft .ab-export:hover{background:#f0f0f0}
-#lis-audit-box .ab-check{display:flex;align-items:center;gap:6px;font-size:12px;color:#555;margin-top:8px}
-#lis-audit-box .ab-check input{width:auto}
-
 /* --- 8.5.58: 自动审核对话框 --- */
 #lis-auto-audit-dlg{position:fixed;inset:0;z-index:100021;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
 #lis-auto-audit-dlg.show{display:flex}
@@ -19874,7 +19712,7 @@ window.addEventListener('keydown',function(e){
   }
 
   // --- 顶部悬停审核条：已禁用（用户不需要，易误触）---
-  // 批审/快捷键仍走工作台与 Alt+A/B；此处只清理历史残留 DOM
+  // 批审统一走工作台 F4（8.11.14 起 Alt 系快捷键已全部移除）；此处只清理历史残留 DOM
   function injectToolbar() {
     try {
       const tb = document.getElementById('lis-toolbar');
@@ -19884,394 +19722,6 @@ window.addEventListener('keydown',function(e){
     } catch (e) {}
   }
 
-  // --- 快速审核当前标本 ---
-  async function quickAuditCurrent() {
-    const auditLockId = acquireAuditLock('quickAudit');
-    if (!auditLockId) {return;}
-    if (_abnormalAuditInProgress || _detailAuditInProgress) {
-      showToast('正在审核异常标本或详情面板审核中，请稍候', 'warning');
-      releaseAuditLock(auditLockId);
-      return;
-    }
-
-    const selected = getNativeSelectedRow();
-    if (!selected) {
-      releaseAuditLock(auditLockId);
-      showToast('请先选择一个标本', 'warning');
-      return;
-    }
-
-    const btn = document.getElementById('lis-tb-quick');
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = '⏳ 审核中...';
-    }
-
-    try {
-      const cached = wsClassifiedCache[selected.ReportDR];
-      const result = cached && !isClassificationStale(selected) ? cached : await fetchAndClassifySpecimen(selected);
-
-      if (result.status === 'CRITICAL') {
-        showToast(getAutoAuditBlockReason(result, selected), 'error');
-        return;
-      }
-
-      if (result.status === 'ABNORMAL') {
-        const abnormalItems = result.items.filter(i => i.status !== 'NORMAL');
-        const names = abnormalItems.map(i => `${i.name}(${i.result})`).join(', ');
-        showToast(`⚠️ 异常标本: ${selected.PatName || ''} - ${names}`, 'warning');
-        return;
-      }
-
-      if (result.status === 'UNCERTAIN') {
-        showToast(`⚠️ 待定标本: ${selected.PatName || ''} - 需人工确认`, 'warning');
-        return;
-      }
-
-      // 8.10.0: 兜底拦截一切非 NORMAL——此前只拦 CRITICAL/ABNORMAL/UNCERTAIN，
-      // 8.5.58 新增的 ZERO（疑似堵孔，整批 0 值）会直接落进「正常标本，执行审核」
-      if (result.status !== 'NORMAL') {
-        showToast(getAutoAuditBlockReason(result, selected), 'warning');
-        return;
-      }
-
-      // 正常标本，执行审核
-      const reportDR = result.reportDR;
-      dbg('审核标本:', reportDR, selected.PatName);
-
-      const iframeWin = getReportIframeWin() || (await ensureReportPageLoaded());
-      if (!iframeWin) {
-        showToast('未找到报告处理页面，请先打开"报告处理"', 'error');
-        return;
-      }
-      const auditCtx = auditTargetContext(iframeWin, reportDR);
-      const caReady = isCASessionReady(iframeWin);
-      let auditOK = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
-        action: 'audit',
-        expectedStatuses: ['3'],
-        timeoutMs: caReady ? 8000 : 15000,
-        caSessionReady: caReady,
-        missingAsSuccess: auditCtx.allowMissingSuccess,
-        targetReportDR: reportDR
-      });
-      if (!auditOK) {
-        auditOK = await confirmAuditEventually(iframeWin, reportDR, selected.PatName || selected.Labno || '', {
-          targetWasPresent: auditCtx.rowPresent,
-          detailWasReady: auditCtx.detailReady
-        });
-      }
-      if (auditOK === 'incomplete') {
-        showToast(`⚠️ 跳过: ${selected.PatName || ''} — 结果不完整，不可审核`, 'warning');
-      } else if (auditOK) {
-        showToast(`✅ 已审核: ${selected.PatName || ''}`, 'success');
-        advanceToNextSpecimen();
-      } else {
-        showToast('⚠️ 审核失败，请手动点击底部工具栏的"审核"按钮', 'warning');
-      }
-    } catch (e) {
-      dbg('快速审核失败:', e);
-      showToast('审核失败: ' + e.message, 'error');
-    } finally {
-      releaseAuditLock(auditLockId);
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = '⚡ 审核';
-      }
-    }
-  }
-
-  // --- 跳转到下一个待审核标本 ---
-  function advanceToNextSpecimen() {
-    const rows = getNativeDatagridRows();
-    const selected = getNativeSelectedRow();
-    if (!selected) {return;}
-
-    const selectedDR = selected.ReportDR || '';
-    const currentIndex = rows.findIndex(r => (r.ReportDR || '') === selectedDR);
-    if (currentIndex === -1) {return;}
-
-    // 找下一个待审核的标本
-    for (let i = currentIndex + 1; i < rows.length; i++) {
-      const status = String(rows[i].Status || rows[i].ReportStatus || '');
-      if (status === '1' || status === '2') {
-        triggerNativeRowClick(i);
-        return;
-      }
-    }
-    // 没有下一个了，从头找
-    for (let i = 0; i < currentIndex; i++) {
-      const status = String(rows[i].Status || rows[i].ReportStatus || '');
-      if (status === '1' || status === '2') {
-        triggerNativeRowClick(i);
-        return;
-      }
-    }
-    showToast('已到末尾，无更多待审核标本', 'success');
-  }
-
-  // --- 跳转到上一个待审核标本 ---
-  function advanceToPrevSpecimen() {
-    const rows = getNativeDatagridRows();
-    const selected = getNativeSelectedRow();
-    if (!selected) {return;}
-
-    const selectedDR = selected.ReportDR || '';
-    const currentIndex = rows.findIndex(r => (r.ReportDR || '') === selectedDR);
-    if (currentIndex === -1) {return;}
-
-    // 找上一个待审核的标本
-    for (let i = currentIndex - 1; i >= 0; i--) {
-      const status = String(rows[i].Status || rows[i].ReportStatus || '');
-      if (status === '1' || status === '2') {
-        triggerNativeRowClick(i);
-        return;
-      }
-    }
-    // 没有上一个了，从末尾找
-    for (let i = rows.length - 1; i > currentIndex; i--) {
-      const status = String(rows[i].Status || rows[i].ReportStatus || '');
-      if (status === '1' || status === '2') {
-        triggerNativeRowClick(i);
-        return;
-      }
-    }
-    showToast('已是第一个待审核标本', 'success');
-  }
-
-  // --- 批量审核对话框 ---
-  async function showBatchAuditDialog() {
-    const auditLockId = acquireAuditLock('showBatchDialog');
-    if (!auditLockId) {return;}
-    if (_abnormalAuditInProgress || _detailAuditInProgress) {
-      showToast('正在审核异常标本或详情面板审核中，请稍候', 'warning');
-      releaseAuditLock(auditLockId);
-      return;
-    }
-    try {
-      const eligible = getAuditEligibleRows();
-      if (eligible.length === 0) {
-        showToast('没有待审核的标本', 'success');
-        return;
-      }
-
-      // 显示进度
-      showToast(`正在分析 ${eligible.length} 个标本...`, 'warning');
-
-      // 获取所有标本的分类（优先使用缓存）
-      const results = [];
-      const toFetch = [];
-      for (const r of eligible) {
-        const cached = wsClassifiedCache[r.ReportDR];
-        if (cached && !isClassificationStale(r)) {
-          results.push(cached);
-        } else {
-          toFetch.push(r);
-        }
-      }
-      if (toFetch.length > 0) {
-        for (let i = 0; i < toFetch.length; i += 8) {
-          const batch = toFetch.slice(i, i + 8);
-          const batchResults = await Promise.all(batch.map(r => fetchAndClassifySpecimen(r)));
-          // 8.9.0: 结果写回分类缓存（与 classifyAllSpecimens 同款）——此前只存局部数组，
-          // 确认后 continueAuditQueue 经 getLiveClassification 查缓存落空，逐条再拉一遍
-          // GetReportInfoAll，200 条待审时对 LIS 多打一倍请求
-          batchResults.forEach(r => {
-            if (r && r.reportDR) {
-              r._accessTs = Date.now();
-              if (!r.fingerprint && r.row) {attachClassificationMeta(r, r.row);}
-              wsClassifiedCache[r.reportDR] = r;
-              _classifyVersion++;
-            }
-          });
-          invalidateCaches();
-          results.push(...batchResults);
-        }
-      }
-
-      const normalSpecimens = results.filter(r => r.status === 'NORMAL');
-      const abnormalSpecimens = results.filter(r => r.status === 'ABNORMAL' || r.status === 'CRITICAL');
-      const uncertainSpecimens = results.filter(r => r.status === 'UNCERTAIN');
-
-      // 创建确认对话框（对话框确认后会重新获取批审锁）
-      showAuditConfirmDialog(normalSpecimens, abnormalSpecimens, uncertainSpecimens);
-    } finally {
-      releaseAuditLock(auditLockId);
-    }
-  }
-
-  // --- 显示审核确认对话框 ---
-  function showAuditConfirmDialog(normal, abnormal, uncertain) {
-    // 兼容旧调用：showAuditConfirmDialog([specimens]) — 走确认对话框
-    if (Array.isArray(normal) && abnormal === undefined) {
-      const specimens = normal;
-      if (specimens.length === 0) {
-        toast('没有可审核的标本', 'w');
-        return;
-      }
-      const formatted = specimens.map(s => {
-        const cached = wsClassifiedCache[s.ReportDR];
-        if (cached && !isClassificationStale(s)) {return { ...cached, row: s, reportDR: s.ReportDR };}
-        return { status: 'UNCERTAIN', items: [], row: s, reportDR: s.ReportDR || '' };
-      });
-      const normalOnly = formatted.filter(isAutoAuditableClassified);
-      if (normalOnly.length !== specimens.length) {
-        showToast('部分标本不可自动审核，已取消批审', 'warning');
-        return;
-      }
-      confirmAndBatchAudit(normalOnly);
-      return;
-    }
-    // 移除已有的对话框
-    const existing = document.getElementById('lis-audit-confirm');
-    if (existing) {existing.remove();}
-
-    const dialog = document.createElement('div');
-    dialog.id = 'lis-audit-confirm';
-
-    let abnormalHTML = '';
-    if (abnormal.length > 0) {
-      abnormalHTML = `
-                <div class="ab-section">
-                    <h5><span class="ab-count" style="background:#e74c3c">${abnormal.length}</span> 异常标本（需人工审核）</h5>
-                    <div class="ab-list">
-                        ${abnormal
-    .map(r => {
-      const abnormalItems = r.items.filter(i => i.status !== 'NORMAL');
-      const names = abnormalItems.map(i => `${i.name} ${i.result}${i.unit}`).join(', ');
-      return `<div class="ab-item">
-                                <span class="ab-name">${esc(r.row.PatName || '未知')}</span>
-                                <span class="ab-detail">${esc(r.row.Labno || '')} | ${esc(r.row.TestSetDesc || '')}</span>
-                                <span class="ab-tag" style="background:#fce4ec;color:#c62828">⚠ ${esc(names)}</span>
-                            </div>`;
-    })
-    .join('')}
-                    </div>
-                </div>`;
-    }
-
-    let uncertainHTML = '';
-    if (uncertain.length > 0) {
-      uncertainHTML = `
-                <div class="ab-section">
-                    <h5><span class="ab-count" style="background:#f39c12">${uncertain.length}</span> 待定标本（需人工确认）</h5>
-                    <div class="ab-list">
-                        ${uncertain
-    .map(
-      r => `<div class="ab-item">
-                            <span class="ab-name">${esc(r.row.PatName || '未知')}</span>
-                            <span class="ab-detail">${esc(r.row.Labno || '')} | ${esc(r.row.TestSetDesc || '')}</span>
-                            <span class="ab-tag" style="background:#fff3e0;color:#e65100">?</span>
-                        </div>`
-    )
-    .join('')}
-                    </div>
-                </div>`;
-    }
-
-    dialog.innerHTML = `
-            <div id="lis-audit-box">
-                <div class="ab-hd">
-                    <h4>📋 批量审核确认</h4>
-                    <button class="ab-close" id="lis-ab-close">✕</button>
-                </div>
-                <div class="ab-body">
-                    <div class="ab-section">
-                        <h5><span class="ab-count" style="background:#27ae60">${normal.length}</span> 正常标本（将自动审核）</h5>
-                        <div class="ab-list">
-                            ${normal
-    .map(
-      r => `<div class="ab-item">
-                                <span class="ab-name">${esc(r.row.PatName || '未知')}</span>
-                                <span class="ab-detail">${esc(r.row.Labno || '')} | ${esc(r.row.TestSetDesc || '')}</span>
-                                <span class="ab-tag" style="background:#e8f5e9;color:#2e7d32">✓ 正常</span>
-                            </div>`
-    )
-    .join('')}
-                        </div>
-                    </div>
-                    ${abnormalHTML}
-                    ${uncertainHTML}
-                    <div class="ab-check">
-                        <input type="checkbox" id="lis-ab-check" />
-                        <label for="lis-ab-check">我确认以上 ${normal.length} 个正常标本的检验结果均适合自动审核</label>
-                    </div>
-                    <p style="margin:8px 0 0;font-size:12px;color:#0d6655"><kbd style="background:#e8f5e9;padding:1px 6px;border-radius:3px">F4</kbd> 勾选并确认审核 · Esc 取消</p>
-                </div>
-                <div class="ab-ft">
-                    <button class="ab-export" id="lis-ab-export">📥 导出审核清单</button>
-                    <button class="ab-cancel" id="lis-ab-cancel">取消</button>
-                    <button class="ab-confirm ok" id="lis-ab-confirm" disabled>✅ 确认审核 (${normal.length}) · F4</button>
-                </div>
-            </div>
-        `;
-
-    document.body.appendChild(dialog);
-    dialog.classList.add('show');
-
-    // 事件绑定
-    const confirmBtn = document.getElementById('lis-ab-confirm');
-    const checkBtn = document.getElementById('lis-ab-check');
-
-    checkBtn.addEventListener('change', () => {
-      confirmBtn.disabled = !checkBtn.checked;
-    });
-
-    let closed = false;
-    const cleanupAndRemove = () => {
-      if (closed) {return;}
-      closed = true;
-      document.removeEventListener('keydown', keyHandler, true);
-      dialog.remove();
-    };
-    const doConfirm = () => {
-      if (closed || normal.length === 0) {return;}
-      // F4：自动勾选确认，避免再点一次复选框
-      if (checkBtn && !checkBtn.checked) {
-        checkBtn.checked = true;
-        confirmBtn.disabled = false;
-      }
-      if (confirmBtn.disabled) {return;}
-      cleanupAndRemove();
-      executeBatchAudit(normal).catch(e => {
-        console.error('[LIS] 批审异常:', e);
-      });
-    };
-    const keyHandler = e => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        cleanupAndRemove();
-        return;
-      }
-      // 8.5.82: 焦点在任意按钮（取消/关闭/导出等）上时放行原生 Enter 激活——
-      // 否则键盘用户 Tab 到「取消」按 Enter 想取消，会被抢注为确认整批
-      const _onBtn = !!(e.target && e.target.closest && e.target.closest('button'));
-      if (e.key === 'F4' || (e.key === 'Enter' && !e.shiftKey && e.target !== checkBtn && !_onBtn)) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        doConfirm();
-      }
-    };
-    document.addEventListener('keydown', keyHandler, true);
-
-    document.getElementById('lis-ab-close').addEventListener('click', cleanupAndRemove);
-    document.getElementById('lis-ab-cancel').addEventListener('click', cleanupAndRemove);
-    dialog.addEventListener('click', e => {
-      if (e.target === dialog) {cleanupAndRemove();}
-    });
-
-    confirmBtn.addEventListener('click', () => {
-      if (confirmBtn.disabled) {return;}
-      cleanupAndRemove();
-      executeBatchAudit(normal).catch(e => {
-        console.error('[LIS] 批审异常:', e);
-      });
-    });
-
-    document.getElementById('lis-ab-export').addEventListener('click', () => {
-      exportAuditTrail(normal, abnormal, uncertain);
-    });
-  }
 
   // --- 按 ReportDR 在原生工作列表中选中行 ---
   function selectNativeRowByReportDR(iframeWin, reportDR, options = {}) {
@@ -24580,39 +24030,6 @@ window.addEventListener('keydown',function(e){
     toast(msg, typeMap[type] || type);
   }
 
-  // --- 键盘快捷键注册 ---
-  function registerAuditShortcuts() {
-    document.addEventListener('keydown', e => {
-      if (isPatientResultPanelEvent(e)) {return;}
-      // 8.5.34: 历史浮层打开时 Alt 快捷键全部让位（与 F4 桥/工作台 Enter 同款防隔层误触）
-      if (histIsOpen()) {return;}
-      // 忽略输入框中的按键
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {return;}
-      // 忽略如果对话框打开
-      if (document.getElementById('lis-audit-confirm')) {return;}
-
-      if (e.altKey && (e.key === 'a' || e.key === 'A')) {
-        e.preventDefault();
-        quickAuditCurrent();
-      } else if (e.altKey && (e.key === 'b' || e.key === 'B')) {
-        e.preventDefault();
-        showBatchAuditDialog();
-      } else if (e.altKey && (e.key === 'n' || e.key === 'N')) {
-        e.preventDefault();
-        advanceToNextSpecimen();
-      } else if (e.altKey && (e.key === 'p' || e.key === 'P')) {
-        e.preventDefault();
-        advanceToPrevSpecimen();
-      } else if (e.altKey && (e.key === 'r' || e.key === 'R')) {
-        e.preventDefault();
-        loadWSData();
-      } else if (e.altKey && (e.key === 'd' || e.key === 'D')) {
-        e.preventDefault();
-        showDebugPanel();
-      }
-    });
-  }
-
   // ============================================================
   //  模块 EMR：电子病历查看增强（跨网段支持 + 现代浏览器直接查看 + 内嵌弹窗/新标签页）
   // ============================================================
@@ -25396,7 +24813,6 @@ window.addEventListener('keydown',function(e){
       dbg('全局函数: ' + funcNames.join(', '));
     }
 
-    registerAuditShortcuts();
     scheduleNativeDetailGuardInstall();
     dbg('报告处理页增强已加载');
   }
