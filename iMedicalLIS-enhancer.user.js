@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.5
+// @version      8.15.6
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -888,8 +888,10 @@
 #lis-pr-body tr:hover{background:#fef3c7}
 #lis-pr-body .pr-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#7b8b96;font-size:13px;text-align:center;line-height:1.7}
 #lis-pr-body .pr-abn{color:#c62828;font-weight:700}
-#lis-pr-body .pr-low{color:#1565c0;font-weight:700}
-#lis-pr-body .pr-high{color:#e65100;font-weight:700}
+#lis-pr-body .pr-low{color:#1e3a8a;background:#dbeafe;font-weight:700}
+#lis-pr-body .pr-low.mild{color:#3b82f6;background:#f7faff;font-weight:700}
+#lis-pr-body .pr-high{color:#9a3412;background:#ffedd5;font-weight:700}
+#lis-pr-body .pr-high.mild{color:#ea580c;background:#fff7ed;font-weight:700}
 #lis-pr-body .pr-critical{color:#b71c1c;font-weight:800}
 .pr-col-diag{max-width:180px;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .pr-col-dept{max-width:120px;min-width:50px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
@@ -1036,8 +1038,10 @@
 .aal-abn-summary{display:flex;align-items:center;gap:5px;flex-wrap:wrap;flex:1}
 .aal-abn-chip-count{font-size:10px;font-weight:700;background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:3px;white-space:nowrap;line-height:1.3}
 #lis-auto-audit-log-box .aal-abn-item{display:inline-flex;align-items:center;gap:3px;padding:1.5px 6px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap}
-#lis-auto-audit-log-box .aal-abn-item.hi{background:#fff7ed;color:#c2410c;border-color:#ffedd5}
-#lis-auto-audit-log-box .aal-abn-item.lo{background:#eff6ff;color:#1d4ed8;border-color:#dbeafe}
+#lis-auto-audit-log-box .aal-abn-item.hi{background:#ffedd5;color:#9a3412;border-color:#f97316}
+#lis-auto-audit-log-box .aal-abn-item.hi.mild{background:#fff7ed;color:#ea580c;border:1px dashed #fb923c}
+#lis-auto-audit-log-box .aal-abn-item.lo{background:#dbeafe;color:#1e3a8a;border-color:#60a5fa}
+#lis-auto-audit-log-box .aal-abn-item.lo.mild{background:#f7faff;color:#3b82f6;border:1px dashed #60a5fa}
 #lis-auto-audit-log-box .aal-abn-item.abn{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
 #lis-auto-audit-log-box .aal-abn-item.cri{background:#fef2f2;color:#b91c1c;border-color:#fee2e2;font-weight:700}
 #lis-auto-audit-log-box .aal-abn-item.unc{background:var(--lis-bg);color:var(--lis-slate-500);border-color:var(--lis-border)}
@@ -1047,12 +1051,14 @@
 #lis-auto-audit-log-box .aal-exp2{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}
 #lis-auto-audit-log-box .aal-exp2 td{padding:2px 6px;border-bottom:1px solid var(--lis-surface-subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #lis-auto-audit-log-box .aal-exp2 td.n{color:var(--lis-text-secondary);width:26%}
-#lis-auto-audit-log-box .aal-exp2 td.v{font-weight:700;color:var(--lis-text)}
+#lis-auto-audit-log-box .aal-exp2 td.v{font-weight:700;color:var(--lis-text);border-left:2px solid transparent}
 #lis-auto-audit-log-box .aal-exp2 td.v .r{font-weight:400;font-size:10px;color:var(--lis-text-muted)}
 #lis-auto-audit-log-box .aal-exp2 td.v + td.n{border-left:1px dashed var(--lis-border)}
 #lis-auto-audit-log-box .aal-exp2 td.v.cri{color:#b91c1c;background:#fef2f2}
-#lis-auto-audit-log-box .aal-exp2 td.v.hi{color:#c2410c;background:#fff7ed}
-#lis-auto-audit-log-box .aal-exp2 td.v.lo{color:#1d4ed8;background:#eff6ff}
+#lis-auto-audit-log-box .aal-exp2 td.v.hi{color:#9a3412;background:#ffedd5}
+#lis-auto-audit-log-box .aal-exp2 td.v.hi.mild{color:#ea580c;background:#fff7ed;border-left:2px dashed #fb923c}
+#lis-auto-audit-log-box .aal-exp2 td.v.lo{color:#1e3a8a;background:#dbeafe}
+#lis-auto-audit-log-box .aal-exp2 td.v.lo.mild{color:#3b82f6;background:#f7faff;border-left:2px dashed #60a5fa}
 #lis-auto-audit-log-box .aal-exp2 td.v.abn{color:#be185d;background:#fdf2f8}
 #lis-auto-audit-log-box .aal-exp2 td.v.unc{color:var(--lis-slate-500);background:var(--lis-bg);font-weight:600}
 #lis-auto-audit-log-box .aal-exp2 td.v.zero{color:#b45309;background:#fffbeb}
@@ -1221,8 +1227,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ab-card-items{display:flex;flex-wrap:wrap;gap:2px 3px;margin-top:1px}
 .ab-card-item{padding:0 4px;border-radius:3px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid transparent;line-height:1.55}
 .ab-card-item.critical{background:#fee2e2;color:#b91c1c;border-color:#fecaca;font-weight:700}
-.ab-card-item.high{background:#fff7ed;color:#c2410c;border-color:#fed7aa}
-.ab-card-item.low{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}
+.ab-card-item.high{background:#ffedd5;color:#9a3412;border-color:#f97316}
+.ab-card-item.high.mild{background:#fff7ed;color:#ea580c;border:1px dashed #fb923c}
+.ab-card-item.low{background:#dbeafe;color:#1e3a8a;border-color:#60a5fa}
+.ab-card-item.low.mild{background:#f7faff;color:#3b82f6;border:1px dashed #60a5fa}
 .ab-card-item.abnormal{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
 .ab-card-item.zero{background:#fffbeb;color:#b45309;border-color:#fde68a}
 .ab-card-item.infection-warning{background:#fff7ed;color:#c2410c;border-color:#fed7aa;font-weight:700}
@@ -1446,8 +1454,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table tr:hover{background:rgba(241,245,249,.6)}
 .result-table .abnormal, .result-table td.abnormal{color:#c62828!important;font-weight:700}
 .result-table .abnormal.critical, .result-table td.abnormal.critical{color:#b91c1c!important;font-weight:800;font-size:14px;text-shadow:0 0 1px rgba(185,28,28,.25)}
-.result-table .abnormal.high, .result-table td.abnormal.high{color:#e65100!important;font-weight:700}
-.result-table .abnormal.low, .result-table td.abnormal.low{color:#2563eb!important;font-weight:700}
+.result-table .abnormal.high, .result-table td.abnormal.high{color:#9a3412!important;background:#ffedd5;font-weight:700}
+.result-table .abnormal.high.mild, .result-table td.abnormal.high.mild{color:#ea580c!important;background:#fff7ed;font-weight:700}
+.result-table .abnormal.low, .result-table td.abnormal.low{color:#1e3a8a!important;background:#dbeafe;font-weight:700}
+.result-table .abnormal.low.mild, .result-table td.abnormal.low.mild{color:#3b82f6!important;background:#f7faff;font-weight:700}
 .result-table .normal, .result-table td.normal{color:#16a34a!important}
 .result-table .history{background:#f8f9fa}
 .result-table .hist-tag{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:3px;font-size:11px;white-space:nowrap;line-height:1.4}
@@ -4083,7 +4093,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                       <tbody>
                         ${g.items
                           .map((item, itemIdx) => {
-                            const itemCls =
+                            let itemCls =
                               item.status === 'CRITICAL'
                                 ? 'pr-critical'
                                 : item.status === 'HIGH'
@@ -4093,6 +4103,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                                     : item.status === 'ABNORMAL'
                                       ? 'pr-abn'
                                       : '';
+                            // 8.15.6: 高/低再分两档——在轻微放行带内＝浅色（可 F4 批审），超带/未配规则＝深色。
+                            // 导出模块自带取数、没有分类缓存，按项目现算；判不出（缺参考范围等）一律按不可批审显示。
+                            if (itemCls === 'pr-high' || itemCls === 'pr-low') {
+                              const _mvIt = mildItemFromRaw(item, item.status, item.result);
+                              if (mildItemVerdict(_mvIt, null, mildSexOf({row: {Sex: item.sex}})) === 'pass') {
+                                itemCls += ' mild';
+                              }
+                            }
                             return `<tr>
                             <td>${esc(item.itemName)}</td>
                             <td>${esc(item.itemSynonym || item.testCodeDR)}</td>
@@ -4169,7 +4187,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
               <tbody>`;
 
       pageRows.forEach((r, rIdx) => {
-        const cls =
+        let cls =
           r.status === 'CRITICAL'
             ? 'pr-critical'
             : r.status === 'HIGH'
@@ -4179,6 +4197,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                 : r.status === 'ABNORMAL'
                   ? 'pr-abn'
                   : '';
+        // 8.15.6: 高/低再分两档（同上方明细表口径，按项目现算）
+        if (cls === 'pr-high' || cls === 'pr-low') {
+          const _mvIt = mildItemFromRaw(r, r.status, r.result);
+          if (mildItemVerdict(_mvIt, null, mildSexOf({row: {Sex: r.sex}})) === 'pass') {
+            cls += ' mild';
+          }
+        }
         h += `<tr>
                 <td>
                   <strong>${esc(r.patient)}</strong>
@@ -12071,11 +12096,15 @@ window.addEventListener('keydown',function(e){
       visibleItems.forEach(it => {
         let cls = 'uncertain';
         const st = it.status || '';
+        // 8.15.6: 高/低再分两档——在轻微放行带内＝浅色+虚线边（F4 可批审），超带/未配规则/判不出＝深色（不可批审）。
+        // 判定复用审核期已算好的结果（mildItemVerdict），保证颜色与 F4 实际放行口径一致。
+        let _mv = '';
         if (st === 'CRITICAL') {cls = 'critical';}
-        else if (st === 'HIGH') {cls = 'high';}
-        else if (st === 'LOW') {cls = 'low';}
+        else if (st === 'HIGH') {cls = 'high'; _mv = mildItemVerdict(it, cached);}
+        else if (st === 'LOW') {cls = 'low'; _mv = mildItemVerdict(it, cached);}
         else if (st === 'ABNORMAL') {cls = 'abnormal';}
         else if (st === 'ZERO') {cls = 'zero';}
+        if (_mv === 'pass') {cls += ' mild';}
         if (
           st === 'ABNORMAL' &&
           isX8InfectionPanel(r) &&
@@ -12090,7 +12119,9 @@ window.addEventListener('keydown',function(e){
         const dirMark = st === 'HIGH' ? '↑' : st === 'LOW' ? '↓' : '';
         const abbrName = aaPushItemAbbr(it.name);
         const chipText = prefix + abbrName + ' ' + it.result + (it.unit || '') + dirMark;
-        h += `<span class="ab-card-item ${cls}" title="${escAttr(it.name + ' ' + it.result + (it.unit || '') + (dirMark ? '（' + (st === 'HIGH' ? '偏高' : '偏低') + '）' : ''))}">${esc(chipText)}</span>`;
+        // 悬停解释浅/深含义，避免现场误读「浅色＝不重要」
+        const _mvHint = _mv === 'pass' ? '（轻微带内，F4 可批审）' : (_mv === 'block' ? '（超出轻微带，需人工）' : '');
+        h += `<span class="ab-card-item ${cls}" title="${escAttr(it.name + ' ' + it.result + (it.unit || '') + (dirMark ? '（' + (st === 'HIGH' ? '偏高' : '偏低') + '）' : '') + _mvHint)}">${esc(chipText)}</span>`;
       });
       if (hiddenMinor.length > 0) {
         const hiddenText = hiddenMinor
@@ -14812,6 +14843,8 @@ window.addEventListener('keydown',function(e){
         .map(d => (d ? `<th style="font-size:11px">${esc(d)}</th>` : '<th style="font-size:11px">-</th>'))
         .join('');
 
+      // 8.15.6: 本标本的分类缓存（供「轻微带内＝浅色」判定；拿不到时退化为按项目现算）
+      const _liveForMild = getLiveClassification(specimen && (specimen.ReportDR || specimen.reportDR));
       for (let _ci = 0; _ci < _detailCols; _ci++) {
         const _colItems = itemInfo.slice(_ci * _detailColSize, Math.min((_ci + 1) * _detailColSize, itemInfo.length));
         html += `<table class="result-table${_detailCols > 1 ? ' compact' : ''}" style="font-size:12px;flex:1;min-width:0">`;
@@ -14887,12 +14920,12 @@ window.addEventListener('keydown',function(e){
           statusColor = '#b91c1c';
         } else if (statusText.includes('高')) {
           statusClass = 'abnormal high';
-          resColor = '#e65100';
-          statusColor = '#e65100';
+          resColor = '#9a3412';
+          statusColor = '#9a3412';
         } else if (statusText.includes('低')) {
           statusClass = 'abnormal low';
-          resColor = '#2563eb';
-          statusColor = '#2563eb';
+          resColor = '#1e3a8a';
+          statusColor = '#1e3a8a';
         } else if (isAbnormal) {
           statusClass = 'abnormal';
           resColor = '#c62828';
@@ -14905,6 +14938,16 @@ window.addEventListener('keydown',function(e){
           statusClass = 'normal';
           resColor = '#16a34a';
           statusColor = '#16a34a';
+        }
+        // 8.15.6: 高/低再分两档——在轻微放行带内＝浅色（F4 可批审），超带/未配规则/判不出＝深色
+        if (statusClass === 'abnormal high' || statusClass === 'abnormal low') {
+          const _isHi = statusClass === 'abnormal high';
+          const _mvIt = mildItemFromRaw(r, itemStatus, result);
+          if (mildItemVerdict(_mvIt, _liveForMild) === 'pass') {
+            statusClass += ' mild';
+            resColor = _isHi ? '#ea580c' : '#3b82f6';
+            statusColor = resColor;
+          }
         }
 
         // x8 传染病面板：梅毒/丙肝/HIV 阳性统一高亮（区别于乙肝两对半）
@@ -19989,6 +20032,63 @@ window.addEventListener('keydown',function(e){
     } catch (e) {dbg('轻微异常留痕写入失败:', e);}
   }
 
+  // 8.15.6: 展示用——单个异常项能否落入轻微放行带（决定结果 chip 的浅/深 + 虚线边）。
+  // 设计要点：**优先复用审核期已经算好的结果**（_evaluateMildAbnormal 的 evalItems 已逐项给出 ok），
+  // 保证「屏幕上看到的颜色」与「F4 实际批审判定」永远一致，不会出现显示说能放行、实际被拦下的分裂。
+  // 只有审核结果里没有的项（_evaluateMildAbnormal 命中首个失败项即 return，其后项被截断）才补算并写回记忆。
+  // 记忆挂在分类对象上、以 _classifyVersion 失效，渲染高频调用零重复开销。
+  // 返回 'pass'（带内＝可批审）| 'block'（超带/无规则/定性异常＝不可批审）| ''（非高低项，不适用）
+  function _mildItemKey(e) {
+    return String((e && (e.name || e.CName)) || '') + '\u0001'
+      + String((e && e.result) || '') + '\u0001'
+      + String((e && e.status) || '');
+  }
+  function mildItemVerdict(it, live, sex) {
+    if (!it) {return '';}
+    const st = String(it.status || '');
+    if (st !== 'HIGH' && st !== 'LOW') {return '';}   // 定性异常/待定/堵孔仍用各自的既有配色
+    if (!MILD_ALLOW_ENABLED) {return 'block';}         // 紧急停用轻微放行 → 一律按不可批审显示
+    if (live) {
+      if (!live._mildItemMap || live._mildItemMapVer !== _classifyVersion) {
+        const map = new Map();
+        const ev = live._mildEval;
+        if (ev && Array.isArray(ev.items)) {
+          for (const e of ev.items) {map.set(_mildItemKey(e), !!e.ok);}
+        }
+        live._mildItemMap = map;
+        live._mildItemMapVer = _classifyVersion;
+      }
+      const k = _mildItemKey({name: it.CName || it.name, result: it.result, status: st});
+      if (live._mildItemMap.has(k)) {return live._mildItemMap.get(k) ? 'pass' : 'block';}
+      let ok = false;
+      try {ok = !!(mildAllowItem(it, sex || mildSexOf(live)) || {}).ok;} catch (e) {ok = false;}
+      live._mildItemMap.set(k, ok);
+      return ok ? 'pass' : 'block';
+    }
+    // 无分类缓存（如病人结果导出模块自带取数）：按项目现算。判不出（缺参考范围等）一律 block，方向保守。
+    try {return ((mildAllowItem(it, sex || '') || {}).ok) ? 'pass' : 'block';} catch (e) {return 'block';}
+  }
+
+  // 8.15.6: 把「原始 LIS 条目 + 已算出的状态/结果文本」适配成 mildAllowItem 需要的形状。
+  // 结果表格与病人结果导出模块的条目字段名（CName/RefRanges 之外还有 itemName/refRange 等）与
+  // 分类对象不同，不能直接把 raw 传进去；preResult 指回 raw 以复用其结构化上下限 ValueLow/ValueHigh。
+  function mildItemFromRaw(raw, status, result) {
+    const nm = raw.CName || raw.Name || raw.itemName || raw.name || '';
+    const ref = raw.RefRanges || raw.RefRange || raw.ReferenceRange || raw.refRange || '';
+    return {
+      CName: nm,
+      name: nm,
+      Synonym: raw.Synonym || raw.itemSynonym || '',
+      Code: raw.Code || raw.TestCodeDR || raw.testCodeDR || '',
+      result: String(result === undefined || result === null ? '' : result),
+      status: status,
+      RefRanges: ref,
+      // preResult 指回 raw 以复用其结构化上下限 ValueLow/ValueHigh；导出模块的条目只有清洗后的
+      // refRange 文本，故把归一化后的参考范围一并挂上，避免 _rngSrc 取不到范围而恒判「不可批审」
+      preResult: Object.assign({}, raw, {RefRanges: ref})
+    };
+  }
+
   // --- 获取标本详情并分类 ---
   async function fetchAndClassifySpecimen(row) {
     const reportDR = row.ReportDR || row.TodoReportDR || '';
@@ -23369,12 +23469,15 @@ window.addEventListener('keydown',function(e){
     const rr = (live && live.row) || row || findWSSpecimenByReportDR(reportDR);
     if (rr && rr.TestSetDesc) {test = String(rr.TestSetDesc) || '';}
     if (live && live.items) {
+      // 8.15.6: m=1 表示该项在轻微放行带内（F4 可批审）——在记录时就算好存进日志快照。
+      // 日志渲染时拿不到原始 item（preResult/RefRanges 等），事后无法重算，所以必须此刻定。
       items = (live.items || []).slice(0, 60).map(it => ({
         n: it.name || '',
         r: String(it.result !== undefined && it.result !== null ? it.result : ''),
         u: it.unit || '',
         f: it.refRange || it.RefRanges || it.RefRange || '',
-        s: it.status || ''
+        s: it.status || '',
+        m: mildItemVerdict(it, live) === 'pass' ? 1 : 0
       }));
       // 8.5.81: 异常项保留 status，记录查看器摘要标签可按 高/低/异常/危急 细分配色；8.10.7: 包含参考范围 f
       abn = (live.items || [])
@@ -23385,7 +23488,8 @@ window.addEventListener('keydown',function(e){
           r: String(it.result !== undefined && it.result !== null ? it.result : ''),
           u: it.unit || '',
           f: it.refRange || it.RefRanges || it.RefRange || '',
-          s: it.status || ''
+          s: it.status || '',
+          m: mildItemVerdict(it, live) === 'pass' ? 1 : 0
         }));
     }
     return { test, abn, items };
@@ -24352,7 +24456,9 @@ window.addEventListener('keydown',function(e){
       const pairHTML = it => {
         if (!it) {return '<td class="n"></td><td class="v"></td>';}
         const st = it.s || it.status || '';
-        const cls = _stCls[st] || '';
+        let cls = _stCls[st] || '';
+        // 8.15.6: m=1＝记录时判定该项在轻微放行带内 → 加 mild 修饰类（浅色 + 虚线边）
+        if (it.m === 1 && (st === 'HIGH' || st === 'LOW')) {cls += ' mild';}
         const pre = _stPre[st] ? _stPre[st] + ' ' : '';
         const rv = it.r !== undefined ? it.r : (it.result !== undefined && it.result !== null ? it.result : '');
         const name = it.n || it.name || '';
@@ -24420,6 +24526,8 @@ window.addEventListener('keydown',function(e){
           else if (st === 'ABNORMAL') {cls = 'aal-abn-item abn'; pre = '⚠';}
           else if (st === 'UNCERTAIN') {cls = 'aal-abn-item unc'; pre = '?';}
           else if (st === 'ZERO') {cls = 'aal-abn-item zero'; pre = '0:';}
+          // 8.15.6: m=1＝记录时判定在轻微放行带内 → 浅色 + 虚线边（F4 可批审）
+          if (x.m === 1 && (st === 'HIGH' || st === 'LOW')) {cls += ' mild';}
           const text = (x.n || '') + ' ' + String(x.r || '') + (x.u ? ' ' + x.u : '');
           return '<span class="' + cls + '">' + (pre ? pre + ' ' : '') + esc(text) + '</span>';
         }).join('');
