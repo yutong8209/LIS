@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.7
+// @version      8.15.8
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1190,7 +1190,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-audit-summary{font-size:12px;font-weight:600;color:var(--lis-text);display:flex;align-items:center;gap:6px;white-space:nowrap}
 .ws-audit-sep{color:var(--lis-border-strong)}
 .ws-audit-critical{color:var(--lis-critical);font-weight:700}
-.ws-audit-mild{color:var(--lis-primary);font-weight:700}
+.ws-audit-mild{color:#047857;font-weight:700}
 .nb-btn{padding:5px 12px;border:none;border-radius:6px;background:linear-gradient(135deg,#059669,#0d9488);color:#fff;font-size:11.5px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;box-shadow:0 1px 2px rgba(5,150,105,.25);display:inline-flex;align-items:center;gap:4px}
 .nb-btn:hover{filter:brightness(1.08);transform:translateY(-0.5px)}
 .nb-btn:active{transform:translateY(0);filter:brightness(.95)}
@@ -1200,26 +1200,26 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 /* 标本队列卡片流 */
 .ws-abnormal-list{flex:1;min-height:0;overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:4px}
 .ws-abnormal-machine{position:sticky;top:0;z-index:4;background:rgba(248,250,252,.94);backdrop-filter:blur(4px);border:1px solid var(--lis-border);border-radius:5px;padding:3px 8px;font-size:10.5px;font-weight:700;color:var(--lis-text-secondary);margin:4px 0 2px}
-.ws-abnormal-card{background:var(--lis-surface);border:1px solid var(--lis-border);border-left:3px solid #f59e0b;border-radius:7px;padding:4px 8px;cursor:pointer;transition:all .12s ease;display:flex;flex-direction:column;gap:2px;box-shadow:0 1px 2px rgba(0,0,0,.02);position:relative}
-.ws-abnormal-card:hover{border-color:#93c5fd;box-shadow:0 2px 6px rgba(37,99,235,.06)}
-.ws-abnormal-card.focused{border-color:#3b82f6!important;background:#eff6ff!important;box-shadow:0 0 0 2px rgba(59,130,246,.2)!important}
+.ws-abnormal-card{background:var(--lis-surface);border:1px solid var(--lis-border);border-left:3px solid #cbd5e1;border-radius:7px;padding:4px 8px;cursor:pointer;transition:all .12s ease;display:flex;flex-direction:column;gap:2px;box-shadow:0 1px 2px rgba(0,0,0,.02);position:relative}
+.ws-abnormal-card:hover{border-color:#cbd5e1;box-shadow:0 2px 6px rgba(15,23,42,.06)}
+.ws-abnormal-card.focused{border-color:#94a3b8!important;background:#f8fafc!important;box-shadow:0 0 0 2px rgba(148,163,184,.25)!important}
 .ws-abnormal-card.has-critical{border-left-color:#dc2626;background:#fffdfd}
 .ws-abnormal-card.has-critical.focused{border-left-color:#dc2626;background:#fef2f2!important;box-shadow:0 0 0 2px rgba(220,38,38,.2)!important}
 .ws-abnormal-card.has-zero{border-left-color:#d97706;background:#fffdfa}
 .ws-abnormal-card.has-infection-warning{border-left-color:#f59e0b;background:#fffbeb}
-.ws-abnormal-card.is-normal{background:rgba(240,253,244,.5);border:1px solid rgba(167,243,208,.6);border-left:3px solid #10b981;padding:3px 8px;flex-direction:row;align-items:center;gap:8px}
-.ws-abnormal-card.is-normal.focused{border-color:#10b981!important;background:#ecfdf5!important;box-shadow:0 0 0 2px rgba(16,185,129,.2)!important}
+.ws-abnormal-card.is-normal{background:#fbfefc;border:1px solid #e0f7ea;border-left:3px solid #34d399;padding:3px 8px;flex-direction:row;align-items:center;gap:8px}
+.ws-abnormal-card.is-normal.focused{border-color:#34d399!important;background:#f2fdf7!important;box-shadow:0 0 0 2px rgba(52,211,153,.3)!important}
 /* 8.14.0: 待审卡片四色分层——危急红/超带橙/轻微可批蓝/正常绿(is-normal)。
    cls-* 置于 has-* 之后，同类冲突时以分层色为准；focused 变体保留本类色相保证聚焦时不「变色盲」 */
 .ws-abnormal-card.cls-critical{border-left-color:#dc2626;background:#fef2f2}
 .ws-abnormal-card.cls-critical.focused{border-color:#dc2626!important;background:#fef2f2!important;box-shadow:0 0 0 2px rgba(220,38,38,.2)!important}
-.ws-abnormal-card.cls-beyond{border-left-color:#f59e0b;background:#fffbeb}
-.ws-abnormal-card.cls-beyond.focused{border-color:#f59e0b!important;background:#fffbeb!important;box-shadow:0 0 0 2px rgba(245,158,11,.25)!important}
-.ws-abnormal-card.cls-mild{border-left-color:#2563eb;background:#f0f6ff}
-.ws-abnormal-card.cls-mild.focused{border-color:#2563eb!important;background:#eff6ff!important;box-shadow:0 0 0 2px rgba(37,99,235,.2)!important}
-.ab-card-badge.mild{color:#2563eb}
+.ws-abnormal-card.cls-beyond{border-left-color:#5b21b6;background:#f5f3ff}
+.ws-abnormal-card.cls-beyond.focused{border-color:#5b21b6!important;background:#f5f3ff!important;box-shadow:0 0 0 2px rgba(91,33,182,.22)!important}
+.ws-abnormal-card.cls-mild{border-left-color:#047857;background:#ecfdf5}
+.ws-abnormal-card.cls-mild.focused{border-color:#047857!important;background:#ecfdf5!important;box-shadow:0 0 0 2px rgba(4,120,87,.22)!important}
+.ab-card-badge.mild{color:#047857}
 .ws-audit-normal{color:#059669}
-.ws-audit-beyond{color:#d97706}
+.ws-audit-beyond{color:#5b21b6}
 .ab-card-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .ab-card-name{font-size:13px;font-weight:700;color:var(--lis-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
 .ab-card-no{font-family:ui-monospace,monospace;font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
