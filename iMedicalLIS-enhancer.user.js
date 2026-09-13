@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.6
+// @version      8.15.7
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -889,9 +889,9 @@
 #lis-pr-body .pr-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#7b8b96;font-size:13px;text-align:center;line-height:1.7}
 #lis-pr-body .pr-abn{color:#c62828;font-weight:700}
 #lis-pr-body .pr-low{color:#1e3a8a;background:#dbeafe;font-weight:700}
-#lis-pr-body .pr-low.mild{color:#3b82f6;background:#f7faff;font-weight:700}
+#lis-pr-body .pr-low.mild{color:#1d4ed8;background:#f7faff;font-weight:700}
 #lis-pr-body .pr-high{color:#9a3412;background:#ffedd5;font-weight:700}
-#lis-pr-body .pr-high.mild{color:#ea580c;background:#fff7ed;font-weight:700}
+#lis-pr-body .pr-high.mild{color:#c2410c;background:#fff7ed;font-weight:700}
 #lis-pr-body .pr-critical{color:#b71c1c;font-weight:800}
 .pr-col-diag{max-width:180px;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .pr-col-dept{max-width:120px;min-width:50px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
@@ -1039,9 +1039,9 @@
 .aal-abn-chip-count{font-size:10px;font-weight:700;background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:3px;white-space:nowrap;line-height:1.3}
 #lis-auto-audit-log-box .aal-abn-item{display:inline-flex;align-items:center;gap:3px;padding:1.5px 6px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap}
 #lis-auto-audit-log-box .aal-abn-item.hi{background:#ffedd5;color:#9a3412;border-color:#f97316}
-#lis-auto-audit-log-box .aal-abn-item.hi.mild{background:#fff7ed;color:#ea580c;border:1px dashed #fb923c}
+#lis-auto-audit-log-box .aal-abn-item.hi.mild{background:#fff7ed;color:#c2410c;border:1px dashed #fb923c}
 #lis-auto-audit-log-box .aal-abn-item.lo{background:#dbeafe;color:#1e3a8a;border-color:#60a5fa}
-#lis-auto-audit-log-box .aal-abn-item.lo.mild{background:#f7faff;color:#3b82f6;border:1px dashed #60a5fa}
+#lis-auto-audit-log-box .aal-abn-item.lo.mild{background:#f7faff;color:#1d4ed8;border:1px dashed #60a5fa}
 #lis-auto-audit-log-box .aal-abn-item.abn{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
 #lis-auto-audit-log-box .aal-abn-item.cri{background:#fef2f2;color:#b91c1c;border-color:#fee2e2;font-weight:700}
 #lis-auto-audit-log-box .aal-abn-item.unc{background:var(--lis-bg);color:var(--lis-slate-500);border-color:var(--lis-border)}
@@ -1056,9 +1056,9 @@
 #lis-auto-audit-log-box .aal-exp2 td.v + td.n{border-left:1px dashed var(--lis-border)}
 #lis-auto-audit-log-box .aal-exp2 td.v.cri{color:#b91c1c;background:#fef2f2}
 #lis-auto-audit-log-box .aal-exp2 td.v.hi{color:#9a3412;background:#ffedd5}
-#lis-auto-audit-log-box .aal-exp2 td.v.hi.mild{color:#ea580c;background:#fff7ed;border-left:2px dashed #fb923c}
+#lis-auto-audit-log-box .aal-exp2 td.v.hi.mild{color:#c2410c;background:#fff7ed;border-left:2px dashed #fb923c}
 #lis-auto-audit-log-box .aal-exp2 td.v.lo{color:#1e3a8a;background:#dbeafe}
-#lis-auto-audit-log-box .aal-exp2 td.v.lo.mild{color:#3b82f6;background:#f7faff;border-left:2px dashed #60a5fa}
+#lis-auto-audit-log-box .aal-exp2 td.v.lo.mild{color:#1d4ed8;background:#f7faff;border-left:2px dashed #60a5fa}
 #lis-auto-audit-log-box .aal-exp2 td.v.abn{color:#be185d;background:#fdf2f8}
 #lis-auto-audit-log-box .aal-exp2 td.v.unc{color:var(--lis-slate-500);background:var(--lis-bg);font-weight:600}
 #lis-auto-audit-log-box .aal-exp2 td.v.zero{color:#b45309;background:#fffbeb}
@@ -1228,9 +1228,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ab-card-item{padding:0 4px;border-radius:3px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid transparent;line-height:1.55}
 .ab-card-item.critical{background:#fee2e2;color:#b91c1c;border-color:#fecaca;font-weight:700}
 .ab-card-item.high{background:#ffedd5;color:#9a3412;border-color:#f97316}
-.ab-card-item.high.mild{background:#fff7ed;color:#ea580c;border:1px dashed #fb923c}
+.ab-card-item.high.mild{background:#fff7ed;color:#c2410c;border:1px dashed #fb923c}
 .ab-card-item.low{background:#dbeafe;color:#1e3a8a;border-color:#60a5fa}
-.ab-card-item.low.mild{background:#f7faff;color:#3b82f6;border:1px dashed #60a5fa}
+.ab-card-item.low.mild{background:#f7faff;color:#1d4ed8;border:1px dashed #60a5fa}
 .ab-card-item.abnormal{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
 .ab-card-item.zero{background:#fffbeb;color:#b45309;border-color:#fde68a}
 .ab-card-item.infection-warning{background:#fff7ed;color:#c2410c;border-color:#fed7aa;font-weight:700}
@@ -1455,9 +1455,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table .abnormal, .result-table td.abnormal{color:#c62828!important;font-weight:700}
 .result-table .abnormal.critical, .result-table td.abnormal.critical{color:#b91c1c!important;font-weight:800;font-size:14px;text-shadow:0 0 1px rgba(185,28,28,.25)}
 .result-table .abnormal.high, .result-table td.abnormal.high{color:#9a3412!important;background:#ffedd5;font-weight:700}
-.result-table .abnormal.high.mild, .result-table td.abnormal.high.mild{color:#ea580c!important;background:#fff7ed;font-weight:700}
 .result-table .abnormal.low, .result-table td.abnormal.low{color:#1e3a8a!important;background:#dbeafe;font-weight:700}
-.result-table .abnormal.low.mild, .result-table td.abnormal.low.mild{color:#3b82f6!important;background:#f7faff;font-weight:700}
+.result-table td.abnormal.high, .result-table td.abnormal.low{border-left:3px solid transparent}
+.result-table .abnormal.high.mild, .result-table td.abnormal.high.mild{color:#c2410c!important;background:#fff7ed;border-left:3px dashed #fb923c;font-weight:700}
+.result-table .abnormal.low.mild, .result-table td.abnormal.low.mild{color:#1d4ed8!important;background:#f7faff;border-left:3px dashed #60a5fa;font-weight:700}
 .result-table .normal, .result-table td.normal{color:#16a34a!important}
 .result-table .history{background:#f8f9fa}
 .result-table .hist-tag{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:3px;font-size:11px;white-space:nowrap;line-height:1.4}
@@ -14945,7 +14946,7 @@ window.addEventListener('keydown',function(e){
           const _mvIt = mildItemFromRaw(r, itemStatus, result);
           if (mildItemVerdict(_mvIt, _liveForMild) === 'pass') {
             statusClass += ' mild';
-            resColor = _isHi ? '#ea580c' : '#3b82f6';
+            resColor = _isHi ? '#c2410c' : '#1d4ed8';
             statusColor = resColor;
           }
         }
