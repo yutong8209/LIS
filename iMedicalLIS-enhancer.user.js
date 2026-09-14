@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.13
+// @version      8.15.14
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1070,9 +1070,9 @@
 #lis-auto-audit-log-box .aal-exp2 td.v + td.n{border-left:1px dashed var(--lis-border)}
 #lis-auto-audit-log-box .aal-exp2 td.v.cri{color:#b91c1c;background:#fef2f2}
 #lis-auto-audit-log-box .aal-exp2 td.v.hi{color:#9a3412;background:#ffedd5}
-#lis-auto-audit-log-box .aal-exp2 td.v.hi.mild{color:#c2410c;background:#fff7ed;border-left:2px dashed #fb923c}
+#lis-auto-audit-log-box .aal-exp2 td.v.hi.mild{color:#c2410c;background:#fff7ed;border-left:2px solid #fb923c}
 #lis-auto-audit-log-box .aal-exp2 td.v.lo{color:#1e3a8a;background:#dbeafe}
-#lis-auto-audit-log-box .aal-exp2 td.v.lo.mild{color:#1d4ed8;background:#f7faff;border-left:2px dashed #60a5fa}
+#lis-auto-audit-log-box .aal-exp2 td.v.lo.mild{color:#1d4ed8;background:#f7faff;border-left:2px solid #60a5fa}
 #lis-auto-audit-log-box .aal-exp2 td.v.abn{color:#be185d;background:#fdf2f8}
 #lis-auto-audit-log-box .aal-exp2 td.v.unc{color:var(--lis-slate-500);background:var(--lis-bg);font-weight:600}
 #lis-auto-audit-log-box .aal-exp2 td.v.zero{color:#b45309;background:#fffbeb}
@@ -1474,8 +1474,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table .abnormal.high, .result-table td.abnormal.high{color:#9a3412!important;background:#ffedd5;font-weight:700}
 .result-table .abnormal.low, .result-table td.abnormal.low{color:#1e3a8a!important;background:#dbeafe;font-weight:700}
 .result-table td.abnormal.high, .result-table td.abnormal.low{border-left:3px solid transparent}
-.result-table .abnormal.high.mild, .result-table td.abnormal.high.mild{color:#c2410c!important;background:#fff7ed;border-left:3px dashed #fb923c;font-weight:700}
-.result-table .abnormal.low.mild, .result-table td.abnormal.low.mild{color:#1d4ed8!important;background:#f7faff;border-left:3px dashed #60a5fa;font-weight:700}
+.result-table .abnormal.high.mild, .result-table td.abnormal.high.mild{color:#c2410c!important;background:#fff7ed;border-left:3px solid #fb923c;font-weight:700}
+.result-table .abnormal.low.mild, .result-table td.abnormal.low.mild{color:#1d4ed8!important;background:#f7faff;border-left:3px solid #60a5fa;font-weight:700}
 .result-table .normal, .result-table td.normal{color:#16a34a!important}
 .result-table .history{background:#f8f9fa}
 .result-table .hist-tag{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:3px;font-size:11px;white-space:nowrap;line-height:1.4}
@@ -15047,6 +15047,7 @@ window.addEventListener('keydown',function(e){
           ' data-syn="' + escAttr(r.Synonym || r.Code || '') + '"' +
           ' data-code="' + escAttr(r.TestCodeDR || r.TCCode || '') + '"' +
           ' data-res="' + escAttr(String(result)) + '"' +
+          ' data-unit="' + escAttr(String(r.Unit || r.Units || '')) + '"' +
           ' data-ref="' + escAttr(r.RefRanges || r.RefRange || r.ReferenceRange || '') + '"' +
           ' data-vlow="' + escAttr(String(r.ValueLow || r.LowValue || r.RefLow || '')) + '"' +
           ' data-vhigh="' + escAttr(String(r.ValueHigh || r.HighValue || r.RefHigh || '')) + '"' +
@@ -16430,6 +16431,7 @@ window.addEventListener('keydown',function(e){
 #lis-mild-dlg .lm-lb{font-size:12px;color:var(--lis-text);min-width:88px}
 /* 8.15.12: 80px 放不下占位符「留空＝不放行」（6 个汉字约 72px + 内边距/边框），被截成「留空＝不」，加宽到 108px */
 #lis-mild-dlg .lm-in{width:108px;height:26px;border:1px solid var(--lis-border-strong);border-radius:4px;padding:0 6px;font-size:12px;color:var(--lis-text);background:var(--lis-surface)}
+#lis-mild-dlg .lm-unit{font-size:11px;color:var(--lis-text-secondary);white-space:nowrap}
 #lis-mild-dlg .lm-pv{font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
 #lis-mild-dlg .lm-pv.on{color:#047857;font-weight:700}
 #lis-mild-dlg .lm-chk{display:block;font-size:12px;color:var(--lis-text);margin:8px 0 4px;cursor:pointer}
@@ -20040,6 +20042,7 @@ window.addEventListener('keydown',function(e){
       Synonym: btn.getAttribute('data-syn') || '',
       Code: btn.getAttribute('data-code') || '',
       RefRanges: btn.getAttribute('data-ref') || '',
+      unit: btn.getAttribute('data-unit') || '',
       ValueLow: btn.getAttribute('data-vlow') || '',
       ValueHigh: btn.getAttribute('data-vhigh') || ''
     }, 'NORMAL', btn.getAttribute('data-res') || '');
@@ -20080,6 +20083,13 @@ window.addEventListener('keydown',function(e){
     catch (e) {dbg('放行范围变更后刷新列表异常:', e);}
   }
 
+  // 8.15.9 起：详情抽屉/右栏检视器结果表项目名后的 ⚙ —— 轻微放行范围设置。
+  // 8.15.14: 调整方式改为**只填绝对值**（现场心智是「放到 12.5 为止」），倍数由「绝对值 ÷ 参考范围」
+  //   自动算出、显示在后面；若本标本取不到该侧参考范围（无法换算），该方向退回「按倍数」输入并在
+  //   提示里说明——这样极端情况下仍能设置，不会因为没范围就完全没法用。
+  //   存储仍存**倍数**（规则模型不变），四舍五入到 4 位，避免 12.5/9.8 = 1.27551… 这类长小数。
+  // 已配规则 → 改值 / 停用 / 恢复默认；未配规则 → 当场新增（甲类全放行 或 乙类带数值）。
+  // 放宽（超出默认值，或从「不放行」变成「放行」）二次确认；所有改动写入留痕。
   function openMildRuleDialog(item) {
     const name = String((item && (item.CName || item.name)) || '');
     if (!name) {return;}
@@ -20092,15 +20102,19 @@ window.addEventListener('keydown',function(e){
     const isAdded = !!(rule0 && rule0._added);
     const ovd = isMildRuleOverridden(rule0);
     const limits = mildRuleLimits(rule0, item);
+    const unit = String((item && item.unit) || '').trim();
+    const unitHTML = unit ? '<span class="lm-unit">' + esc(unit) + '</span>' : '';
+    // 该方向能否用绝对值：取决于本标本有没有该侧参考范围
+    const absH = limits.uln !== null && limits.uln > 0;
+    const absL = limits.lln !== null && limits.lln > 0;
     const fmt = v => (v === null || v === undefined || (typeof v === 'number' && isNaN(v)))
       ? '—' : String(Math.round(v * 100) / 100);
+    const fmtM = v => String(Math.round(v * 1000) / 1000);
     const refTxt = (limits.lln !== null || limits.uln !== null)
       ? '本标本参考范围：' + (limits.lln === null ? '—' : fmt(limits.lln)) + ' ~ ' + (limits.uln === null ? '—' : fmt(limits.uln))
       : (limits.refText
-        // 8.15.12: 把拿到的原文显示出来——分不清「数据没有范围」还是「有范围但没解析出来」时，
-        // 现场能看到实际文本，便于判断该补哪个字段名（此前只有一句「取不到」，无从下手）
-        ? '参考范围文本「' + esc(limits.refText) + '」未能解析出数值上下限，无法预览绝对值（倍数仍会生效）'
-        : '本标本数据里没有参考范围字段，无法预览绝对值（倍数仍会生效）');
+        ? '参考范围文本「' + esc(limits.refText) + '」未能解析出数值上下限，本方向只能按倍数设置'
+        : '本标本数据里没有参考范围字段，本方向只能按倍数设置');
     let tier = isTierA ? 'a' : 'b';
 
     const dlg = document.createElement('div');
@@ -20120,6 +20134,13 @@ window.addEventListener('keydown',function(e){
 
     const body = dlg.querySelector('#lm-body');
     const btnReset = dlg.querySelector('#lm-reset');
+    // 8.15.14: 记下「初值」与「原倍数」——绝对值只显示 2 位小数，若每次都用「绝对值 ÷ 参考范围」
+    // 重新换算，来回一趟会让倍数漂移（如 9.8×1.03 显示成 10.09，再除回 9.8 得 1.0296）。
+    // 那样「打开对话框什么都不改、直接保存」就会静默改掉规则，不可接受。
+    // 规则：输入框内容与初值**完全一致**时，沿用原倍数；只有真被改过才重新换算。
+    let initH = '', initL = '';
+    const origH = (rule0 && typeof rule0.high === 'number') ? rule0.high : null;
+    const origL = (rule0 && typeof rule0.low === 'number') ? rule0.low : null;
 
     function segHTML() {
       const offChk = isNew ? '' :
@@ -20128,32 +20149,59 @@ window.addEventListener('keydown',function(e){
       if (tier === 'a') {
         return '<div class="lm-note">甲类：该项目<b>任何方向</b>的异常都直接放行，不设数值范围。</div>' + offChk;
       }
-      const h0 = (rule0 && typeof rule0.high === 'number') ? rule0.high : (isNew ? 1.2 : '');
-      const l0 = (rule0 && typeof rule0.low === 'number') ? rule0.low : '';
+      // 初值：有规则时按当前倍数换算成绝对值显示（无范围时退回显示倍数）；新增时留空，强制现场自己填
+      let hVal = '';
+      if (rule0 && typeof rule0.high === 'number') {
+        hVal = absH ? fmt(limits.uln * rule0.high) : String(rule0.high);
+      }
+      let lVal = '';
+      if (rule0 && typeof rule0.low === 'number') {
+        lVal = absL ? fmt(limits.lln * rule0.low) : String(rule0.low);
+      }
+      initH = hVal; initL = lVal; // 供 readInputs 判断「有没有真被改过」
       return '<div class="lm-note">' + refTxt + '</div>' +
-        '<div class="lm-row"><span class="lm-lb">偏高放行倍数</span>' +
-          '<input id="lm-high" class="lm-in" type="number" step="0.01" min="1" placeholder="留空＝不放行" value="' + h0 + '">' +
+        '<div class="lm-row"><span class="lm-lb">' + (absH ? '偏高放行至' : '偏高放行倍数') + '</span>' +
+          '<input id="lm-high" class="lm-in" type="number" step="0.01" ' + (absH ? 'min="0"' : 'min="1"') +
+          ' placeholder="留空＝不放行" value="' + hVal + '">' + (absH ? unitHTML : '') +
           '<span class="lm-pv" id="lm-pv-h"></span></div>' +
-        '<div class="lm-row"><span class="lm-lb">偏低放行倍数</span>' +
-          '<input id="lm-low" class="lm-in" type="number" step="0.01" min="0" max="1" placeholder="留空＝不放行" value="' + l0 + '">' +
+        '<div class="lm-row"><span class="lm-lb">' + (absL ? '偏低放行至' : '偏低放行倍数') + '</span>' +
+          '<input id="lm-low" class="lm-in" type="number" step="0.01" ' + (absL ? 'min="0"' : 'min="0" max="1"') +
+          ' placeholder="留空＝不放行" value="' + lVal + '">' + (absL ? unitHTML : '') +
           '<span class="lm-pv" id="lm-pv-l"></span></div>' +
         offChk +
         '<div class="lm-warn">⚠️ 放宽后该项目的异常结果会被 <b>F4 批审</b>与<b>白天方案自动审核</b>直接放行，' +
         '不再人工复核。<br>危急值 / 堵孔 0 值 / 传染病阳性 / 心肌危急线是独立安全门，<b>不受此处影响</b>。</div>';
     }
 
+    // 读输入并统一换算成「倍数」（存储模型用的是倍数）
+    function readInputs() {
+      const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
+      const hRaw = hi ? hi.value.trim() : '';
+      const lRaw = lo ? lo.value.trim() : '';
+      const hv = hRaw !== '' ? Number(hRaw) : null;
+      const lv = lRaw !== '' ? Number(lRaw) : null;
+      const hMult = (hRaw === '' || isNaN(hv)) ? null
+        : (hRaw === initH && origH !== null) ? origH
+          : (absH ? hv / limits.uln : hv);
+      const lMult = (lRaw === '' || isNaN(lv)) ? null
+        : (lRaw === initL && origL !== null) ? origL
+          : (absL ? lv / limits.lln : lv);
+      return {hv, lv, hMult, lMult};
+    }
+
     function wirePreview() {
       const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
       if (!hi || !lo) {return;}
       const pv = () => {
-        const hv = hi.value.trim() === '' ? null : Number(hi.value);
-        const lv = lo.value.trim() === '' ? null : Number(lo.value);
-        const okH = hv !== null && !isNaN(hv), okL = lv !== null && !isNaN(lv);
+        const r = readInputs();
         const ph = body.querySelector('#lm-pv-h'), pl = body.querySelector('#lm-pv-l');
-        ph.textContent = okH ? (limits.uln !== null ? '→ 放行至 ' + fmt(limits.uln * hv) : '→ 上限取不到') : '→ 不放行';
-        pl.textContent = okL ? (limits.lln !== null ? '→ 放行至 ' + fmt(limits.lln * lv) : '→ 下限取不到') : '→ 不放行';
-        ph.className = 'lm-pv' + (okH ? ' on' : '');
-        pl.className = 'lm-pv' + (okL ? ' on' : '');
+        // 绝对值模式下把算出的倍数显示出来（倍数是规则内部量，现场关心的是「放到多少」）
+        ph.textContent = r.hMult === null ? '→ 不放行'
+          : (absH ? '＝ ' + fmtM(r.hMult) + '× 上限' : (limits.uln !== null ? '→ 放行至 ' + fmt(limits.uln * r.hMult) : ''));
+        pl.textContent = r.lMult === null ? '→ 不放行'
+          : (absL ? '＝ ' + fmtM(r.lMult) + '× 下限' : (limits.lln !== null ? '→ 放行至 ' + fmt(limits.lln * r.lMult) : ''));
+        ph.className = 'lm-pv' + (r.hMult !== null ? ' on' : '');
+        pl.className = 'lm-pv' + (r.lMult !== null ? ' on' : '');
       };
       hi.addEventListener('input', pv);
       lo.addEventListener('input', pv);
@@ -20165,7 +20213,7 @@ window.addEventListener('keydown',function(e){
         body.innerHTML =
           '<div class="lm-note">该项目<b>当前未配放行规则</b> —— 异常一律留人工。要让它可放行吗？</div>' +
           '<div class="lm-row"><span class="lm-lb">规则类型</span>' +
-            '<label class="lm-radio"><input type="radio" name="lm-tier" value="b"' + (tier === 'b' ? ' checked' : '') + '> 乙类（按倍数）</label>' +
+            '<label class="lm-radio"><input type="radio" name="lm-tier" value="b"' + (tier === 'b' ? ' checked' : '') + '> 乙类（按数值）</label>' +
             '<label class="lm-radio"><input type="radio" name="lm-tier" value="a"' + (tier === 'a' ? ' checked' : '') + '> 甲类（全放行）</label>' +
           '</div><div id="lm-seg"></div>';
         body.querySelectorAll('input[name="lm-tier"]').forEach(rd => {
@@ -20250,25 +20298,36 @@ window.addEventListener('keydown',function(e){
         if (isNew) {addMildRuleOverride(name, 'a', undefined, undefined);}
         else {setMildRuleOverride(rule0, {off}, name);}
       } else {
-        const hiEl = body.querySelector('#lm-high'), loEl = body.querySelector('#lm-low');
-        const hv = (hiEl && hiEl.value.trim() !== '') ? Number(hiEl.value) : null;
-        const lv = (loEl && loEl.value.trim() !== '') ? Number(loEl.value) : null;
-        if (hv !== null && (isNaN(hv) || hv <= 0)) {showToast('偏高倍数需为正数', 'error'); return;}
-        if (lv !== null && (isNaN(lv) || lv <= 0)) {showToast('偏低倍数需为正数', 'error'); return;}
-        // 倍数越界时结果恒为「不放行」，直接拦下比让它默默失效更清楚
-        if (hv !== null && hv < 1) {showToast('偏高倍数不能小于 1（那样等于不放行），请留空', 'warning'); return;}
-        if (lv !== null && lv > 1) {showToast('偏低倍数不能大于 1（那样等于不放行），请留空', 'warning'); return;}
-        if (!off && hv === null && lv === null) {
-          showToast('请至少填一个方向的倍数，或勾选「一律不放行」', 'error'); return;
+        const r = readInputs();
+        if (r.hv !== null && (isNaN(r.hv) || r.hv <= 0)) {showToast('偏高放行值需为正数', 'error'); return;}
+        if (r.lv !== null && (isNaN(r.lv) || r.lv <= 0)) {showToast('偏低放行值需为正数', 'error'); return;}
+        // 换算成倍数后越界 = 恒不放行，直接拦下并提示留空（比让它静默失效清楚）
+        if (r.hMult !== null && r.hMult < 1) {
+          showToast(absH
+            ? '偏高放行值不能低于参考上限 ' + fmt(limits.uln) + '（那样等于不放行），请留空'
+            : '偏高倍数不能小于 1（那样等于不放行），请留空', 'warning');
+          return;
         }
-        if (!off && _mildIsLoosening(rule0, hv, lv, isNew)) {
+        if (r.lMult !== null && r.lMult > 1) {
+          showToast(absL
+            ? '偏低放行值不能高于参考下限 ' + fmt(limits.lln) + '（那样等于不放行），请留空'
+            : '偏低倍数不能大于 1（那样等于不放行），请留空', 'warning');
+          return;
+        }
+        if (!off && r.hMult === null && r.lMult === null) {
+          showToast('请至少填一个方向的值，或勾选「一律不放行」', 'error'); return;
+        }
+        if (!off && _mildIsLoosening(rule0, r.hMult, r.lMult, isNew)) {
           const msg = '确认放宽「' + name + '」的放行范围？\n\n' +
             '放宽后该项目的异常结果会被 F4 批审与白天方案自动审核直接放行，不再人工复核。\n' +
             '（本次改动会记入留痕，控制台 lisMildRuleLog() 可查看/导出）';
           if (!window.confirm(msg)) {return;}
         }
-        if (isNew) {addMildRuleOverride(name, 'b', hv, lv);}
-        else {setMildRuleOverride(rule0, {high: hv, low: lv, off}, name);}
+        // 存储仍用倍数，四舍五入到 4 位（12.5 / 9.8 = 1.27551… → 1.2755）
+        const hStore = r.hMult === null ? null : Math.round(r.hMult * 1e4) / 1e4;
+        const lStore = r.lMult === null ? null : Math.round(r.lMult * 1e4) / 1e4;
+        if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore);}
+        else {setMildRuleOverride(rule0, {high: hStore, low: lStore, off}, name);}
       }
       showToast('已保存，立即生效', 'success');
       close();
@@ -20580,6 +20639,7 @@ window.addEventListener('keydown',function(e){
       Code: raw.Code || raw.TestCodeDR || raw.testCodeDR || '',
       result: String(result === undefined || result === null ? '' : result),
       status: status,
+      unit: String(raw.unit || raw.Unit || raw.Units || ''), // 8.15.14: 设绝对值阈值时显示单位，避免搞错量纲
       RefRanges: ref,
       // preResult 指回 raw 以复用其结构化上下限 ValueLow/ValueHigh；导出模块的条目只有清洗后的
       // refRange 文本，故把归一化后的参考范围一并挂上，避免 _rngSrc 取不到范围而恒判「不可批审」
