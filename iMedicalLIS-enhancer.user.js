@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.11
+// @version      8.15.12
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -16424,7 +16424,8 @@ window.addEventListener('keydown',function(e){
 #lis-mild-dlg .lm-note{font-size:12px;color:var(--lis-text-secondary);margin-bottom:8px;line-height:1.6}
 #lis-mild-dlg .lm-row{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
 #lis-mild-dlg .lm-lb{font-size:12px;color:var(--lis-text);min-width:88px}
-#lis-mild-dlg .lm-in{width:80px;height:26px;border:1px solid var(--lis-border-strong);border-radius:4px;padding:0 6px;font-size:12px;color:var(--lis-text);background:var(--lis-surface)}
+/* 8.15.12: 80px 放不下占位符「留空＝不放行」（6 个汉字约 72px + 内边距/边框），被截成「留空＝不」，加宽到 108px */
+#lis-mild-dlg .lm-in{width:108px;height:26px;border:1px solid var(--lis-border-strong);border-radius:4px;padding:0 6px;font-size:12px;color:var(--lis-text);background:var(--lis-surface)}
 #lis-mild-dlg .lm-pv{font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
 #lis-mild-dlg .lm-pv.on{color:#047857;font-weight:700}
 #lis-mild-dlg .lm-chk{display:block;font-size:12px;color:var(--lis-text);margin:8px 0 4px;cursor:pointer}
@@ -19982,14 +19983,22 @@ window.addEventListener('keydown',function(e){
     return !!loadMildRuleOverrides().rules[mildRuleKey(rule)];
   }
   // 按「本标本的参考范围」算出实际放行上下限，供对话框实时预览（倍数才是稳定参数，绝对值随性别/年龄变）
+  // 按「本标本的参考范围」算出实际放行上下限，供对话框实时预览（倍数才是稳定参数，绝对值随性别/年龄变）。
+  // ⚠️ 参考范围只取决于条目本身，**与是否已配规则无关**——「新增规则」时 rule 就是 null，同样要能预览。
+  // 所以范围计算必须放在 rule 判空**之前**。（8.15.12 修：此前 `if (!rule …) return` 在最前面，
+  // 新增规则流程永远显示「参考范围取不到」，看起来像数据缺失，其实是自己早退了。）
   function mildRuleLimits(rule, it) {
-    const out = {uln: null, lln: null, high: undefined, low: undefined};
-    if (!rule || rule.tier !== 'b') {return out;}
-    const range = getItemRangeValues((it && it.preResult) || it || {});
+    const out = {uln: null, lln: null, high: undefined, low: undefined, refText: ''};
+    const rngSrc = (it && it.preResult) || it || {};
+    out.refText = String(
+      rngSrc.RefRanges || rngSrc.RefRange || rngSrc.ReferenceRange || (it && it.RefRanges) || ''
+    ).trim();
+    const range = getItemRangeValues(rngSrc);
     const uln = parseComparableNumber(range.high);
     const lln = parseComparableNumber(range.low);
     if (uln && !isNaN(uln.value)) {out.uln = uln.value;}
     if (lln && !isNaN(lln.value)) {out.lln = lln.value;}
+    if (!rule || rule.tier !== 'b') {return out;}
     if (typeof rule.high === 'number' && out.uln !== null) {out.high = out.uln * rule.high;}
     else if (rule.high === null) {out.high = null;}
     if (typeof rule.low === 'number' && out.lln !== null) {out.low = out.lln * rule.low;}
@@ -20083,7 +20092,11 @@ window.addEventListener('keydown',function(e){
       ? '—' : String(Math.round(v * 100) / 100);
     const refTxt = (limits.lln !== null || limits.uln !== null)
       ? '本标本参考范围：' + (limits.lln === null ? '—' : fmt(limits.lln)) + ' ~ ' + (limits.uln === null ? '—' : fmt(limits.uln))
-      : '本标本参考范围取不到，无法预览绝对值（倍数仍会生效）';
+      : (limits.refText
+        // 8.15.12: 把拿到的原文显示出来——分不清「数据没有范围」还是「有范围但没解析出来」时，
+        // 现场能看到实际文本，便于判断该补哪个字段名（此前只有一句「取不到」，无从下手）
+        ? '参考范围文本「' + esc(limits.refText) + '」未能解析出数值上下限，无法预览绝对值（倍数仍会生效）'
+        : '本标本数据里没有参考范围字段，无法预览绝对值（倍数仍会生效）');
     let tier = isTierA ? 'a' : 'b';
 
     const dlg = document.createElement('div');
