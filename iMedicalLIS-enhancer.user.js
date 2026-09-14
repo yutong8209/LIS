@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.23
+// @version      8.15.24
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1459,19 +1459,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 #lis-detail-body{flex:1!important;overflow-y:scroll!important;overflow-x:hidden!important;padding:16px 20px;min-height:0!important;position:relative;overscroll-behavior:contain;contain:content;background:var(--lis-bg)}
 #lis-detail-body .result-section{margin-bottom:20px}
 #lis-detail-body .result-section h5{margin:0 0 12px;color:var(--lis-text);font-size:14px;padding-bottom:8px;border-bottom:1px solid var(--lis-border)}
-.result-table{width:100%;border-collapse:collapse;font-size:12px}
-.result-table th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-weight:700;padding:6px 8px;text-align:left;white-space:nowrap;font-size:11px;border-bottom:1px solid var(--lis-border)}
+.result-table{width:100%;border-collapse:collapse;font-size:12px;line-height:1.25}
+.result-table th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-weight:700;padding:4px 6px;text-align:left;white-space:nowrap;font-size:11px;border-bottom:1px solid var(--lis-border);line-height:1.2}
 .result-table th::after{content:none!important}
-.result-table td{padding:4px 8px;border-bottom:1px solid #eee;overflow:hidden;text-overflow:ellipsis;color:var(--lis-text)}
-/* 8.5.19: 双栏紧凑行高——项目多时进一步压缩，减少滚动 */
-/* 8.5.21: 双栏紧凑行高（padding 压缩保留），字号恢复原水平（8.5.19 改小后 1080p 费眼） */
-.result-table.compact th{padding:3px 6px;font-size:11px}
-.result-table.compact td{padding:2px 6px;font-size:12px}
-.result-table.compact td:nth-child(3){font-size:13px}
-.result-table.compact .hist-tag{padding:1px 4px;font-size:11px;margin:0 1px}
+.result-table td{padding:2.5px 6px;border-bottom:1px solid #eee;overflow:hidden;text-overflow:ellipsis;color:var(--lis-text);vertical-align:middle;line-height:1.25}
+/* 8.15.24: 双栏紧凑行高（生化等大项目报告）——进一步压缩内边距，行高控制在21px左右，减少滚动一屏看全 */
+.result-table.compact th{padding:2px 5px;font-size:10.5px;line-height:1.15}
+.result-table.compact td{padding:1.5px 5px;font-size:11.5px;line-height:1.2}
+.result-table.compact td:nth-child(3){font-size:12px}
+.result-table.compact .hist-tag{padding:0 4px;font-size:10.5px;margin:0 1px;line-height:1.3}
+.result-table.compact .res-tag{padding:1px 5px;font-size:11.5px;line-height:1.2}
 .result-table.compact tr:last-child td{border-bottom:none}
 .result-table tr:hover{background:rgba(241,245,249,.6)}
-/* 8.15.23 方案 A：微胶囊标签流（Modern Pill / Tag System）
+/* 8.15.24 方案 A：微胶囊标签流（Modern Pill / Tag System）
    彻底告别大面积高饱和满色底与整格厚重色块，行底色恢复纯白，所有测定结果统一包裹于圆角微胶囊内。
    微胶囊只包含数值与紧凑箭头/标记，单位置于胶囊外侧（统一为柔和浅灰 #888），杜绝背景与文字冲突。
    视觉层级：
@@ -1484,7 +1484,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
    - 堵孔0值（生化）：醒目紫底微徽章 [ 0 ⚠️ 堵孔 ]（bg:#7c3aed;color:#fff）；
    - 传染病特殊阳性：金黄底黑字微徽章 [ 阳性+ ]（bg:#fef08a;color:#713f12;border:1px solid #facc15）。
 */
-.result-table .res-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:4px;font-size:12.5px;line-height:1.35;font-weight:700;box-sizing:border-box;vertical-align:middle}
+.result-table .res-tag{display:inline-flex;align-items:center;gap:2px;padding:1.5px 6px;border-radius:4px;font-size:12px;line-height:1.25;font-weight:700;box-sizing:border-box;vertical-align:middle}
 .result-table .res-tag.normal{background:#f0fdf4;color:#15803d!important;border:1px solid #dcfce7;font-weight:700}
 .result-table .normal, .result-table td.normal{color:#15803d!important;font-weight:700}
 .result-table .res-tag.mild-high{background:#fffbeb;color:#c2410c;border:1px solid #fed7aa}
@@ -15091,6 +15091,7 @@ window.addEventListener('keydown',function(e){
           ? ('调整「' + (r.CName || '') + '」的 F4/自动审核放行范围'
             + (_mildOvd ? '（已人工修改）' : '') + (_mildRule._off ? '（当前已停用）' : ''))
           : '该项目未配放行规则 —— 点此新增';
+        const _mildSvg = '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style="display:block;pointer-events:none"><path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z"/><path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319z"/></svg>';
         const mildBtn = '<button class="detail-mild-btn' + (_mildOvd ? ' ovd' : '') + '"' +
           ' data-name="' + escAttr(r.CName || '') + '"' +
           ' data-syn="' + escAttr(r.Synonym || r.Code || '') + '"' +
@@ -15101,11 +15102,11 @@ window.addEventListener('keydown',function(e){
           ' data-vlow="' + escAttr(String(r.ValueLow || r.LowValue || r.RefLow || '')) + '"' +
           ' data-vhigh="' + escAttr(String(r.ValueHigh || r.HighValue || r.RefHigh || '')) + '"' +
           ' data-sex="' + escAttr(mildSexOf({ row: specimen })) + '"' +
-          ' title="' + escAttr(_mildBtnTitle) + '">⚙</button>';
+          ' title="' + escAttr(_mildBtnTitle) + '">' + _mildSvg + '</button>';
 
         html += `<tr style="${rowStyle}">
                     <td style="text-align:center">${qcHtml}</td>
-                    <td style="font-weight:500"><span style="display:inline-block;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}</span>${mildBtn}${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400"> ' + esc(refRange) + '</span>' : ''}</td>
+                    <td style="font-weight:500;white-space:nowrap"><div style="display:inline-flex;align-items:center;vertical-align:middle"><span style="display:inline-block;max-width:${_detailCols > 1 ? '108px' : '136px'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}</span>${mildBtn}</div>${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400;margin-left:3px"> ' + esc(refRange) + '</span>' : ''}</td>
                     <td class="${tagClass}" style="white-space:nowrap"${resTitle}>${resTagHTML}${resUnitHTML}</td>
                     ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:11px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
                     <td style="font-size:11px">${hist.cells[0]}</td>
@@ -16505,10 +16506,11 @@ window.addEventListener('keydown',function(e){
 .hist-focus-x{font-weight:900;margin-left:2px}
 .pr-hist-btn,.detail-hist-item{background:none;border:none;cursor:pointer;font-size:11px;padding:0 2px;margin-left:3px;vertical-align:middle;opacity:.75;line-height:1}
 .pr-hist-btn:hover,.detail-hist-item:hover{opacity:1;transform:scale(1.15)}
-/* 8.15.9: 详情表项目名后的 ⚙ —— 轻微放行范围设置入口（人工改过的转醒目色） */
-.detail-mild-btn{background:none;border:none;cursor:pointer;font-size:11px;padding:0 2px;margin-left:2px;vertical-align:middle;opacity:.4;line-height:1}
-.detail-mild-btn:hover{opacity:1;transform:scale(1.15)}
-.detail-mild-btn.ovd{opacity:1;color:#b45309}
+/* 8.15.24: 详情表项目名后的设置按钮优化（SVG 极简微齿轮，悬停浮现，不折行不占多余行高） */
+.detail-mild-btn{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;padding:0;margin-left:3px;background:transparent;border:1px solid transparent;border-radius:3px;cursor:pointer;color:#94a3b8;vertical-align:middle;opacity:0;transition:all .15s ease;flex-shrink:0}
+.result-table tr:hover .detail-mild-btn{opacity:.6}
+.detail-mild-btn:hover{opacity:1!important;background:#e2e8f0;color:#0f766e;transform:scale(1.1)}
+.detail-mild-btn.ovd{opacity:1;background:#fffbeb;color:#b45309;border:1px solid #fde68a}
 /* 8.15.13: 改成可拖动浮层——不再用深色遮罩全屏挡住结果表。
    容器 pointer-events:none（背后表格照常可看、可滚、可点），仅弹窗本体可交互；
    因此点外部不再关闭（否则想滚表格看别的项目时会误关），关闭走 ✕ / 取消 / Esc。 */
