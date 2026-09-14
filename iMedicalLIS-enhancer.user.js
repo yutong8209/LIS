@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.1
+// @version      8.16.2
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1502,7 +1502,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
    - 堵孔0值（生化）：醒目紫底微徽章 [ 0 ⚠️ 堵孔 ]（bg:#7c3aed;color:#fff）；
    - 传染病特殊阳性：金黄底黑字微徽章 [ 阳性+ ]（bg:#fef08a;color:#713f12;border:1px solid #facc15）。
 */
-.result-table .res-tag{display:inline-flex;align-items:center;gap:2px;padding:2px 7px;border-radius:4px;font-size:13px;line-height:1.25;font-weight:700;box-sizing:border-box;vertical-align:middle}
+/* 8.16.2: 基础类补 1px transparent 边框占位——满色档（high/low/critical/zero）本身不写 border，
+   没有占位就比 normal/mild 档宽高各少 2px，同一列胶囊尺寸不齐。 */
+.result-table .res-tag{display:inline-flex;align-items:center;gap:2px;padding:2px 7px;border:1px solid transparent;border-radius:4px;font-size:13px;line-height:1.25;font-weight:700;box-sizing:border-box;vertical-align:middle}
 .result-table .res-tag.normal{background:#f0fdf4;color:#15803d!important;border:1px solid #dcfce7;font-weight:700}
 .result-table .normal, .result-table td.normal{color:#15803d!important;font-weight:700}
 .result-table .res-tag.mild-high{background:#fffbeb;color:#c2410c;border:1px solid #fed7aa}
@@ -1518,7 +1520,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table .res-unit{font-size:11px;color:#888;font-weight:400;margin-left:4px;vertical-align:middle}
 
 .result-table .history{background:#f8f9fa}
-.result-table .hist-tag{display:inline-flex;align-items:center;justify-content:center;margin:1px 2px;padding:1px 5px;border-radius:4px;font-size:11.5px;white-space:nowrap;line-height:1.4;box-sizing:border-box}
+.result-table .hist-tag{display:inline-flex;align-items:center;justify-content:center;margin:1px 2px;padding:1px 5px;border:1px solid transparent;border-radius:4px;font-size:11.5px;white-space:nowrap;line-height:1.4;box-sizing:border-box}
 .result-table .hist-tag.normal{background:#e8f5e9;color:#2e7d32;border:1px solid #c8e6c9;font-weight:600}
 .result-table .hist-tag.abnormal{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
 .result-table .hist-tag.high{background:#ea580c;color:#fff}
@@ -16689,11 +16691,13 @@ window.addEventListener('keydown',function(e){
 .hist-gtable th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-size:11px;padding:4px 8px;text-align:left;font-weight:600}
 .hist-gtable td{padding:4px 8px;border-top:1px solid var(--lis-surface-subtle);vertical-align:top}
 .hist-gtable tr.hist-row-cur td{background:#ecfdf5}
-.hist-val{font-weight:700;color:#15803d!important;background:#f0fdf4;border:1px solid #dcfce7;border-radius:4px;padding:1px 6px;white-space:nowrap;display:inline-block}
+.hist-val{font-weight:700;color:#15803d!important;background:#f0fdf4;border:1px solid #dcfce7;border-radius:4px;padding:1px 5px;white-space:nowrap;display:inline-block}
 /* 8.15.22: 患者历史浮层同步采用微胶囊标签，正常项严格为经典绿 #16a34a */
-.hist-val.H{color:#fff!important;background:#ea580c;border-radius:4px;padding:1px 6px}
+/* 8.16.2: 满色档原来不写 border，于是**继承了 .hist-val 的浅绿边框**（橙/蓝满色底配浅绿边），
+   且内边距比 mild 档大 1px。这里显式声明 transparent 边框并统一 padding，四档尺寸与配色一致。 */
+.hist-val.H{color:#fff!important;background:#ea580c;border:1px solid transparent;border-radius:4px;padding:1px 5px}
 .hist-val.H.mild{color:#c2410c!important;background:#fffbeb;border:1px solid #fed7aa;border-radius:4px;padding:1px 5px}
-.hist-val.L{color:#fff!important;background:#1d4ed8;border-radius:4px;padding:1px 6px}
+.hist-val.L{color:#fff!important;background:#1d4ed8;border:1px solid transparent;border-radius:4px;padding:1px 5px}
 .hist-val.L.mild{color:#1d4ed8!important;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:1px 5px}
 .hist-val.A{color:#be185d!important;background:#fdf2f8;border:1px solid #fce7f3;border-radius:4px;padding:1px 5px}
 .hist-val.H:not(.mild) .hist-unit,.hist-val.L:not(.mild) .hist-unit{color:rgba(255,255,255,.9)}
@@ -20093,8 +20097,11 @@ window.addEventListener('keydown',function(e){
     { re: /^(单核(细胞)?(百分比|比率)|mono%|mon%)[\*＊]?$/i, tier: 'a' },
     { re: /^(嗜酸(性)?(粒细胞?)?(绝对值|绝对数|计数|数目|数)?|eos#|eo#)[\*＊#]?$/i, tier: 'b', group: 'EOS', high: 1.5, low: null },
     { re: /^(嗜酸(性)?(粒细胞?)?(百分比|比率)|eos%|eo%)[\*＊]?$/i, tier: 'b', group: 'EOS', high: 1.5, low: null },
-    { re: /^(嗜碱(性)?(粒细胞?)?(绝对值|绝对数|计数|数目|数)?|baso#|bas#)[\*＊#]?$/i, tier: 'b', group: 'BAS', high: null, highAbs: 0.1, low: null },
-    { re: /^(嗜碱(性)?(粒细胞?)?(百分比|比率)|baso%|bas%)[\*＊]?$/i, tier: 'b', group: 'BAS', high: null, highAbs: 2, low: null },
+    // 8.16.2: 这两条共用 group 'BAS'（计数去重按 group，判定口径不变），但放行上限量级完全不同
+    // （绝对值 0.1 / 百分比 2）。若不分开配置键，在 ⚙ 里调「嗜碱绝对值」会把百分比的上限一并压成 0.1
+    // （百分比几乎再也放行不了）。故用 ovKey 只区分**覆盖键**，group 保持不动。
+    { re: /^(嗜碱(性)?(粒细胞?)?(绝对值|绝对数|计数|数目|数)?|baso#|bas#)[\*＊#]?$/i, tier: 'b', group: 'BAS', ovKey: 'BAS.abs', high: null, highAbs: 0.1, low: null },
+    { re: /^(嗜碱(性)?(粒细胞?)?(百分比|比率)|baso%|bas%)[\*＊]?$/i, tier: 'b', group: 'BAS', ovKey: 'BAS.pct', high: null, highAbs: 2, low: null },
     { re: /^(红细胞(计数|数目|数)?|rbc)[\*＊]?$/i, tier: 'b', group: 'RBC', bySex: true, high: 1.1, low: 0.93, m: { high: 1.1, low: 0.93 }, f: { high: 1.1, low: 0.93 } },
     { re: /^血红蛋白(浓度)?[\*＊]?$/i, tier: 'b', group: 'HGB', bySex: true, high: 1.1, low: 0.93, m: { high: 1.1, low: 0.93 }, f: { high: 1.1, low: 0.93 } },
     { re: /^红细胞(压积|比容)[\*＊]?$/i, tier: 'b', group: 'HCT', bySex: true, high: 1.1, low: 0.93, m: { high: 1.1, low: 0.93 }, f: { high: 1.1, low: 0.93 } },
@@ -20371,7 +20378,11 @@ window.addEventListener('keydown',function(e){
   // 规则稳定键：乙类用 group，甲类用正则源码
   function mildRuleKey(rule) {
     if (!rule) {return '';}
-    return rule.group ? String(rule.group) : ('re:' + String(rule.re));
+    // 8.16.2: 同一 group 下若存在量级不同的两条规则（如 BAS 的绝对值 0.1 / 百分比 2），
+    // 共用覆盖键会「改一条连带改另一条」。这类规则用显式 ovKey 区分覆盖键；
+    // 计数去重仍走 rule.group（未改），判定口径不变。EOS / CRP 虽也共用 group，
+    // 但两条参数量级相同、改动无副作用，故不额外拆分（保持既有覆盖数据有效）。
+    return rule.ovKey ? String(rule.ovKey) : (rule.group ? String(rule.group) : ('re:' + String(rule.re)));
   }
   function _mildReEsc(s) {
     return String(s)
@@ -20395,7 +20406,9 @@ window.addEventListener('keydown',function(e){
     }
     const ov = loadMildRuleOverrides();
     for (const r of MILD_ALLOW_RULES) {
-      const o = ov.rules[mildRuleKey(r)];
+      // 8.16.2: ovKey 规则兼容旧键——老版本把覆盖存在 group 名下（如 'BAS'），回退读取可让现场
+      // 已调的参数继续生效（仍是「同时作用于两条」，与拆分前行为一致），不做静默丢弃；下次保存写新键。
+      const o = ov.rules[mildRuleKey(r)] || (r.ovKey && r.group ? ov.rules[r.group] : null);
       if (!o) {continue;}
       // 8.15.20: 分男女覆盖处理
       if (r.bySex) {
@@ -20479,15 +20492,20 @@ window.addEventListener('keydown',function(e){
     if (patch === null) {delete ov.rules[key];}
     else {
       ov.rules[key] = Object.assign({}, ov.rules[key] || {});
+      // 8.16.2: 顶层标量字段（off / high / low …）**必须无条件合并**。此前这一整块被塞在
+      // `if (!patch.m && !patch.f)` 里，而 bySex 调用分支（性激素六项 + RBC/HGB/HCT/GGT/CR/UA/CK/FER
+      // 共 14 项）永远带 patch.m/patch.f，于是 `patch.off` 从未落盘 —— 界面上勾了「整条规则停用」、
+      // 提示也报「已保存并同步」，实际该项目仍在按原放行带被 F4 / 白天自动审核直接放行。
+      // 正确顺序：先合并顶层（排除 m/f 子对象），再合并分性别子对象。
+      const topPatch = Object.assign({}, patch);
+      delete topPatch.m; delete topPatch.f;
+      Object.assign(ov.rules[key], topPatch);
+      if (patch.highAbs === undefined) {delete ov.rules[key].highAbs;}
+      if (patch.lowAbs === undefined) {delete ov.rules[key].lowAbs;}
+      if (patch.high === undefined) {delete ov.rules[key].high;}
+      if (patch.low === undefined) {delete ov.rules[key].low;}
       if (patch.m) {ov.rules[key].m = Object.assign({}, ov.rules[key].m || {}, patch.m);}
       if (patch.f) {ov.rules[key].f = Object.assign({}, ov.rules[key].f || {}, patch.f);}
-      if (!patch.m && !patch.f) {
-        Object.assign(ov.rules[key], patch);
-        if (patch.highAbs === undefined) {delete ov.rules[key].highAbs;}
-        if (patch.lowAbs === undefined) {delete ov.rules[key].lowAbs;}
-        if (patch.high === undefined) {delete ov.rules[key].high;}
-        if (patch.low === undefined) {delete ov.rules[key].low;}
-      }
     }
     _mildOvLog(ov, key, label || key, before, patch === null ? '默认' : JSON.stringify(ov.rules[key]));
     ov.updated_at = Date.now();
@@ -20532,7 +20550,8 @@ window.addEventListener('keydown',function(e){
   function isMildRuleOverridden(rule) {
     if (!rule) {return false;}
     if (rule._added) {return true;}
-    const o = loadMildRuleOverrides().rules[mildRuleKey(rule)];
+    const _ovr = loadMildRuleOverrides().rules;
+    const o = _ovr[mildRuleKey(rule)] || (rule.ovKey && rule.group ? _ovr[rule.group] : null);
     if (!o) {return false;}
     if (rule.bySex) {
       return !!(o.m || o.f || o.high !== undefined || o.low !== undefined || o.off);
@@ -20553,7 +20572,7 @@ window.addEventListener('keydown',function(e){
     FER: { m: [30, 400], f: [13, 150] }
   };
   function mildRuleLimits(rule, it, sex) {
-    const out = {uln: null, lln: null, high: undefined, low: undefined, refText: ''};
+    const out = {uln: null, lln: null, high: undefined, low: undefined, refText: '', approx: false};
     const rngSrc = (it && it.preResult) || it || {};
     out.refText = String(
       rngSrc.RefRanges || rngSrc.RefRange || rngSrc.ReferenceRange || (it && it.RefRanges) || ''
@@ -20585,6 +20604,10 @@ window.addEventListener('keydown',function(e){
       const dr = DEFAULT_SEX_RANGES[rule.group][effSex];
       out.lln = dr[0];
       out.uln = dr[1];
+      // 8.16.2: 这对上下限来自脚本内硬编码的「常见值」，不是 LIS 返回的。它只用来给 ⚙ 对话框做
+      // 绝对值换算显示；批审判定（mildAllowItem）拿不到这份兜底，LIS 未返回参考范围时仍会按
+      // 「参考上限缺失，不放行」处理。标记出来，让对话框如实提示，避免显示一条实际不存在的放行线。
+      out.approx = true;
       out.refText = (effSex === 'm' ? '常见男性参考：' : '常见女性参考：') + dr[0] + ' ~ ' + dr[1];
     }
 
@@ -20775,6 +20798,9 @@ window.addEventListener('keydown',function(e){
       };
     }
 
+    // 8.16.2: 「整条规则停用」的勾选要跨 男/女 tab 保留——saveCurrentTabInputs 只存了双方向的
+    // 模式与数值，而切 tab 会 render() 重建复选框（用 rule0._off 打底），勾选会被悄悄重置。
+    let offChecked = !!(rule0 && rule0._off);
     const state = {
       m: initSexSubState('m'),
       f: initSexSubState('f')
@@ -20825,6 +20851,8 @@ window.addEventListener('keydown',function(e){
           st.lVal = lo.value.trim();
         }
       }
+      const offEl = body.querySelector('#lm-off');
+      if (offEl) {offChecked = !!offEl.checked;}
     }
 
     function dirRow(which) {
@@ -20852,16 +20880,21 @@ window.addEventListener('keydown',function(e){
     function segHTML() {
       const st = state[curSex];
       const lims = st.limits;
-      const refTxt = (lims.lln !== null || lims.uln !== null)
+      const refTxtBase = (lims.lln !== null || lims.uln !== null)
         ? (lims.refText.indexOf('基准') >= 0 || lims.refText.indexOf('包络') >= 0 || lims.refText.indexOf('参考') >= 0
           ? lims.refText
           : '参考范围：' + (lims.lln === null ? '—' : fmt(lims.lln)) + ' ~ ' + (lims.uln === null ? '—' : fmt(lims.uln)))
         : (lims.refText
           ? '参考范围文本「' + esc(lims.refText) + '」未能解析出数值上下限，该方向按绝对数值填写'
           : '未能获取参考范围，该方向按绝对数值填写');
+      // 8.16.2: 兜底范围来自硬编码「常见值」时如实告知——否则这里换算出的绝对值会让人以为
+      // 放行线真的落在那个数上。
+      const refTxt = lims.approx
+        ? refTxtBase + '（按常见参考值估算，仅供参考；LIS 未返回参考范围时该项目仍留人工）'
+        : refTxtBase;
 
       const offChk = isNew ? '' :
-        '<label class="lm-chk"><input type="checkbox" id="lm-off"' + ((rule0 && rule0._off) ? ' checked' : '') +
+        '<label class="lm-chk"><input type="checkbox" id="lm-off"' + (offChecked ? ' checked' : '') +
         '> 整条规则停用（该项目永不自动放行）</label>';
       if (tier === 'a') {
         return '<div class="lm-note">甲类：该项目<b>任何方向</b>的异常都直接放行，不设数值范围。</div>' + offChk;
@@ -21446,7 +21479,11 @@ window.addEventListener('keydown',function(e){
     if (live) {
       if (!live._mildItemMap || live._mildItemMapVer !== _classifyVersion) {
         const map = new Map();
-        const ev = live._mildEval;
+        // 8.16.2: 必须连带校验数据**自身**的版本。live._mildEval 可能是上一版规则算出来的
+        // （_mildEvalVer 落后于 _classifyVersion），若直接拿来建 map 再把 mapVer 盖成新版本号，
+        // 旧结论就永久占位、之后重算也不会刷新 —— 改完放行范围后会出现「同一管里前几项按旧规则、
+        // 后面项按新规则」的自相矛盾配色，与 F4 实际判定不一致。
+        const ev = (live._mildEvalVer === _classifyVersion) ? live._mildEval : null;
         if (ev && Array.isArray(ev.items)) {
           for (const e of ev.items) {map.set(_mildItemKey(e), !!e.ok);}
         }
