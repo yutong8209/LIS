@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.10
+// @version      8.15.11
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1217,6 +1217,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-abnormal-card{background:var(--lis-surface);border:1px solid var(--lis-border);border-left:3px solid #cbd5e1;border-radius:7px;padding:4px 8px;cursor:pointer;transition:all .12s ease;display:flex;flex-direction:column;gap:2px;box-shadow:0 1px 2px rgba(0,0,0,.02);position:relative}
 .ws-abnormal-card:hover{border-color:#cbd5e1;box-shadow:0 2px 6px rgba(15,23,42,.06)}
 .ws-abnormal-card.focused{border-color:#94a3b8!important;background:#f8fafc!important;box-shadow:0 0 0 2px rgba(148,163,184,.25)!important}
+/* 8.15.11: 审核中视觉态。原先靠卡片内「正在审核...」提示文字，而该提示行已按用户要求去掉，
+   改用它兜底——outline 不占布局高度，不会让卡片在审核时跳高。 */
+.ws-abnormal-card.auditing{outline:2px solid var(--lis-primary);outline-offset:-2px;opacity:.9}
 .ws-abnormal-card.has-critical{border-left-color:#dc2626;background:#fffdfd}
 .ws-abnormal-card.has-critical.focused{border-left-color:#dc2626;background:#fef2f2!important;box-shadow:0 0 0 2px rgba(220,38,38,.2)!important}
 .ws-abnormal-card.has-zero{border-left-color:#d97706;background:#fffdfa}
@@ -9809,7 +9812,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (!cached) {return 'incomplete';} // 分类未完成时不进入正常可审，避免误批审
     if (isClassificationStale(r)) {return 'incomplete';}
     if (cached.status === 'NORMAL') {return 'normal';}
-    if (cached.status === 'ABNORMAL' || cached.status === 'CRITICAL' || cached.status === 'ZERO') {return 'abnormal';}
+    if (cached.status === 'CRITICAL' || cached.status === 'ZERO') {return 'abnormal';}
+    // 8.15.11: 含星号占位结果（形如 ***.**，各仪器星号个数不同）→ 一律归「不完整」。
+    // **必须放在下面 8.10.25 那条之前**：LIS 对这类标本常仍置 IsComplete=1，
+    // 于是走「实际已录入完整就放行进待审」被捞进待审，而待审视图的 Enter/F4 会连它一起审掉。
+    // 危急值/堵孔仍保留在待审——它们本就不可被 Enter/F4 批审（F4 只收 NORMAL/轻微带内），
+    // 留在待审更利于被发现，不该因占位符而下沉。
+    if (cached.items && cached.items.some(it => isAsteriskPlaceholderResult(it.result))) {return 'incomplete';}
+    if (cached.status === 'ABNORMAL') {return 'abnormal';}
     // 8.10.25: 若标本实际结果已经录入完整（手工录入无空项 或 IsComplete=1），即使含有待定项目（UNCERTAIN，如特殊符号/操作符/未配置参考范围）
     // 也应放行进入待审（需人工确认审核），绝不能作为不完整锁死在未录入列表中
     if (isSpecimenActuallyComplete(r, cached)) {return 'abnormal';}
@@ -12063,9 +12073,8 @@ window.addEventListener('keydown',function(e){
         h += '</div>';
         h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
         h += '</div>';
-        h += `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary)">`;
+        h += `<div style="display:flex;align-items:center;font-size:11px;color:var(--lis-text-secondary)">`;
         h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || '', wsSearchQuery)}</span>`;
-        h += `<span class="ab-card-hint" style="color:#059669;font-weight:600">Enter 审核</span>`;
         h += '</div>';
         h += '</div>';
         return;
@@ -12161,14 +12170,14 @@ window.addEventListener('keydown',function(e){
       }
       h += '</div>';
       // 8.5.52: 复检标本可审核（危急值除外）；危急值红线优先提示
+      // 8.15.11: 去掉「Enter=审核」提示——它让每张无红线的卡片多出一整行，抬高卡片高度；
+      // Enter 是常驻主操作，界面上不必反复提示（底部提示条已有说明）。红线类提示保留。
       if (hasCritical) {
         h += '<span class="ab-card-hint" style="color:#c62828;font-weight:600">🚨 危急值</span>';
       } else if (hasZeroSuspect) {
         h += '<span class="ab-card-hint" style="color:#8a6d3b;font-weight:600">0值? 疑似堵孔，需人工确认</span>';
       } else if (hasInfectionWarning) {
         h += '<span class="ab-card-hint" style="color:#e65100;font-weight:600">⚠ 历史不一致</span>';
-      } else {
-        h += '<span class="ab-card-hint">Enter=审核</span>';
       }
       h += '</div>';
     });
@@ -19335,6 +19344,18 @@ window.addEventListener('keydown',function(e){
     if (isNegativeReferenceText(ref)) {return true;}
     if (format === 'X' || format === 'S' || String(item.IsCheckText || '') === '1') {return true;}
     return /尿|URINE|A\/C|ACR|ALB\/CRE|白蛋白|肌酐/.test(name);
+  }
+
+  // 8.15.11: 星号占位结果——仪器未算出/未回传，形如 *.**、***.*、** 等，**各仪器星号个数不同**。
+  // 既不是数值也不是定性，绝不能当正常值放进待审（待审视图的 Enter/F4 会连它一起审掉）。
+  // 判定：整串只由星号/点/空白组成，且**至少含一个星号**（纯「.」不算，避免误伤正常值）。
+  // 注意「1.5*」这类带数字的不算——那是真值加脚注标记。
+  const ASTERISK_PLACEHOLDER_RE = /^[*＊.．·\s]+$/;
+  function isAsteriskPlaceholderResult(result) {
+    const v = String(result === null || result === undefined ? '' : result).trim();
+    if (!v) {return false;}
+    if (v.indexOf('*') < 0 && v.indexOf('＊') < 0) {return false;}
+    return ASTERISK_PLACEHOLDER_RE.test(v);
   }
 
   function isEmptyResultValue(item, result) {
