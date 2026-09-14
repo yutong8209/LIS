@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.28
+// @version      8.15.29
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19484,6 +19484,11 @@ window.addEventListener('keydown',function(e){
     if (m) {return { low: '', high: m[1] };}
     m = raw.match(/^(?:>|>=)\s*([-+]?\d+(?:\.\d+)?)/);
     if (m) {return { low: m[1], high: '' };}
+    // 8.15.29: 兼容单侧带横杠格式：0.06-（>=0.06）、-30（<=30）
+    m = raw.match(/^([-+]?\d+(?:\.\d+)?)\s*-$/);
+    if (m) {return { low: m[1], high: '' };}
+    m = raw.match(/^-\s*([-+]?\d+(?:\.\d+)?)$/);
+    if (m) {return { low: '', high: m[1] };}
     m = raw.match(/(?:正常|参考|值)?[：:\s]*([-+]?\d+(?:\.\d+)?)\s*以下/);
     if (m) {return { low: '', high: m[1] };}
     m = raw.match(/(?:正常|参考|值)?[：:\s]*([-+]?\d+(?:\.\d+)?)\s*以上/);
@@ -20155,7 +20160,13 @@ window.addEventListener('keydown',function(e){
     if (!rule) {return '';}
     return rule.group ? String(rule.group) : ('re:' + String(rule.re));
   }
-  function _mildReEsc(s) {return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');}
+  function _mildReEsc(s) {
+    return String(s)
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/[-－–—−]/g, '[-－–—−]')
+      .replace(/[/／]/g, '[/／]')
+      .replace(/[βBΒ]/gi, '[βbBΒ]');
+  }
 
   // 用「默认值快照 + 覆盖」重建规则表。**任何改动后都必须调用**——它会递增 _classifyVersion，
   // 让所有已记忆的轻微判定（live._mildEval / _mildItemMap）失效，否则界面与批审仍按旧规则跑。
@@ -20199,14 +20210,19 @@ window.addEventListener('keydown',function(e){
     // 新增规则：锚定「精确项目名」（避免误吞其它项目），追加在末尾——不影响既有首条命中的顺序
     for (const a of ov.added) {
       if (!a || !a.name) {continue;}
-      const isA = a.tier === 'a';
+      const ovRule = ov.rules['x:' + a.name];
+      const merged = Object.assign({}, a, ovRule || {});
+      const isA = merged.tier === 'a';
       MILD_ALLOW_RULES.push({
-        re: new RegExp('^' + _mildReEsc(a.name) + '[\\*＊]?$', 'i'),
+        re: new RegExp('^' + _mildReEsc(merged.name) + '[\\*＊]?$', 'i'),
         tier: isA ? 'a' : 'b',
-        group: 'x:' + a.name,
-        high: isA ? undefined : (a.highOff ? undefined : (a.high === undefined ? null : a.high)),
-        low: isA ? undefined : (a.lowOff ? undefined : (a.low === undefined ? null : a.low)),
-        _added: true, _overridden: true, _addedName: a.name
+        group: 'x:' + merged.name,
+        high: isA ? undefined : (merged.highOff ? undefined : (merged.high === undefined ? null : merged.high)),
+        low: isA ? undefined : (merged.lowOff ? undefined : (merged.low === undefined ? null : merged.low)),
+        highAbs: isA ? undefined : (typeof merged.highAbs === 'number' ? merged.highAbs : undefined),
+        lowAbs: isA ? undefined : (typeof merged.lowAbs === 'number' ? merged.lowAbs : undefined),
+        _off: !!merged.off,
+        _added: true, _overridden: true, _addedName: merged.name
       });
     }
     _classifyVersion++;
@@ -20221,12 +20237,26 @@ window.addEventListener('keydown',function(e){
     });
     if (ov.log.length > MILD_RULE_OV_LOG_MAX) {ov.log = ov.log.slice(ov.log.length - MILD_RULE_OV_LOG_MAX);}
   }
-  // 设置已有规则的覆盖。patch: {high,low,off,m,f}；patch 传 null 表示删除覆盖（恢复默认）
+  // 设置已有规则的覆盖。patch: {high,low,off,m,f,highAbs,lowAbs}；patch 传 null 表示删除覆盖（恢复默认）
   function setMildRuleOverride(rule, patch, label) {
     const key = mildRuleKey(rule);
     if (!key) {return false;}
     const ov = loadMildRuleOverrides();
     const before = ov.rules[key] ? JSON.stringify(ov.rules[key]) : '默认';
+
+    // 8.15.29: 若修改的是人工新增规则，同步落盘到 ov.added，避免重建时仍读旧参数致重开恢复默认值
+    const addedName = (rule && rule._addedName) || (rule && rule.group && rule.group.startsWith('x:') ? rule.group.slice(2) : '');
+    if ((rule && rule._added) || addedName) {
+      const idx = ov.added.findIndex(a => a && a.name === addedName);
+      if (idx >= 0) {
+        if (patch === null) {
+          ov.added.splice(idx, 1);
+        } else {
+          Object.assign(ov.added[idx], patch);
+        }
+      }
+    }
+
     if (patch === null) {delete ov.rules[key];}
     else {
       ov.rules[key] = Object.assign({}, ov.rules[key] || {});
@@ -20240,12 +20270,23 @@ window.addEventListener('keydown',function(e){
     return true;
   }
   // 给原本「未配规则」的项目新增一条规则
-  function addMildRuleOverride(name, tier, high, low, highOff, lowOff) {
+  function addMildRuleOverride(name, tier, high, low, highOff, lowOff, highAbs, lowAbs) {
     const ov = loadMildRuleOverrides();
     ov.added = ov.added.filter(a => a && a.name !== name);
-    ov.added.push({name, tier: tier === 'a' ? 'a' : 'b', high, low, highOff: !!highOff, lowOff: !!lowOff});
+    ov.added.push({
+      name,
+      tier: tier === 'a' ? 'a' : 'b',
+      high,
+      low,
+      highOff: !!highOff,
+      lowOff: !!lowOff,
+      highAbs: typeof highAbs === 'number' ? highAbs : undefined,
+      lowAbs: typeof lowAbs === 'number' ? lowAbs : undefined
+    });
+    const logHigh = highOff ? '不放行' : (high === null ? '不拦截' : (typeof highAbs === 'number' ? `${highAbs}` : `${high}×`));
+    const logLow = lowOff ? '不放行' : (low === null ? '不拦截' : (typeof lowAbs === 'number' ? `${lowAbs}` : `${low}×`));
     _mildOvLog(ov, 'x:' + name, name, '未配规则',
-      tier === 'a' ? '甲类（全放行）' : `乙类 高${high === null ? '不放行' : high + '×'} / 低${low === null ? '不放行' : low + '×'}`);
+      tier === 'a' ? '甲类（全放行）' : `乙类 高${logHigh} / 低${logLow}`);
     saveMildRuleOverrides(ov);
     applyMildRuleOverrides();
     return true;
@@ -20457,22 +20498,30 @@ window.addEventListener('keydown',function(e){
     function initSexSubState(sx) {
       const subRule = isBySex ? ((rule0 && rule0[sx]) || {}) : (rule0 || {});
       const lim = mildRuleLimits(rule0, item, sx);
+      const absH = lim.uln !== null && lim.uln > 0;
+      const absL = lim.lln !== null && lim.lln > 0;
+
       const modeOf = key => {
         if (!rule0 || rule0.tier !== 'b') {return 'off';}
         const v = subRule[key];
-        if (v === null) {return 'any';}
-        if (typeof v === 'number') {return 'num';}
+        const vAbs = subRule[key + 'Abs'];
+        if (v === null && vAbs === undefined) {return 'any';}
+        if (typeof v === 'number' || typeof vAbs === 'number') {return 'num';}
         return 'off';
       };
-      const hM = isNew ? 'num' : modeOf('high');
-      const lM = isNew ? 'num' : modeOf('low');
-      const absH = lim.uln !== null && lim.uln > 0;
-      const absL = lim.lln !== null && lim.lln > 0;
+
+      // 8.15.29: 单侧参考范围项目（如仅上限的 Tau-181 或仅下限的 Aβ42/Aβ40），新增时无参考限的一侧默认「不放行」
+      const hM = isNew ? (absH ? 'num' : 'off') : modeOf('high');
+      const lM = isNew ? (absL ? 'num' : 'off') : modeOf('low');
+
       let valH = '', valL = '';
-      if (typeof subRule.high === 'number') {valH = absH ? fmt(lim.uln * subRule.high) : String(subRule.high);}
-      else if (isNew && hM === 'num') {valH = absH ? fmt(lim.uln) : '1';}
-      if (typeof subRule.low === 'number') {valL = absL ? fmt(lim.lln * subRule.low) : String(subRule.low);}
-      else if (isNew && lM === 'num') {valL = absL ? fmt(lim.lln) : '1';}
+      if (typeof subRule.highAbs === 'number') {valH = String(subRule.highAbs);}
+      else if (typeof subRule.high === 'number') {valH = absH ? fmt(lim.uln * subRule.high) : String(subRule.high);}
+      else if (isNew && hM === 'num') {valH = absH ? fmt(lim.uln) : '';}
+
+      if (typeof subRule.lowAbs === 'number') {valL = String(subRule.lowAbs);}
+      else if (typeof subRule.low === 'number') {valL = absL ? fmt(lim.lln * subRule.low) : String(subRule.low);}
+      else if (isNew && lM === 'num') {valL = absL ? fmt(lim.lln) : '';}
       return {
         hM, lM,
         hVal: valH, lVal: valL,
@@ -20542,7 +20591,7 @@ window.addEventListener('keydown',function(e){
           '<option value="any"' + (mode === 'any' ? ' selected' : '') + '>不拦截</option>' +
         '</select>' +
         '<input id="' + idPfx + '" class="lm-in' + (on ? '' : ' lm-in-off') + '" type="text" inputmode="decimal" ' +
-          'placeholder="' + (abs ? '放行至' : '倍数') + '" value="' + escAttr(val) + '"' + (on ? '' : ' disabled') + '>' +
+          'placeholder="' + (abs ? '放行至' : '放行至（绝对值）') + '" value="' + escAttr(val) + '"' + (on ? '' : ' disabled') + '>' +
         (abs && on ? unitHTML : '') +
         '<span class="lm-pv" id="' + idPfx + '-pv"></span></div>';
     }
@@ -20555,8 +20604,8 @@ window.addEventListener('keydown',function(e){
           ? lims.refText
           : '参考范围：' + (lims.lln === null ? '—' : fmt(lims.lln)) + ' ~ ' + (lims.uln === null ? '—' : fmt(lims.uln)))
         : (lims.refText
-          ? '参考范围文本「' + esc(lims.refText) + '」未能解析出数值上下限，该方向只能按倍数填写'
-          : '未能获取参考范围，该方向只能按倍数填写');
+          ? '参考范围文本「' + esc(lims.refText) + '」未能解析出数值上下限，该方向按绝对数值填写'
+          : '未能获取参考范围，该方向按绝对数值填写');
 
       const offChk = isNew ? '' :
         '<label class="lm-chk"><input type="checkbox" id="lm-off"' + ((rule0 && rule0._off) ? ' checked' : '') +
@@ -20582,15 +20631,40 @@ window.addEventListener('keydown',function(e){
       const lRaw = st.lVal;
       const hv = hRaw !== '' ? Number(hRaw) : null;
       const lv = lRaw !== '' ? Number(lRaw) : null;
-      const hNum = (hRaw === '' || isNaN(hv)) ? null
-        : (hRaw === st.initH && st.origH !== null) ? st.origH
-          : (absH ? hv / lims.uln : hv);
-      const lNum = (lRaw === '' || isNaN(lv)) ? null
-        : (lRaw === st.initL && st.origL !== null) ? st.origL
-          : (absL ? lv / lims.lln : lv);
-      const hFinal = hM === 'off' ? undefined : (hM === 'any' ? null : hNum);
-      const lFinal = lM === 'off' ? undefined : (lM === 'any' ? null : lNum);
-      return { st, lims, absH, absL, hM, lM, hRaw, lRaw, hv, lv, hNum, lNum, hFinal, lFinal };
+
+      let hNum = null, newHighAbs = undefined;
+      if (hRaw !== '' && !isNaN(hv)) {
+        if (absH) {
+          hNum = (hRaw === st.initH && st.origH !== null) ? st.origH : hv / lims.uln;
+          newHighAbs = (st.highAbs !== undefined) ? hv : undefined;
+        } else {
+          // 8.15.29: 无参考上限时，填写的数值作为绝对阈值 highAbs，倍数置 null
+          newHighAbs = hv;
+          hNum = null;
+        }
+      } else if (hM === 'any') {
+        hNum = null;
+        newHighAbs = null;
+      }
+
+      let lNum = null, newLowAbs = undefined;
+      if (lRaw !== '' && !isNaN(lv)) {
+        if (absL) {
+          lNum = (lRaw === st.initL && st.origL !== null) ? st.origL : lv / lims.lln;
+          newLowAbs = (st.lowAbs !== undefined) ? lv : undefined;
+        } else {
+          // 8.15.29: 无参考下限时，填写的数值作为绝对下限 lowAbs，倍数置 null
+          newLowAbs = lv;
+          lNum = null;
+        }
+      } else if (lM === 'any') {
+        lNum = null;
+        newLowAbs = null;
+      }
+
+      const hFinal = hM === 'off' ? undefined : (hM === 'any' ? null : (hNum !== null ? hNum : null));
+      const lFinal = lM === 'off' ? undefined : (lM === 'any' ? null : (lNum !== null ? lNum : null));
+      return { st, lims, absH, absL, hM, lM, hRaw, lRaw, hv, lv, hNum, lNum, hFinal, lFinal, newHighAbs, newLowAbs };
     }
 
     function updatePreview() {
@@ -20598,15 +20672,19 @@ window.addEventListener('keydown',function(e){
       const ph = body.querySelector('#lm-high-pv'), pl = body.querySelector('#lm-low-pv');
       if (!ph || !pl) {return;}
       const r = readInputsForSex(curSex);
-      const txt = (mode, num, abs, lim, side) => {
+      const txt = (mode, num, abs, lim, side, absVal) => {
         if (mode === 'off') {return '→ 不放行';}
         if (mode === 'any') {return '→ 一律放行';}
-        if (num === null) {return '→ 请填数值';}
-        return abs ? '＝ ' + fmtM(num) + '× ' + side
-          : (lim !== null ? '→ 放行至 ' + fmt(lim * num) : '');
+        if (abs) {
+          if (num === null) {return '→ 请填数值';}
+          return '＝ ' + fmtM(num) + '× ' + side;
+        }
+        if (typeof absVal === 'number') {return '→ 绝对放行线 ' + fmt(absVal);}
+        if (num !== null && lim !== null) {return '→ 放行至 ' + fmt(lim * num);}
+        return num === null ? '→ 请填数值' : '';
       };
-      ph.textContent = txt(r.hM, r.hNum, r.absH, r.lims.uln, '上限');
-      pl.textContent = txt(r.lM, r.lNum, r.absL, r.lims.lln, '下限');
+      ph.textContent = txt(r.hM, r.hNum, r.absH, r.lims.uln, '上限', r.newHighAbs);
+      pl.textContent = txt(r.lM, r.lNum, r.absL, r.lims.lln, '下限', r.newLowAbs);
       ph.className = 'lm-pv' + (r.hM === 'num' ? ' on' : '');
       pl.className = 'lm-pv' + (r.lM === 'num' ? ' on' : '');
     }
@@ -20745,26 +20823,14 @@ window.addEventListener('keydown',function(e){
           if (r.lM === 'num' && (r.lRaw === '' || isNaN(r.lv))) {
             showToast(`${sxLabel}偏低选了「按数值放行」，请填一个数值；不想放行请改选「不放行」`, 'error'); return;
           }
-          if (r.hNum !== null && r.hNum < 1) {
-            showToast(r.absH
-              ? `${sxLabel}偏高放行值不能低于参考上限 ${fmt(r.lims.uln)}（那样等于不放行），请留空或改选「不放行」`
-              : `${sxLabel}偏高倍数不能小于 1（那样等于不放行），请留空或改选「不放行」`, 'warning');
+          if (r.absH && r.hNum !== null && r.hNum < 1) {
+            showToast(`${sxLabel}偏高放行值不能低于参考上限 ${fmt(r.lims.uln)}（那样等于不放行），请留空或改选「不放行」`, 'warning');
             return;
           }
-          if (r.lNum !== null && r.lNum > 1) {
-            showToast(r.absL
-              ? `${sxLabel}偏低放行值不能高于参考下限 ${fmt(r.lims.lln)}（那样等于不放行），请留空或改选「不放行」`
-              : `${sxLabel}偏低倍数不能大于 1（那样等于不放行），请留空或改选「不放行」`, 'warning');
+          if (r.absL && r.lNum !== null && r.lNum > 1) {
+            showToast(`${sxLabel}偏低放行值不能高于参考下限 ${fmt(r.lims.lln)}（那样等于不放行），请留空或改选「不放行」`, 'warning');
             return;
           }
-
-          let newHighAbs = r.st.highAbs;
-          if (r.hM === 'any') {newHighAbs = null;}
-          else if (r.hM === 'num' && r.hv !== null && r.st.highAbs !== undefined) {newHighAbs = r.hv;}
-
-          let newLowAbs = r.st.lowAbs;
-          if (r.lM === 'any') {newLowAbs = null;}
-          else if (r.lM === 'num' && r.lv !== null && r.st.lowAbs !== undefined) {newLowAbs = r.lv;}
 
           const hStore = r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4;
           const lStore = r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4;
@@ -20772,7 +20838,7 @@ window.addEventListener('keydown',function(e){
           patch[sx] = {
             high: hStore, low: lStore,
             highOff: r.hFinal === undefined, lowOff: r.lFinal === undefined,
-            highAbs: newHighAbs, lowAbs: newLowAbs
+            highAbs: r.newHighAbs, lowAbs: r.newLowAbs
           };
 
           if (!off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew, sx)) {
@@ -20788,19 +20854,15 @@ window.addEventListener('keydown',function(e){
         if (r.lM === 'num' && (r.lRaw === '' || isNaN(r.lv))) {
           showToast('偏低选了「按数值放行」，请填一个数值；不想放行请改选「不放行」', 'error'); return;
         }
-        if (r.hNum !== null && r.hNum < 1) {
-          showToast(r.absH
-            ? '偏高放行值不能低于参考上限 ' + fmt(r.lims.uln) + '（那样等于不放行），请留空或改选「不放行」'
-            : '偏高倍数不能小于 1（那样等于不放行），请留空或改选「不放行」', 'warning');
+        if (r.absH && r.hNum !== null && r.hNum < 1) {
+          showToast('偏高放行值不能低于参考上限 ' + fmt(r.lims.uln) + '（那样等于不放行），请留空或改选「不放行」', 'warning');
           return;
         }
-        if (r.lNum !== null && r.lNum > 1) {
-          showToast(r.absL
-            ? '偏低放行值不能高于参考下限 ' + fmt(r.lims.lln) + '（那样等于不放行），请留空或改选「不放行」'
-            : '偏低倍数不能大于 1（那样等于不放行），请留空或改选「不放行」', 'warning');
+        if (r.absL && r.lNum !== null && r.lNum > 1) {
+          showToast('偏低放行值不能高于参考下限 ' + fmt(r.lims.lln) + '（那样等于不放行），请留空或改选「不放行」', 'warning');
           return;
         }
-        if (!off && r.hFinal === undefined && r.lFinal === undefined) {
+        if (!off && r.hFinal === undefined && r.lFinal === undefined && r.newHighAbs === undefined && r.newLowAbs === undefined) {
           showToast('两个方向都选了「不放行」，这条规则没有意义；请至少放行一个方向，或勾选「整条规则停用」', 'error');
           return;
         }
@@ -20808,20 +20870,12 @@ window.addEventListener('keydown',function(e){
         const hStore = r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4;
         const lStore = r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4;
 
-        let newHighAbs = (rule0 && rule0.highAbs);
-        if (r.hM === 'any') {newHighAbs = null;}
-        else if (r.hM === 'num' && r.hv !== null && (rule0 && rule0.highAbs !== undefined)) {newHighAbs = r.hv;}
-
-        let newLowAbs = (rule0 && rule0.lowAbs);
-        if (r.lM === 'any') {newLowAbs = null;}
-        else if (r.lM === 'num' && r.lv !== null && (rule0 && rule0.lowAbs !== undefined)) {newLowAbs = r.lv;}
-
         const patch = {
           high: hStore, low: lStore,
           highOff: r.hFinal === undefined, lowOff: r.lFinal === undefined, off,
-          highAbs: newHighAbs, lowAbs: newLowAbs
+          highAbs: r.newHighAbs, lowAbs: r.newLowAbs
         };
-        if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore, patch.highOff, patch.lowOff);}
+        if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore, patch.highOff, patch.lowOff, patch.highAbs, patch.lowAbs);}
         else {setMildRuleOverride(rule0, patch, name);}
       }
 
@@ -20983,20 +21037,23 @@ window.addEventListener('keydown',function(e){
       return { ok: false, reason: `${name} 参考范围为分段文本且无结构化上下限，留人工` };
     }
     if (st === 'HIGH') {
-      if (effRule.high === undefined) {return { ok: false, reason: `${name} 偏高不放行` };}
+      if (effRule.high === undefined && effRule.highAbs === undefined) {return { ok: false, reason: `${name} 偏高不放行` };}
       let limit = Infinity;
-      if (effRule.high !== null) {
+      if (effRule.high !== null && effRule.high !== undefined) {
         let ulnV = NaN;
         if (_sexRange) {ulnV = Number(_sexRange[1]);}
         else {
           const uln = parseComparableNumber(range.high);
-          if (!uln || isNaN(uln.value) || uln.value <= 0) {return { ok: false, reason: `${name} 参考上限缺失，不放行` };}
-          ulnV = uln.value;
+          if (uln && !isNaN(uln.value) && uln.value > 0) {ulnV = uln.value;}
         }
-        if (!Number.isFinite(ulnV) || ulnV <= 0) {return { ok: false, reason: `${name} 性别基准上限缺失，不放行` };}
-        limit = ulnV * effRule.high;
+        if (Number.isFinite(ulnV) && ulnV > 0) {
+          limit = ulnV * effRule.high;
+        } else if (typeof effRule.highAbs !== 'number') {
+          return { ok: false, reason: `${name} 参考上限缺失，不放行` };
+        }
       }
       if (typeof effRule.highAbs === 'number') {limit = Math.min(limit, effRule.highAbs);}
+      if (!Number.isFinite(limit)) {return { ok: false, reason: `${name} 偏高未设有效上限` };}
       const limitDisp = Math.round(limit * 100) / 100;
       if (!(p.value <= limit)) {return { ok: false, reason: `${name} ${it.result} 超出轻微带（≤${limitDisp}）` };}
       return { ok: true, rule, tier: 'b' };
@@ -21005,11 +21062,16 @@ window.addEventListener('keydown',function(e){
     if (effRule.low === undefined && effRule.lowAbs === undefined) {return { ok: false, reason: `${name} 偏低不放行` };}
     let floor = null;
     if (effRule.low !== undefined && effRule.low !== null) {
-      if (_sexRange) {floor = Number(_sexRange[0]) * effRule.low;}
+      let llnV = NaN;
+      if (_sexRange) {llnV = Number(_sexRange[0]);}
       else {
         const lln = parseComparableNumber(range.low);
-        if (!lln || isNaN(lln.value)) {return { ok: false, reason: `${name} 参考下限缺失，不放行` };}
-        floor = lln.value * effRule.low;
+        if (lln && !isNaN(lln.value)) {llnV = lln.value;}
+      }
+      if (Number.isFinite(llnV)) {
+        floor = llnV * effRule.low;
+      } else if (typeof effRule.lowAbs !== 'number') {
+        return { ok: false, reason: `${name} 参考下限缺失，不放行` };
       }
     }
     if (typeof effRule.lowAbs === 'number') {floor = floor === null ? effRule.lowAbs : Math.max(floor, effRule.lowAbs);}
