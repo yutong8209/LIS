@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.25
+// @version      8.15.26
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1295,6 +1295,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 /* 提示横幅 */
 .ws-incomplete-banner{background:var(--lis-surface);border:1px solid #fde68a;border-left:3px solid var(--lis-warning);border-radius:6px;padding:8px 12px;margin:10px 12px;font-size:12px;color:#92400e;font-weight:700}
 .ws-collected-banner{background:var(--lis-surface);border:1px solid #fce7f3;border-left:3px solid #be185d;border-radius:6px;padding:8px 12px;margin:10px 12px;font-size:12px;color:#be185d;font-weight:700}
+.ws-pending-banner{background:var(--lis-surface);border:1px solid #bfdbfe;border-left:3px solid #2563eb;border-radius:6px;padding:8px 12px;margin:10px 12px;font-size:12px;color:#1d4ed8;font-weight:700}
 .ws-category-loading{text-align:center;padding:40px;color:var(--lis-text-muted);font-size:13px}
 .ws-category-loading .cat-prog{font-size:11px;color:var(--lis-text-muted);margin-top:6px}
 
@@ -10059,7 +10060,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           (r.Labno || '').toLowerCase().includes(ql) ||
           (r.EpisodeNo || '').toLowerCase().includes(ql) ||
           (r.RegNo || '').toLowerCase().includes(ql) ||
-          (r.TestSetDesc || '').toLowerCase().includes(ql)
+          (r.TestSetDesc || '').toLowerCase().includes(ql) ||
+          (r.Doctor || r.DoctorName || '').toLowerCase().includes(ql) ||
+          (r.Location || r.LocationName || '').toLowerCase().includes(ql)
       );
     }
     wsSearchQuery = _q; // 保存搜索词用于高亮
@@ -11579,6 +11582,10 @@ window.addEventListener('keydown',function(e){
       break;
     case 'incomplete':
       renderIncompleteView(data, body);
+      break;
+    case 'pending':
+      // 8.15.26: 待排样标本 — 独立只读表格视图，完整展示患者及申请信息
+      renderPendingView(data, body);
       break;
     case 'collected':
       // 8.5.31: 病房采集 — 与不完整视图一致的只读模式
@@ -13236,25 +13243,113 @@ window.addEventListener('keydown',function(e){
     body.addEventListener('click', body._incompleteClickHandler);
   }
 
+  // 8.15.26: 提取标本患者详细元信息（申请医生/性别年龄/科室床号等），支持多级字段回退与缓存联动
+  function getWSPatientMeta(r) {
+    if (!r) {return { doc: '—', sex: '', age: '', dept: '', ward: '', bed: '', locBed: '—', sexAge: '—' };}
+    const cached = (typeof wsClassifiedCache !== 'undefined' && wsClassifiedCache && wsClassifiedCache[r.ReportDR]) || null;
+    const cr = (cached && cached.row) || r;
+    const li = (cached && cached.labInfo) || {};
+
+    const rawDoc =
+      cr.Doctor || cr.DoctorName || cr.ReqDoctorName || cr.ApplyDoctorName ||
+      cr.OrderDoctor || cr.DocName || cr.RequestUser || cr.InDocName || cr.ReqDoc || cr.DoctorDesc ||
+      cr.ApplyDoc || cr.ReqDoctor || cr.OrderDoc || cr.AppDoctor ||
+      r.Doctor || r.DoctorName || r.ReqDoctorName || r.ApplyDoctorName ||
+      r.OrderDoctor || r.DocName || r.RequestUser || r.InDocName || r.ReqDoc || r.DoctorDesc ||
+      r.ApplyDoc || r.ReqDoctor || r.OrderDoc || r.AppDoctor ||
+      li.Doctor || li.DoctorName || li.ReqDoctorName || li.ApplyDoctorName || '';
+    const doc = String(rawDoc || '').trim();
+
+    const sex = String(cr.Species || cr.Sex || cr.SexDesc || r.Species || r.Sex || r.SexDesc || li.Species || li.Sex || '').trim();
+    const ageVal = String(cr.Age || r.Age || li.Age || '').trim();
+    const ageUnit = String(cr.AgeUnit || r.AgeUnit || li.AgeUnit || '').trim();
+    const age = ageVal ? (ageVal + ageUnit) : String(cr.PatAge || r.PatAge || '').trim();
+
+    const dept = String(
+      cr.Location || cr.LocationName || cr.LocDesc || cr.DeptName || cr.Department || cr.AdmLoc || cr.ReqDept || cr.LocName ||
+      r.Location || r.LocationName || r.LocDesc || r.DeptName || r.Department || r.AdmLoc || r.ReqDept || r.LocName ||
+      li.Location || li.LocationName || ''
+    ).trim();
+
+    const ward = String(
+      cr.Ward || cr.WardName || cr.WardDesc || r.Ward || r.WardName || r.WardDesc || li.Ward || li.WardName || ''
+    ).trim();
+
+    const bedRaw = cr.BedNo || cr.Bed || cr.BedNum || r.BedNo || r.Bed || r.BedNum || li.BedNo || li.Bed || '';
+    const bed = formatDetailBedNo(bedRaw);
+
+    const sexAge = [sex, age].filter(Boolean).join('/') || '—';
+    const loc = dept && ward && ward !== dept ? `${dept} (${ward})` : (dept || ward || '');
+    const locBed = [loc, bed].filter(Boolean).join(' ') || '—';
+
+    return {
+      doc: doc || '—',
+      sex,
+      age,
+      dept,
+      ward,
+      bed,
+      locBed,
+      sexAge
+    };
+  }
+
   function renderCollectedView(data, body) {
     let h = '<div class="ws-collected-banner">🩸 以下标本为病房采集中、尚未送到科室 · 仅供追踪/催送</div>';
 
     h += '<table><thead><tr>';
-    h += '<th>仪器</th><th>姓名</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>采集日期</th><th style="width:84px">忽略</th>';
+    h += '<th>仪器</th><th>姓名</th><th>性别/年龄</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>申请科室/床号</th><th>申请医生</th><th>采集时间</th><th style="width:84px">忽略</th>';
     h += '</tr></thead><tbody>';
 
     data.forEach((r, i) => {
       const ignored = isWSIgnored(r.ReportDR);
+      const meta = getWSPatientMeta(r);
       h += `<tr class="${ignored ? 'ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
       h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
+      h += `<td>${esc(meta.sexAge)}</td>`;
       h += `<td><b>${highlightText(r.Labno || '', wsSearchQuery)}</b></td>`;
       h += `<td>${highlightText(r.RegNo || r.EpisodeNo || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(r.SpecimenDesc || r.Specimen || '', wsSearchQuery)}</td>`;
-      // 采集中：LIS 首页 dgStatusDetail 未显示采集日期列，CollectionDate 字段是否存在待真实数据确认（缺失时显示 —）
-      const ct = ((r.CollectionDate || '') + ' ' + (r.CollectionTime || '')).trim();
-      h += `<td>${esc(ct || '—')}</td>`;
+      h += `<td>${highlightText(meta.locBed, wsSearchQuery)}</td>`;
+      h += `<td>${highlightText(meta.doc, wsSearchQuery)}</td>`;
+      // 采集中：收集 LIS 返回的 CollectionDate/CollectionTime（缺失时显示 —）
+      const ct = ((r.CollectionDate || '') + ' ' + (r.CollectionTime || '')).trim() || r.CollectDT || r.ReceiveDT || '—';
+      h += `<td>${esc(ct)}</td>`;
+      h += `<td style="text-align:center">${wsIgnoreBtnHTML(r.ReportDR)}</td>`;
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    body.innerHTML = '<div class="ws-table-wrap">' + h + '</div>';
+
+    // 行点击 → 详情面板；空白处点击 → 收回
+    bindReadOnlyRowClick(body);
+  }
+
+  // --- 8.15.26: 待排样标本视图（只读，标本已送达/核收待上机排样）---
+  function renderPendingView(data, body) {
+    let h = '<div class="ws-pending-banner">📝 以下标本已送达/核收 · 待上机排样测试</div>';
+
+    h += '<table><thead><tr>';
+    h += '<th>仪器</th><th>姓名</th><th>性别/年龄</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>申请科室/床号</th><th>申请医生</th><th>核收时间</th><th style="width:84px">忽略</th>';
+    h += '</tr></thead><tbody>';
+
+    data.forEach((r, i) => {
+      const ignored = isWSIgnored(r.ReportDR);
+      const meta = getWSPatientMeta(r);
+      h += `<tr class="${ignored ? 'ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
+      h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
+      h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
+      h += `<td>${esc(meta.sexAge)}</td>`;
+      h += `<td><b>${highlightText(r.Labno || '', wsSearchQuery)}</b></td>`;
+      h += `<td>${highlightText(r.RegNo || r.EpisodeNo || '', wsSearchQuery)}</td>`;
+      h += `<td>${highlightText(r.TestSetDesc || '', wsSearchQuery)}</td>`;
+      h += `<td>${highlightText(r.SpecimenDesc || r.Specimen || '', wsSearchQuery)}</td>`;
+      h += `<td>${highlightText(meta.locBed, wsSearchQuery)}</td>`;
+      h += `<td>${highlightText(meta.doc, wsSearchQuery)}</td>`;
+      const at = r.AcceptDT || ((r.AcceptDate || '') + ' ' + (r.AcceptTime || '')).trim() || r.ReceiveDT || '—';
+      h += `<td>${esc(at)}</td>`;
       h += `<td style="text-align:center">${wsIgnoreBtnHTML(r.ReportDR)}</td>`;
       h += '</tr>';
     });
