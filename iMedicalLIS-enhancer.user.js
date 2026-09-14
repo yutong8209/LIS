@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.12
+// @version      8.15.13
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -16416,9 +16416,13 @@ window.addEventListener('keydown',function(e){
 .detail-mild-btn{background:none;border:none;cursor:pointer;font-size:11px;padding:0 2px;margin-left:2px;vertical-align:middle;opacity:.4;line-height:1}
 .detail-mild-btn:hover{opacity:1;transform:scale(1.15)}
 .detail-mild-btn.ovd{opacity:1;color:#b45309}
-#lis-mild-dlg{position:fixed;inset:0;z-index:100030;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;font-family:var(--lis-font)}
-#lis-mild-dlg .lm-box{background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:10px;width:436px;max-width:92vw;max-height:88vh;overflow:auto;padding:14px 16px;color:var(--lis-text);box-shadow:0 10px 34px rgba(0,0,0,.22)}
-#lis-mild-dlg .lm-hd{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:700;margin-bottom:2px}
+/* 8.15.13: 改成可拖动浮层——不再用深色遮罩全屏挡住结果表。
+   容器 pointer-events:none（背后表格照常可看、可滚、可点），仅弹窗本体可交互；
+   因此点外部不再关闭（否则想滚表格看别的项目时会误关），关闭走 ✕ / 取消 / Esc。 */
+#lis-mild-dlg{position:fixed;inset:0;z-index:100030;pointer-events:none;font-family:var(--lis-font)}
+#lis-mild-dlg .lm-box{position:absolute;pointer-events:auto;background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:10px;width:436px;max-width:92vw;max-height:88vh;overflow:auto;padding:14px 16px;color:var(--lis-text);box-shadow:0 10px 34px rgba(0,0,0,.22)}
+#lis-mild-dlg .lm-box.dragging{box-shadow:0 18px 48px rgba(0,0,0,.32)}
+#lis-mild-dlg .lm-hd{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:700;margin-bottom:2px;cursor:move;user-select:none;touch-action:none}
 #lis-mild-dlg .lm-close{cursor:pointer;color:var(--lis-text-muted);font-size:15px;padding:0 4px}
 #lis-mild-dlg .lm-item{font-size:12px;color:var(--lis-text-secondary);margin-bottom:10px}
 #lis-mild-dlg .lm-note{font-size:12px;color:var(--lis-text-secondary);margin-bottom:8px;line-height:1.6}
@@ -20176,10 +20180,58 @@ window.addEventListener('keydown',function(e){
     }
     render();
 
+    // 8.15.13: 可拖动 + 位置记忆（复用登录窗 8.11.16「整头部拖拽」的写法，保持一致）
+    const box = dlg.querySelector('.lm-box');
+    const MILD_DLG_POS = 'lis-mild-dlg-pos';
+    (function placeBox() {
+      const vw = window.innerWidth, vh = window.innerHeight;
+      let left = Math.round((vw - box.offsetWidth) / 2);
+      let top = 72;
+      try {
+        const sv = JSON.parse(localStorage.getItem(MILD_DLG_POS) || 'null');
+        if (sv && typeof sv.left === 'number' && typeof sv.top === 'number') {left = sv.left; top = sv.top;}
+      } catch (e) {}
+      // 恢复时也夹回视口内——窗口变小或换过显示器时，旧坐标可能落在屏幕外找不回来
+      left = Math.max(8, Math.min(left, vw - box.offsetWidth - 8));
+      top = Math.max(8, Math.min(top, vh - Math.min(box.offsetHeight, vh - 16) - 8));
+      box.style.left = left + 'px';
+      box.style.top = top + 'px';
+    })();
+    const dragHead = dlg.querySelector('.lm-hd');
+    dragHead.title = '按住可拖动窗口（位置会记住）';
+    dragHead.addEventListener('pointerdown', e => {
+      if (e.target && e.target.closest && e.target.closest('.lm-close')) {return;} // 关闭按钮不当作拖拽起点
+      e.preventDefault();
+      box.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      const startX = e.clientX, startY = e.clientY;
+      const startLeft = box.offsetLeft, startTop = box.offsetTop;
+      const w = box.offsetWidth, h = box.offsetHeight;
+      try {dragHead.setPointerCapture(e.pointerId);} catch (x) {}
+      const onMove = ev => {
+        const vw = window.innerWidth, vh = window.innerHeight;
+        box.style.left = Math.max(0, Math.min(startLeft + ev.clientX - startX, vw - w)) + 'px';
+        box.style.top = Math.max(0, Math.min(startTop + ev.clientY - startY, vh - h)) + 'px';
+      };
+      const onUp = ev => {
+        try {dragHead.releasePointerCapture(ev.pointerId);} catch (x) {}
+        dragHead.removeEventListener('pointermove', onMove);
+        dragHead.removeEventListener('pointerup', onUp);
+        dragHead.removeEventListener('pointercancel', onUp);
+        box.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        try {localStorage.setItem(MILD_DLG_POS, JSON.stringify({left: box.offsetLeft, top: box.offsetTop}));} catch (x) {}
+      };
+      dragHead.addEventListener('pointermove', onMove);
+      dragHead.addEventListener('pointerup', onUp);
+      dragHead.addEventListener('pointercancel', onUp);
+    });
+
     const close = () => {dlg.remove(); document.removeEventListener('keydown', onKey);};
     function onKey(e) {if (e.key === 'Escape') {close();}}
     document.addEventListener('keydown', onKey);
-    dlg.addEventListener('click', e => {if (e.target === dlg) {close();}});
+    // 8.15.13: 不再「点外部关闭」——容器已 pointer-events:none，且用户需要在弹窗开着时
+    // 滚动/查看背后的结果表来定倍数，误关会打断操作。关闭走 ✕ / 取消 / Esc。
     dlg.querySelector('.lm-close').addEventListener('click', close);
     dlg.querySelector('#lm-cancel').addEventListener('click', close);
 
