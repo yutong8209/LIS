@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.26
+// @version      8.15.27
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -13757,12 +13757,26 @@ window.addEventListener('keydown',function(e){
     if (!curDR) {
       queue.pausedForSwitch = true;
       saveAuditQueueNow(queue);
-      runAuditQueueResume(2500);
+      runAuditQueueResume(1500);
       return false;
     }
-    // 8.5.10: 跨组先试不切组——原生列表可按 WorkGroupMachineDR 跨组加载（用户实测可行），
-    // 不再预先切组；主循环内选不到标本时才回退切组（见 continueAuditQueue 的 !selectedOk 分支）。
-    return true;
+    // 8.15.27: 若首条标本已在当前原生列表中（例如跨组共享视图或机台），则直接复用当前组无需预先切组
+    const iframeWin = getReportIframeWin();
+    if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+      return true;
+    }
+    // 首条标本不在当前原生列表且所属工作组不同：批审起始直接切换到目标组，消除盲目尝试选行导致的数秒卡顿
+    queue.pausedForSwitch = true;
+    saveAuditQueueNow(queue);
+    const wgName = (WG_MAP[itemWg] || {}).name || itemWg;
+    showToast('切换到' + wgName + '开始批审...', 'info');
+    try {
+      sessionStorage.setItem(WS_REOPEN_KEY, '1');
+      saveWSState();
+    } catch (e) {}
+    safeSwitchWG(itemWg);
+    runAuditQueueResume(2500);
+    return false;
   }
 
   function runAuditQueueResume(delayMs) {
@@ -13829,7 +13843,7 @@ window.addEventListener('keydown',function(e){
     // 仅在切组后自动续跑，不弹确认框
     if (queue.pausedForSwitch) {
       showToast(`切换工作组后继续批审（${remaining} 个标本）...`, 'warning');
-      runAuditQueueResume(1500);
+      runAuditQueueResume(500);
       return;
     }
     // 非切组场景（如页面刷新），静默清理过期队列，不弹窗打扰
@@ -21988,8 +22002,8 @@ window.addEventListener('keydown',function(e){
       if (!wsData.length) {
         updateBatchProgress('正在加载工作台数据...', 0);
         let _wsWaited = 0;
-        while (!wsData.length && _wsWaited < 30) {
-          await new Promise(r => setTimeout(r, 1000));
+        while (!wsData.length && _wsWaited < 150) {
+          await new Promise(r => setTimeout(r, 100));
           _wsWaited++;
         }
         // keepWorkbenchOnTop 未调用或 loadWSData 失败时，主动加载
@@ -22020,8 +22034,8 @@ window.addEventListener('keydown',function(e){
       let me = iframeWin.me;
       if (!jq || !me) {
         dbg('等待 iframe 就绪...');
-        for (let w = 0; w < 20; w++) {
-          await new Promise(r => setTimeout(r, 500));
+        for (let w = 0; w < 100; w++) {
+          await new Promise(r => setTimeout(r, 100));
           iframeWin = getReportIframeWin();
           if (iframeWin) {
             jq = iframeWin.jQuery || iframeWin.$;
@@ -22318,6 +22332,42 @@ window.addEventListener('keydown',function(e){
               selectedOk = false;
             }
           }
+          if (_batchCrossGroup && !selectedOk) {
+            // 8.15.27: 跨组标本快速探测——先检查当前原生列表是否已包含（0ms）；若无则单次快速切机台查询（~70ms，如 x8 免切组场景）
+            if (selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+              selectedOk = true;
+            } else if (item.mdr) {
+              iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
+              if (iframeWin) {
+                jq = iframeWin.jQuery || iframeWin.$;
+                me = iframeWin.me;
+              }
+              if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+                selectedOk = true;
+                batchLastMdr = String(item.mdr);
+                batchListFresh = true;
+              }
+            }
+            // 当前组无法加载该跨组标本：立即切组续跑，彻底消除 waitAndSelectNativeRow 4~4.5秒死等超时！
+            if (!selectedOk) {
+              dbg('批审: 跨组标本在当前组未找到，立即切组:', item.wg, item.reportDR);
+              if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
+              queue.pausedForSwitch = true;
+              queue.current = Math.max(0, queue.current - 1);
+              saveAuditQueueNow(queue);
+              const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
+              const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
+              showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
+              queuePausedForSwitch = true;
+              try {
+                sessionStorage.setItem(WS_REOPEN_KEY, '1');
+                saveWSState();
+              } catch (e) {}
+              safeSwitchWG(item.wg);
+              runAuditQueueResume(2500);
+              break;
+            }
+          }
           if (!selectedOk) {
             progressPhase('选中标本');
             const selectedResult = await waitAndSelectNativeRow(iframeWin, item, {
@@ -22341,7 +22391,7 @@ window.addEventListener('keydown',function(e){
               batchLastMdr = String(item.mdr);
               batchListFresh = true;
               const retrySel = await waitAndSelectNativeRow(iframeWin, item, {
-                timeoutMs: 2000,
+                timeoutMs: 500,
                 pollMs: 25,
                 skipListRefresh: true
               });
