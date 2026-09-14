@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.19
+// @version      8.15.20
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14992,7 +14992,7 @@ window.addEventListener('keydown',function(e){
         if (statusClass === 'abnormal high' || statusClass === 'abnormal low') {
           const _isHi = statusClass === 'abnormal high';
           const _mvIt = mildItemFromRaw(r, itemStatus, result);
-          if (mildItemVerdict(_mvIt, _liveForMild) === 'pass') {
+          if (mildItemVerdict(_mvIt, _liveForMild, mildSexOf({ row: specimen })) === 'pass') {
             statusClass += ' mild';
             resColor = _isHi ? '#c2410c' : '#1d4ed8';
           }
@@ -15077,6 +15077,7 @@ window.addEventListener('keydown',function(e){
           ' data-ref="' + escAttr(r.RefRanges || r.RefRange || r.ReferenceRange || '') + '"' +
           ' data-vlow="' + escAttr(String(r.ValueLow || r.LowValue || r.RefLow || '')) + '"' +
           ' data-vhigh="' + escAttr(String(r.ValueHigh || r.HighValue || r.RefHigh || '')) + '"' +
+          ' data-sex="' + escAttr(mildSexOf({ row: specimen })) + '"' +
           ' title="' + escAttr(_mildBtnTitle) + '">⚙</button>';
 
         html += `<tr style="${rowStyle}">
@@ -16497,6 +16498,10 @@ window.addEventListener('keydown',function(e){
 #lis-mild-dlg .lm-hd{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:700;margin-bottom:2px;cursor:move;user-select:none;touch-action:none}
 #lis-mild-dlg .lm-close{cursor:pointer;color:var(--lis-text-muted);font-size:15px;padding:0 4px}
 #lis-mild-dlg .lm-item{font-size:12px;color:var(--lis-text-secondary);margin-bottom:10px}
+#lis-mild-dlg .lm-tabs{display:flex;gap:6px;margin-bottom:10px}
+#lis-mild-dlg .lm-tab{flex:1;height:26px;border:1px solid var(--lis-border);background:var(--lis-surface-subtle);color:var(--lis-text);border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+#lis-mild-dlg .lm-tab:hover{border-color:var(--lis-primary);color:var(--lis-primary)}
+#lis-mild-dlg .lm-tab.active{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff}
 #lis-mild-dlg .lm-note{font-size:12px;color:var(--lis-text-secondary);margin-bottom:8px;line-height:1.6}
 #lis-mild-dlg .lm-row{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
 #lis-mild-dlg .lm-lb{font-size:12px;color:var(--lis-text);min-width:34px}
@@ -19534,6 +19539,10 @@ window.addEventListener('keydown',function(e){
     if (live.status === 'CRITICAL') {
       return { ok: false, msg: getAutoAuditBlockReason(live, live.row) };
     }
+    // 8.15.20: 疑似堵孔 0 值（生化分析仪）禁止快捷键/直接审核，必须在原始LIS中处理
+    if (live.status === 'ZERO') {
+      return { ok: false, msg: getAutoAuditBlockReason(live, live.row) };
+    }
     if (context === 'abnormal') {
       if (live.status === 'NORMAL') {
         return { ok: false, msg: '该标本已分类为正常，请在待审视图用 Enter/F4 审核' };
@@ -19555,6 +19564,7 @@ window.addEventListener('keydown',function(e){
     const name = specimen.PatName || specimen.Labno || '';
     if (!r.status) {return '未完成分类，需人工确认';}
     if (r.status === 'CRITICAL') {return `🚨 ${name} 有危急值，必须在原始LIS中审核`;}
+    if (r.status === 'ZERO') {return `🚨 ${name} 含 0 值结果（疑似生化堵孔），必须在原始LIS中审核`;}
     if (r.status === 'ABNORMAL') {return `⚠️ ${name} 有异常结果，需人工审核`;}
     if (r.status === 'UNCERTAIN') {return `⚠️ ${name} 结果待定，需人工确认`;}
     if (r.status !== 'NORMAL') {return `⚠️ ${name} 状态为${classifyStatusText(r.status)}，不可自动审核`;}
@@ -19850,9 +19860,9 @@ window.addEventListener('keydown',function(e){
     { re: /^(嗜酸(性)?(粒细胞?)?(百分比|比率)|eos%|eo%)[\*＊]?$/i, tier: 'b', group: 'EOS', high: 1.5, low: null },
     { re: /^(嗜碱(性)?(粒细胞?)?(绝对值|绝对数|计数|数目|数)?|baso#|bas#)[\*＊#]?$/i, tier: 'b', group: 'BAS', high: null, highAbs: 0.1, low: null },
     { re: /^(嗜碱(性)?(粒细胞?)?(百分比|比率)|baso%|bas%)[\*＊]?$/i, tier: 'b', group: 'BAS', high: null, highAbs: 2, low: null },
-    { re: /^(红细胞(计数|数目|数)?|rbc)[\*＊]?$/i, tier: 'b', group: 'RBC', high: 1.1, low: 0.93 },
-    { re: /^血红蛋白(浓度)?[\*＊]?$/i, tier: 'b', group: 'HGB', high: 1.1, low: 0.93 },
-    { re: /^红细胞(压积|比容)[\*＊]?$/i, tier: 'b', group: 'HCT', high: 1.1, low: 0.93 },
+    { re: /^(红细胞(计数|数目|数)?|rbc)[\*＊]?$/i, tier: 'b', group: 'RBC', bySex: true, high: 1.1, low: 0.93, m: { high: 1.1, low: 0.93 }, f: { high: 1.1, low: 0.93 } },
+    { re: /^血红蛋白(浓度)?[\*＊]?$/i, tier: 'b', group: 'HGB', bySex: true, high: 1.1, low: 0.93, m: { high: 1.1, low: 0.93 }, f: { high: 1.1, low: 0.93 } },
+    { re: /^红细胞(压积|比容)[\*＊]?$/i, tier: 'b', group: 'HCT', bySex: true, high: 1.1, low: 0.93, m: { high: 1.1, low: 0.93 }, f: { high: 1.1, low: 0.93 } },
     { re: /^平均红细胞体积|^mcv$/i, tier: 'b', group: 'MCV', high: 1.1, low: 0.93 },
     { re: /^平均(红细胞)?血红蛋白(含量|量)[\*＊]?$|^mch$/i, tier: 'b', group: 'MCH', high: 1.1, low: 0.93 }, // 8.13.4: 补「平均红细胞血红蛋白量」变体（LIS 实名用「量」不用「含量」，此前误拦）
     { re: /^平均(红细胞)?血红蛋白浓度[\*＊]?$|^mchc$/i, tier: 'b', group: 'MCHC', high: 1.08, low: 0.93 },
@@ -19861,7 +19871,7 @@ window.addEventListener('keydown',function(e){
     { re: /^丙氨酸氨基转移酶[\*＊]?$|^alt$/i, tier: 'b', group: 'ALT', high: 1.2, low: null },
     { re: /^天门冬氨酸氨基转移酶[\*＊]?$|^ast$/i, tier: 'b', group: 'AST', high: 1.2, low: null },
     { re: /^碱性磷酸酶[\*＊]?$|^alp$/i, tier: 'b', group: 'ALP', high: 1.2, low: null },
-    { re: /谷氨酰(基)?(转肽|转移)酶|^ggt$/i, tier: 'b', group: 'GGT', high: 1.2, low: null },
+    { re: /谷氨酰(基)?(转肽|转移)酶|^ggt$/i, tier: 'b', group: 'GGT', bySex: true, high: 1.2, low: null, m: { high: 1.2, low: null }, f: { high: 1.2, low: null } },
     { re: /岩藻糖苷酶|^afu$/i, tier: 'b', group: 'AFU', high: 1.3, low: null },
     { re: /核苷酸酶|5['’]?-?nt/i, tier: 'b', group: 'ALP5NT', high: 1.3, low: null },
     { re: /胆碱酯酶|^che$/i, tier: 'b', group: 'CHE', high: null, low: 0.9 },
@@ -19877,8 +19887,8 @@ window.addEventListener('keydown',function(e){
     { re: /谷胱甘肽还原酶/i, tier: 'b', group: 'GR', high: 1.5, low: null },
     // ---- 乙类：生化肾功 ----
     { re: /^(血清)?尿素(氮)?[\*＊]?$|^urea$|^bun$/i, tier: 'b', group: 'UREA', high: 1.15, low: null },
-    { re: /^肌酐[\*＊]?$|^cr$|^crea$/i, tier: 'b', group: 'CR', high: 1.05, low: null },
-    { re: /^尿酸[\*＊]?$|^ua$/i, tier: 'b', group: 'UA', high: 1.2, low: null },
+    { re: /^肌酐[\*＊]?$|^cr$|^crea$/i, tier: 'b', group: 'CR', bySex: true, high: 1.05, low: null, m: { high: 1.05, low: null }, f: { high: 1.05, low: null } },
+    { re: /^尿酸[\*＊]?$|^ua$/i, tier: 'b', group: 'UA', bySex: true, high: 1.2, low: null, m: { high: 1.2, low: null }, f: { high: 1.2, low: null } },
     { re: /胱抑素|^cys-?c$/i, tier: 'b', group: 'CYSC', high: 1.1, low: null },
     { re: /β2-?微球蛋白|β2-?mg/i, tier: 'b', group: 'B2MG', high: 1.3, low: null },
     { re: /视黄醇结合蛋白|^rbp$/i, tier: 'b', group: 'RBP', high: 1.3, low: null },
@@ -19908,7 +19918,7 @@ window.addEventListener('keydown',function(e){
     { re: /^镁(离子)?[\*＊]?$|^mg$/i, tier: 'b', group: 'MG', high: 1.15, low: 0.85 },
     { re: /二氧化碳(结合力)?[\*＊]?$|^co2/i, tier: 'b', group: 'CO2', high: 1.1, low: 0.9 },
     // ---- 乙类：心肌酶/胰腺（cTnI/Myo 中 cTnI 故意不配=不放行；Myo 见发光段；CK-MB mass/活力同名共用 1.3） ----
-    { re: /^肌酸激酶[\*＊]?$|^ck$/i, tier: 'b', group: 'CK', high: 2, low: null },
+    { re: /^肌酸激酶[\*＊]?$|^ck$/i, tier: 'b', group: 'CK', bySex: true, high: 2, low: null, m: { high: 2, low: null }, f: { high: 2, low: null } },
     { re: /^肌酸激酶同工酶|^ck-?mb$/i, tier: 'b', group: 'CKMB', high: 1.3, low: null },
     { re: /乳酸脱氢酶|^ldh$/i, tier: 'b', group: 'LDH', high: 1.3, low: null },
     { re: /羟基丁酸脱氢酶|^hbdh$/i, tier: 'b', group: 'HBDH', high: 1.3, low: null },
@@ -19920,16 +19930,16 @@ window.addEventListener('keydown',function(e){
     { re: /^游离三碘甲状(腺)?原氨酸|^游离t3|^ft3$/i, tier: 'b', group: 'FT3', high: 1.15, low: 0.9 },
     { re: /^甲状腺素[\*＊]?$|^总甲状腺素|^总t4$|^tt4$/i, tier: 'b', group: 'TT4', high: 1.15, low: 0.85 },
     { re: /^三碘甲状(腺)?原氨酸|^总t3$|^tt3$/i, tier: 'b', group: 'TT3', high: 1.15, low: 0.85 },
-    // ---- 乙类：性激素六项（8.15.0 起按性别取基准范围）----
+    // ---- 乙类：性激素六项（8.15.0 起按性别取基准范围，8.15.20 支持男女分别设置上下限）----
     // sexRanges: [m]=男性范围；[f]=「各期汇总包络」（各期下限取最低、上限取最高，基准值取自 LIS 参考分段文本）。
-    // 基准上再乘 high/low 倍数；性别取不到 → 留人工。倍数取 1.5/0.5（激素日间波动大、且包络本身已覆盖各期；8.15.2 用户定稿偏高收回 1.5）。
+    // 基准上再乘 high/low 倍数；性别取不到 → 留人工。倍数默认 1.5/0.5（可在 ⚙ 弹窗中按男女分别调整）。
     // 注意：绝经后女性 FSH/LH 显著高于育龄期包络，会按超带留人工（保守正确）；如需放行需把绝经后期范围并入包络
-    { re: /促卵泡|^fsh$/i, tier: 'b', group: 'FSH', sexRanges: { m: [1.27, 19.26], f: [1.79, 22.51] }, high: 1.5, low: 0.5 },
-    { re: /黄体生成素|^lh$/i, tier: 'b', group: 'LH', sexRanges: { m: [1.24, 8.62], f: [1.20, 103.03] }, high: 1.5, low: 0.5 },
-    { re: /泌乳素|^prl$/i, tier: 'b', group: 'PRL', sexRanges: { m: [2.64, 13.13], f: [2.74, 26.72] }, high: 1.5, low: 0.5 },
-    { re: /雌二醇|^e2$/i, tier: 'b', group: 'E2', sexRanges: { m: [0, 143], f: [0, 1624] }, high: 1.5, low: null },
-    { re: /^(血清)?孕酮(测定)?[\*＊]?$/i, tier: 'b', group: 'PROG', sexRanges: { m: [0.45, 6.55], f: [0.25, 59] }, high: 1.5, low: null },
-    { re: /^(血清)?睾酮(测定)?[\*＊]?$|^tsto$/i, tier: 'b', group: 'TSTO', sexRanges: { m: [2.12, 23.15], f: [0, 2.6] }, high: 1.5, low: 0.5 },
+    { re: /促卵泡|^fsh$/i, tier: 'b', group: 'FSH', bySex: true, sexRanges: { m: [1.27, 19.26], f: [1.79, 22.51] }, high: 1.5, low: 0.5, m: { high: 1.5, low: 0.5 }, f: { high: 1.5, low: 0.5 } },
+    { re: /黄体生成素|^lh$/i, tier: 'b', group: 'LH', bySex: true, sexRanges: { m: [1.24, 8.62], f: [1.20, 103.03] }, high: 1.5, low: 0.5, m: { high: 1.5, low: 0.5 }, f: { high: 1.5, low: 0.5 } },
+    { re: /泌乳素|^prl$/i, tier: 'b', group: 'PRL', bySex: true, sexRanges: { m: [2.64, 13.13], f: [2.74, 26.72] }, high: 1.5, low: 0.5, m: { high: 1.5, low: 0.5 }, f: { high: 1.5, low: 0.5 } },
+    { re: /雌二醇|^e2$/i, tier: 'b', group: 'E2', bySex: true, sexRanges: { m: [0, 143], f: [0, 1624] }, high: 1.5, low: null, m: { high: 1.5, low: null }, f: { high: 1.5, low: null } },
+    { re: /^(血清)?孕酮(测定)?[\*＊]?$/i, tier: 'b', group: 'PROG', bySex: true, sexRanges: { m: [0.45, 6.55], f: [0.25, 59] }, high: 1.5, low: null, m: { high: 1.5, low: null }, f: { high: 1.5, low: null } },
+    { re: /^(血清)?睾酮(测定)?[\*＊]?$|^tsto$/i, tier: 'b', group: 'TSTO', bySex: true, sexRanges: { m: [2.12, 23.15], f: [0, 2.6] }, high: 1.5, low: 0.5, m: { high: 1.5, low: 0.5 }, f: { high: 1.5, low: 0.5 } },
     // ---- 乙类：发光心肌/肿瘤/铁蛋白/炎症 ----
     { re: /^肌红蛋白[\*＊]?$|^myo$/i, tier: 'b', group: 'MYO', high: 1.25, low: null },
     { re: /甲胎蛋白|^afp$/i, tier: 'b', group: 'AFP', high: 1.3, low: null },
@@ -19938,7 +19948,7 @@ window.addEventListener('keydown',function(e){
     { re: /糖类抗原125|ca125/i, tier: 'b', group: 'CA125', high: 1.3, low: null },
     { re: /糖类抗原15-?3|ca15-?3/i, tier: 'b', group: 'CA153', high: 1.3, low: null },
     { re: /^前列腺特异(性)?抗原[\*＊]?$|^psa$/i, tier: 'b', group: 'PSA', high: 1.25, low: null },
-    { re: /^铁蛋白[\*＊]?$|^ferritin$/i, tier: 'b', group: 'FER', high: 1.5, low: 0.9 },
+    { re: /^铁蛋白[\*＊]?$|^ferritin$/i, tier: 'b', group: 'FER', bySex: true, high: 1.5, low: 0.9, m: { high: 1.5, low: 0.9 }, f: { high: 1.5, low: 0.9 } },
     { re: /^超敏c[-－]?反应蛋白|^hscrp/i, tier: 'b', group: 'CRP', high: 3, low: null },
     { re: /^c[-－]?反应蛋白[\*＊]?$|^crp$/i, tier: 'b', group: 'CRP', high: 3, low: null },
     { re: /降钙素原|^pct$/i, tier: 'b', group: 'PCT', high: null, highAbs: 0.5, low: null }
@@ -19951,7 +19961,9 @@ window.addEventListener('keydown',function(e){
   // ⚠️ 覆盖只作用于「轻微放行带」——危急值/堵孔0值/传染病阳性/心肌危急线是**独立安全门**，不受影响。
   // 键的选择：乙类规则用 group（WBC/ALT…，稳定可读）；甲类规则无 group，退回 're:' + 正则源码。
   const MILD_RULE_DEFAULTS = MILD_ALLOW_RULES.map(r => ({
-    high: r.high, low: r.low, highAbs: r.highAbs, lowAbs: r.lowAbs
+    high: r.high, low: r.low, highAbs: r.highAbs, lowAbs: r.lowAbs,
+    m: r.m ? { high: r.m.high, low: r.m.low, highAbs: r.m.highAbs, lowAbs: r.m.lowAbs } : undefined,
+    f: r.f ? { high: r.f.high, low: r.f.low, highAbs: r.f.highAbs, lowAbs: r.f.lowAbs } : undefined
   }));
   const MILD_RULE_OV_LOG_MAX = 200;
 
@@ -19986,18 +19998,34 @@ window.addEventListener('keydown',function(e){
     for (let i = 0; i < base; i++) {
       const d = MILD_RULE_DEFAULTS[i], r = MILD_ALLOW_RULES[i];
       r.high = d.high; r.low = d.low; r.highAbs = d.highAbs; r.lowAbs = d.lowAbs;
+      if (d.m) {r.m = { high: d.m.high, low: d.m.low, highAbs: d.m.highAbs, lowAbs: d.m.lowAbs, _off: false };}
+      if (d.f) {r.f = { high: d.f.high, low: d.f.low, highAbs: d.f.highAbs, lowAbs: d.f.lowAbs, _off: false };}
       r._off = false; r._added = false; r._overridden = false;
     }
     const ov = loadMildRuleOverrides();
     for (const r of MILD_ALLOW_RULES) {
       const o = ov.rules[mildRuleKey(r)];
       if (!o) {continue;}
-      // 8.15.14: 单方向三态——off（该方向不放行，等价于规则里没有这个键）/ any（不拦截，=null）/
-      // num（按倍数，=number）。用 highOff/lowOff 显式表达「不放行」，因为 JSON 存不了 undefined。
+      // 8.15.20: 分男女覆盖处理
+      if (r.bySex) {
+        ['m', 'f'].forEach(sx => {
+          const so = o[sx];
+          if (!so || !r[sx]) {return;}
+          if (so.highOff) {r[sx].high = undefined;}
+          else if (typeof so.high === 'number' || so.high === null) {r[sx].high = so.high;}
+          if (so.lowOff) {r[sx].low = undefined;}
+          else if (typeof so.low === 'number' || so.low === null) {r[sx].low = so.low;}
+          if (typeof so.highAbs === 'number' || so.highAbs === null) {r[sx].highAbs = so.highAbs;}
+          if (typeof so.lowAbs === 'number' || so.lowAbs === null) {r[sx].lowAbs = so.lowAbs;}
+          if (so.off) {r[sx]._off = true;}
+        });
+      }
       if (o.highOff) {r.high = undefined;}
       else if (typeof o.high === 'number' || o.high === null) {r.high = o.high;}
       if (o.lowOff) {r.low = undefined;}
       else if (typeof o.low === 'number' || o.low === null) {r.low = o.low;}
+      if (typeof o.highAbs === 'number' || o.highAbs === null) {r.highAbs = o.highAbs;}
+      if (typeof o.lowAbs === 'number' || o.lowAbs === null) {r.lowAbs = o.lowAbs;}
       if (o.off) {r._off = true;}
       r._overridden = true;
     }
@@ -20026,14 +20054,19 @@ window.addEventListener('keydown',function(e){
     });
     if (ov.log.length > MILD_RULE_OV_LOG_MAX) {ov.log = ov.log.slice(ov.log.length - MILD_RULE_OV_LOG_MAX);}
   }
-  // 设置已有规则的覆盖。patch: {high,low,off}；patch 传 null 表示删除覆盖（恢复默认）
+  // 设置已有规则的覆盖。patch: {high,low,off,m,f}；patch 传 null 表示删除覆盖（恢复默认）
   function setMildRuleOverride(rule, patch, label) {
     const key = mildRuleKey(rule);
     if (!key) {return false;}
     const ov = loadMildRuleOverrides();
     const before = ov.rules[key] ? JSON.stringify(ov.rules[key]) : '默认';
     if (patch === null) {delete ov.rules[key];}
-    else {ov.rules[key] = Object.assign({}, ov.rules[key] || {}, patch);}
+    else {
+      ov.rules[key] = Object.assign({}, ov.rules[key] || {});
+      if (patch.m) {ov.rules[key].m = Object.assign({}, ov.rules[key].m || {}, patch.m);}
+      if (patch.f) {ov.rules[key].f = Object.assign({}, ov.rules[key].f || {}, patch.f);}
+      if (!patch.m && !patch.f) {Object.assign(ov.rules[key], patch);}
+    }
     _mildOvLog(ov, key, label || key, before, patch === null ? '默认' : JSON.stringify(ov.rules[key]));
     saveMildRuleOverrides(ov);
     applyMildRuleOverrides();
@@ -20063,14 +20096,27 @@ window.addEventListener('keydown',function(e){
   function isMildRuleOverridden(rule) {
     if (!rule) {return false;}
     if (rule._added) {return true;}
-    return !!loadMildRuleOverrides().rules[mildRuleKey(rule)];
+    const o = loadMildRuleOverrides().rules[mildRuleKey(rule)];
+    if (!o) {return false;}
+    if (rule.bySex) {
+      return !!(o.m || o.f || o.high !== undefined || o.low !== undefined || o.off);
+    }
+    return true;
   }
   // 按「本标本的参考范围」算出实际放行上下限，供对话框实时预览（倍数才是稳定参数，绝对值随性别/年龄变）
-  // 按「本标本的参考范围」算出实际放行上下限，供对话框实时预览（倍数才是稳定参数，绝对值随性别/年龄变）。
-  // ⚠️ 参考范围只取决于条目本身，**与是否已配规则无关**——「新增规则」时 rule 就是 null，同样要能预览。
-  // 所以范围计算必须放在 rule 判空**之前**。（8.15.12 修：此前 `if (!rule …) return` 在最前面，
-  // 新增规则流程永远显示「参考范围取不到」，看起来像数据缺失，其实是自己早退了。）
-  function mildRuleLimits(rule, it) {
+  // 8.15.20: 支持传入患者性别 sex（m/f），若项目配置了 sexRanges（性激素等），优先按对应性别包络给出基准；
+  // 若无 sexRanges 但有 bySex，跨性别切换时优先尝试从参考范围文本中提取对应性别的上下限，缺失时落入标准基准
+  const DEFAULT_SEX_RANGES = {
+    RBC: { m: [4.3, 5.8], f: [3.8, 5.1] },
+    HGB: { m: [130, 175], f: [115, 150] },
+    HCT: { m: [0.40, 0.50], f: [0.35, 0.45] },
+    GGT: { m: [10, 60], f: [7, 45] },
+    CR: { m: [53, 106], f: [44, 97] },
+    UA: { m: [208, 428], f: [155, 357] },
+    CK: { m: [50, 310], f: [40, 200] },
+    FER: { m: [30, 400], f: [13, 150] }
+  };
+  function mildRuleLimits(rule, it, sex) {
     const out = {uln: null, lln: null, high: undefined, low: undefined, refText: ''};
     const rngSrc = (it && it.preResult) || it || {};
     out.refText = String(
@@ -20081,16 +20127,43 @@ window.addEventListener('keydown',function(e){
     const lln = parseComparableNumber(range.low);
     if (uln && !isNaN(uln.value)) {out.uln = uln.value;}
     if (lln && !isNaN(lln.value)) {out.lln = lln.value;}
-    if (!rule || rule.tier !== 'b') {return out;}
-    if (typeof rule.high === 'number' && out.uln !== null) {out.high = out.uln * rule.high;}
-    else if (rule.high === null) {out.high = null;}
-    if (typeof rule.low === 'number' && out.lln !== null) {out.low = out.lln * rule.low;}
-    else if (rule.low === null) {out.low = null;}
-    if (typeof rule.highAbs === 'number') {
-      out.high = (out.high === undefined || out.high === null) ? rule.highAbs : Math.min(out.high, rule.highAbs);
+
+    const effSex = (sex === 'm' || sex === 'f') ? sex : (it && (it._sex || ''));
+    if (rule && rule.sexRanges && (effSex === 'm' || effSex === 'f')) {
+      const _sr = rule.sexRanges[effSex];
+      out.lln = _sr[0];
+      out.uln = _sr[1];
+      out.refText = (effSex === 'm' ? '男性基准范围：' : '女性各期包络：') + _sr[0] + ' ~ ' + _sr[1];
+    } else if (effSex && it && it._sex && it._sex !== effSex && out.refText) {
+      const sPat = effSex === 'm'
+        ? /(?:男|男性)[^\d]*(\d+(?:\.\d+)?)\s*[-~～至]\s*(\d+(?:\.\d+)?)/
+        : /(?:女|女性)[^\d]*(\d+(?:\.\d+)?)\s*[-~～至]\s*(\d+(?:\.\d+)?)/;
+      const sm = out.refText.match(sPat);
+      if (sm) {
+        out.lln = Number(sm[1]);
+        out.uln = Number(sm[2]);
+        out.refText = (effSex === 'm' ? '男性参考范围：' : '女性参考范围：') + sm[1] + ' ~ ' + sm[2];
+      }
     }
-    if (typeof rule.lowAbs === 'number') {
-      out.low = (out.low === undefined || out.low === null) ? rule.lowAbs : Math.max(out.low, rule.lowAbs);
+    if (out.uln === null && rule && rule.group && DEFAULT_SEX_RANGES[rule.group] && (effSex === 'm' || effSex === 'f')) {
+      const dr = DEFAULT_SEX_RANGES[rule.group][effSex];
+      out.lln = dr[0];
+      out.uln = dr[1];
+      out.refText = (effSex === 'm' ? '常见男性参考：' : '常见女性参考：') + dr[0] + ' ~ ' + dr[1];
+    }
+
+    if (!rule || rule.tier !== 'b') {return out;}
+    const subRule = (effSex && rule[effSex]) ? rule[effSex] : rule;
+
+    if (typeof subRule.high === 'number' && out.uln !== null) {out.high = out.uln * subRule.high;}
+    else if (subRule.high === null) {out.high = null;}
+    if (typeof subRule.low === 'number' && out.lln !== null) {out.low = out.lln * subRule.low;}
+    else if (subRule.low === null) {out.low = null;}
+    if (typeof subRule.highAbs === 'number') {
+      out.high = (out.high === undefined || out.high === null) ? subRule.highAbs : Math.min(out.high, subRule.highAbs);
+    }
+    if (typeof subRule.lowAbs === 'number') {
+      out.low = (out.low === undefined || out.low === null) ? subRule.lowAbs : Math.max(out.low, subRule.lowAbs);
     }
     return out;
   }
@@ -20101,26 +20174,27 @@ window.addEventListener('keydown',function(e){
   // 已配规则 → 调倍数 / 停用 / 恢复默认；未配规则 → 当场新增（甲类全放行 或 乙类带倍数）。
   // 放宽（超出默认值，或从「不放行」变成「放行」）不再弹确认框，只给非阻断提示（8.15.16）；所有改动写入留痕，可 lisMildRuleLog() 导出。
   // 8.15.14: 单方向「是否放宽」判断。三态取值：undefined=不放行 / null=不拦截 / number=倍数
-  function _mildDirLoosening(rule0, key, finalVal, isNew) {
+  function _mildDirLoosening(rule0, key, finalVal, isNew, sex) {
     if (finalVal === undefined) {return false;}   // 改成「不放行」永远不算放宽
     // 新增规则时：倍数恰为 1（只放到参考限本身）等于没放宽，不算放宽；不拦截(null)与 >1 才算放宽
     if (isNew || !rule0) {return finalVal !== 1;}
     const i = MILD_ALLOW_RULES.indexOf(rule0);
     const d = (i >= 0 && i < MILD_RULE_DEFAULTS.length) ? MILD_RULE_DEFAULTS[i] : null;
     if (!d) {return true;}
-    const dv = d[key];
+    const subD = (sex && d[sex]) ? d[sex] : d;
+    const dv = subD[key];
     if (finalVal === null) {return dv !== null;}   // 改成「不拦截」：默认本来就不拦截则不算放宽
     if (dv === null) {return false;}               // 默认是「不拦截」，现在给了数值 = **收紧**，不是放宽
     if (dv === undefined) {return true;}           // 默认是「不放行」，现在给了数值 = 放宽
     return key === 'high' ? finalVal > dv : finalVal < dv;
   }
-  function _mildIsLoosening(rule0, hFinal, lFinal, isNew) {
-    return _mildDirLoosening(rule0, 'high', hFinal, isNew) || _mildDirLoosening(rule0, 'low', lFinal, isNew);
+  function _mildIsLoosening(rule0, hFinal, lFinal, isNew, sex) {
+    return _mildDirLoosening(rule0, 'high', hFinal, isNew, sex) || _mildDirLoosening(rule0, 'low', lFinal, isNew, sex);
   }
 
   // 8.15.10: ⚙ 按钮的 data-* → mildItemFromRaw 形状（详情抽屉与右栏检视器共用同一份还原逻辑）
   function _mildItemFromBtn(btn) {
-    return mildItemFromRaw({
+    const it = mildItemFromRaw({
       CName: btn.getAttribute('data-name') || '',
       Synonym: btn.getAttribute('data-syn') || '',
       Code: btn.getAttribute('data-code') || '',
@@ -20129,6 +20203,8 @@ window.addEventListener('keydown',function(e){
       ValueLow: btn.getAttribute('data-vlow') || '',
       ValueHigh: btn.getAttribute('data-vhigh') || ''
     }, 'NORMAL', btn.getAttribute('data-res') || '');
+    it._sex = btn.getAttribute('data-sex') || '';
+    return it;
   }
   // 给容器绑定 ⚙ 的委托点击（详情抽屉 #lis-detail-body / 右栏检视器 #lis-insp-body 各绑一次）
   function _bindMildBtn(container) {
@@ -20199,40 +20275,66 @@ window.addEventListener('keydown',function(e){
     const isNew = !rule0;
     const isTierA = !!(rule0 && rule0.tier === 'a');
     const isAdded = !!(rule0 && rule0._added);
+    const isBySex = !!(rule0 && rule0.bySex);
     const ovd = isMildRuleOverridden(rule0);
-    const limits = mildRuleLimits(rule0, item);
     const unit = String((item && item.unit) || '').trim();
     const unitHTML = unit ? '<span class="lm-unit">' + esc(unit) + '</span>' : '';
-    // 该方向能否用绝对值：取决于本标本有没有该侧参考范围
-    const absH = limits.uln !== null && limits.uln > 0;
-    const absL = limits.lln !== null && limits.lln > 0;
+
     const fmt = v => (v === null || v === undefined || (typeof v === 'number' && isNaN(v)))
       ? '—' : String(Math.round(v * 100) / 100);
     const fmtM = v => String(Math.round(v * 1000) / 1000);
-    const refTxt = (limits.lln !== null || limits.uln !== null)
-      ? '本标本参考范围：' + (limits.lln === null ? '—' : fmt(limits.lln)) + ' ~ ' + (limits.uln === null ? '—' : fmt(limits.uln))
-      : (limits.refText
-        ? '参考范围文本「' + esc(limits.refText) + '」未能解析出数值上下限，该方向只能按倍数填写'
-        : '本标本数据里没有参考范围字段，该方向只能按倍数填写');
+
+    let curSex = (item && (item._sex === 'm' || item._sex === 'f')) ? item._sex : 'm';
     let tier = isTierA ? 'a' : 'b';
-    // 每个方向的当前模式：off=不放行 / num=按数值 / any=不拦截
-    const modeOf = key => {
-      if (!rule0 || rule0.tier !== 'b') {return 'off';}
-      const v = rule0[key];
-      if (v === null) {return 'any';}
-      if (typeof v === 'number') {return 'num';}
-      return 'off';
+
+    function initSexSubState(sx) {
+      const subRule = isBySex ? ((rule0 && rule0[sx]) || {}) : (rule0 || {});
+      const lim = mildRuleLimits(rule0, item, sx);
+      const modeOf = key => {
+        if (!rule0 || rule0.tier !== 'b') {return 'off';}
+        const v = subRule[key];
+        if (v === null) {return 'any';}
+        if (typeof v === 'number') {return 'num';}
+        return 'off';
+      };
+      const hM = isNew ? 'num' : modeOf('high');
+      const lM = isNew ? 'num' : modeOf('low');
+      const absH = lim.uln !== null && lim.uln > 0;
+      const absL = lim.lln !== null && lim.lln > 0;
+      let valH = '', valL = '';
+      if (typeof subRule.high === 'number') {valH = absH ? fmt(lim.uln * subRule.high) : String(subRule.high);}
+      else if (isNew && hM === 'num') {valH = absH ? fmt(lim.uln) : '1';}
+      if (typeof subRule.low === 'number') {valL = absL ? fmt(lim.lln * subRule.low) : String(subRule.low);}
+      else if (isNew && lM === 'num') {valL = absL ? fmt(lim.lln) : '1';}
+      return {
+        hM, lM,
+        hVal: valH, lVal: valL,
+        initH: valH, initL: valL,
+        origH: (typeof subRule.high === 'number') ? subRule.high : null,
+        origL: (typeof subRule.low === 'number') ? subRule.low : null,
+        highAbs: subRule.highAbs,
+        lowAbs: subRule.lowAbs,
+        limits: lim
+      };
+    }
+
+    const state = {
+      m: initSexSubState('m'),
+      f: initSexSubState('f')
     };
-    // 新增规则时默认「按数值」，其余按现有规则还原
-    let hMode = isNew ? 'num' : modeOf('high');
-    let lMode = isNew ? 'num' : modeOf('low');
 
     const dlg = document.createElement('div');
     dlg.id = 'lis-mild-dlg';
     dlg.innerHTML =
       '<div class="lm-box">' +
         '<div class="lm-hd"><span>⚙ 轻微放行范围</span><span class="lm-close" title="关闭">✕</span></div>' +
-        '<div class="lm-item">' + esc(name) + (isTierA ? ' · 甲类' : '') + (isAdded ? ' · 人工新增' : '') + '</div>' +
+        '<div class="lm-item">' + esc(name) + (isTierA ? ' · 甲类' : '') + (isAdded ? ' · 人工新增' : '') + (isBySex ? ' · 分男女' : '') + '</div>' +
+        (isBySex ? (
+          '<div class="lm-tabs">' +
+            '<button type="button" class="lm-tab' + (curSex === 'm' ? ' active' : '') + '" data-sex="m">♂ 男性设置</button>' +
+            '<button type="button" class="lm-tab' + (curSex === 'f' ? ' active' : '') + '" data-sex="f">♀ 女性设置</button>' +
+          '</div>'
+        ) : '') +
         '<div id="lm-body"></div>' +
         '<div class="lm-foot">' +
           '<button id="lm-reset" class="lm-btn">恢复默认</button><span style="flex:1"></span>' +
@@ -20244,28 +20346,26 @@ window.addEventListener('keydown',function(e){
 
     const body = dlg.querySelector('#lm-body');
     const btnReset = dlg.querySelector('#lm-reset');
-    // 8.15.14: 记「初值」与「原倍数」——绝对值只显示 2 位小数，若每次都用「绝对值 ÷ 参考范围」重算，
-    // 来回一趟会让倍数漂移（9.8×1.03=10.094 → 显示 10.09 → 除回 9.8=1.0296），
-    // 那样「打开对话框什么都不改、直接保存」就会静默改掉规则。输入与初值完全一致时沿用原倍数。
-    let initH = '', initL = '';
-    const origH = (rule0 && typeof rule0.high === 'number') ? rule0.high : null;
-    const origL = (rule0 && typeof rule0.low === 'number') ? rule0.low : null;
+
+    function saveCurrentTabInputs() {
+      const st = state[curSex];
+      if (!st) {return;}
+      const hSel = body.querySelector('#lm-high-mode'), lSel = body.querySelector('#lm-low-mode');
+      const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
+      if (hSel) {st.hM = hSel.value;}
+      if (lSel) {st.lM = lSel.value;}
+      if (hi && !hi.disabled) {st.hVal = hi.value.trim();}
+      if (lo && !lo.disabled) {st.lVal = lo.value.trim();}
+    }
 
     function dirRow(which) {
+      const st = state[curSex];
       const isHigh = which === 'high';
-      const mode = isHigh ? hMode : lMode;
-      const abs = isHigh ? absH : absL;
-      const lim = isHigh ? limits.uln : limits.lln;
+      const mode = isHigh ? st.hM : st.lM;
+      const lims = st.limits;
+      const abs = isHigh ? (lims.uln !== null && lims.uln > 0) : (lims.lln !== null && lims.lln > 0);
       const idPfx = isHigh ? 'lm-high' : 'lm-low';
-      const rv = rule0 ? rule0[which] : undefined;
-      let val = '';
-      if (typeof rv === 'number') {val = abs ? fmt(lim * rv) : String(rv);}
-      else if (isNew && mode === 'num') {
-        // 8.15.14: 新增规则时默认值就是**参考值的上限/下限本身**（倍数=1，等于还没放宽）——
-        // 现场在这个基线上往上调，比从空白开始直观
-        val = abs ? fmt(lim) : '1';
-      }
-      if (isHigh) {initH = val;} else {initL = val;}
+      const val = isHigh ? st.hVal : st.lVal;
       const on = mode === 'num';
       return '<div class="lm-row">' +
         '<span class="lm-lb">' + (isHigh ? '偏高' : '偏低') + '</span>' +
@@ -20275,51 +20375,62 @@ window.addEventListener('keydown',function(e){
           '<option value="any"' + (mode === 'any' ? ' selected' : '') + '>不拦截</option>' +
         '</select>' +
         '<input id="' + idPfx + '" class="lm-in' + (on ? '' : ' lm-in-off') + '" type="text" inputmode="decimal" ' +
-          'placeholder="' + (abs ? '放行至' : '倍数') + '" value="' + val + '"' + (on ? '' : ' disabled') + '>' +
+          'placeholder="' + (abs ? '放行至' : '倍数') + '" value="' + escAttr(val) + '"' + (on ? '' : ' disabled') + '>' +
         (abs && on ? unitHTML : '') +
         '<span class="lm-pv" id="' + idPfx + '-pv"></span></div>';
     }
 
     function segHTML() {
+      const st = state[curSex];
+      const lims = st.limits;
+      const refTxt = (lims.lln !== null || lims.uln !== null)
+        ? (lims.refText.indexOf('基准') >= 0 || lims.refText.indexOf('包络') >= 0 || lims.refText.indexOf('参考') >= 0
+          ? lims.refText
+          : '参考范围：' + (lims.lln === null ? '—' : fmt(lims.lln)) + ' ~ ' + (lims.uln === null ? '—' : fmt(lims.uln)))
+        : (lims.refText
+          ? '参考范围文本「' + esc(lims.refText) + '」未能解析出数值上下限，该方向只能按倍数填写'
+          : '未能获取参考范围，该方向只能按倍数填写');
+
       const offChk = isNew ? '' :
         '<label class="lm-chk"><input type="checkbox" id="lm-off"' + ((rule0 && rule0._off) ? ' checked' : '') +
         '> 整条规则停用（该项目永不自动放行）</label>';
       if (tier === 'a') {
         return '<div class="lm-note">甲类：该项目<b>任何方向</b>的异常都直接放行，不设数值范围。</div>' + offChk;
       }
-      return '<div class="lm-note">' + refTxt + '</div>' +
+      return '<div class="lm-note">' + esc(refTxt) + '</div>' +
         dirRow('high') + dirRow('low') + offChk +
         '<div class="lm-warn">⚠️ 设为「按数值放行」或「不拦截」后，该方向的异常结果会被 <b>F4 批审</b>与' +
         '<b>白天方案自动审核</b>直接放行，不再人工复核。<br>' +
         '危急值 / 堵孔 0 值 / 传染病阳性 / 心肌危急线是独立安全门，<b>不受此处影响</b>。</div>';
     }
 
-    // 读输入并统一换算成「倍数」（存储模型用的是倍数）
-    function readInputs() {
-      const hSel = body.querySelector('#lm-high-mode'), lSel = body.querySelector('#lm-low-mode');
-      const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
-      const hM = hSel ? hSel.value : 'off';
-      const lM = lSel ? lSel.value : 'off';
-      const hRaw = (hi && !hi.disabled) ? hi.value.trim() : '';
-      const lRaw = (lo && !lo.disabled) ? lo.value.trim() : '';
+    function readInputsForSex(sx) {
+      const st = state[sx];
+      const lims = st.limits;
+      const absH = lims.uln !== null && lims.uln > 0;
+      const absL = lims.lln !== null && lims.lln > 0;
+      const hM = st.hM;
+      const lM = st.lM;
+      const hRaw = st.hVal;
+      const lRaw = st.lVal;
       const hv = hRaw !== '' ? Number(hRaw) : null;
       const lv = lRaw !== '' ? Number(lRaw) : null;
       const hNum = (hRaw === '' || isNaN(hv)) ? null
-        : (hRaw === initH && origH !== null) ? origH
-          : (absH ? hv / limits.uln : hv);
+        : (hRaw === st.initH && st.origH !== null) ? st.origH
+          : (absH ? hv / lims.uln : hv);
       const lNum = (lRaw === '' || isNaN(lv)) ? null
-        : (lRaw === initL && origL !== null) ? origL
-          : (absL ? lv / limits.lln : lv);
-      // 该方向最终取值：undefined=不放行 / null=不拦截 / number=倍数
+        : (lRaw === st.initL && st.origL !== null) ? st.origL
+          : (absL ? lv / lims.lln : lv);
       const hFinal = hM === 'off' ? undefined : (hM === 'any' ? null : hNum);
       const lFinal = lM === 'off' ? undefined : (lM === 'any' ? null : lNum);
-      return {hM, lM, hRaw, lRaw, hv, lv, hNum, lNum, hFinal, lFinal};
+      return { st, lims, absH, absL, hM, lM, hRaw, lRaw, hv, lv, hNum, lNum, hFinal, lFinal };
     }
 
     function updatePreview() {
-      const ph = body.querySelector('#lm-pv-h'), pl = body.querySelector('#lm-pv-l');
+      saveCurrentTabInputs();
+      const ph = body.querySelector('#lm-high-pv'), pl = body.querySelector('#lm-low-pv');
       if (!ph || !pl) {return;}
-      const r = readInputs();
+      const r = readInputsForSex(curSex);
       const txt = (mode, num, abs, lim, side) => {
         if (mode === 'off') {return '→ 不放行';}
         if (mode === 'any') {return '→ 一律放行';}
@@ -20327,14 +20438,13 @@ window.addEventListener('keydown',function(e){
         return abs ? '＝ ' + fmtM(num) + '× ' + side
           : (lim !== null ? '→ 放行至 ' + fmt(lim * num) : '');
       };
-      ph.textContent = txt(r.hM, r.hNum, absH, limits.uln, '上限');
-      pl.textContent = txt(r.lM, r.lNum, absL, limits.lln, '下限');
+      ph.textContent = txt(r.hM, r.hNum, r.absH, r.lims.uln, '上限');
+      pl.textContent = txt(r.lM, r.lNum, r.absL, r.lims.lln, '下限');
       ph.className = 'lm-pv' + (r.hM === 'num' ? ' on' : '');
       pl.className = 'lm-pv' + (r.lM === 'num' ? ' on' : '');
     }
 
-    // 切换模式时只切换输入框可用态，**不重渲染**——否则会丢掉用户已输入但还没保存的值
-    function wireModeSwitch() {
+    function wireEvents() {
       [['#lm-high-mode', '#lm-high'], ['#lm-low-mode', '#lm-low']].forEach(pair => {
         const sel = body.querySelector(pair[0]), inp = body.querySelector(pair[1]);
         if (!sel || !inp) {return;}
@@ -20342,6 +20452,11 @@ window.addEventListener('keydown',function(e){
           const on = sel.value === 'num';
           inp.disabled = !on;
           inp.classList.toggle('lm-in-off', !on);
+          saveCurrentTabInputs();
+          updatePreview();
+        });
+        inp.addEventListener('input', () => {
+          saveCurrentTabInputs();
           updatePreview();
         });
       });
@@ -20362,10 +20477,24 @@ window.addEventListener('keydown',function(e){
       } else {
         body.innerHTML = segHTML();
       }
-      wireModeSwitch();
+      wireEvents();
       updatePreview();
       btnReset.style.display = (!isNew && ovd) ? '' : 'none';
     }
+
+    if (isBySex) {
+      dlg.querySelectorAll('.lm-tab').forEach(tb => {
+        tb.addEventListener('click', () => {
+          const sx = tb.getAttribute('data-sex');
+          if (sx === curSex) {return;}
+          saveCurrentTabInputs();
+          curSex = sx;
+          dlg.querySelectorAll('.lm-tab').forEach(b => b.classList.toggle('active', b.getAttribute('data-sex') === curSex));
+          render();
+        });
+      });
+    }
+
     render();
 
     // 8.15.13: 可拖动 + 位置记忆（复用登录窗 8.11.16「整头部拖拽」的写法，保持一致）
@@ -20379,7 +20508,6 @@ window.addEventListener('keydown',function(e){
         const sv = JSON.parse(localStorage.getItem(MILD_DLG_POS) || 'null');
         if (sv && typeof sv.left === 'number' && typeof sv.top === 'number') {left = sv.left; top = sv.top;}
       } catch (e) {}
-      // 恢复时也夹回视口内——窗口变小或换过显示器时，旧坐标可能落在屏幕外找不回来
       left = Math.max(8, Math.min(left, vw - box.offsetWidth - 8));
       top = Math.max(8, Math.min(top, vh - Math.min(box.offsetHeight, vh - 16) - 8));
       box.style.left = left + 'px';
@@ -20388,7 +20516,7 @@ window.addEventListener('keydown',function(e){
     const dragHead = dlg.querySelector('.lm-hd');
     dragHead.title = '按住可拖动窗口（位置会记住）';
     dragHead.addEventListener('pointerdown', e => {
-      if (e.target && e.target.closest && e.target.closest('.lm-close')) {return;} // 关闭按钮不当作拖拽起点
+      if (e.target && e.target.closest && e.target.closest('.lm-close')) {return;}
       e.preventDefault();
       box.classList.add('dragging');
       document.body.style.userSelect = 'none';
@@ -20418,8 +20546,6 @@ window.addEventListener('keydown',function(e){
     const close = () => {dlg.remove(); document.removeEventListener('keydown', onKey);};
     function onKey(e) {if (e.key === 'Escape') {close();}}
     document.addEventListener('keydown', onKey);
-    // 8.15.13: 不再「点外部关闭」——容器已 pointer-events:none，且用户需要在弹窗开着时
-    // 滚动/查看背后的结果表来定值，误关会打断操作。关闭走 ✕ / 取消 / Esc。
     dlg.querySelector('.lm-close').addEventListener('click', close);
     dlg.querySelector('#lm-cancel').addEventListener('click', close);
 
@@ -20432,32 +20558,78 @@ window.addEventListener('keydown',function(e){
     });
 
     dlg.querySelector('#lm-save').addEventListener('click', () => {
+      saveCurrentTabInputs();
       const offEl = body.querySelector('#lm-off');
       const off = !!(offEl && offEl.checked);
-      // 8.15.16: 本次保存是否属于「放宽」——只用来决定提示文案/颜色，**不再用来弹确认框**
       let loosened = false;
+
       if (tier === 'a') {
         if (isNew) {addMildRuleOverride(name, 'a', undefined, undefined, true, true);}
         else {setMildRuleOverride(rule0, {off}, name);}
+      } else if (isBySex) {
+        const patch = { off, m: {}, f: {} };
+        const sexes = ['m', 'f'];
+        for (const sx of sexes) {
+          const r = readInputsForSex(sx);
+          const sxLabel = sx === 'm' ? '男性' : '女性';
+          if (r.hM === 'num' && (r.hRaw === '' || isNaN(r.hv))) {
+            showToast(`${sxLabel}偏高选了「按数值放行」，请填一个数值；不想放行请改选「不放行」`, 'error'); return;
+          }
+          if (r.lM === 'num' && (r.lRaw === '' || isNaN(r.lv))) {
+            showToast(`${sxLabel}偏低选了「按数值放行」，请填一个数值；不想放行请改选「不放行」`, 'error'); return;
+          }
+          if (r.hNum !== null && r.hNum < 1) {
+            showToast(r.absH
+              ? `${sxLabel}偏高放行值不能低于参考上限 ${fmt(r.lims.uln)}（那样等于不放行），请留空或改选「不放行」`
+              : `${sxLabel}偏高倍数不能小于 1（那样等于不放行），请留空或改选「不放行」`, 'warning');
+            return;
+          }
+          if (r.lNum !== null && r.lNum > 1) {
+            showToast(r.absL
+              ? `${sxLabel}偏低放行值不能高于参考下限 ${fmt(r.lims.lln)}（那样等于不放行），请留空或改选「不放行」`
+              : `${sxLabel}偏低倍数不能大于 1（那样等于不放行），请留空或改选「不放行」`, 'warning');
+            return;
+          }
+
+          let newHighAbs = r.st.highAbs;
+          if (r.hM === 'any') {newHighAbs = null;}
+          else if (r.hM === 'num' && r.hv !== null && r.st.highAbs !== undefined) {newHighAbs = r.hv;}
+
+          let newLowAbs = r.st.lowAbs;
+          if (r.lM === 'any') {newLowAbs = null;}
+          else if (r.lM === 'num' && r.lv !== null && r.st.lowAbs !== undefined) {newLowAbs = r.lv;}
+
+          const hStore = r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4;
+          const lStore = r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4;
+
+          patch[sx] = {
+            high: hStore, low: lStore,
+            highOff: r.hFinal === undefined, lowOff: r.lFinal === undefined,
+            highAbs: newHighAbs, lowAbs: newLowAbs
+          };
+
+          if (!off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew, sx)) {
+            loosened = true;
+          }
+        }
+        setMildRuleOverride(rule0, patch, name);
       } else {
-        const r = readInputs();
-        // 选了「按数值放行」却没填有效数字 —— 明确报错，不让它静默变成别的语义
+        const r = readInputsForSex('m');
         if (r.hM === 'num' && (r.hRaw === '' || isNaN(r.hv))) {
           showToast('偏高选了「按数值放行」，请填一个数值；不想放行请改选「不放行」', 'error'); return;
         }
         if (r.lM === 'num' && (r.lRaw === '' || isNaN(r.lv))) {
           showToast('偏低选了「按数值放行」，请填一个数值；不想放行请改选「不放行」', 'error'); return;
         }
-        // 换算成倍数后越界 = 恒不放行，直接拦下并提示（比让它静默失效清楚）
         if (r.hNum !== null && r.hNum < 1) {
-          showToast(absH
-            ? '偏高放行值不能低于参考上限 ' + fmt(limits.uln) + '（那样等于不放行），请留空或改选「不放行」'
+          showToast(r.absH
+            ? '偏高放行值不能低于参考上限 ' + fmt(r.lims.uln) + '（那样等于不放行），请留空或改选「不放行」'
             : '偏高倍数不能小于 1（那样等于不放行），请留空或改选「不放行」', 'warning');
           return;
         }
         if (r.lNum !== null && r.lNum > 1) {
-          showToast(absL
-            ? '偏低放行值不能高于参考下限 ' + fmt(limits.lln) + '（那样等于不放行），请留空或改选「不放行」'
+          showToast(r.absL
+            ? '偏低放行值不能高于参考下限 ' + fmt(r.lims.lln) + '（那样等于不放行），请留空或改选「不放行」'
             : '偏低倍数不能大于 1（那样等于不放行），请留空或改选「不放行」', 'warning');
           return;
         }
@@ -20465,23 +20637,27 @@ window.addEventListener('keydown',function(e){
           showToast('两个方向都选了「不放行」，这条规则没有意义；请至少放行一个方向，或勾选「整条规则停用」', 'error');
           return;
         }
-        // 8.15.16: 「确认放宽？」二次确认已去掉——现场反馈每次保存都被拦一道很打断，
-        // 而弹窗里那段黄底警示（.lm-warn）+ 保存后的 warning toast + 留痕已经把风险讲清楚。
-        // 判定函数保留：放宽与否仍要区分，只是改成**非阻断**提示（见下方 showToast），
-        // 且不改变任何判定口径（_mildIsLoosening 一行未动）。
         loosened = !off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew);
-        // 存储仍用倍数，四舍五入到 4 位（12.5 / 9.8 = 1.27551… → 1.2755）
         const hStore = r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4;
         const lStore = r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4;
+
+        let newHighAbs = (rule0 && rule0.highAbs);
+        if (r.hM === 'any') {newHighAbs = null;}
+        else if (r.hM === 'num' && r.hv !== null && (rule0 && rule0.highAbs !== undefined)) {newHighAbs = r.hv;}
+
+        let newLowAbs = (rule0 && rule0.lowAbs);
+        if (r.lM === 'any') {newLowAbs = null;}
+        else if (r.lM === 'num' && r.lv !== null && (rule0 && rule0.lowAbs !== undefined)) {newLowAbs = r.lv;}
+
         const patch = {
           high: hStore, low: lStore,
-          highOff: r.hFinal === undefined, lowOff: r.lFinal === undefined, off
+          highOff: r.hFinal === undefined, lowOff: r.lFinal === undefined, off,
+          highAbs: newHighAbs, lowAbs: newLowAbs
         };
         if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore, patch.highOff, patch.lowOff);}
         else {setMildRuleOverride(rule0, patch, name);}
       }
-      // 8.15.16: 放宽不再弹确认框，改用 warning 色 toast 说明后果——「放宽」这件事仍然可见，
-      // 不会变成静默放行；每次改动照旧写入留痕（控制台 lisMildRuleLog() 查看/导出）。
+
       showToast(loosened
         ? '已放宽放行范围并立即生效 —— 该方向异常结果不再人工复核（改动已记留痕）'
         : '已保存，立即生效', loosened ? 'warning' : 'success');
@@ -20617,6 +20793,14 @@ window.addEventListener('keydown',function(e){
     const p = parseComparableNumber(it && it.result);
     if (!p || p.op || isNaN(p.value)) {return { ok: false, reason: `${name} 结果非纯数值，不放行` };}
     if (p.value < 0) {return { ok: false, reason: `${name} ${p.value} 含负值，不放行` };}
+
+    const effSex = (sex === 'm' || sex === 'f') ? sex : (it && (it._sex || ''));
+    if (rule.bySex && !effSex) {
+      return { ok: false, reason: `${name} 区分男女范围但标本性别未知，留人工` };
+    }
+    const effRule = (effSex && rule[effSex]) ? rule[effSex] : rule;
+    if (effRule._off) {return { ok: false, reason: `${name} 的放行规则已被手动停用` };}
+
     // 8.14.1: 上下限取自原始 LIS 条目（it.preResult 带 ValueLow/ValueHigh，按患者性别年龄，
     // 与 LIS 判 H/L 同源）。分类对象只拷了 RefRanges 文本，直接传 it 会恒落文本解析、多段取第一段。
     const _rngSrc = (it && it.preResult) || it || {};
@@ -20627,14 +20811,14 @@ window.addEventListener('keydown',function(e){
                           _rngSrc.ReferenceLow || _rngSrc.ReferenceHigh);
     // 8.15.0: 性激素六项按性别取基准范围（男=男性范围；女=「各期汇总包络」——各期下限取最低、
     // 上限取最高），在此基准上套 high/low 倍数。性别取不到 → 走原路径 → 多段文本被下方守卫拦下留人工
-    const _sexRange = (rule.sexRanges && sex) ? (sex === 'm' ? rule.sexRanges.m : rule.sexRanges.f) : null;
+    const _sexRange = (rule.sexRanges && effSex) ? (effSex === 'm' ? rule.sexRanges.m : rule.sexRanges.f) : null;
     if (!_sexRange && !_hasStruct && isAmbiguousRangeText(_rngSrc.RefRanges || _rngSrc.RefRange || _rngSrc.ReferenceRange || it.RefRanges)) {
       return { ok: false, reason: `${name} 参考范围为分段文本且无结构化上下限，留人工` };
     }
     if (st === 'HIGH') {
-      if (rule.high === undefined) {return { ok: false, reason: `${name} 偏高不放行` };}
+      if (effRule.high === undefined) {return { ok: false, reason: `${name} 偏高不放行` };}
       let limit = Infinity;
-      if (rule.high !== null) {
+      if (effRule.high !== null) {
         let ulnV = NaN;
         if (_sexRange) {ulnV = Number(_sexRange[1]);}
         else {
@@ -20643,25 +20827,27 @@ window.addEventListener('keydown',function(e){
           ulnV = uln.value;
         }
         if (!Number.isFinite(ulnV) || ulnV <= 0) {return { ok: false, reason: `${name} 性别基准上限缺失，不放行` };}
-        limit = ulnV * rule.high;
+        limit = ulnV * effRule.high;
       }
-      if (rule.highAbs !== undefined) {limit = Math.min(limit, rule.highAbs);}
-      if (!(p.value <= limit)) {return { ok: false, reason: `${name} ${it.result} 超出轻微带（≤${limit}）` };}
+      if (typeof effRule.highAbs === 'number') {limit = Math.min(limit, effRule.highAbs);}
+      const limitDisp = Math.round(limit * 100) / 100;
+      if (!(p.value <= limit)) {return { ok: false, reason: `${name} ${it.result} 超出轻微带（≤${limitDisp}）` };}
       return { ok: true, rule, tier: 'b' };
     }
     // LOW
-    if (rule.low === undefined && rule.lowAbs === undefined) {return { ok: false, reason: `${name} 偏低不放行` };}
+    if (effRule.low === undefined && effRule.lowAbs === undefined) {return { ok: false, reason: `${name} 偏低不放行` };}
     let floor = null;
-    if (rule.low !== undefined && rule.low !== null) {
-      if (_sexRange) {floor = Number(_sexRange[0]) * rule.low;}
+    if (effRule.low !== undefined && effRule.low !== null) {
+      if (_sexRange) {floor = Number(_sexRange[0]) * effRule.low;}
       else {
         const lln = parseComparableNumber(range.low);
         if (!lln || isNaN(lln.value)) {return { ok: false, reason: `${name} 参考下限缺失，不放行` };}
-        floor = lln.value * rule.low;
+        floor = lln.value * effRule.low;
       }
     }
-    if (rule.lowAbs !== undefined) {floor = floor === null ? rule.lowAbs : Math.max(floor, rule.lowAbs);}
-    if (floor !== null && !(p.value >= floor)) {return { ok: false, reason: `${name} ${it.result} 低于轻微带（≥${floor}）` };}
+    if (typeof effRule.lowAbs === 'number') {floor = floor === null ? effRule.lowAbs : Math.max(floor, effRule.lowAbs);}
+    const floorDisp = floor !== null ? (Math.round(floor * 100) / 100) : '';
+    if (floor !== null && !(p.value >= floor)) {return { ok: false, reason: `${name} ${it.result} 低于轻微带（≥${floorDisp}）` };}
     return { ok: true, rule, tier: 'b' };
   }
 
@@ -24497,6 +24683,13 @@ window.addEventListener('keydown',function(e){
               audited.push(entry);
             }
             aaRecordEvent('异常', entry); // 8.8.25: 增量持久化
+            // 8.15.20: 自动审核放行轻微异常标本补齐留痕（消除追溯黑洞）
+            if (live) {
+              const _m = classifyMildAbnormal(live);
+              if (_m && _m.ok) {
+                recordMildAuditLog([{ row: r, mild: _m }]);
+              }
+            }
           }
           else {
             const entry = { name: r.PatName, labno: r.Labno, seq: r.EpisodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || '', reason: '审核未确认成功（留人工/下轮重试）' };
