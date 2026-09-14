@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.21
+// @version      8.15.22
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1245,12 +1245,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ab-card-test{font-size:11px;color:var(--lis-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
 .ab-card-items{display:flex;flex-wrap:wrap;gap:2px 3px;margin-top:1px}
 .ab-card-item{padding:0 5px;border-radius:4px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid transparent;line-height:1.55}
-/* 8.15.21 方案 A：微胶囊标签流（轻微项浅底细边、显著项实色微徽章） */
-.ab-card-item.high{background:#f97316;color:#fff;border-color:transparent}
-.ab-card-item.high.mild{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
-.ab-card-item.low{background:#2563eb;color:#fff;border-color:transparent}
+/* 8.15.22 方案 A：微胶囊标签流（轻微项浅底细边、显著项实色微徽章） */
+.ab-card-item.high{background:#ea580c;color:#fff;border-color:transparent}
+.ab-card-item.high.mild{background:#fffbeb;color:#c2410c;border:1px solid #fed7aa}
+.ab-card-item.low{background:#1d4ed8;color:#fff;border-color:transparent}
 .ab-card-item.low.mild{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
-.ab-card-item.critical{background:#dc2626;color:#fff;border-color:transparent;font-weight:700}
+.ab-card-item.critical{background:#b91c1c;color:#fff;border-color:transparent;font-weight:700}
 .ab-card-item.abnormal{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
 .ab-card-item.zero{background:#7c3aed;color:#fff;border-color:transparent}
 .ab-card-item.infection-warning{background:#fff7ed;color:#c2410c;border-color:#fed7aa;font-weight:700}
@@ -1471,44 +1471,45 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table.compact .hist-tag{padding:1px 4px;font-size:11px;margin:0 1px}
 .result-table.compact tr:last-child td{border-bottom:none}
 .result-table tr:hover{background:rgba(241,245,249,.6)}
-/* 8.15.21 方案 A：微胶囊标签流（Modern Pill / Tag System）
+/* 8.15.22 方案 A：微胶囊标签流（Modern Pill / Tag System）
    彻底告别大面积高饱和满色底与整格厚重色块，行底色恢复纯白，只有测定结果包裹于圆角微胶囊内。
-   微胶囊只包含数值与紧凑箭头/标记，单位置于胶囊外侧（统一为柔和浅灰 #94a3b8），杜绝背景与文字冲突。
+   微胶囊只包含数值与紧凑箭头/标记，单位置于胶囊外侧（统一为柔和浅灰 #888），杜绝背景与文字冲突。
    视觉层级：
-   - 正常项：无底色无框，深青黑加粗（#334155），沉稳不抢戏；
-   - 轻微偏高（带内·可批审）：柔和淡琥珀底 + 细金边 + 棕橙色字与箭头（bg:#fffbeb;color:#b45309;border:1px solid #fde68a）；
-   - 轻微偏低（带内·可批审）：柔和淡雾蓝底 + 细蓝边 + 宝蓝色字与箭头（bg:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe）；
-   - 显著偏高（超带·须人工）：紧凑实色橙底微徽章 [ 42.8 ▲ ]（bg:#f97316;color:#fff）；
-   - 显著偏低（超带·须人工）：紧凑实色蓝底微徽章 [ 78 ▼ ]（bg:#2563eb;color:#fff）；
-   - 危急值（须原始LIS）：醒目红底微徽章 [ 6.6 ↑↑ 危急 ]（bg:#dc2626;color:#fff;font-weight:800）；
+   - 正常项：无底色无框，健康纯正绿色加粗（#16a34a），绝对不发黑！
+   - 轻微偏高（带内·可批审）：柔和淡琥珀底 + 细金边 + 暖橙色字与细箭头（bg:#fffbeb;color:#c2410c;border:1px solid #fed7aa）；
+   - 轻微偏低（带内·可批审）：柔和淡雾蓝底 + 细蓝边 + 宝蓝色字与细箭头（bg:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe）；
+   - 显著偏高（超带·须人工）：紧凑实色橙底微徽章 [ 42.8 ▲ ]（bg:#ea580c;color:#fff）；
+   - 显著偏低（超带·须人工）：紧凑实色蓝底微徽章 [ 78 ▼ ]（bg:#1d4ed8;color:#fff）；
+   - 危急值（须原始LIS）：醒目红底微徽章 [ 6.6 ↑↑ 危急 ]（bg:#b91c1c;color:#fff;font-weight:800）；
    - 堵孔0值（生化）：醒目紫底微徽章 [ 0 ⚠️ 堵孔 ]（bg:#7c3aed;color:#fff）；
    - 传染病特殊阳性：金黄底黑字微徽章 [ 阳性+ ]（bg:#fef08a;color:#713f12;border:1px solid #facc15）。
 */
 .result-table .res-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:4px;font-size:12.5px;line-height:1.35;font-weight:700;box-sizing:border-box;vertical-align:middle}
-.result-table .res-tag.normal{color:#334155;background:transparent;padding:2px 0}
-.result-table .res-tag.mild-high{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+.result-table .res-tag.normal{color:#16a34a!important;background:transparent;padding:2px 0;font-weight:700}
+.result-table .normal, .result-table td.normal{color:#16a34a!important;font-weight:700}
+.result-table .res-tag.mild-high{background:#fffbeb;color:#c2410c;border:1px solid #fed7aa}
 .result-table .res-tag.mild-low{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
-.result-table .res-tag.high{background:#f97316;color:#fff}
-.result-table .res-tag.low{background:#2563eb;color:#fff}
-.result-table .res-tag.critical{background:#dc2626;color:#fff;font-weight:800;font-size:13px}
+.result-table .res-tag.high{background:#ea580c;color:#fff}
+.result-table .res-tag.low{background:#1d4ed8;color:#fff}
+.result-table .res-tag.critical{background:#b91c1c;color:#fff;font-weight:800;font-size:13px}
 .result-table .res-tag.zero{background:#7c3aed;color:#fff}
 .result-table .res-tag.inf-special{background:#fef08a;color:#713f12;border:1px solid #facc15}
 .result-table .res-tag.abnormal{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
-.result-table .res-tag.empty{color:#94a3b8;font-weight:400}
+.result-table .res-tag.empty{color:#999;font-weight:400}
 .result-table .res-arrow{font-size:11px;font-weight:700;display:inline-block;line-height:1}
-.result-table .res-unit{font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:4px;vertical-align:middle}
+.result-table .res-unit{font-size:10.5px;color:#888;font-weight:400;margin-left:4px;vertical-align:middle}
 
 .result-table .history{background:#f8f9fa}
 .result-table .hist-tag{display:inline-flex;align-items:center;justify-content:center;margin:1px 2px;padding:1px 5px;border-radius:4px;font-size:11px;white-space:nowrap;line-height:1.4;box-sizing:border-box}
-.result-table .hist-tag.normal{background:#f8fafc;color:#475569;border:1px solid #e2e8f0}
+.result-table .hist-tag.normal{background:#e8f5e9;color:#2e7d32;border:1px solid #c8e6c9;font-weight:600}
 .result-table .hist-tag.abnormal{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
-.result-table .hist-tag.high{background:#f97316;color:#fff}
-.result-table .hist-tag.high.mild{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
-.result-table .hist-tag.low{background:#2563eb;color:#fff}
+.result-table .hist-tag.high{background:#ea580c;color:#fff}
+.result-table .hist-tag.high.mild{background:#fffbeb;color:#c2410c;border:1px solid #fed7aa}
+.result-table .hist-tag.low{background:#1d4ed8;color:#fff}
 .result-table .hist-tag.low.mild{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
-.result-table .hist-tag.critical{background:#dc2626;color:#fff;font-weight:700}
-.result-table .hist-tag.nodate{background:#f8fafc;color:#94a3b8;border:1px solid #e2e8f0}
-.result-table .hist-date{font-size:9px;color:#94a3b8;display:block;margin-top:-1px}
+.result-table .hist-tag.critical{background:#b91c1c;color:#fff;font-weight:700}
+.result-table .hist-tag.nodate{background:#f5f5f5;color:#999;border:1px solid #ddd}
+.result-table .hist-date{font-size:9px;color:#999;display:block;margin-top:-1px}
 /* 8.11.10: 去掉 justify-content:space-between——提示行 margin-right:auto 已把主操作推到最右，
    二者叠加属冗余（auto margin 优先吃掉全部剩余空间，space-between 无空闲可分配，渲染结果相同） */
 #lis-detail-footer{padding:10px 18px;background:var(--lis-bg);border-top:1px solid var(--lis-border);display:flex;align-items:center;flex-shrink:0;box-sizing:border-box;height:52px}
@@ -15105,7 +15106,7 @@ window.addEventListener('keydown',function(e){
         html += `<tr style="${rowStyle}">
                     <td style="text-align:center">${qcHtml}</td>
                     <td style="font-weight:500"><span style="display:inline-block;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}</span>${mildBtn}${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400"> ' + esc(refRange) + '</span>' : ''}</td>
-                    <td style="white-space:nowrap"${resTitle}>${resTagHTML}${resUnitHTML}</td>
+                    <td class="${tagClass}" style="white-space:nowrap"${resTitle}>${resTagHTML}${resUnitHTML}</td>
                     ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:11px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
                     <td style="font-size:11px">${hist.cells[0]}</td>
                     <td style="font-size:11px">${hist.cells[1]}</td>
@@ -16479,16 +16480,16 @@ window.addEventListener('keydown',function(e){
 .hist-gtable th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-size:11px;padding:4px 8px;text-align:left;font-weight:600}
 .hist-gtable td{padding:4px 8px;border-top:1px solid var(--lis-surface-subtle);vertical-align:top}
 .hist-gtable tr.hist-row-cur td{background:#ecfdf5}
-.hist-val{font-weight:700;color:#334155;white-space:nowrap}
-/* 8.15.21 方案 A：患者历史浮层同步采用微胶囊标签 */
-.hist-val.H{color:#fff;background:#f97316;border-radius:4px;padding:1px 6px}
-.hist-val.H.mild{color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:1px 5px}
-.hist-val.L{color:#fff;background:#2563eb;border-radius:4px;padding:1px 6px}
-.hist-val.L.mild{color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:1px 5px}
-.hist-val.A{color:#be185d;background:#fdf2f8;border:1px solid #fce7f3;border-radius:4px;padding:1px 5px}
+.hist-val{font-weight:700;color:#16a34a!important;white-space:nowrap}
+/* 8.15.22: 患者历史浮层同步采用微胶囊标签，正常项严格为经典绿 #16a34a */
+.hist-val.H{color:#fff!important;background:#ea580c;border-radius:4px;padding:1px 6px}
+.hist-val.H.mild{color:#c2410c!important;background:#fffbeb;border:1px solid #fed7aa;border-radius:4px;padding:1px 5px}
+.hist-val.L{color:#fff!important;background:#1d4ed8;border-radius:4px;padding:1px 6px}
+.hist-val.L.mild{color:#1d4ed8!important;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:1px 5px}
+.hist-val.A{color:#be185d!important;background:#fdf2f8;border:1px solid #fce7f3;border-radius:4px;padding:1px 5px}
 .hist-val.H:not(.mild) .hist-unit,.hist-val.L:not(.mild) .hist-unit{color:rgba(255,255,255,.9)}
 .hist-flag.H{color:#ea580c;font-weight:800}
-.hist-flag.L{color:#2563eb;font-weight:800}
+.hist-flag.L{color:#1d4ed8;font-weight:800}
 .hist-flag.A{color:#be185d;font-weight:800}
 .hist-unit{font-size:10px;color:var(--lis-text-muted);font-weight:400}
 .hist-date{color:var(--lis-slate-700);white-space:nowrap}
