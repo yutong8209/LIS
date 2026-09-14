@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.16
+// @version      8.15.17
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -902,10 +902,11 @@
 #lis-pr-body tr:hover{background:#fef3c7}
 #lis-pr-body .pr-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#7b8b96;font-size:13px;text-align:center;line-height:1.7}
 #lis-pr-body .pr-abn{color:#c62828;font-weight:700}
-#lis-pr-body .pr-low{color:#1e3a8a;background:#dbeafe;font-weight:700}
-#lis-pr-body .pr-low.mild{color:#1d4ed8;background:#f7faff;font-weight:700}
-#lis-pr-body .pr-high{color:#9a3412;background:#ffedd5;font-weight:700}
-#lis-pr-body .pr-high.mild{color:#c2410c;background:#fff7ed;font-weight:700}
+/* 8.15.17: 同结果表——满色底白字＝须人工，白底彩字＝可批审（mild） */
+#lis-pr-body .pr-low{color:#fff;background:#1d4ed8;font-weight:700}
+#lis-pr-body .pr-low.mild{color:#1d4ed8;background:#fff;border:1px solid #bfdbfe;border-left:4px dashed #60a5fa;font-weight:700}
+#lis-pr-body .pr-high{color:#fff;background:#ea580c;font-weight:700}
+#lis-pr-body .pr-high.mild{color:#c2410c;background:#fff;border:1px solid #fed7aa;border-left:4px dashed #fb923c;font-weight:700}
 #lis-pr-body .pr-critical{color:#b71c1c;font-weight:800}
 .pr-col-diag{max-width:180px;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .pr-col-dept{max-width:120px;min-width:50px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
@@ -1052,12 +1053,13 @@
 .aal-abn-summary{display:flex;align-items:center;gap:5px;flex-wrap:wrap;flex:1}
 .aal-abn-chip-count{font-size:10px;font-weight:700;background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:3px;white-space:nowrap;line-height:1.3}
 #lis-auto-audit-log-box .aal-abn-item{display:inline-flex;align-items:center;gap:3px;padding:1.5px 6px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap}
-#lis-auto-audit-log-box .aal-abn-item.hi{background:#ffedd5;color:#9a3412;border-color:#f97316}
-#lis-auto-audit-log-box .aal-abn-item.hi.mild{background:#fff7ed;color:#c2410c;border:1px dashed #fb923c}
-#lis-auto-audit-log-box .aal-abn-item.lo{background:#dbeafe;color:#1e3a8a;border-color:#60a5fa}
-#lis-auto-audit-log-box .aal-abn-item.lo.mild{background:#f7faff;color:#1d4ed8;border:1px dashed #60a5fa}
+/* 8.15.17: 同结果表——满色底白字＝须人工，白底彩字＝可批审（mild） */
+#lis-auto-audit-log-box .aal-abn-item.hi{background:#ea580c;color:#fff;border-color:#9a3412}
+#lis-auto-audit-log-box .aal-abn-item.hi.mild{background:#fff;color:#c2410c;border:1px dashed #fb923c}
+#lis-auto-audit-log-box .aal-abn-item.lo{background:#1d4ed8;color:#fff;border-color:#1e3a8a}
+#lis-auto-audit-log-box .aal-abn-item.lo.mild{background:#fff;color:#1d4ed8;border:1px dashed #60a5fa}
 #lis-auto-audit-log-box .aal-abn-item.abn{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
-#lis-auto-audit-log-box .aal-abn-item.cri{background:#fef2f2;color:#b91c1c;border-color:#fee2e2;font-weight:700}
+#lis-auto-audit-log-box .aal-abn-item.cri{background:#b91c1c;color:#fff;border-color:#7f1d1d;font-weight:700}
 #lis-auto-audit-log-box .aal-abn-item.unc{background:var(--lis-bg);color:var(--lis-slate-500);border-color:var(--lis-border)}
 #lis-auto-audit-log-box .aal-abn-item.zero{background:#fffbeb;color:#b45309;border-color:#fef3c7}
 .aal-skip-box{display:flex;align-items:center;gap:6px;background:#fffbeb;border:1px solid #fef3c7;color:#92400e;padding:3px 10px;border-radius:4px;font-size:11px;width:100%;line-height:1.35}
@@ -1243,11 +1245,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ab-card-test{font-size:11px;color:var(--lis-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
 .ab-card-items{display:flex;flex-wrap:wrap;gap:2px 3px;margin-top:1px}
 .ab-card-item{padding:0 4px;border-radius:3px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid transparent;line-height:1.55}
-.ab-card-item.critical{background:#fee2e2;color:#b91c1c;border-color:#fecaca;font-weight:700}
-.ab-card-item.high{background:#ffedd5;color:#9a3412;border-color:#f97316}
-.ab-card-item.high.mild{background:#fff7ed;color:#c2410c;border:1px dashed #fb923c}
-.ab-card-item.low{background:#dbeafe;color:#1e3a8a;border-color:#60a5fa}
-.ab-card-item.low.mild{background:#f7faff;color:#1d4ed8;border:1px dashed #60a5fa}
+/* 8.15.17: 条目级轻/重与结果表同一套形式（满色底白字＝须人工 / 白底彩字＝可批审）——
+   避免"同一含义在不同界面两套视觉"。⚠️ critical 排在 high/low 之后：特异性相同，靠顺序保证红色胜出。 */
+.ab-card-item.high{background:#ea580c;color:#fff;border-color:#9a3412}
+.ab-card-item.high.mild{background:#fff;color:#c2410c;border:1px dashed #fb923c}
+.ab-card-item.low{background:#1d4ed8;color:#fff;border-color:#1e3a8a}
+.ab-card-item.low.mild{background:#fff;color:#1d4ed8;border:1px dashed #60a5fa}
+.ab-card-item.critical{background:#b91c1c;color:#fff;border-color:#7f1d1d;font-weight:700}
 .ab-card-item.abnormal{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
 .ab-card-item.zero{background:#fffbeb;color:#b45309;border-color:#fde68a}
 .ab-card-item.infection-warning{background:#fff7ed;color:#c2410c;border-color:#fed7aa;font-weight:700}
@@ -1470,20 +1474,28 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table.compact tr:last-child td{border-bottom:none}
 .result-table tr:hover{background:rgba(241,245,249,.6)}
 .result-table .abnormal, .result-table td.abnormal{color:#c62828!important;font-weight:700}
-.result-table .abnormal.critical, .result-table td.abnormal.critical{color:#b91c1c!important;font-weight:800;font-size:14px;text-shadow:0 0 1px rgba(185,28,28,.25)}
-.result-table .abnormal.high, .result-table td.abnormal.high{color:#9a3412!important;background:#ffedd5;font-weight:700}
-.result-table .abnormal.low, .result-table td.abnormal.low{color:#1e3a8a!important;background:#dbeafe;font-weight:700}
-.result-table td.abnormal.high, .result-table td.abnormal.low{border-left:3px solid transparent}
-.result-table .abnormal.high.mild, .result-table td.abnormal.high.mild{color:#c2410c!important;background:#fff7ed;border-left:3px solid #fb923c;font-weight:700}
-.result-table .abnormal.low.mild, .result-table td.abnormal.low.mild{color:#1d4ed8!important;background:#f7faff;border-left:3px solid #60a5fa;font-weight:700}
+/* 8.15.17: 轻/重两档改用「形式」区分，不再只靠橙色深浅——旧版两档同为橙色系、只有明度差和一条左竖条，
+   现场反馈「分不清哪个能批」。现在：须人工＝满色底+白字+左实线；可批审＝白底+彩字+左虚线。
+   这是明度反转（最深 vs 最浅），扫一眼即可分辨；左竖条实/虚、粗细 4px 作为第二重线索（色弱也分得清）。
+   危急值同样满色红底白字（用户要求）。⚠️ 顺序：high/low 在前、critical 在后——
+   二者特异性相同，靠顺序保证同元素同时带 critical 与 high 类时红色胜出。 */
+.result-table .abnormal.high, .result-table td.abnormal.high{color:#fff!important;background:#ea580c;border-left:4px solid #9a3412;font-weight:700}
+.result-table .abnormal.low, .result-table td.abnormal.low{color:#fff!important;background:#1d4ed8;border-left:4px solid #1e3a8a;font-weight:700}
+.result-table .abnormal.critical, .result-table td.abnormal.critical{color:#fff!important;background:#b91c1c;border-left:4px solid #7f1d1d;font-weight:800;font-size:14px}
+.result-table .abnormal.high.mild, .result-table td.abnormal.high.mild{color:#c2410c!important;background:#fff;border:1px solid #fed7aa;border-left:4px dashed #fb923c;font-weight:700}
+.result-table .abnormal.low.mild, .result-table td.abnormal.low.mild{color:#1d4ed8!important;background:#fff;border:1px solid #bfdbfe;border-left:4px dashed #60a5fa;font-weight:700}
 .result-table .normal, .result-table td.normal{color:#16a34a!important}
 .result-table .history{background:#f8f9fa}
 .result-table .hist-tag{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:3px;font-size:11px;white-space:nowrap;line-height:1.4}
 .result-table .hist-tag.normal{background:#e8f5e9;color:#2e7d32;border-left:3px solid #4caf50}
 .result-table .hist-tag.abnormal{background:#fce4ec;color:#c62828;border-left:3px solid #e74c3c}
-.result-table .hist-tag.high{background:#fff3e0;color:#e65100;border-left:3px solid #ff9800}
-.result-table .hist-tag.low{background:#e3f2fd;color:#1565c0;border-left:3px solid #2196f3}
-.result-table .hist-tag.critical{background:#ffebee;color:#c62828;border-left:3px solid #e74c3c;font-weight:700}
+/* 8.15.17: 历史小列与主结果同一套口径（判定见 renderHistoryItems）——须人工满色、可批审白底+虚竖条。
+   mild 修饰类由 JS 按当前放行规则（含 ⚙ 覆盖）实时加/去，所以「改了我的上下限，历史列颜色跟着变」。 */
+.result-table .hist-tag.high{background:#ea580c;color:#fff;border-left:3px solid #9a3412}
+.result-table .hist-tag.high.mild{background:#fff;color:#c2410c;border:1px solid #fed7aa;border-left:3px dashed #fb923c}
+.result-table .hist-tag.low{background:#1d4ed8;color:#fff;border-left:3px solid #1e3a8a}
+.result-table .hist-tag.low.mild{background:#fff;color:#1d4ed8;border:1px solid #bfdbfe;border-left:3px dashed #60a5fa}
+.result-table .hist-tag.critical{background:#b91c1c;color:#fff;border-left:3px solid #7f1d1d;font-weight:700}
 .result-table .hist-tag.nodate{background:#f5f5f5;color:#999;border-left:3px solid #bbb}
 .result-table .hist-date{font-size:9px;color:#999;display:block;margin-top:-1px}
 /* 8.11.10: 去掉 justify-content:space-between——提示行 margin-right:auto 已把主操作推到最右，
@@ -14485,7 +14497,7 @@ window.addEventListener('keydown',function(e){
   }
 
   // 解析并渲染单个检验项目的历次结果，返回 {cells:[], dates:[]}
-  function renderHistoryItems(r) {
+  function renderHistoryItems(r, live) {
     const historyItems = parsePreResult(r);
     if (historyItems.length === 0) {return { cells: ['', '', ''], dates: [] };}
 
@@ -14503,18 +14515,25 @@ window.addEventListener('keydown',function(e){
       if (i < recent.length) {
         const h = recent[i];
         let cls = 'normal';
-        // 优先用 AbFlag 判断颜色（从 PreResult 中提取）
+        let st = ''; // 8.15.17: 供「能否批审」判定用的状态（只对高/低有意义）
+        // 优先用 AbFlag 判断档位（从 PreResult 中提取）
         const ab = (h.abFlag || '').toUpperCase();
         if (ab === 'HH' || ab === 'LL') {cls = 'critical';}
-        else if (ab === 'H') {cls = 'high';}
-        else if (ab === 'L') {cls = 'low';}
+        else if (ab === 'H') {cls = 'high'; st = 'HIGH';}
+        else if (ab === 'L') {cls = 'low'; st = 'LOW';}
         else if (ab === 'A') {cls = 'abnormal';}
         else {
           // 回退：用参考范围数值比较
           const histStatus = compareResultToRange(h.result, r.ValueLow, r.ValueHigh);
-          if (histStatus === 'HIGH') {cls = 'high';}
-          else if (histStatus === 'LOW') {cls = 'low';}
+          if (histStatus === 'HIGH') {cls = 'high'; st = 'HIGH';}
+          else if (histStatus === 'LOW') {cls = 'low'; st = 'LOW';}
         }
+        // 8.15.17: 历史小列不再只按 LIS 的 AbFlag 上色，而是与主结果共用同一套「可批审 / 须人工」判定，
+        // 且用**当前生效的放行规则**（含 ⚙ 人工覆盖）现算 —— 所以上调/下调上下限后，
+        // 历史列的颜色与形式（白底虚线 vs 满色实线）会跟着一起变，不需要重新打开历史。
+        // 判定借当前标本该项的参考范围（PreResult 不带范围字段，同一患者同一项目范围一般一致）；
+        // 判不出（缺范围 / 分段文本 / 未配规则）一律按「须人工」显示，方向保守。
+        if (st && mildItemVerdict(mildItemFromRaw(r, st, h.result), live) === 'pass') {cls += ' mild';}
         if (!h.date && cls === 'normal') {cls = 'nodate';}
         const dateStr = h.date ? h.date.split(' ')[0].replace(/^\d{2}(\d{2})/, '$1') : '';
         dates.push(dateStr);
@@ -14946,17 +14965,20 @@ window.addEventListener('keydown',function(e){
         let statusClass = isAbnormal ? 'abnormal' : 'normal';
         let resColor = '';
         let statusColor = '';
+        // 8.15.17: 结果单元格与状态列的颜色**拆成两个变量**——满色底档要求结果文字为白字
+        // （深色彩字压在实色底上不可读），而状态列没有底色，仍用深色彩字。
+        // 旧版两者共用 resColor/statusColor 同值，正是没法直接上满色底的原因。
         if (isCritical) {
           statusClass = 'abnormal critical';
-          resColor = '#b91c1c';
+          resColor = '#fff';
           statusColor = '#b91c1c';
         } else if (statusText.includes('高')) {
           statusClass = 'abnormal high';
-          resColor = '#9a3412';
+          resColor = '#fff';
           statusColor = '#9a3412';
         } else if (statusText.includes('低')) {
           statusClass = 'abnormal low';
-          resColor = '#1e3a8a';
+          resColor = '#fff';
           statusColor = '#1e3a8a';
         } else if (isAbnormal) {
           statusClass = 'abnormal';
@@ -14971,7 +14993,8 @@ window.addEventListener('keydown',function(e){
           resColor = '#16a34a';
           statusColor = '#16a34a';
         }
-        // 8.15.6: 高/低再分两档——在轻微放行带内＝浅色（F4 可批审），超带/未配规则/判不出＝深色
+        // 8.15.17: 高/低再分两档——在轻微放行带内＝白底彩字（F4 可批审）；
+        // 超带/未配规则/判不出＝满色底白字（须人工）。两档是**明度反转**，不再只靠橙色深浅。
         if (statusClass === 'abnormal high' || statusClass === 'abnormal low') {
           const _isHi = statusClass === 'abnormal high';
           const _mvIt = mildItemFromRaw(r, itemStatus, result);
@@ -14998,8 +15021,14 @@ window.addEventListener('keydown',function(e){
         // 参考范围带单位
         const refWithUnit = unit ? refRange + ' ' + unit : refRange;
 
+        // 8.15.17: 满色底档（须人工 / 危急值）——单位与结果同处一个单元格，必须一起转白，
+        // 否则原来的 #999 小字压在实色底上几乎看不见。判定放在传染病特例之后：inf-special 无底色，仍用灰字。
+        const _solidFill = statusClass === 'abnormal critical' || statusClass === 'abnormal high' || statusClass === 'abnormal low';
+        const unitStyle = _solidFill ? 'color:rgba(255,255,255,.92);font-weight:400' : 'color:#999;font-weight:400';
+        const resUnitHTML = unit ? ' <span style="font-size:10px;' + unitStyle + '">' + esc(unit) + '</span>' : '';
+
         // 历史结果
-        const hist = renderHistoryItems(r);
+        const hist = renderHistoryItems(r, _liveForMild);
 
         // QC 状态图标
         let qcHtml = '';
@@ -15056,7 +15085,7 @@ window.addEventListener('keydown',function(e){
         html += `<tr style="${rowStyle}">
                     <td style="text-align:center">${qcHtml}</td>
                     <td style="font-weight:500"><span style="display:inline-block;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}</span>${mildBtn}${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400"> ' + esc(refRange) + '</span>' : ''}</td>
-                    <td class="${statusClass}" style="${resStyle}">${esc(result)}${unit ? ' <span style="font-size:10px;color:#999;font-weight:400">' + esc(unit) + '</span>' : ''}</td>
+                    <td class="${statusClass}" style="${resStyle}">${esc(result)}${resUnitHTML}</td>
                     ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:11px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
                     <td class="${statusClass}" style="${statusStyle}">${statusText}</td>
                     <td style="font-size:11px">${hist.cells[0]}</td>
@@ -15901,7 +15930,15 @@ window.addEventListener('keydown',function(e){
         const g = groups.get(key);
         const value = _histItemValue(it);
         if (value === '') { return; }
-        g.rows.push({ date, value, flag: _histItemFlag(it), meta });
+        g.rows.push({
+          date, value, flag: _histItemFlag(it), meta,
+          // 8.15.17: 一并留下该次记录**自己的**参考范围与结构化上下限——历史浮层的
+          // 「可批审 / 须人工」判定必须用当时那份报告的范围（同一项目随年龄/性别范围会变），
+          // 只用 group 上「最后一份」的 ref 去套所有历史值会误判。
+          ref: _histItemRef(it),
+          vlow: it.ValueLow,
+          vhigh: it.ValueHigh
+        });
       });
     });
 
@@ -16099,15 +16136,44 @@ window.addEventListener('keydown',function(e){
     }
   }
 
+  // 8.15.17: 历史浮层单条的「可批审 / 须人工」判定——复用主结果同一条判定链
+  // （mildItemVerdict → mildAllowItem），保证历史与当前报告的口径永远不会分叉。
+  // 判定以**当前生效的放行规则**（含 ⚙ 人工覆盖）为准，所以现场调完上下限，历史浮层立刻跟着变。
+  // memo：同一次渲染内按「项目|方向|值|范围|上下限」缓存——历史浮层可上千行，
+  // 不缓存会重复跑 97 条正则 + 参考范围解析。
+  let _histMildMemo = null;
+  function histRowMild(g, r, flagCls) {
+    if (flagCls !== 'H' && flagCls !== 'L') {return false;}
+    const ref = r.ref || g.ref || '';
+    const key = g.name + '\u0001' + flagCls + '\u0001' + r.value + '\u0001' + ref +
+      '\u0001' + (r.vlow === undefined ? '' : r.vlow) + '\u0001' + (r.vhigh === undefined ? '' : r.vhigh);
+    if (_histMildMemo && _histMildMemo.has(key)) {return _histMildMemo.get(key);}
+    let ok = false;
+    try {
+      const it = mildItemFromRaw(
+        {CName: g.name, Synonym: g.syn, RefRanges: ref, ValueLow: r.vlow, ValueHigh: r.vhigh},
+        flagCls === 'H' ? 'HIGH' : 'LOW', r.value);
+      ok = mildItemVerdict(it, null, mildSexOf({row: histCurrentSpecimen || {}})) === 'pass';
+    } catch (e) {ok = false;}
+    if (_histMildMemo) {_histMildMemo.set(key, ok);}
+    return ok;
+  }
+
   function histRowHTML(g, r) {
     const f = r.flag;
     const flagCls = f === 'H' || f === 'HH' || f === 'PH' || f === 'UH' ? 'H' : f === 'L' || f === 'LL' || f === 'PL' || f === 'UL' ? 'L' : f === 'A' ? 'A' : '';
     const flagText =
       f === 'HH' || f === 'PH' || f === 'UH' ? '↑↑' : f === 'LL' || f === 'PL' || f === 'UL' ? '↓↓' : f === 'H' ? '↑' : f === 'L' ? '↓' : f === 'A' ? '⚠' : '';
+    // 8.15.17: 高/低再分两档，与结果表同一形式——可批审加 .mild（白底彩字 + 虚竖条），
+    // 否则满色底白字（须人工）。危急（↑↑/↓↓，HH/LL/PH/PL/UH/UL）固定满色红底，不参与 mild 判定。
+    const isCri = f === 'HH' || f === 'PH' || f === 'UH' || f === 'LL' || f === 'PL' || f === 'UL';
+    const valCls = (flagCls === 'H' || flagCls === 'L')
+      ? flagCls + ((!isCri && histRowMild(g, r, flagCls)) ? ' mild' : '')
+      : flagCls;
     const rowCls = r.meta.isCurrent ? 'hist-row-cur' : '';
     return `<tr class="${rowCls}">
       <td class="hist-date">${esc(r.date)}${r.meta.isCurrent ? '<span class="hist-now">本次</span>' : ''}</td>
-      <td class="hist-val ${flagCls}">${esc(r.value)}${g.unit ? ' <span class="hist-unit">' + esc(g.unit) + '</span>' : ''}</td>
+      <td class="hist-val ${valCls}">${esc(r.value)}${g.unit ? ' <span class="hist-unit">' + esc(g.unit) + '</span>' : ''}</td>
       <td class="hist-flag ${flagCls}">${flagText}</td>
       <td class="hist-src">${esc(r.meta.testSetDesc || '')}${r.meta.labno ? ' · ' + esc(r.meta.labno) : ''}${r.meta.wgName ? ' · ' + esc(r.meta.wgName) : ''}</td>
     </tr>`;
@@ -16115,6 +16181,8 @@ window.addEventListener('keydown',function(e){
 
   function histRender() {
     if (!histPanel || !histPanel.classList.contains('show')) { return; }
+    // 8.15.17: 每次渲染重置「可批审」判定缓存——规则可能刚被改过（_refreshAfterMildRuleChange 会调到这里）
+    _histMildMemo = new Map();
     const sp = histCurrentSpecimen;
     const sub = document.getElementById('lis-hist-sub');
     if (sub) {
@@ -16393,9 +16461,16 @@ window.addEventListener('keydown',function(e){
 .hist-gtable td{padding:4px 8px;border-top:1px solid var(--lis-surface-subtle);vertical-align:top}
 .hist-gtable tr.hist-row-cur td{background:#ecfdf5}
 .hist-val{font-weight:700;color:#0f3d36;white-space:nowrap}
-.hist-val.H{color:#dc2626}
-.hist-val.L{color:#2563eb}
+/* 8.15.17: 与结果表同一套形式——须人工＝满色底白字＋左实线；可批审(.mild)＝白底彩字＋左虚线。
+   .mild 由 JS 按当前放行规则（含 ⚙ 覆盖）实时加/去，所以改了上下限历史浮层颜色会跟着变。 */
+.hist-val.H{color:#fff;background:#ea580c;border-left:3px solid #9a3412;border-radius:3px;padding:0 4px}
+.hist-val.H.mild{color:#c2410c;background:#fff;border:1px solid #fed7aa;border-left:3px dashed #fb923c}
+.hist-val.L{color:#fff;background:#1d4ed8;border-left:3px solid #1e3a8a;border-radius:3px;padding:0 4px}
+.hist-val.L.mild{color:#1d4ed8;background:#fff;border:1px solid #bfdbfe;border-left:3px dashed #60a5fa}
 .hist-val.A{color:#d97706}
+/* 8.15.17: 满色底档上的单位小字必须转白（原本是 var(--lis-text-muted) 灰，压在实色底上看不见）。
+   用 :not(.mild) 精确排除白底的可批审档，那里仍需灰字。 */
+.hist-val.H:not(.mild) .hist-unit,.hist-val.L:not(.mild) .hist-unit{color:rgba(255,255,255,.92)}
 .hist-flag.H{color:#dc2626;font-weight:800}
 .hist-flag.L{color:#2563eb;font-weight:800}
 .hist-flag.A{color:#d97706;font-weight:800}
@@ -20093,6 +20168,12 @@ window.addEventListener('keydown',function(e){
     } catch (e) {dbg('放行范围变更后刷新检视器异常:', e);}
     try {loadWSData({}).catch(e => dbg('放行范围变更后刷新列表失败:', e));}
     catch (e) {dbg('放行范围变更后刷新列表异常:', e);}
+    // 8.15.17: 历史浮层（🔎）若正开着，也一起重渲染——它的「可批审 / 须人工」配色同样按当前规则现算，
+    // 不刷就会出现「同一个值在当前报告里是白底可批审、在历史浮层里还是满色」的分裂。
+    // histRender 内部会重置判定缓存，所以这里不需要额外清缓存。
+    try {
+      if (histPanel && histPanel.classList.contains('show')) {histRender();}
+    } catch (e) {dbg('放行范围变更后刷新历史浮层异常:', e);}
   }
 
   // 8.15.9 起：详情抽屉/右栏检视器结果表项目名后的 ⚙ —— 轻微放行范围设置。
