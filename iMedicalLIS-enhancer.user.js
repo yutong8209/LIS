@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.2
+// @version      8.16.3
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -23362,6 +23362,19 @@ window.addEventListener('keydown',function(e){
     scheduleAutoAuditCycle();
   }
 
+  // 8.16.3: 停止/到期时统计「还剩多少待审」——自动审核只是代签，没审完的仍需人工处理。
+  // 夜间到期时无人看屏幕，不告知剩余数，用户会以为「开着的时候都审完了」。
+  function aaCountPendingForAutoAudit() {
+    try {
+      if (!wsData || !wsData.length) {return 0;}
+      return wsData.filter(r => {
+        if (!rowIsAutoAuditCandidate(r)) {return false;}
+        const b = getWSAuditBucket(r);
+        return b === 'normal' || b === 'abnormal';
+      }).length;
+    } catch (e) {return 0;}
+  }
+
   function stopAutoAudit(reason) {
     const wasEnabled = autoAuditEnabled();
     _autoAuditCancelRequested = true;
@@ -23383,14 +23396,20 @@ window.addEventListener('keydown',function(e){
     updateWSFooter();
     // 8.9.6: 停止/到期时把攒着没发的合并推送立即结清（防止随页面关闭被丢弃）
     try {flushAutoAuditPushBuffer();} catch (e) {}
+    // 8.16.3: 剩余待审计数——下面三处（时间线 / toast / 到期推送）共用。
+    // 自动审核只做代签，没审完的仍要人工；不说清剩余数，用户会以为「开着的时候都审完了」。
+    const _leftN = wasEnabled ? aaCountPendingForAutoAudit() : 0;
+    const _leftTxt = _leftN > 0 ? '，仍有 ' + _leftN + ' 例待审需人工处理' : '';
     // 8.9.1: 关闭/到期事件进「查看记录」时间线
     if (wasEnabled) {
-      aaStateEventAdd(reason === '到期' ? 'expire' : 'stop', reason === '到期' ? '设定时长已到，自动审核到期停止' : '手动关闭自动审核');
+      aaStateEventAdd(reason === '到期' ? 'expire' : 'stop',
+        (reason === '到期' ? '设定时长已到，自动审核到期停止' : '手动关闭自动审核') + _leftTxt);
     }
     // 8.5.82: 到期停止属于用户必须知道的状态变化，不受 mute 静默（mute 只静默常规流水提示）——
     // 此前到期 toast 被 mute 吞掉，用户回来看不到任何「为何停了」的提示
     if (wasEnabled && (!_autoAuditMute || reason === '到期')) {
-      showToast(reason === '到期' ? '🤖 自动审核已到期，自动停止' : '🤖 自动审核已关闭', 'success');
+      showToast((reason === '到期' ? '🤖 自动审核已到期，自动停止' : '🤖 自动审核已关闭') + _leftTxt,
+        _leftN > 0 ? 'warning' : 'success');
     }
     // 8.8.21: 停止/关闭不再发手机推送（原 ⏰/🛑 状态推送已移除）——
     // 关闭是用户本机主动动作，界面已有 toast 与按钮状态；减少无谓打扰与一次云端转发
@@ -23398,7 +23417,7 @@ window.addEventListener('keydown',function(e){
     // 手动关闭维持静音。同时清掉断流恢复待通知标记，防止下次开启首个健康 tick 误报「已恢复」
     if (reason === '到期' && wasEnabled) {
       _pendingResumeNotice = false;
-      try {pushAutoAuditNotify({title: '⏰ 自动审核已到期停止', body: '设定的审核时长已到，自动审核已停止；需再次开启请到工作台', level: 'active', group: 'LIS系统状态', sound: 'glass'});} catch (e) {}
+      try {pushAutoAuditNotify({title: '⏰ 自动审核已到期停止', body: '设定的审核时长已到，自动审核已停止；需再次开启请到工作台' + _leftTxt, level: 'active', group: 'LIS系统状态', sound: 'glass'});} catch (e) {}
     } else {
       _pendingResumeNotice = false;
     }
@@ -25061,7 +25080,12 @@ window.addEventListener('keydown',function(e){
         // 真暂停：红线从当前数据现扫（Map 语义，不受 skipSeen 去重影响，连续暂停每轮明细都完整）
         // 8.10.2: 与主循环候选口径统一（含手工杂项黑名单）——不自动审的仪器不该在暂停推送里冒充「拦下待人工」
         const _cand = wsData.filter(r => rowIsAutoAuditCandidate(r));
-        const _rl = _aaScanRedLines(_cand);
+        // 8.16.3: 与主循环同口径——只扫会进自动审核的 normal / abnormal。把「不完整」页的标本
+        // 当成红线拦下，会让暂停推送列出待审视图里根本找不到的标本。
+        const _rl = _aaScanRedLines(_cand.filter(r => {
+          const b = getWSAuditBucket(r);
+          return b === 'normal' || b === 'abnormal';
+        }));
         const _realSpecs = [];
         _rl.map.forEach((reason, dr) => {
           const r = findWSSpecimenByReportDR(dr) || {};
@@ -25138,7 +25162,18 @@ window.addEventListener('keydown',function(e){
       // 候选 = 开启时固定的筛选范围快照（工作组+勾选仪器；忽略标本不审）—— 8.5.67 快照语义
       // 8.10.2: 追加「手工杂项」永久黑名单（临检/免疫各一台）——即使快照是全工作组全仪器也排除
       const candidates = wsData.filter(r => rowIsAutoAuditCandidate(r));
-      let normals = candidates.filter(r => getWSAuditBucket(r) === 'normal');
+      // 8.16.3: 按分类桶收敛——只有 normal / abnormal 会真的走自动审核。此前红线扫描直接吃全部
+      // 候选，于是一条「结果不完整 / 分类已过期 / 含星号占位」的标本只要还留着旧分类缓存、而那份
+      // 缓存里恰好含负值或传染病阳性，就会被记成红线留人工并进推送；可它其实躺在工作台「不完整」
+      // 页 —— 推送说「已拦下 N 例」，切到待审视图却找不到，读数还虚高。桶只算一次，normals 与
+      // 红线扫描共用同一份判定，避免重复分类开销。
+      const _aaBucketOf = new Map();
+      const _aaAuditScope = candidates.filter(r => {
+        const b = getWSAuditBucket(r);
+        _aaBucketOf.set(String(r.ReportDR), b);
+        return b === 'normal' || b === 'abnormal';
+      });
+      let normals = _aaAuditScope.filter(r => _aaBucketOf.get(String(r.ReportDR)) === 'normal');
       // 8.11.9: 原 `abnormals` 列表已不再使用——异常逐条段改为按 wsData 实时取候选
       // （见下方 _aaAbnormalDone），避免"每审完一条重建列表导致跳条"。红线排除改由 _redLineDRs 承担。
 
@@ -25150,7 +25185,7 @@ window.addEventListener('keydown',function(e){
       const _passByMn = {};
       // 8.5.76/8.5.82/8.6.2: 三类红线预过滤——8.8.33 起扫描收敛为 _aaScanRedLines 单次遍历，
       // 负值/传染病阳性/心肌标志物各自取集，_redLineReasonMap 同时供暂停推送取真实明细
-      const _rl = _aaScanRedLines(candidates);
+      const _rl = _aaScanRedLines(_aaAuditScope);
       const negDRs = _rl.neg;
       const infPosDRs = _rl.inf;
       const cardiacDRs = _rl.card;
