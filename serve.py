@@ -62,6 +62,10 @@ _load_cmd()
 QC_CONFIG_FILE = os.path.join(ROOT, '.cache', 'qc_config.json')
 _qc_lock = threading.Lock()
 
+# 轻微放行范围与自定义规则配置存储（本地 fallback 与网关同构）
+MILD_RULES_FILE = os.path.join(ROOT, '.cache', 'mild_rules.json')
+_mild_rules_lock = threading.Lock()
+
 # ── Bark 推送（自动审核关键事件 → iPhone / Apple Watch）──────────────────────
 # 配置：notify_config.json（不入库，勿提交）：
 #   {"bark_key": "你在 Bark App 里的设备码", "enabled": true}
@@ -414,6 +418,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(str(e).encode('utf-8'))
             return
+        if path in ('/mild_rules', '/mild-rules'):
+            if not self._origin_allowed():
+                self._reject_origin()
+                return
+            with _mild_rules_lock:
+                try:
+                    if os.path.exists(MILD_RULES_FILE):
+                        with open(MILD_RULES_FILE, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        if not isinstance(data, dict):
+                            data = {}
+                        body = json.dumps({
+                            'ok': True,
+                            'rules': data.get('rules') or {},
+                            'added': data.get('added') or [],
+                            'log': data.get('log') or [],
+                            'updated_at': data.get('updated_at', 0),
+                            'updated_by': data.get('updated_by', '')
+                        }, ensure_ascii=False).encode('utf-8')
+                    else:
+                        body = json.dumps({'ok': True, 'rules': {}, 'added': [], 'log': [], 'updated_at': 0, 'updated_by': ''}).encode('utf-8')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.send_header('Cache-Control', 'no-cache')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(str(e).encode('utf-8'))
+            return
         # 允许 vendor/ 下已登记的静态文件
         filepath = ALLOWED.get(path)
         if not filepath and path.startswith('/vendor/'):
@@ -566,6 +604,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(str(e).encode())
+        elif path in ('/mild_rules', '/mild-rules'):
+            try:
+                length = int(self.headers.get('Content-Length', 0) or 0)
+                if length <= 0 or length > 1048576:
+                    self._reply_413()
+                    return
+                raw = self.rfile.read(length)
+                payload = json.loads(raw.decode('utf-8'))
+                if not isinstance(payload, dict):
+                    self.send_response(400)
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(b'{"error":"invalid json"}')
+                    return
+                with _mild_rules_lock:
+                    existing = {}
+                    if os.path.exists(MILD_RULES_FILE):
+                        try:
+                            with open(MILD_RULES_FILE, 'r', encoding='utf-8') as f:
+                                existing = json.load(f)
+                            if not isinstance(existing, dict):
+                                existing = {}
+                        except Exception:
+                            existing = {}
+                    if 'rules' in payload and isinstance(payload['rules'], dict):
+                        existing['rules'] = payload['rules']
+                    if 'added' in payload and isinstance(payload['added'], list):
+                        existing['added'] = payload['added']
+                    if 'log' in payload and isinstance(payload['log'], list):
+                        existing['log'] = payload['log']
+                    now_ts = int(time.time() * 1000)
+                    existing['updated_at'] = payload.get('updated_at') or now_ts
+                    client_ip = self.headers.get('X-Real-IP') or self.client_address[0]
+                    existing['updated_by'] = client_ip
+                    os.makedirs(os.path.dirname(MILD_RULES_FILE), exist_ok=True)
+                    tmp_file = MILD_RULES_FILE + '.tmp'
+                    with open(tmp_file, 'w', encoding='utf-8') as f:
+                        json.dump(existing, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp_file, MILD_RULES_FILE)
+                body = json.dumps({'ok': True, 'updated_at': existing['updated_at']}).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(str(e).encode('utf-8'))
         elif path in ('/qc_config', '/qc-config'):
             try:
                 length = int(self.headers.get('Content-Length', 0) or 0)

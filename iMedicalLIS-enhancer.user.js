@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.31
-// @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
+// @version      8.16.0
+// @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -678,10 +678,27 @@
     };
     uw().lisMildRuleOverrides = () => loadMildRuleOverrides();
     uw().lisResetMildRuleOverrides = () => { // 一把恢复全部默认（谨慎）
-      _mildRuleOv = {rules: {}, added: [], log: []};
-      try {localStorage.removeItem(K.mildRules);} catch (e) {}
+      _mildRuleOv = {rules: {}, added: [], log: [], updated_at: Date.now()};
+      try {localStorage.setItem(K.mildRules, JSON.stringify(_mildRuleOv));} catch (e) {}
       applyMildRuleOverrides();
-      return '已恢复全部默认放行范围';
+      _refreshAfterMildRuleChange();
+      mildPushGatewayRules(_mildRuleOv).catch(() => {});
+      return '已恢复全部默认放行范围并同步至网关';
+    };
+    uw().lisSyncMildRules = () => syncMildRuleOverrides(true);
+    uw().lisExportMildRules = () => JSON.stringify(loadMildRuleOverrides(), null, 2);
+    uw().lisImportMildRules = (str) => {
+      try {
+        const parsed = typeof str === 'string' ? JSON.parse(str) : str;
+        if (!parsed || typeof parsed !== 'object') throw new Error('无效的 JSON 格式');
+        parsed.updated_at = Date.now();
+        saveMildRuleOverrides(parsed, true);
+        applyMildRuleOverrides();
+        _refreshAfterMildRuleChange();
+        return '导入成功并已同步至网关';
+      } catch (e) {
+        return '导入失败: ' + (e.message || e);
+      }
     };
   } catch (e) {}
 
@@ -9040,6 +9057,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     try {
       wsLoading = true;
       setWSStatusNote(force ? '强制刷新中...' : '加载中...');
+      try { syncMildRuleOverrides(false).catch(() => {}); } catch (e) {}
 
       // 8.7.0: 本次加载的查询日期窗口（平时=选中单日；自动审核运行中=开启日~今天）
       const [qStart, qEnd] = getWSQueryRange();
@@ -20183,6 +20201,141 @@ window.addEventListener('keydown',function(e){
   }));
   const MILD_RULE_OV_LOG_MAX = 200;
 
+  // --- 8.16.0: 轻微放行规则与上下限覆盖全科室多机同步 ---
+  const MILD_RULES_ENDPOINTS = [
+    'http://192.168.31.111:9111/mild_rules',
+    'http://127.0.0.1:8765/mild_rules'
+  ];
+
+  function mildGetEndpoints() {
+    if (location.hostname === '192.168.31.111') {
+      return [location.origin + '/mild_rules', 'http://127.0.0.1:8765/mild_rules'];
+    }
+    return MILD_RULES_ENDPOINTS;
+  }
+
+  async function mildFetchGatewayRules() {
+    const endpoints = mildGetEndpoints();
+    for (const ep of endpoints) {
+      try {
+        const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const tmr = ctl ? setTimeout(() => { try { ctl.abort(); } catch (x) {} }, 3500) : null;
+        const resp = await fetch(ep, {
+          cache: 'no-cache',
+          signal: ctl ? ctl.signal : undefined
+        });
+        if (tmr) { clearTimeout(tmr); }
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.ok) {
+            return { ...data, endpoint: ep };
+          }
+        }
+      } catch (e) {
+        dbg('[LIS-Mild] 网关规则拉取失败 ' + ep + ': ' + (e.message || e));
+      }
+    }
+    return null;
+  }
+
+  async function mildPushGatewayRules(payload) {
+    if (!payload || typeof payload !== 'object') { return { ok: false }; }
+    const endpoints = mildGetEndpoints();
+    const dataToSend = {
+      rules: payload.rules || {},
+      added: Array.isArray(payload.added) ? payload.added : [],
+      log: Array.isArray(payload.log) ? payload.log : [],
+      updated_at: payload.updated_at || Date.now()
+    };
+    for (const ep of endpoints) {
+      try {
+        const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const tmr = ctl ? setTimeout(() => { try { ctl.abort(); } catch (x) {} }, 4000) : null;
+        const resp = await fetch(ep, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' }, // text/plain 免 CORS 复杂预检
+          body: JSON.stringify(dataToSend),
+          signal: ctl ? ctl.signal : undefined
+        });
+        if (tmr) { clearTimeout(tmr); }
+        if (resp.ok) {
+          const res = await resp.json();
+          if (res && res.ok) {
+            dbg('[LIS-Mild] 放行规则已成功同步至网关: ' + ep + ' (updated_at: ' + res.updated_at + ')');
+            return { ok: true, endpoint: ep, updated_at: res.updated_at };
+          }
+        }
+      } catch (e) {
+        dbg('[LIS-Mild] 网关规则推送失败 ' + ep + ': ' + (e.message || e));
+      }
+    }
+    return { ok: false };
+  }
+
+  let _mildLastSyncTs = 0;
+  let _mildSyncing = false;
+
+  async function syncMildRuleOverrides(force = false) {
+    const now = Date.now();
+    if (!force && _mildSyncing) { return false; }
+    if (!force && now - _mildLastSyncTs < 30000) { return false; } // 30s 节流
+    _mildSyncing = true;
+    try {
+      const local = loadMildRuleOverrides();
+      const localHasData = (local && local.rules && Object.keys(local.rules).length > 0) ||
+                           (local && Array.isArray(local.added) && local.added.length > 0);
+      const localUpdatedAt = (local && typeof local.updated_at === 'number') ? local.updated_at : 0;
+
+      const remote = await mildFetchGatewayRules();
+      if (!remote || !remote.ok) {
+        return false;
+      }
+      _mildLastSyncTs = Date.now();
+
+      const remoteUpdatedAt = typeof remote.updated_at === 'number' ? remote.updated_at : 0;
+      const remoteHasData = (remote.rules && Object.keys(remote.rules).length > 0) ||
+                            (Array.isArray(remote.added) && remote.added.length > 0);
+
+      // 情况 1：网关尚无规则或为空，而本地有规则 → 将本地规则上传网关作为全科室共享种子
+      if (!remoteHasData && localHasData) {
+        local.updated_at = localUpdatedAt || Date.now();
+        saveMildRuleOverrides(local, false);
+        mildPushGatewayRules(local).catch(() => {});
+        dbg('[LIS-Mild] 本地规则初始化推送至网关');
+        return true;
+      }
+
+      // 情况 2：远端更新（其它电脑修改并上传）→ 覆盖本地并刷新重算
+      if (remoteUpdatedAt > localUpdatedAt && remoteHasData) {
+        _mildRuleOv = {
+          rules: remote.rules || {},
+          added: Array.isArray(remote.added) ? remote.added : [],
+          log: Array.isArray(remote.log) ? remote.log : [],
+          updated_at: remoteUpdatedAt,
+          updated_by: remote.updated_by || ''
+        };
+        try {
+          localStorage.setItem(K.mildRules, JSON.stringify(_mildRuleOv));
+        } catch (e) {}
+        applyMildRuleOverrides();
+        _refreshAfterMildRuleChange();
+        dbg('[LIS-Mild] 已从网关拉取最新放行规则并生效 (updated_at: ' + remoteUpdatedAt + ')');
+        return true;
+      }
+
+      // 情况 3：本地较新（如离线时修改保存）→ 补推网关
+      if (localUpdatedAt > remoteUpdatedAt && localHasData) {
+        mildPushGatewayRules(local).catch(() => {});
+      }
+      return true;
+    } catch (e) {
+      dbg('[LIS-Mild] 规则同步异常:', e);
+      return false;
+    } finally {
+      _mildSyncing = false;
+    }
+  }
+
   let _mildRuleOv = null;
   function loadMildRuleOverrides() {
     if (_mildRuleOv) {return _mildRuleOv;}
@@ -20195,9 +20348,15 @@ window.addEventListener('keydown',function(e){
     _mildRuleOv = o;
     return o;
   }
-  function saveMildRuleOverrides(o) {
+  function saveMildRuleOverrides(o, syncToGateway = true) {
     _mildRuleOv = o;
+    if (o && typeof o === 'object') {
+      o.updated_at = o.updated_at || Date.now();
+    }
     try {localStorage.setItem(K.mildRules, JSON.stringify(o));} catch (e) {dbg('放行范围覆盖保存失败:', e);}
+    if (syncToGateway && o) {
+      mildPushGatewayRules(o).catch(e => dbg('[LIS-Mild] 网关同步推送失败:', e));
+    }
   }
   // 规则稳定键：乙类用 group，甲类用正则源码
   function mildRuleKey(rule) {
@@ -20321,6 +20480,7 @@ window.addEventListener('keydown',function(e){
       }
     }
     _mildOvLog(ov, key, label || key, before, patch === null ? '默认' : JSON.stringify(ov.rules[key]));
+    ov.updated_at = Date.now();
     saveMildRuleOverrides(ov);
     applyMildRuleOverrides();
     return true;
@@ -20343,6 +20503,7 @@ window.addEventListener('keydown',function(e){
     const logLow = lowOff ? '不放行' : (low === null ? '不拦截' : (typeof lowAbs === 'number' ? `${lowAbs}` : `${low}×`));
     _mildOvLog(ov, 'x:' + name, name, '未配规则',
       tier === 'a' ? '甲类（全放行）' : `乙类 高${logHigh} / 低${logLow}`);
+    ov.updated_at = Date.now();
     saveMildRuleOverrides(ov);
     applyMildRuleOverrides();
     return true;
@@ -20352,6 +20513,7 @@ window.addEventListener('keydown',function(e){
     if (!ov.added.some(a => a && a.name === name)) {return false;}
     ov.added = ov.added.filter(a => a && a.name !== name);
     _mildOvLog(ov, 'x:' + name, name, '已新增规则', '已删除（回到未配规则）');
+    ov.updated_at = Date.now();
     saveMildRuleOverrides(ov);
     applyMildRuleOverrides();
     return true;
@@ -20432,6 +20594,13 @@ window.addEventListener('keydown',function(e){
     return out;
   }
   applyMildRuleOverrides(); // 启动即应用（_classifyVersion 在 8174 行已声明，无 TDZ 风险）
+  // 8.16.0: 启动即异步拉取网关规则（多机自动同步）
+  setTimeout(() => { syncMildRuleOverrides(true).catch(() => {}); }, 1200);
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) { syncMildRuleOverrides(false).catch(() => {}); }
+    });
+  }
 
   // 8.15.9: 详情面板 ⚙ —— 轻微放行范围设置对话框
   // 只改「倍数」：倍数才是稳定参数（参考范围随性别/年龄变），旁边实时换算绝对值让你看到实际放行线。
@@ -20605,7 +20774,7 @@ window.addEventListener('keydown',function(e){
     dlg.id = 'lis-mild-dlg';
     dlg.innerHTML =
       '<div class="lm-box">' +
-        '<div class="lm-hd"><span>⚙ 轻微放行范围</span><span class="lm-close" title="关闭">✕</span></div>' +
+        '<div class="lm-hd"><span>⚙ 轻微放行范围 <span style="font-size:11px;font-weight:normal;color:#10b981;margin-left:6px;" title="规则已由网关持久化，科室所有电脑实时同步">☁️ 全科室同步</span></span><span class="lm-close" title="关闭">✕</span></div>' +
         '<div class="lm-item">' + esc(name) + (isTierA ? ' · 甲类' : '') + (isAdded ? ' · 人工新增' : '') + (isBySex ? ' · 分男女' : '') + '</div>' +
         (isBySex ? (
           '<div class="lm-tabs">' +
@@ -20886,7 +21055,7 @@ window.addEventListener('keydown',function(e){
     btnReset.addEventListener('click', () => {
       if (isAdded) {removeAddedMildRule(name);}
       else {setMildRuleOverride(rule0, null, name);}
-      showToast('已恢复默认放行范围', 'success');
+      showToast('已恢复默认放行范围并同步至网关（全科室生效）', 'success');
       close();
       _refreshAfterMildRuleChange();
     });
@@ -20969,8 +21138,8 @@ window.addEventListener('keydown',function(e){
       }
 
       showToast(loosened
-        ? '已放宽放行范围并立即生效 —— 该方向异常结果不再人工复核（改动已记留痕）'
-        : '已保存，立即生效', loosened ? 'warning' : 'success');
+        ? '已放宽放行范围并同步至网关（全科室生效） —— 该方向异常结果不再人工复核（改动已记留痕）'
+        : '已保存并同步至网关（全科室电脑生效）', loosened ? 'warning' : 'success');
       close();
       _refreshAfterMildRuleChange();
     });

@@ -46,6 +46,11 @@ QC_CONFIG_FILE = os.path.join(ROOT, 'qc_config.json')
 _qc_lock = threading.Lock()
 QC_MAX_BODY = 1048576  # 1MB 上限（含 mappings 大字典）
 
+# 轻微放行范围与自定义规则配置存储（多机共享）
+MILD_RULES_FILE = os.path.join(ROOT, 'mild_rules.json')
+_mild_rules_lock = threading.Lock()
+MILD_RULES_MAX_BODY = 1048576  # 1MB 上限
+
 # 8.10.0 安全加固：/notify 经 nginx 反代后，任何能访问 9111 的机器用 curl（无 Origin）
 # 即可调用——Origin 白名单只约束浏览器，挡不住脚本。加全局最小受理间隔 + 在途重试线程
 # 上限 + 请求体上限，防止恶意/误发请求轰炸手机，或用海量重试线程/大 body 耗尽资源。
@@ -364,10 +369,82 @@ class RelayHandler(http.server.BaseHTTPRequestHandler):
                     _log(f'/qc_config 读取异常: {e}')
                     self._send_json({'ok': False, 'error': str(e)[:120]}, code=500)
             return
+        if path in ('/mild_rules', '/mild-rules'):
+            if not self._origin_allowed():
+                _log(f'[security] 拒绝非白名单 Origin 的 GET {path}: {self.headers.get("Origin")}')
+                self._send_json({'error': 'Origin not allowed'}, code=403)
+                return
+            with _mild_rules_lock:
+                try:
+                    if os.path.exists(MILD_RULES_FILE):
+                        with open(MILD_RULES_FILE, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        if not isinstance(data, dict):
+                            data = {}
+                        self._send_json({
+                            'ok': True,
+                            'rules': data.get('rules') or {},
+                            'added': data.get('added') or [],
+                            'log': data.get('log') or [],
+                            'updated_at': data.get('updated_at', 0),
+                            'updated_by': data.get('updated_by', '')
+                        })
+                    else:
+                        self._send_json({'ok': True, 'rules': {}, 'added': [], 'log': [], 'updated_at': 0, 'updated_by': ''})
+                except Exception as e:
+                    _log(f'/mild_rules 读取异常: {e}')
+                    self._send_json({'ok': False, 'error': str(e)[:120]}, code=500)
+            return
         self._send_json({'error': 'not found'}, code=404)
 
     def do_POST(self):
         path = unquote(urlparse(self.path).path)
+        if path in ('/mild_rules', '/mild-rules'):
+            if not self._origin_allowed():
+                _log(f'[security] 拒绝非白名单 Origin 的 POST {path}: {self.headers.get("Origin")}')
+                self._send_json({'error': 'Origin not allowed'}, code=403)
+                return
+            try:
+                length = int(self.headers.get('Content-Length', 0) or 0)
+                if length <= 0 or length > MILD_RULES_MAX_BODY:
+                    self._send_json({'error': 'payload invalid or too large'}, code=413)
+                    return
+                raw = self.rfile.read(length)
+                payload = json.loads(raw.decode('utf-8'))
+                if not isinstance(payload, dict):
+                    self._send_json({'error': 'invalid json object'}, code=400)
+                    return
+                with _mild_rules_lock:
+                    existing = {}
+                    if os.path.exists(MILD_RULES_FILE):
+                        try:
+                            with open(MILD_RULES_FILE, 'r', encoding='utf-8') as f:
+                                existing = json.load(f)
+                            if not isinstance(existing, dict):
+                                existing = {}
+                        except Exception:
+                            existing = {}
+                    if 'rules' in payload and isinstance(payload['rules'], dict):
+                        existing['rules'] = payload['rules']
+                    if 'added' in payload and isinstance(payload['added'], list):
+                        existing['added'] = payload['added']
+                    if 'log' in payload and isinstance(payload['log'], list):
+                        existing['log'] = payload['log']
+                    now_ts = int(time.time() * 1000)
+                    existing['updated_at'] = payload.get('updated_at') or now_ts
+                    client_ip = self.headers.get('X-Real-IP') or self.client_address[0]
+                    existing['updated_by'] = client_ip
+                    # 原子落盘
+                    tmp_file = MILD_RULES_FILE + '.tmp'
+                    with open(tmp_file, 'w', encoding='utf-8') as f:
+                        json.dump(existing, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp_file, MILD_RULES_FILE)
+                _log(f'[mild_rules] 已保存轻微放行规则 (来自 {client_ip})，updated_at={existing["updated_at"]}')
+                self._send_json({'ok': True, 'updated_at': existing['updated_at']})
+            except Exception as e:
+                _log(f'/mild_rules 保存异常: {e}')
+                self._send_json({'ok': False, 'error': str(e)[:120]}, code=500)
+            return
         if path in ('/qc_config', '/qc-config'):
             if not self._origin_allowed():
                 _log(f'[security] 拒绝非白名单 Origin 的 POST {path}: {self.headers.get("Origin")}')
