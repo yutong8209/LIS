@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.8
+// @version      8.15.9
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -98,7 +98,8 @@
     notifyRetryQueue: 'LIS_NotifyRetryQueue', // 8.8.34: 推送发送失败的待补发队列（serve 未运行/网络瞬断不再丢推送）
     autoAuditPushBuf: 'LIS_AA_PushBuf', // 8.9.6: 连续结果合并推送缓冲区（连续做标本时攒单，防手机连响）
     autoAuditPushLast: 'LIS_AA_PushLastTs', // 8.10.2: 上一条轮次推送发出时刻（前沿即发 + 最短间隔节奏，跨刷新存续）
-    mildLog: 'LIS_MildAuditLog' // 8.12.0: F4 轻微异常放行留痕（本地环形 500，不推送不进自动审核日志）
+    mildLog: 'LIS_MildAuditLog', // 8.12.0: F4 轻微异常放行留痕（本地环形 500，不推送不进自动审核日志）
+    mildRules: 'LIS_MildRuleOverrides' // 8.15.9: 轻微放行范围的人工覆盖（详情面板 ⚙ 可调；删掉即恢复默认）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -669,6 +670,19 @@
     uw().lisMildAuditLog = lisMildAuditLog;
     uw().lisExportMildAuditLog = lisExportMildAuditLog;
     uw().lisSelfTestMildRules = lisSelfTestMildRules; // 规则表自检（返回未通过项数组，空数组=通过）
+    // 8.15.9: 放行范围人工覆盖的查看/导出（谁在什么时候把哪条规则从什么改成什么）
+    uw().lisMildRuleLog = () => {
+      const rows = (loadMildRuleOverrides().log || []);
+      if (!rows.length) {return '（无放行范围变更记录）';}
+      return rows.map(r => [r.t, r.label || r.key, r.from, '→ ' + r.to].join('\t')).join('\n');
+    };
+    uw().lisMildRuleOverrides = () => loadMildRuleOverrides();
+    uw().lisResetMildRuleOverrides = () => { // 一把恢复全部默认（谨慎）
+      _mildRuleOv = {rules: {}, added: [], log: []};
+      try {localStorage.removeItem(K.mildRules);} catch (e) {}
+      applyMildRuleOverrides();
+      return '已恢复全部默认放行范围';
+    };
   } catch (e) {}
 
   async function fetchJ(u, timeoutMs, externalSignal) {
@@ -13796,6 +13810,21 @@ window.addEventListener('keydown',function(e){
           }
         );
       });
+      // 8.15.9: 项目名后的 ⚙ —— 打开「轻微放行范围」设置（事件委托，兼容 LRU 缓存 HTML）
+      dBody.addEventListener('click', e => {
+        const mb = e.target && e.target.closest ? e.target.closest('.detail-mild-btn') : null;
+        if (!mb) {return;}
+        e.preventDefault();
+        e.stopPropagation();
+        openMildRuleDialog(mildItemFromRaw({
+          CName: mb.getAttribute('data-name') || '',
+          Synonym: mb.getAttribute('data-syn') || '',
+          Code: mb.getAttribute('data-code') || '',
+          RefRanges: mb.getAttribute('data-ref') || '',
+          ValueLow: mb.getAttribute('data-vlow') || '',
+          ValueHigh: mb.getAttribute('data-vhigh') || ''
+        }, 'NORMAL', mb.getAttribute('data-res') || ''));
+      });
     }
 
     return detailPanel;
@@ -15003,9 +15032,27 @@ window.addEventListener('keydown',function(e){
         const resStyle = `font-weight:700;font-size:13px;white-space:nowrap;${resColor ? `color:${resColor}!important;` : ''}`;
         const statusStyle = `white-space:nowrap;font-size:11px;font-weight:700;${statusColor ? `color:${statusColor}!important;` : ''}`;
 
+        // 8.15.9: 项目名后的 ⚙ —— 调整该项目的轻微放行范围（人工改过的用醒目色，一眼能看出规则被动过）
+        const _mildIt = mildItemFromRaw(r, itemStatus, result);
+        const _mildRule = matchMildRule(_mildIt);
+        const _mildOvd = isMildRuleOverridden(_mildRule);
+        const _mildBtnTitle = _mildRule
+          ? ('调整「' + (r.CName || '') + '」的 F4/自动审核放行范围'
+            + (_mildOvd ? '（已人工修改）' : '') + (_mildRule._off ? '（当前已停用）' : ''))
+          : '该项目未配放行规则 —— 点此新增';
+        const mildBtn = '<button class="detail-mild-btn' + (_mildOvd ? ' ovd' : '') + '"' +
+          ' data-name="' + escAttr(r.CName || '') + '"' +
+          ' data-syn="' + escAttr(r.Synonym || r.Code || '') + '"' +
+          ' data-code="' + escAttr(r.TestCodeDR || r.TCCode || '') + '"' +
+          ' data-res="' + escAttr(String(result)) + '"' +
+          ' data-ref="' + escAttr(r.RefRanges || r.RefRange || r.ReferenceRange || '') + '"' +
+          ' data-vlow="' + escAttr(String(r.ValueLow || r.LowValue || r.RefLow || '')) + '"' +
+          ' data-vhigh="' + escAttr(String(r.ValueHigh || r.HighValue || r.RefHigh || '')) + '"' +
+          ' title="' + escAttr(_mildBtnTitle) + '">⚙</button>';
+
         html += `<tr style="${rowStyle}">
                     <td style="text-align:center">${qcHtml}</td>
-                    <td style="font-weight:500;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400"> ' + esc(refRange) + '</span>' : ''}</td>
+                    <td style="font-weight:500"><span style="display:inline-block;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}</span>${mildBtn}${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400"> ' + esc(refRange) + '</span>' : ''}</td>
                     <td class="${statusClass}" style="${resStyle}">${esc(result)}${unit ? ' <span style="font-size:10px;color:#999;font-weight:400">' + esc(unit) + '</span>' : ''}</td>
                     ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:11px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
                     <td class="${statusClass}" style="${statusStyle}">${statusText}</td>
@@ -16363,6 +16410,28 @@ window.addEventListener('keydown',function(e){
 .hist-focus-x{font-weight:900;margin-left:2px}
 .pr-hist-btn,.detail-hist-item{background:none;border:none;cursor:pointer;font-size:11px;padding:0 2px;margin-left:3px;vertical-align:middle;opacity:.75;line-height:1}
 .pr-hist-btn:hover,.detail-hist-item:hover{opacity:1;transform:scale(1.15)}
+/* 8.15.9: 详情表项目名后的 ⚙ —— 轻微放行范围设置入口（人工改过的转醒目色） */
+.detail-mild-btn{background:none;border:none;cursor:pointer;font-size:11px;padding:0 2px;margin-left:2px;vertical-align:middle;opacity:.4;line-height:1}
+.detail-mild-btn:hover{opacity:1;transform:scale(1.15)}
+.detail-mild-btn.ovd{opacity:1;color:#b45309}
+#lis-mild-dlg{position:fixed;inset:0;z-index:100030;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;font-family:var(--lis-font)}
+#lis-mild-dlg .lm-box{background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:10px;width:436px;max-width:92vw;max-height:88vh;overflow:auto;padding:14px 16px;color:var(--lis-text);box-shadow:0 10px 34px rgba(0,0,0,.22)}
+#lis-mild-dlg .lm-hd{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:700;margin-bottom:2px}
+#lis-mild-dlg .lm-close{cursor:pointer;color:var(--lis-text-muted);font-size:15px;padding:0 4px}
+#lis-mild-dlg .lm-item{font-size:12px;color:var(--lis-text-secondary);margin-bottom:10px}
+#lis-mild-dlg .lm-note{font-size:12px;color:var(--lis-text-secondary);margin-bottom:8px;line-height:1.6}
+#lis-mild-dlg .lm-row{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
+#lis-mild-dlg .lm-lb{font-size:12px;color:var(--lis-text);min-width:88px}
+#lis-mild-dlg .lm-in{width:80px;height:26px;border:1px solid var(--lis-border-strong);border-radius:4px;padding:0 6px;font-size:12px;color:var(--lis-text);background:var(--lis-surface)}
+#lis-mild-dlg .lm-pv{font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
+#lis-mild-dlg .lm-pv.on{color:#047857;font-weight:700}
+#lis-mild-dlg .lm-chk{display:block;font-size:12px;color:var(--lis-text);margin:8px 0 4px;cursor:pointer}
+#lis-mild-dlg .lm-radio{font-size:12px;margin-right:10px;cursor:pointer}
+#lis-mild-dlg .lm-warn{font-size:11.5px;line-height:1.65;color:#7c2d12;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 9px;margin-top:9px}
+#lis-mild-dlg .lm-foot{display:flex;align-items:center;gap:8px;margin-top:13px}
+#lis-mild-dlg .lm-btn{height:28px;border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-primary);border-radius:5px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer}
+#lis-mild-dlg .lm-btn:hover{background:var(--lis-primary-lighter)}
+#lis-mild-dlg .lm-btn.lm-primary{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff}
 `);
 
   // ============================================================
@@ -19781,6 +19850,317 @@ window.addEventListener('keydown',function(e){
     { re: /降钙素原|^pct$/i, tier: 'b', group: 'PCT', high: null, highAbs: 0.5, low: null }
   ];
 
+  // ==================== 8.15.9: 轻微放行范围的人工覆盖 ====================
+  // 规则表原为硬编码，现场按科室实际调放行带（或给未配规则的项目补规则）每次都要发版，不现实。
+  // 这里把「倍数」与「新增规则」做成可在详情面板 ⚙ 里改、存 localStorage 的覆盖层：
+  // 启动时用「默认值快照 + 覆盖」重建规则表，删掉覆盖即恢复默认（完全可逆）。
+  // ⚠️ 覆盖只作用于「轻微放行带」——危急值/堵孔0值/传染病阳性/心肌危急线是**独立安全门**，不受影响。
+  // 键的选择：乙类规则用 group（WBC/ALT…，稳定可读）；甲类规则无 group，退回 're:' + 正则源码。
+  const MILD_RULE_DEFAULTS = MILD_ALLOW_RULES.map(r => ({
+    high: r.high, low: r.low, highAbs: r.highAbs, lowAbs: r.lowAbs
+  }));
+  const MILD_RULE_OV_LOG_MAX = 200;
+
+  let _mildRuleOv = null;
+  function loadMildRuleOverrides() {
+    if (_mildRuleOv) {return _mildRuleOv;}
+    let o = null;
+    try {o = JSON.parse(localStorage.getItem(K.mildRules) || 'null');} catch (e) {o = null;}
+    if (!o || typeof o !== 'object' || Array.isArray(o)) {o = {};}
+    if (!o.rules || typeof o.rules !== 'object' || Array.isArray(o.rules)) {o.rules = {};}
+    if (!Array.isArray(o.added)) {o.added = [];}
+    if (!Array.isArray(o.log)) {o.log = [];}
+    _mildRuleOv = o;
+    return o;
+  }
+  function saveMildRuleOverrides(o) {
+    _mildRuleOv = o;
+    try {localStorage.setItem(K.mildRules, JSON.stringify(o));} catch (e) {dbg('放行范围覆盖保存失败:', e);}
+  }
+  // 规则稳定键：乙类用 group，甲类用正则源码
+  function mildRuleKey(rule) {
+    if (!rule) {return '';}
+    return rule.group ? String(rule.group) : ('re:' + String(rule.re));
+  }
+  function _mildReEsc(s) {return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');}
+
+  // 用「默认值快照 + 覆盖」重建规则表。**任何改动后都必须调用**——它会递增 _classifyVersion，
+  // 让所有已记忆的轻微判定（live._mildEval / _mildItemMap）失效，否则界面与批审仍按旧规则跑。
+  function applyMildRuleOverrides() {
+    const base = MILD_RULE_DEFAULTS.length;
+    if (MILD_ALLOW_RULES.length > base) {MILD_ALLOW_RULES.length = base;} // 去掉上一轮追加的新增规则
+    for (let i = 0; i < base; i++) {
+      const d = MILD_RULE_DEFAULTS[i], r = MILD_ALLOW_RULES[i];
+      r.high = d.high; r.low = d.low; r.highAbs = d.highAbs; r.lowAbs = d.lowAbs;
+      r._off = false; r._added = false; r._overridden = false;
+    }
+    const ov = loadMildRuleOverrides();
+    for (const r of MILD_ALLOW_RULES) {
+      const o = ov.rules[mildRuleKey(r)];
+      if (!o) {continue;}
+      if (typeof o.high === 'number' || o.high === null) {r.high = o.high;}
+      if (typeof o.low === 'number' || o.low === null) {r.low = o.low;}
+      if (o.off) {r._off = true;}
+      r._overridden = true;
+    }
+    // 新增规则：锚定「精确项目名」（避免误吞其它项目），追加在末尾——不影响既有首条命中的顺序
+    for (const a of ov.added) {
+      if (!a || !a.name) {continue;}
+      const isA = a.tier === 'a';
+      MILD_ALLOW_RULES.push({
+        re: new RegExp('^' + _mildReEsc(a.name) + '[\\*＊]?$', 'i'),
+        tier: isA ? 'a' : 'b',
+        group: 'x:' + a.name,
+        high: isA ? undefined : (a.high === undefined ? null : a.high),
+        low: isA ? undefined : (a.low === undefined ? null : a.low),
+        _added: true, _overridden: true, _addedName: a.name
+      });
+    }
+    _classifyVersion++;
+  }
+
+  function _mildOvLog(ov, key, label, from, to) {
+    const now = new Date();
+    const p2 = n => String(n).padStart(2, '0');
+    ov.log.push({
+      t: `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`,
+      key, label, from, to
+    });
+    if (ov.log.length > MILD_RULE_OV_LOG_MAX) {ov.log = ov.log.slice(ov.log.length - MILD_RULE_OV_LOG_MAX);}
+  }
+  // 设置已有规则的覆盖。patch: {high,low,off}；patch 传 null 表示删除覆盖（恢复默认）
+  function setMildRuleOverride(rule, patch, label) {
+    const key = mildRuleKey(rule);
+    if (!key) {return false;}
+    const ov = loadMildRuleOverrides();
+    const before = ov.rules[key] ? JSON.stringify(ov.rules[key]) : '默认';
+    if (patch === null) {delete ov.rules[key];}
+    else {ov.rules[key] = Object.assign({}, ov.rules[key] || {}, patch);}
+    _mildOvLog(ov, key, label || key, before, patch === null ? '默认' : JSON.stringify(ov.rules[key]));
+    saveMildRuleOverrides(ov);
+    applyMildRuleOverrides();
+    return true;
+  }
+  // 给原本「未配规则」的项目新增一条规则
+  function addMildRuleOverride(name, tier, high, low) {
+    const ov = loadMildRuleOverrides();
+    ov.added = ov.added.filter(a => a && a.name !== name);
+    ov.added.push({name, tier: tier === 'a' ? 'a' : 'b', high, low});
+    _mildOvLog(ov, 'x:' + name, name, '未配规则',
+      tier === 'a' ? '甲类（全放行）' : `乙类 高${high === null ? '不放行' : high + '×'} / 低${low === null ? '不放行' : low + '×'}`);
+    saveMildRuleOverrides(ov);
+    applyMildRuleOverrides();
+    return true;
+  }
+  function removeAddedMildRule(name) {
+    const ov = loadMildRuleOverrides();
+    if (!ov.added.some(a => a && a.name === name)) {return false;}
+    ov.added = ov.added.filter(a => a && a.name !== name);
+    _mildOvLog(ov, 'x:' + name, name, '已新增规则', '已删除（回到未配规则）');
+    saveMildRuleOverrides(ov);
+    applyMildRuleOverrides();
+    return true;
+  }
+  // 该规则是否被人工动过（供 ⚙ 高亮）
+  function isMildRuleOverridden(rule) {
+    if (!rule) {return false;}
+    if (rule._added) {return true;}
+    return !!loadMildRuleOverrides().rules[mildRuleKey(rule)];
+  }
+  // 按「本标本的参考范围」算出实际放行上下限，供对话框实时预览（倍数才是稳定参数，绝对值随性别/年龄变）
+  function mildRuleLimits(rule, it) {
+    const out = {uln: null, lln: null, high: undefined, low: undefined};
+    if (!rule || rule.tier !== 'b') {return out;}
+    const range = getItemRangeValues((it && it.preResult) || it || {});
+    const uln = parseComparableNumber(range.high);
+    const lln = parseComparableNumber(range.low);
+    if (uln && !isNaN(uln.value)) {out.uln = uln.value;}
+    if (lln && !isNaN(lln.value)) {out.lln = lln.value;}
+    if (typeof rule.high === 'number' && out.uln !== null) {out.high = out.uln * rule.high;}
+    else if (rule.high === null) {out.high = null;}
+    if (typeof rule.low === 'number' && out.lln !== null) {out.low = out.lln * rule.low;}
+    else if (rule.low === null) {out.low = null;}
+    if (typeof rule.highAbs === 'number') {
+      out.high = (out.high === undefined || out.high === null) ? rule.highAbs : Math.min(out.high, rule.highAbs);
+    }
+    if (typeof rule.lowAbs === 'number') {
+      out.low = (out.low === undefined || out.low === null) ? rule.lowAbs : Math.max(out.low, rule.lowAbs);
+    }
+    return out;
+  }
+  applyMildRuleOverrides(); // 启动即应用（_classifyVersion 在 8174 行已声明，无 TDZ 风险）
+
+  // 8.15.9: 详情面板 ⚙ —— 轻微放行范围设置对话框
+  // 只改「倍数」：倍数才是稳定参数（参考范围随性别/年龄变），旁边实时换算绝对值让你看到实际放行线。
+  // 已配规则 → 调倍数 / 停用 / 恢复默认；未配规则 → 当场新增（甲类全放行 或 乙类带倍数）。
+  // 放宽（超出默认值，或从「不放行」变成「放行」）二次确认；所有改动写入留痕，可 lisMildRuleLog() 导出。
+  function _mildIsLoosening(rule0, hv, lv, isNew) {
+    if (isNew || !rule0) {return true;} // 从「不放行」变成「放行」本身就是放宽
+    const i = MILD_ALLOW_RULES.indexOf(rule0);
+    const d = (i >= 0 && i < MILD_RULE_DEFAULTS.length) ? MILD_RULE_DEFAULTS[i] : null;
+    if (!d) {return true;}
+    const dH = typeof d.high === 'number' ? d.high : null;
+    const dL = typeof d.low === 'number' ? d.low : null;
+    if (hv !== null && (dH === null || hv > dH)) {return true;}
+    if (lv !== null && (dL === null || lv < dL)) {return true;}
+    return false;
+  }
+
+  // 规则改动后刷新界面：详情面板 + 待审列表。**必须刷新**——applyMildRuleOverrides 只递增了
+  // _classifyVersion（让已记忆的判定失效），但已渲染的 DOM 仍是旧配色/旧结论。
+  function _refreshAfterMildRuleChange() {
+    try {
+      const sp = currentDetailSpecimen;
+      if (sp) {loadDetailResults(sp).catch(e => dbg('放行范围变更后刷新详情失败:', e));}
+    } catch (e) {dbg('放行范围变更后刷新详情异常:', e);}
+    try {loadWSData({}).catch(e => dbg('放行范围变更后刷新列表失败:', e));}
+    catch (e) {dbg('放行范围变更后刷新列表异常:', e);}
+  }
+
+  function openMildRuleDialog(item) {
+    const name = String((item && (item.CName || item.name)) || '');
+    if (!name) {return;}
+    const prev = document.getElementById('lis-mild-dlg');
+    if (prev) {prev.remove();}
+
+    const rule0 = matchMildRule(item);
+    const isNew = !rule0;
+    const isTierA = !!(rule0 && rule0.tier === 'a');
+    const isAdded = !!(rule0 && rule0._added);
+    const ovd = isMildRuleOverridden(rule0);
+    const limits = mildRuleLimits(rule0, item);
+    const fmt = v => (v === null || v === undefined || (typeof v === 'number' && isNaN(v)))
+      ? '—' : String(Math.round(v * 100) / 100);
+    const refTxt = (limits.lln !== null || limits.uln !== null)
+      ? '本标本参考范围：' + (limits.lln === null ? '—' : fmt(limits.lln)) + ' ~ ' + (limits.uln === null ? '—' : fmt(limits.uln))
+      : '本标本参考范围取不到，无法预览绝对值（倍数仍会生效）';
+    let tier = isTierA ? 'a' : 'b';
+
+    const dlg = document.createElement('div');
+    dlg.id = 'lis-mild-dlg';
+    dlg.innerHTML =
+      '<div class="lm-box">' +
+        '<div class="lm-hd"><span>⚙ 轻微放行范围</span><span class="lm-close" title="关闭">✕</span></div>' +
+        '<div class="lm-item">' + esc(name) + (isTierA ? ' · 甲类' : '') + (isAdded ? ' · 人工新增' : '') + '</div>' +
+        '<div id="lm-body"></div>' +
+        '<div class="lm-foot">' +
+          '<button id="lm-reset" class="lm-btn">恢复默认</button><span style="flex:1"></span>' +
+          '<button id="lm-cancel" class="lm-btn">取消</button>' +
+          '<button id="lm-save" class="lm-btn lm-primary">保存</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(dlg);
+
+    const body = dlg.querySelector('#lm-body');
+    const btnReset = dlg.querySelector('#lm-reset');
+
+    function segHTML() {
+      const offChk = isNew ? '' :
+        '<label class="lm-chk"><input type="checkbox" id="lm-off"' + ((rule0 && rule0._off) ? ' checked' : '') +
+        '> 一律不放行（停用该项目的放行）</label>';
+      if (tier === 'a') {
+        return '<div class="lm-note">甲类：该项目<b>任何方向</b>的异常都直接放行，不设数值范围。</div>' + offChk;
+      }
+      const h0 = (rule0 && typeof rule0.high === 'number') ? rule0.high : (isNew ? 1.2 : '');
+      const l0 = (rule0 && typeof rule0.low === 'number') ? rule0.low : '';
+      return '<div class="lm-note">' + refTxt + '</div>' +
+        '<div class="lm-row"><span class="lm-lb">偏高放行倍数</span>' +
+          '<input id="lm-high" class="lm-in" type="number" step="0.01" min="1" placeholder="留空＝不放行" value="' + h0 + '">' +
+          '<span class="lm-pv" id="lm-pv-h"></span></div>' +
+        '<div class="lm-row"><span class="lm-lb">偏低放行倍数</span>' +
+          '<input id="lm-low" class="lm-in" type="number" step="0.01" min="0" max="1" placeholder="留空＝不放行" value="' + l0 + '">' +
+          '<span class="lm-pv" id="lm-pv-l"></span></div>' +
+        offChk +
+        '<div class="lm-warn">⚠️ 放宽后该项目的异常结果会被 <b>F4 批审</b>与<b>白天方案自动审核</b>直接放行，' +
+        '不再人工复核。<br>危急值 / 堵孔 0 值 / 传染病阳性 / 心肌危急线是独立安全门，<b>不受此处影响</b>。</div>';
+    }
+
+    function wirePreview() {
+      const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
+      if (!hi || !lo) {return;}
+      const pv = () => {
+        const hv = hi.value.trim() === '' ? null : Number(hi.value);
+        const lv = lo.value.trim() === '' ? null : Number(lo.value);
+        const okH = hv !== null && !isNaN(hv), okL = lv !== null && !isNaN(lv);
+        const ph = body.querySelector('#lm-pv-h'), pl = body.querySelector('#lm-pv-l');
+        ph.textContent = okH ? (limits.uln !== null ? '→ 放行至 ' + fmt(limits.uln * hv) : '→ 上限取不到') : '→ 不放行';
+        pl.textContent = okL ? (limits.lln !== null ? '→ 放行至 ' + fmt(limits.lln * lv) : '→ 下限取不到') : '→ 不放行';
+        ph.className = 'lm-pv' + (okH ? ' on' : '');
+        pl.className = 'lm-pv' + (okL ? ' on' : '');
+      };
+      hi.addEventListener('input', pv);
+      lo.addEventListener('input', pv);
+      pv();
+    }
+
+    function render() {
+      if (isNew) {
+        body.innerHTML =
+          '<div class="lm-note">该项目<b>当前未配放行规则</b> —— 异常一律留人工。要让它可放行吗？</div>' +
+          '<div class="lm-row"><span class="lm-lb">规则类型</span>' +
+            '<label class="lm-radio"><input type="radio" name="lm-tier" value="b"' + (tier === 'b' ? ' checked' : '') + '> 乙类（按倍数）</label>' +
+            '<label class="lm-radio"><input type="radio" name="lm-tier" value="a"' + (tier === 'a' ? ' checked' : '') + '> 甲类（全放行）</label>' +
+          '</div><div id="lm-seg"></div>';
+        body.querySelectorAll('input[name="lm-tier"]').forEach(rd => {
+          rd.addEventListener('change', () => {tier = rd.value; render();});
+        });
+        body.querySelector('#lm-seg').innerHTML = segHTML();
+      } else {
+        body.innerHTML = segHTML();
+      }
+      wirePreview();
+      btnReset.style.display = (!isNew && ovd) ? '' : 'none';
+    }
+    render();
+
+    const close = () => {dlg.remove(); document.removeEventListener('keydown', onKey);};
+    function onKey(e) {if (e.key === 'Escape') {close();}}
+    document.addEventListener('keydown', onKey);
+    dlg.addEventListener('click', e => {if (e.target === dlg) {close();}});
+    dlg.querySelector('.lm-close').addEventListener('click', close);
+    dlg.querySelector('#lm-cancel').addEventListener('click', close);
+
+    btnReset.addEventListener('click', () => {
+      if (isAdded) {removeAddedMildRule(name);}
+      else {setMildRuleOverride(rule0, null, name);}
+      showToast('已恢复默认放行范围', 'success');
+      close();
+      _refreshAfterMildRuleChange();
+    });
+
+    dlg.querySelector('#lm-save').addEventListener('click', () => {
+      const offEl = body.querySelector('#lm-off');
+      const off = !!(offEl && offEl.checked);
+      if (tier === 'a') {
+        if (isNew) {addMildRuleOverride(name, 'a', undefined, undefined);}
+        else {setMildRuleOverride(rule0, {off}, name);}
+      } else {
+        const hiEl = body.querySelector('#lm-high'), loEl = body.querySelector('#lm-low');
+        const hv = (hiEl && hiEl.value.trim() !== '') ? Number(hiEl.value) : null;
+        const lv = (loEl && loEl.value.trim() !== '') ? Number(loEl.value) : null;
+        if (hv !== null && (isNaN(hv) || hv <= 0)) {showToast('偏高倍数需为正数', 'error'); return;}
+        if (lv !== null && (isNaN(lv) || lv <= 0)) {showToast('偏低倍数需为正数', 'error'); return;}
+        // 倍数越界时结果恒为「不放行」，直接拦下比让它默默失效更清楚
+        if (hv !== null && hv < 1) {showToast('偏高倍数不能小于 1（那样等于不放行），请留空', 'warning'); return;}
+        if (lv !== null && lv > 1) {showToast('偏低倍数不能大于 1（那样等于不放行），请留空', 'warning'); return;}
+        if (!off && hv === null && lv === null) {
+          showToast('请至少填一个方向的倍数，或勾选「一律不放行」', 'error'); return;
+        }
+        if (!off && _mildIsLoosening(rule0, hv, lv, isNew)) {
+          const msg = '确认放宽「' + name + '」的放行范围？\n\n' +
+            '放宽后该项目的异常结果会被 F4 批审与白天方案自动审核直接放行，不再人工复核。\n' +
+            '（本次改动会记入留痕，控制台 lisMildRuleLog() 可查看/导出）';
+          if (!window.confirm(msg)) {return;}
+        }
+        if (isNew) {addMildRuleOverride(name, 'b', hv, lv);}
+        else {setMildRuleOverride(rule0, {high: hv, low: lv, off}, name);}
+      }
+      showToast('已保存，立即生效', 'success');
+      close();
+      _refreshAfterMildRuleChange();
+    });
+  }
+
   function matchMildRule(it) {
     if (!it) {return null;}
     // 8.14.1: 两轮匹配，中文名优先于编码——杜绝裸编码串味：
@@ -19902,6 +20282,8 @@ window.addEventListener('keydown',function(e){
     }
     const rule = matchMildRule(it);
     if (!rule) {return { ok: false, reason: `${name} 未配轻微放行规则` };}
+    // 8.15.9: 该规则被人工停用（详情面板 ⚙ 里勾了「一律不放行」）——fail-closed，整管留人工
+    if (rule._off) {return { ok: false, reason: `${name} 的放行规则已被手动停用` };}
     if (rule.tier === 'a') {return { ok: true, rule, tier: 'a' };}
     const p = parseComparableNumber(it && it.result);
     if (!p || p.op || isNaN(p.value)) {return { ok: false, reason: `${name} 结果非纯数值，不放行` };}
