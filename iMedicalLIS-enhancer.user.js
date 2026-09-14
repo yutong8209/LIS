@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.20
+// @version      8.15.21
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1244,19 +1244,17 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ab-card-no{font-family:ui-monospace,monospace;font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
 .ab-card-test{font-size:11px;color:var(--lis-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
 .ab-card-items{display:flex;flex-wrap:wrap;gap:2px 3px;margin-top:1px}
-.ab-card-item{padding:0 4px;border-radius:3px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid transparent;line-height:1.55}
-/* 8.15.17: 条目级轻/重与结果表同一套形式（满色底白字＝须人工 / 白底彩字＝可批审）——
-   避免"同一含义在不同界面两套视觉"。⚠️ critical 排在 high/low 之后：特异性相同，靠顺序保证红色胜出。 */
-.ab-card-item.high{background:#ea580c;color:#fff;border-color:#9a3412}
-.ab-card-item.high.mild{background:#fff;color:#c2410c;border:1px solid #fb923c}
-.ab-card-item.low{background:#1d4ed8;color:#fff;border-color:#1e3a8a}
-.ab-card-item.low.mild{background:#fff;color:#1d4ed8;border:1px solid #60a5fa}
-.ab-card-item.critical{background:#b91c1c;color:#fff;border-color:#7f1d1d;font-weight:700}
+.ab-card-item{padding:0 5px;border-radius:4px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid transparent;line-height:1.55}
+/* 8.15.21 方案 A：微胶囊标签流（轻微项浅底细边、显著项实色微徽章） */
+.ab-card-item.high{background:#f97316;color:#fff;border-color:transparent}
+.ab-card-item.high.mild{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+.ab-card-item.low{background:#2563eb;color:#fff;border-color:transparent}
+.ab-card-item.low.mild{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.ab-card-item.critical{background:#dc2626;color:#fff;border-color:transparent;font-weight:700}
 .ab-card-item.abnormal{background:#fdf2f8;color:#be185d;border-color:#fce7f3}
-.ab-card-item.zero{background:#fffbeb;color:#b45309;border-color:#fde68a}
+.ab-card-item.zero{background:#7c3aed;color:#fff;border-color:transparent}
 .ab-card-item.infection-warning{background:#fff7ed;color:#c2410c;border-color:#fed7aa;font-weight:700}
 .ab-card-item.uncertain{background:var(--lis-surface-subtle);color:var(--lis-slate-500)}
-/* 8.11.13: 血常规次要异常折叠计数 chip（比率/分布宽度/MPV 等），悬停看被折叠项全量 */
 .ab-card-item.minor-more{background:transparent;color:var(--lis-text-muted);border:1px dashed var(--lis-border-strong);font-weight:500}
 .ab-card-item.inf-special{background:#fef08a;color:#713f12;border-color:#facc15;font-weight:700}
 .ab-card-badge{font-size:13px;flex:0 0 auto}
@@ -1473,31 +1471,44 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table.compact .hist-tag{padding:1px 4px;font-size:11px;margin:0 1px}
 .result-table.compact tr:last-child td{border-bottom:none}
 .result-table tr:hover{background:rgba(241,245,249,.6)}
-.result-table .abnormal, .result-table td.abnormal{color:#c62828!important;font-weight:700}
-/* 8.15.17: 轻/重两档改用「形式」区分，不再只靠橙色深浅——旧版两档同为橙色系、只有明度差和一条左竖条，
-   现场反馈「分不清哪个能批」。现在：须人工＝满色底+白字+左实线；可批审＝白底+彩字+左虚线。
-   这是明度反转（最深 vs 最浅），扫一眼即可分辨；左竖条实/虚、粗细 4px 作为第二重线索（色弱也分得清）。
-   危急值同样满色红底白字（用户要求）。⚠️ 顺序：high/low 在前、critical 在后——
-   二者特异性相同，靠顺序保证同元素同时带 critical 与 high 类时红色胜出。 */
-.result-table .abnormal.high, .result-table td.abnormal.high{color:#fff!important;background:#ea580c;border-left:4px solid #9a3412;font-weight:700}
-.result-table .abnormal.low, .result-table td.abnormal.low{color:#fff!important;background:#1d4ed8;border-left:4px solid #1e3a8a;font-weight:700}
-.result-table .abnormal.critical, .result-table td.abnormal.critical{color:#fff!important;background:#b91c1c;border-left:4px solid #7f1d1d;font-weight:800;font-size:14px}
-.result-table .abnormal.high.mild, .result-table td.abnormal.high.mild{color:#c2410c!important;background:#fff;border:1px solid #fed7aa;border-left:4px solid #fb923c;font-weight:700}
-.result-table .abnormal.low.mild, .result-table td.abnormal.low.mild{color:#1d4ed8!important;background:#fff;border:1px solid #bfdbfe;border-left:4px solid #60a5fa;font-weight:700}
-.result-table .normal, .result-table td.normal{color:#16a34a!important}
+/* 8.15.21 方案 A：微胶囊标签流（Modern Pill / Tag System）
+   彻底告别大面积高饱和满色底与整格厚重色块，行底色恢复纯白，只有测定结果包裹于圆角微胶囊内。
+   微胶囊只包含数值与紧凑箭头/标记，单位置于胶囊外侧（统一为柔和浅灰 #94a3b8），杜绝背景与文字冲突。
+   视觉层级：
+   - 正常项：无底色无框，深青黑加粗（#334155），沉稳不抢戏；
+   - 轻微偏高（带内·可批审）：柔和淡琥珀底 + 细金边 + 棕橙色字与箭头（bg:#fffbeb;color:#b45309;border:1px solid #fde68a）；
+   - 轻微偏低（带内·可批审）：柔和淡雾蓝底 + 细蓝边 + 宝蓝色字与箭头（bg:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe）；
+   - 显著偏高（超带·须人工）：紧凑实色橙底微徽章 [ 42.8 ▲ ]（bg:#f97316;color:#fff）；
+   - 显著偏低（超带·须人工）：紧凑实色蓝底微徽章 [ 78 ▼ ]（bg:#2563eb;color:#fff）；
+   - 危急值（须原始LIS）：醒目红底微徽章 [ 6.6 ↑↑ 危急 ]（bg:#dc2626;color:#fff;font-weight:800）；
+   - 堵孔0值（生化）：醒目紫底微徽章 [ 0 ⚠️ 堵孔 ]（bg:#7c3aed;color:#fff）；
+   - 传染病特殊阳性：金黄底黑字微徽章 [ 阳性+ ]（bg:#fef08a;color:#713f12;border:1px solid #facc15）。
+*/
+.result-table .res-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:4px;font-size:12.5px;line-height:1.35;font-weight:700;box-sizing:border-box;vertical-align:middle}
+.result-table .res-tag.normal{color:#334155;background:transparent;padding:2px 0}
+.result-table .res-tag.mild-high{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+.result-table .res-tag.mild-low{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.result-table .res-tag.high{background:#f97316;color:#fff}
+.result-table .res-tag.low{background:#2563eb;color:#fff}
+.result-table .res-tag.critical{background:#dc2626;color:#fff;font-weight:800;font-size:13px}
+.result-table .res-tag.zero{background:#7c3aed;color:#fff}
+.result-table .res-tag.inf-special{background:#fef08a;color:#713f12;border:1px solid #facc15}
+.result-table .res-tag.abnormal{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
+.result-table .res-tag.empty{color:#94a3b8;font-weight:400}
+.result-table .res-arrow{font-size:11px;font-weight:700;display:inline-block;line-height:1}
+.result-table .res-unit{font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:4px;vertical-align:middle}
+
 .result-table .history{background:#f8f9fa}
-.result-table .hist-tag{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:3px;font-size:11px;white-space:nowrap;line-height:1.4}
-.result-table .hist-tag.normal{background:#e8f5e9;color:#2e7d32;border-left:3px solid #4caf50}
-.result-table .hist-tag.abnormal{background:#fce4ec;color:#c62828;border-left:3px solid #e74c3c}
-/* 8.15.17: 历史小列与主结果同一套口径（判定见 renderHistoryItems）——须人工满色、可批审白底+虚竖条。
-   mild 修饰类由 JS 按当前放行规则（含 ⚙ 覆盖）实时加/去，所以「改了我的上下限，历史列颜色跟着变」。 */
-.result-table .hist-tag.high{background:#ea580c;color:#fff;border-left:3px solid #9a3412}
-.result-table .hist-tag.high.mild{background:#fff;color:#c2410c;border:1px solid #fed7aa;border-left:3px solid #fb923c}
-.result-table .hist-tag.low{background:#1d4ed8;color:#fff;border-left:3px solid #1e3a8a}
-.result-table .hist-tag.low.mild{background:#fff;color:#1d4ed8;border:1px solid #bfdbfe;border-left:3px solid #60a5fa}
-.result-table .hist-tag.critical{background:#b91c1c;color:#fff;border-left:3px solid #7f1d1d;font-weight:700}
-.result-table .hist-tag.nodate{background:#f5f5f5;color:#999;border-left:3px solid #bbb}
-.result-table .hist-date{font-size:9px;color:#999;display:block;margin-top:-1px}
+.result-table .hist-tag{display:inline-flex;align-items:center;justify-content:center;margin:1px 2px;padding:1px 5px;border-radius:4px;font-size:11px;white-space:nowrap;line-height:1.4;box-sizing:border-box}
+.result-table .hist-tag.normal{background:#f8fafc;color:#475569;border:1px solid #e2e8f0}
+.result-table .hist-tag.abnormal{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
+.result-table .hist-tag.high{background:#f97316;color:#fff}
+.result-table .hist-tag.high.mild{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+.result-table .hist-tag.low{background:#2563eb;color:#fff}
+.result-table .hist-tag.low.mild{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.result-table .hist-tag.critical{background:#dc2626;color:#fff;font-weight:700}
+.result-table .hist-tag.nodate{background:#f8fafc;color:#94a3b8;border:1px solid #e2e8f0}
+.result-table .hist-date{font-size:9px;color:#94a3b8;display:block;margin-top:-1px}
 /* 8.11.10: 去掉 justify-content:space-between——提示行 margin-right:auto 已把主操作推到最右，
    二者叠加属冗余（auto margin 优先吃掉全部剩余空间，space-between 无空闲可分配，渲染结果相同） */
 #lis-detail-footer{padding:10px 18px;background:var(--lis-bg);border-top:1px solid var(--lis-border);display:flex;align-items:center;flex-shrink:0;box-sizing:border-box;height:52px}
@@ -14914,7 +14925,6 @@ window.addEventListener('keydown',function(e){
         let isAbnormal = false,
           isCritical = false;
         let statusText = isEmpty ? '⏳ 待检' : '✓';
-        let rowStyle = isEmpty ? 'background:#fafafa;color:#bbb' : '';
 
         const itemStatus = classifyResultItem(r);
         const criticalByRange = itemStatus === 'CRITICAL';
@@ -14924,100 +14934,120 @@ window.addEventListener('keydown',function(e){
           isAbnormal = true;
           isCritical = true;
           statusText = abnormalFlag === 'LL' || panicStatus === 'LOW' ? '↓↓ 危急' : '↑↑ 危急';
-          rowStyle = 'background:#fff5f5;border-left:3px solid #e74c3c';
-        } else if (abnormalFlag === 'H') {
+        } else if (abnormalFlag === 'H' || itemStatus === 'HIGH') {
           isAbnormal = true;
           statusText = '↑ 高';
-          rowStyle = 'background:#fff8e1;border-left:3px solid #ff9800';
-        } else if (abnormalFlag === 'L') {
+        } else if (abnormalFlag === 'L' || itemStatus === 'LOW') {
           isAbnormal = true;
           statusText = '↓ 低';
-          rowStyle = 'background:#e3f2fd;border-left:3px solid #2196f3';
-        } else if (abnormalFlag === 'A') {
+        } else if (abnormalFlag === 'A' || itemStatus === 'ABNORMAL') {
           isAbnormal = true;
           statusText = '⚠ 异常';
-          rowStyle = 'background:#fce4ec;border-left:3px solid #e91e63';
-        } else if (itemStatus === 'ABNORMAL') {
-          isAbnormal = true;
-          statusText = '⚠ 异常';
-          rowStyle = 'background:#fce4ec;border-left:3px solid #e91e63';
-        } else if (itemStatus === 'HIGH') {
-          isAbnormal = true;
-          statusText = '↑ 高';
-          rowStyle = 'background:#fff8e1;border-left:3px solid #ff9800';
-        } else if (itemStatus === 'LOW') {
-          isAbnormal = true;
-          statusText = '↓ 低';
-          rowStyle = 'background:#e3f2fd;border-left:3px solid #2196f3';
         } else if (r.ValueLow && r.ValueHigh) {
           const rangeStatus = compareResultToRange(result, r.ValueLow, r.ValueHigh);
           if (rangeStatus === 'HIGH') {
             isAbnormal = true;
             statusText = '↑ 高';
-            rowStyle = 'background:#fff8e1;border-left:3px solid #ff9800';
           } else if (rangeStatus === 'LOW') {
             isAbnormal = true;
             statusText = '↓ 低';
-            rowStyle = 'background:#e3f2fd;border-left:3px solid #2196f3';
           }
         }
 
-        let statusClass = isAbnormal ? 'abnormal' : 'normal';
-        let resColor = '';
-        // 8.15.19: 删掉「状态」列后，颜色只需区分「结果单元格」——状态标记（↑高/↓低/⚠异常/⏳待检）
-        // 改挂到结果单元格的 title 上，信息不丢但不占列宽。
-        // 历史包袱：8.15.17/8.15.18 曾把同一个 class 同时用在结果列与状态列上，
-        // 状态列因此被满色底覆盖、深色字压在实色底上糊成一片（用户截图反馈）——删列一并根治。
-        if (isCritical) {
-          statusClass = 'abnormal critical';
-          resColor = '#fff';
+        // 8.15.21: 堵孔 0 值检测（生化分析仪特有误报）
+        const _matchedCachedItem = _liveForMild && _liveForMild.items && _liveForMild.items.find(it => (it.code && it.code === (r.TestCodeDR || r.TCCode)) || (it.name && it.name === r.CName));
+        const isZeroSuspect = (_matchedCachedItem && _matchedCachedItem.status === 'ZERO') ||
+          (ZERO_BLOCK_MACHINE_NAMES.test(String(specimen && (specimen._mn || specimen.MachineName || '') || '')) &&
+           parseComparableNumber(result) && parseComparableNumber(result).value === 0 && parseComparableNumber(result).op === '' &&
+           (() => {
+             const rg = getItemRangeValues({ low: r.ValueLow, high: r.ValueHigh, ref: refRange });
+             const lo = parseComparableNumber(rg.low);
+             const hi = parseComparableNumber(rg.high);
+             if ((lo && !isNaN(lo.value)) || (hi && !isNaN(hi.value))) {
+               const lowLe0 = !lo || isNaN(lo.value) || lo.value <= 0;
+               const highGe0 = hi && !isNaN(hi.value) ? hi.value >= 0 : (!lo || isNaN(lo.value));
+               return !(lowLe0 && highGe0);
+             }
+             return false;
+           })());
+
+        // 8.15.21 方案 A：行底色彻底去除普通高/低满行色块，仅危急值/堵孔/待检保留极浅提示底色
+        let rowStyle = '';
+        if (isEmpty) {
+          rowStyle = 'background:#fafafa;color:#94a3b8';
+        } else if (isCritical) {
+          rowStyle = 'background:#fef2f2;border-left:3px solid #ef4444';
+        } else if (isZeroSuspect) {
+          rowStyle = 'background:#faf5ff;border-left:3px solid #8b5cf6';
+        }
+
+        // 8.15.21 方案 A：微胶囊标签流分类（数值+形态双重区分：轻微项镂空淡底细箭头 / 显著项实色徽章实心三角）
+        let tagClass = 'normal';
+        let arrowIcon = '';
+        let arrowDesc = '';
+
+        if (isEmpty) {
+          tagClass = 'empty';
+          arrowDesc = '⏳ 待检';
+        } else if (isCritical) {
+          tagClass = 'critical';
+          const isLow = abnormalFlag === 'LL' || panicStatus === 'LOW';
+          arrowIcon = isLow ? '↓↓ 危急' : '↑↑ 危急';
+          arrowDesc = isLow ? '↓↓ 危急（极低）' : '↑↑ 危急（极高）';
+        } else if (isZeroSuspect) {
+          tagClass = 'zero';
+          arrowIcon = '⚠️ 堵孔';
+          arrowDesc = '疑似生化堵孔0值，须人工核实';
+        } else if (isX8Inf && !isCritical && isInfectionSpecialItem(r.CName) && isPositiveResult(result, r)) {
+          tagClass = 'inf-special';
+          arrowIcon = '+ 阳性';
+          arrowDesc = '传染病特殊阳性';
+          rowStyle = 'background:' + INFECTION_SPECIAL_STYLE.bg + ';border-left:3px solid ' + INFECTION_SPECIAL_STYLE.border + ';font-weight:700';
         } else if (statusText.includes('高')) {
-          statusClass = 'abnormal high';
-          resColor = '#fff';
-        } else if (statusText.includes('低')) {
-          statusClass = 'abnormal low';
-          resColor = '#fff';
-        } else if (isAbnormal) {
-          statusClass = 'abnormal';
-          resColor = '#c62828';
-        } else if (isEmpty) {
-          statusClass = 'empty';
-          resColor = '#999';
-        } else {
-          statusClass = 'normal';
-          resColor = '#16a34a';
-        }
-        // 8.15.17: 高/低再分两档——在轻微放行带内＝白底彩字（F4 可批审）；
-        // 超带/未配规则/判不出＝满色底白字（须人工）。两档是**明度反转**，不再只靠橙色深浅。
-        if (statusClass === 'abnormal high' || statusClass === 'abnormal low') {
-          const _isHi = statusClass === 'abnormal high';
           const _mvIt = mildItemFromRaw(r, itemStatus, result);
-          if (mildItemVerdict(_mvIt, _liveForMild, mildSexOf({ row: specimen })) === 'pass') {
-            statusClass += ' mild';
-            resColor = _isHi ? '#c2410c' : '#1d4ed8';
+          const isMild = mildItemVerdict(_mvIt, _liveForMild, mildSexOf({ row: specimen })) === 'pass';
+          if (isMild) {
+            tagClass = 'mild-high';
+            arrowIcon = '↑';
+            arrowDesc = '↑ 高（轻微带内，F4 可批审）';
+          } else {
+            tagClass = 'high';
+            arrowIcon = '▲';
+            arrowDesc = '▲ 显著偏高（超带，须人工审核）';
           }
-        }
-
-        // x8 传染病面板：梅毒/丙肝/HIV 阳性统一高亮（区别于乙肝两对半）
-        if (isX8Inf && !isCritical && isInfectionSpecialItem(r.CName) && isPositiveResult(result, r)) {
-          statusClass = 'inf-special';
-          resColor = '#b45309';
-          rowStyle =
-            'background:' +
-            INFECTION_SPECIAL_STYLE.bg +
-            ';border-left:3px solid ' +
-            INFECTION_SPECIAL_STYLE.border +
-            ';font-weight:700';
+        } else if (statusText.includes('低')) {
+          const _mvIt = mildItemFromRaw(r, itemStatus, result);
+          const isMild = mildItemVerdict(_mvIt, _liveForMild, mildSexOf({ row: specimen })) === 'pass';
+          if (isMild) {
+            tagClass = 'mild-low';
+            arrowIcon = '↓';
+            arrowDesc = '↓ 低（轻微带内，F4 可批审）';
+          } else {
+            tagClass = 'low';
+            arrowIcon = '▼';
+            arrowDesc = '▼ 显著偏低（超带，须人工审核）';
+          }
+        } else if (isAbnormal) {
+          tagClass = 'abnormal';
+          arrowIcon = '⚠';
+          arrowDesc = '⚠ 异常';
+        } else {
+          tagClass = 'normal';
+          arrowIcon = '';
+          arrowDesc = '';
         }
 
         // 参考范围带单位
         const refWithUnit = unit ? refRange + ' ' + unit : refRange;
 
-        // 8.15.17: 满色底档（须人工 / 危急值）——单位与结果同处一个单元格，必须一起转白，
-        // 否则原来的 #999 小字压在实色底上几乎看不见。判定放在传染病特例之后：inf-special 无底色，仍用灰字。
-        const _solidFill = statusClass === 'abnormal critical' || statusClass === 'abnormal high' || statusClass === 'abnormal low';
-        const unitStyle = _solidFill ? 'color:rgba(255,255,255,.92);font-weight:400' : 'color:#999;font-weight:400';
-        const resUnitHTML = unit ? ' <span style="font-size:10px;' + unitStyle + '">' + esc(unit) + '</span>' : '';
+        // 8.15.21 方案 A：微胶囊标签 + 外部柔和灰色单位
+        let tagInner = esc(result);
+        if (arrowIcon) {
+          tagInner += ` <span class="res-arrow">${esc(arrowIcon)}</span>`;
+        }
+        const resTagHTML = `<span class="res-tag ${tagClass}">${tagInner}</span>`;
+        const resUnitHTML = unit ? `<span class="res-unit">${esc(unit)}</span>` : '';
+        const resTitle = arrowDesc ? ' title="' + escAttr(arrowDesc) + '"' : '';
 
         // 历史结果
         const hist = renderHistoryItems(r, _liveForMild);
@@ -15052,14 +15082,6 @@ window.addEventListener('keydown',function(e){
             '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid #bbb;background:#f5f5f5" title="未知"></span>';
         }
 
-        const resStyle = `font-weight:700;font-size:13px;white-space:nowrap;${resColor ? `color:${resColor}!important;` : ''}`;
-        // 8.15.19: 「状态」列已删除——高/低/危急由结果单元格的底色与字色表达，正常值绿色、待检灰色。
-        // 原来的状态文字（↑高 / ↓低 / ↑↑危急 / ⚠异常 / ⏳待检）改为挂在结果单元格的 title 上，
-        // 悬停仍能看到明确文字，信息不丢也不占列宽。'✓'（正常）不提示，避免无意义的悬停气泡。
-        const resTitle = (statusText && statusText !== '✓')
-          ? ' title="' + escAttr(statusText + (statusClass.indexOf(' mild') >= 0 ? '（轻微带内，F4 可批审）' : '')) + '"'
-          : '';
-
         // 8.15.9: 项目名后的 ⚙ —— 调整该项目的轻微放行范围（人工改过的用醒目色，一眼能看出规则被动过）
         const _mildIt = mildItemFromRaw(r, itemStatus, result);
         const _mildRule = matchMildRule(_mildIt);
@@ -15083,7 +15105,7 @@ window.addEventListener('keydown',function(e){
         html += `<tr style="${rowStyle}">
                     <td style="text-align:center">${qcHtml}</td>
                     <td style="font-weight:500"><span style="display:inline-block;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}</span>${mildBtn}${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400"> ' + esc(refRange) + '</span>' : ''}</td>
-                    <td class="${statusClass}" style="${resStyle}"${resTitle}>${esc(result)}${resUnitHTML}</td>
+                    <td style="white-space:nowrap"${resTitle}>${resTagHTML}${resUnitHTML}</td>
                     ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:11px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
                     <td style="font-size:11px">${hist.cells[0]}</td>
                     <td style="font-size:11px">${hist.cells[1]}</td>
@@ -16457,20 +16479,17 @@ window.addEventListener('keydown',function(e){
 .hist-gtable th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-size:11px;padding:4px 8px;text-align:left;font-weight:600}
 .hist-gtable td{padding:4px 8px;border-top:1px solid var(--lis-surface-subtle);vertical-align:top}
 .hist-gtable tr.hist-row-cur td{background:#ecfdf5}
-.hist-val{font-weight:700;color:#0f3d36;white-space:nowrap}
-/* 8.15.17: 与结果表同一套形式——须人工＝满色底白字＋左实线；可批审(.mild)＝白底彩字＋左虚线。
-   .mild 由 JS 按当前放行规则（含 ⚙ 覆盖）实时加/去，所以改了上下限历史浮层颜色会跟着变。 */
-.hist-val.H{color:#fff;background:#ea580c;border-left:3px solid #9a3412;border-radius:3px;padding:0 4px}
-.hist-val.H.mild{color:#c2410c;background:#fff;border:1px solid #fed7aa;border-left:3px solid #fb923c}
-.hist-val.L{color:#fff;background:#1d4ed8;border-left:3px solid #1e3a8a;border-radius:3px;padding:0 4px}
-.hist-val.L.mild{color:#1d4ed8;background:#fff;border:1px solid #bfdbfe;border-left:3px solid #60a5fa}
-.hist-val.A{color:#d97706}
-/* 8.15.17: 满色底档上的单位小字必须转白（原本是 var(--lis-text-muted) 灰，压在实色底上看不见）。
-   用 :not(.mild) 精确排除白底的可批审档，那里仍需灰字。 */
-.hist-val.H:not(.mild) .hist-unit,.hist-val.L:not(.mild) .hist-unit{color:rgba(255,255,255,.92)}
-.hist-flag.H{color:#dc2626;font-weight:800}
+.hist-val{font-weight:700;color:#334155;white-space:nowrap}
+/* 8.15.21 方案 A：患者历史浮层同步采用微胶囊标签 */
+.hist-val.H{color:#fff;background:#f97316;border-radius:4px;padding:1px 6px}
+.hist-val.H.mild{color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:1px 5px}
+.hist-val.L{color:#fff;background:#2563eb;border-radius:4px;padding:1px 6px}
+.hist-val.L.mild{color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:1px 5px}
+.hist-val.A{color:#be185d;background:#fdf2f8;border:1px solid #fce7f3;border-radius:4px;padding:1px 5px}
+.hist-val.H:not(.mild) .hist-unit,.hist-val.L:not(.mild) .hist-unit{color:rgba(255,255,255,.9)}
+.hist-flag.H{color:#ea580c;font-weight:800}
 .hist-flag.L{color:#2563eb;font-weight:800}
-.hist-flag.A{color:#d97706;font-weight:800}
+.hist-flag.A{color:#be185d;font-weight:800}
 .hist-unit{font-size:10px;color:var(--lis-text-muted);font-weight:400}
 .hist-date{color:var(--lis-slate-700);white-space:nowrap}
 .hist-now{font-size:10px;color:var(--lis-teal-600);border:1px solid var(--lis-teal-600);border-radius:4px;padding:0 4px;margin-left:4px;font-weight:700}
