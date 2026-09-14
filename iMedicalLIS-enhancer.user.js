@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.27
+// @version      8.15.28
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9466,6 +9466,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       IsComplete: '0',
       EpisodeNo: r.RegNo || '',
       AcceptDT: ((r.AcceptDate || '') + ' ' + (r.AcceptTime || '')).trim(),
+      CollectDT: ((r.CollectionDate || r.CollectDate || '') + ' ' + (r.CollectionTime || r.CollectTime || '')).trim() || r.CollectDT || r.ReceiveDT || '',
+      CollectionDate: r.CollectionDate || r.CollectDate || '',
+      CollectionTime: r.CollectionTime || r.CollectTime || '',
       // 病房采集尚未送到科室，没有接收/核收时间，留空避免误用 AcceptDT 当成核收
       _collected: true
     }));
@@ -13298,7 +13301,7 @@ window.addEventListener('keydown',function(e){
     let h = '<div class="ws-collected-banner">🩸 以下标本为病房采集中、尚未送到科室 · 仅供追踪/催送</div>';
 
     h += '<table><thead><tr>';
-    h += '<th>仪器</th><th>姓名</th><th>性别/年龄</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>申请科室/床号</th><th>申请医生</th><th>采集时间</th><th style="width:84px">忽略</th>';
+    h += '<th>仪器</th><th>姓名</th><th>性别/年龄</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>申请科室/床号</th><th>申请医生</th><th style="width:84px">忽略</th>';
     h += '</tr></thead><tbody>';
 
     data.forEach((r, i) => {
@@ -13314,9 +13317,6 @@ window.addEventListener('keydown',function(e){
       h += `<td>${highlightText(r.SpecimenDesc || r.Specimen || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(meta.locBed, wsSearchQuery)}</td>`;
       h += `<td>${highlightText(meta.doc, wsSearchQuery)}</td>`;
-      // 采集中：收集 LIS 返回的 CollectionDate/CollectionTime（缺失时显示 —）
-      const ct = ((r.CollectionDate || '') + ' ' + (r.CollectionTime || '')).trim() || r.CollectDT || r.ReceiveDT || '—';
-      h += `<td>${esc(ct)}</td>`;
       h += `<td style="text-align:center">${wsIgnoreBtnHTML(r.ReportDR)}</td>`;
       h += '</tr>';
     });
@@ -14158,6 +14158,23 @@ window.addEventListener('keydown',function(e){
     return /^床/.test(bed) || /床$/.test(bed) ? bed : '床' + bed;
   }
 
+  // 8.15.28: 提取标本采集时间（用于采集列表标本详情顶栏展示）
+  function getSpecimenCollectTime(r) {
+    if (!r) {return '';}
+    const raw =
+      r.CollectDT ||
+      r.CollectionDT ||
+      ((r.CollectionDate || r.CollectDate || '') + ' ' + (r.CollectionTime || r.CollectTime || '')).trim() ||
+      r.CollectDate ||
+      r.CollectionDate ||
+      r.ReceiveDT ||
+      '';
+    if (!raw) {return '';}
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::\d{2})?/);
+    if (m) {return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5];}
+    return raw;
+  }
+
   // 8.13.1: 第三参 labInfo 为可选回退（检视器传入分类缓存带回的 GetReportInfoAll LabInfo）——
   // 申请医生/标本类型等工作台行数据常缺的字段从这层兜底
   function buildDetailExtraText(info, fallback, labInfo) {
@@ -14165,6 +14182,13 @@ window.addEventListener('keydown',function(e){
     const fb = fallback || {};
     const li = labInfo || {};
     const parts = [];
+    const isCollected = !!(
+      r._collected ||
+      fb._collected ||
+      String(r.Status || fb.Status || r.ReportStatus || fb.ReportStatus || '') === '9' ||
+      getWSAuditBucket(r) === 'collected' ||
+      getWSAuditBucket(fb) === 'collected'
+    );
     const sex = r.Sex || r.Species || fb.Sex || fb.Species;
     const age = r.Age || fb.Age;
     const ageUnit = r.AgeUnit || fb.AgeUnit || '';
@@ -14179,7 +14203,11 @@ window.addEventListener('keydown',function(e){
       fb.Doctor || fb.DoctorName || fb.ReqDoctorName || fb.ApplyDoctorName ||
       li.Doctor || li.DoctorName || li.ReqDoctorName || li.ApplyDoctorName;
     const diagnose = r.Diagnose || fb.Diagnose;
-    const collectTime = detailTimeFrom(r, 'CollectDT', 'CollectDate', 'CollectTime', fb.CollectDT);
+    const collectTime =
+      getSpecimenCollectTime(r) ||
+      getSpecimenCollectTime(fb) ||
+      getSpecimenCollectTime(li) ||
+      detailTimeFrom(r, 'CollectDT', 'CollectDate', 'CollectTime', fb.CollectDT);
     const receiveTime = detailTimeFrom(r, 'ReceiveDT', 'ReceiveDate', 'ReceiveTime', fb.ReceiveDT);
     const acceptTime = detailTimeFrom(r, 'AcceptDT', 'AcceptDate', 'AcceptTime', fb.AcceptDT);
     const authTime = detailTimeFrom(r, 'AuthDT', 'AuthDate', 'AuthTime', fb.AuthDT);
@@ -14194,7 +14222,8 @@ window.addEventListener('keydown',function(e){
     if (bed) {parts.push(bed);}
     if (specimen) {parts.push(specimen);}
     if (doctor) {parts.push(doctor);}
-    if (collectTime) {parts.push('采集 ' + collectTime);}
+    // 8.15.28: 采集时间只在采集列表标本详情顶栏展示，已到科室的其它标本重点关注核收/审核
+    if (isCollected && collectTime) {parts.push('采集时间 ' + collectTime);}
     if (receiveTime) {parts.push('接收 ' + receiveTime);}
     if (acceptTime) {parts.push('核收 ' + acceptTime);}
     if (authTime) {parts.push('审核 ' + authTime);}
@@ -14612,7 +14641,8 @@ window.addEventListener('keydown',function(e){
       2: '🔍 初审',
       3: '✅ 审核',
       4: '🔄 复审',
-      5: '❌ 取消'
+      5: '❌ 取消',
+      9: '🩸 采集中'
     };
     return map[String(status)] || '未知';
   }
@@ -14936,7 +14966,13 @@ window.addEventListener('keydown',function(e){
 
       if (itemInfo.length === 0) {
         if (!isCurrentDetail()) {return;}
-        body.innerHTML = '<div style="text-align:center;padding:40px;color:#999">未找到结果数据</div>';
+        const isColl = specimen && (
+          specimen._collected ||
+          String(specimen.Status || specimen.ReportStatus || '') === '9' ||
+          getWSAuditBucket(specimen) === 'collected'
+        );
+        const emptyMsg = isColl ? '🩸 标本处于病房采集中，尚未送到检验科上机测试' : '未找到结果数据';
+        body.innerHTML = `<div style="text-align:center;padding:40px;color:#999">${emptyMsg}</div>`;
         return;
       }
       // 渲染结果
