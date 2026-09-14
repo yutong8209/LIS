@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.29
+// @version      8.15.30
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9441,6 +9441,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       IsComplete: '0',
       EpisodeNo: r.RegNo || '',
       AcceptDT: ((r.AcceptDate || '') + ' ' + (r.AcceptTime || '')).trim(),
+      ReceiveDT: ((r.ReceiveDate || '') + ' ' + (r.ReceiveTime || '')).trim() || r.ReceiveDT || '',
+      ReceiveDate: r.ReceiveDate || '',
+      ReceiveTime: r.ReceiveTime || '',
       _pending: true
     }));
   }
@@ -9465,8 +9468,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       ReportStatus: '9',
       IsComplete: '0',
       EpisodeNo: r.RegNo || '',
-      AcceptDT: ((r.AcceptDate || '') + ' ' + (r.AcceptTime || '')).trim(),
-      CollectDT: ((r.CollectionDate || r.CollectDate || '') + ' ' + (r.CollectionTime || r.CollectTime || '')).trim() || r.CollectDT || r.ReceiveDT || '',
+      AcceptDT: '',
+      CollectDT: ((r.CollectionDate || r.CollectDate || '') + ' ' + (r.CollectionTime || r.CollectTime || '')).trim() || r.CollectDT || '',
       CollectionDate: r.CollectionDate || r.CollectDate || '',
       CollectionTime: r.CollectionTime || r.CollectTime || '',
       // 病房采集尚未送到科室，没有接收/核收时间，留空避免误用 AcceptDT 当成核收
@@ -10111,8 +10114,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       d = _dec.map(x => x.r);
     } else {
       d.sort((a, b) => {
-        const va = (a[field] || '').toString();
-        const vb = (b[field] || '').toString();
+        const va = wsCategory === 'collected'
+          ? (getSpecimenCollectTime(a) || a.CollectDT || a[field] || '').toString()
+          : wsCategory === 'pending'
+          ? (getSpecimenReceiveTime(a) || a.ReceiveDT || a[field] || '').toString()
+          : (a[field] || '').toString();
+        const vb = wsCategory === 'collected'
+          ? (getSpecimenCollectTime(b) || b.CollectDT || b[field] || '').toString()
+          : wsCategory === 'pending'
+          ? (getSpecimenReceiveTime(b) || b.ReceiveDT || b[field] || '').toString()
+          : (b[field] || '').toString();
         return asc ? va.localeCompare(vb, 'zh') : vb.localeCompare(va, 'zh');
       });
     }
@@ -13297,16 +13308,61 @@ window.addEventListener('keydown',function(e){
     };
   }
 
+  // 8.15.28: 提取标本采集时间（用于采集列表及标本详情顶栏展示）
+  function getSpecimenCollectTime(r) {
+    if (!r) {return '';}
+    const cached = (typeof wsClassifiedCache !== 'undefined' && wsClassifiedCache && wsClassifiedCache[r.ReportDR]) || null;
+    const cr = (cached && cached.row) || r;
+    const li = (cached && cached.labInfo) || {};
+    const raw =
+      r.CollectDT ||
+      cr.CollectDT ||
+      li.CollectDT ||
+      r.CollectionDT ||
+      cr.CollectionDT ||
+      ((r.CollectionDate || r.CollectDate || cr.CollectionDate || cr.CollectDate || li.CollectionDate || li.CollectDate || '') + ' ' +
+       (r.CollectionTime || r.CollectTime || cr.CollectionTime || cr.CollectTime || li.CollectionTime || li.CollectTime || '')).trim() ||
+      r.CollectDate ||
+      cr.CollectDate ||
+      '';
+    if (!raw) {return '';}
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::\d{2})?/);
+    if (m) {return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5];}
+    return raw;
+  }
+
+  // 8.15.30: 提取标本接收时间（用于待排列表及标本详情顶栏展示）
+  function getSpecimenReceiveTime(r) {
+    if (!r) {return '';}
+    const cached = (typeof wsClassifiedCache !== 'undefined' && wsClassifiedCache && wsClassifiedCache[r.ReportDR]) || null;
+    const cr = (cached && cached.row) || r;
+    const li = (cached && cached.labInfo) || {};
+    const raw =
+      r.ReceiveDT ||
+      cr.ReceiveDT ||
+      li.ReceiveDT ||
+      ((r.ReceiveDate || cr.ReceiveDate || li.ReceiveDate || '') + ' ' +
+       (r.ReceiveTime || cr.ReceiveTime || li.ReceiveTime || '')).trim() ||
+      r.ReceiveDate ||
+      cr.ReceiveDate ||
+      '';
+    if (!raw) {return '';}
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::\d{2})?/);
+    if (m) {return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5];}
+    return raw;
+  }
+
   function renderCollectedView(data, body) {
     let h = '<div class="ws-collected-banner">🩸 以下标本为病房采集中、尚未送到科室 · 仅供追踪/催送</div>';
 
     h += '<table><thead><tr>';
-    h += '<th>仪器</th><th>姓名</th><th>性别/年龄</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>申请科室/床号</th><th>申请医生</th><th style="width:84px">忽略</th>';
+    h += '<th>仪器</th><th>姓名</th><th>性别/年龄</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>申请科室/床号</th><th>申请医生</th><th>采集时间</th><th style="width:84px">忽略</th>';
     h += '</tr></thead><tbody>';
 
     data.forEach((r, i) => {
       const ignored = isWSIgnored(r.ReportDR);
       const meta = getWSPatientMeta(r);
+      const ct = getSpecimenCollectTime(r) || '—';
       h += `<tr class="${ignored ? 'ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
       h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
@@ -13317,6 +13373,7 @@ window.addEventListener('keydown',function(e){
       h += `<td>${highlightText(r.SpecimenDesc || r.Specimen || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(meta.locBed, wsSearchQuery)}</td>`;
       h += `<td>${highlightText(meta.doc, wsSearchQuery)}</td>`;
+      h += `<td>${esc(ct)}</td>`;
       h += `<td style="text-align:center">${wsIgnoreBtnHTML(r.ReportDR)}</td>`;
       h += '</tr>';
     });
@@ -13327,17 +13384,18 @@ window.addEventListener('keydown',function(e){
     bindReadOnlyRowClick(body);
   }
 
-  // --- 8.15.26: 待排样标本视图（只读，标本已送达/核收待上机排样）---
+  // --- 8.15.26: 待排样标本视图（只读，标本已送达/接收待上机排样）---
   function renderPendingView(data, body) {
-    let h = '<div class="ws-pending-banner">📝 以下标本已送达/核收 · 待上机排样测试</div>';
+    let h = '<div class="ws-pending-banner">📝 以下标本已送达/接收 · 待上机排样测试</div>';
 
     h += '<table><thead><tr>';
-    h += '<th>仪器</th><th>姓名</th><th>性别/年龄</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>申请科室/床号</th><th>申请医生</th><th>核收时间</th><th style="width:84px">忽略</th>';
+    h += '<th>仪器</th><th>姓名</th><th>性别/年龄</th><th>检验号</th><th>登记号</th><th>医嘱</th><th>标本</th><th>申请科室/床号</th><th>申请医生</th><th>接收时间</th><th style="width:84px">忽略</th>';
     h += '</tr></thead><tbody>';
 
     data.forEach((r, i) => {
       const ignored = isWSIgnored(r.ReportDR);
       const meta = getWSPatientMeta(r);
+      const rt = getSpecimenReceiveTime(r) || '—';
       h += `<tr class="${ignored ? 'ws-ignored' : ''}" data-i="${i}" data-rdr="${escAttr(r.ReportDR || '')}">`;
       h += `<td>${highlightText(r._mn || '', wsSearchQuery)}</td>`;
       h += `<td>${admTypeBadgeHTML(r)}${highlightText(r.PatName || '', wsSearchQuery)}</td>`;
@@ -13348,8 +13406,7 @@ window.addEventListener('keydown',function(e){
       h += `<td>${highlightText(r.SpecimenDesc || r.Specimen || '', wsSearchQuery)}</td>`;
       h += `<td>${highlightText(meta.locBed, wsSearchQuery)}</td>`;
       h += `<td>${highlightText(meta.doc, wsSearchQuery)}</td>`;
-      const at = r.AcceptDT || ((r.AcceptDate || '') + ' ' + (r.AcceptTime || '')).trim() || r.ReceiveDT || '—';
-      h += `<td>${esc(at)}</td>`;
+      h += `<td>${esc(rt)}</td>`;
       h += `<td style="text-align:center">${wsIgnoreBtnHTML(r.ReportDR)}</td>`;
       h += '</tr>';
     });
@@ -14158,23 +14215,6 @@ window.addEventListener('keydown',function(e){
     return /^床/.test(bed) || /床$/.test(bed) ? bed : '床' + bed;
   }
 
-  // 8.15.28: 提取标本采集时间（用于采集列表标本详情顶栏展示）
-  function getSpecimenCollectTime(r) {
-    if (!r) {return '';}
-    const raw =
-      r.CollectDT ||
-      r.CollectionDT ||
-      ((r.CollectionDate || r.CollectDate || '') + ' ' + (r.CollectionTime || r.CollectTime || '')).trim() ||
-      r.CollectDate ||
-      r.CollectionDate ||
-      r.ReceiveDT ||
-      '';
-    if (!raw) {return '';}
-    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::\d{2})?/);
-    if (m) {return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5];}
-    return raw;
-  }
-
   // 8.13.1: 第三参 labInfo 为可选回退（检视器传入分类缓存带回的 GetReportInfoAll LabInfo）——
   // 申请医生/标本类型等工作台行数据常缺的字段从这层兜底
   function buildDetailExtraText(info, fallback, labInfo) {
@@ -14208,7 +14248,11 @@ window.addEventListener('keydown',function(e){
       getSpecimenCollectTime(fb) ||
       getSpecimenCollectTime(li) ||
       detailTimeFrom(r, 'CollectDT', 'CollectDate', 'CollectTime', fb.CollectDT);
-    const receiveTime = detailTimeFrom(r, 'ReceiveDT', 'ReceiveDate', 'ReceiveTime', fb.ReceiveDT);
+    const receiveTime =
+      getSpecimenReceiveTime(r) ||
+      getSpecimenReceiveTime(fb) ||
+      getSpecimenReceiveTime(li) ||
+      detailTimeFrom(r, 'ReceiveDT', 'ReceiveDate', 'ReceiveTime', fb.ReceiveDT);
     const acceptTime = detailTimeFrom(r, 'AcceptDT', 'AcceptDate', 'AcceptTime', fb.AcceptDT);
     const authTime = detailTimeFrom(r, 'AuthDT', 'AuthDate', 'AuthTime', fb.AuthDT);
 
