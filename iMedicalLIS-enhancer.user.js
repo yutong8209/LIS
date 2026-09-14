@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.9
+// @version      8.15.10
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8676,6 +8676,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     _detailLRU.set(key, val);
   }
+  // 8.15.10: 整表作废——放行范围改动后必须调用。详情 HTML 里含「该项能否批审」的配色与结论，
+  // 缓存命中会直接注入旧 HTML（loadDetailResults 的 LRU 快路径），不清理就永远显示旧规则的结果。
+  function detailLRUClear() {_detailLRU.clear();}
 
   const WS_CATEGORIES = ['audit', 'incomplete', 'pending', 'collected', 'all'];
 
@@ -11856,6 +11859,9 @@ window.addEventListener('keydown',function(e){
           btn.dataset.syn || ''
         );
       });
+      // 8.15.10: 右栏检视器同样支持项目名后的 ⚙ —— 保存后由 _refreshAfterMildRuleChange
+      // 调 renderLiveInspector 重建（版本号已递增，其「跳过重建」判据会失效）
+      _bindMildBtn(bd);
     }
 
     hd.innerHTML = hdHtml;
@@ -13810,21 +13816,8 @@ window.addEventListener('keydown',function(e){
           }
         );
       });
-      // 8.15.9: 项目名后的 ⚙ —— 打开「轻微放行范围」设置（事件委托，兼容 LRU 缓存 HTML）
-      dBody.addEventListener('click', e => {
-        const mb = e.target && e.target.closest ? e.target.closest('.detail-mild-btn') : null;
-        if (!mb) {return;}
-        e.preventDefault();
-        e.stopPropagation();
-        openMildRuleDialog(mildItemFromRaw({
-          CName: mb.getAttribute('data-name') || '',
-          Synonym: mb.getAttribute('data-syn') || '',
-          Code: mb.getAttribute('data-code') || '',
-          RefRanges: mb.getAttribute('data-ref') || '',
-          ValueLow: mb.getAttribute('data-vlow') || '',
-          ValueHigh: mb.getAttribute('data-vhigh') || ''
-        }, 'NORMAL', mb.getAttribute('data-res') || ''));
-      });
+      // 8.15.9/8.15.10: 项目名后的 ⚙ —— 打开「轻微放行范围」设置（事件委托，兼容 LRU 缓存 HTML）
+      _bindMildBtn(dBody);
     }
 
     return detailPanel;
@@ -20006,13 +19999,49 @@ window.addEventListener('keydown',function(e){
     return false;
   }
 
-  // 规则改动后刷新界面：详情面板 + 待审列表。**必须刷新**——applyMildRuleOverrides 只递增了
-  // _classifyVersion（让已记忆的判定失效），但已渲染的 DOM 仍是旧配色/旧结论。
+  // 8.15.10: ⚙ 按钮的 data-* → mildItemFromRaw 形状（详情抽屉与右栏检视器共用同一份还原逻辑）
+  function _mildItemFromBtn(btn) {
+    return mildItemFromRaw({
+      CName: btn.getAttribute('data-name') || '',
+      Synonym: btn.getAttribute('data-syn') || '',
+      Code: btn.getAttribute('data-code') || '',
+      RefRanges: btn.getAttribute('data-ref') || '',
+      ValueLow: btn.getAttribute('data-vlow') || '',
+      ValueHigh: btn.getAttribute('data-vhigh') || ''
+    }, 'NORMAL', btn.getAttribute('data-res') || '');
+  }
+  // 给容器绑定 ⚙ 的委托点击（详情抽屉 #lis-detail-body / 右栏检视器 #lis-insp-body 各绑一次）
+  function _bindMildBtn(container) {
+    if (!container || container._mildBtnBound) {return;}
+    container._mildBtnBound = true;
+    container.addEventListener('click', e => {
+      const mb = e.target && e.target.closest ? e.target.closest('.detail-mild-btn') : null;
+      if (!mb) {return;}
+      e.preventDefault();
+      e.stopPropagation();
+      openMildRuleDialog(_mildItemFromBtn(mb));
+    });
+  }
+
+  // 规则改动后刷新界面。**必须刷新**——applyMildRuleOverrides 只递增了 _classifyVersion
+  // （让已记忆的判定失效），已渲染的 DOM 仍是旧配色/旧结论；而详情结果有 LRU 缓存，
+  // 命中会直接注入旧 HTML，所以还要先整表作废。三处都要刷：详情抽屉、右栏检视器、待审列表。
   function _refreshAfterMildRuleChange() {
+    try {detailLRUClear();} catch (e) {dbg('放行范围变更后清详情缓存异常:', e);}
     try {
       const sp = currentDetailSpecimen;
-      if (sp) {loadDetailResults(sp).catch(e => dbg('放行范围变更后刷新详情失败:', e));}
+      if (sp && document.getElementById('lis-detail-body')) {
+        loadDetailResults(sp).catch(e => dbg('放行范围变更后刷新详情失败:', e));
+      }
     } catch (e) {dbg('放行范围变更后刷新详情异常:', e);}
+    // 右栏检视器（待审界面右侧）：自己的标本来源 + 自己的渲染入口，必须单独刷。
+    // 它内部有 _inspShownVersion === _classifyVersion 的「跳过重建」判据，
+    // 而 applyMildRuleOverrides 已递增版本号 → 这里调用即会真正重建。
+    try {
+      if (document.getElementById('lis-ws-inspector')) {
+        renderLiveInspector(getAbnormalFocusSpecimen(filteredData()));
+      }
+    } catch (e) {dbg('放行范围变更后刷新检视器异常:', e);}
     try {loadWSData({}).catch(e => dbg('放行范围变更后刷新列表失败:', e));}
     catch (e) {dbg('放行范围变更后刷新列表异常:', e);}
   }
