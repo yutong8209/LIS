@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.14
+// @version      8.15.15
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -16421,17 +16421,19 @@ window.addEventListener('keydown',function(e){
    容器 pointer-events:none（背后表格照常可看、可滚、可点），仅弹窗本体可交互；
    因此点外部不再关闭（否则想滚表格看别的项目时会误关），关闭走 ✕ / 取消 / Esc。 */
 #lis-mild-dlg{position:fixed;inset:0;z-index:100030;pointer-events:none;font-family:var(--lis-font)}
-#lis-mild-dlg .lm-box{position:absolute;pointer-events:auto;background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:10px;width:436px;max-width:92vw;max-height:88vh;overflow:auto;padding:14px 16px;color:var(--lis-text);box-shadow:0 10px 34px rgba(0,0,0,.22)}
+#lis-mild-dlg .lm-box{position:absolute;pointer-events:auto;background:var(--lis-surface);border:1px solid var(--lis-border);border-radius:10px;width:486px;max-width:92vw;max-height:88vh;overflow:auto;padding:14px 16px;color:var(--lis-text);box-shadow:0 10px 34px rgba(0,0,0,.22)}
 #lis-mild-dlg .lm-box.dragging{box-shadow:0 18px 48px rgba(0,0,0,.32)}
 #lis-mild-dlg .lm-hd{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:700;margin-bottom:2px;cursor:move;user-select:none;touch-action:none}
 #lis-mild-dlg .lm-close{cursor:pointer;color:var(--lis-text-muted);font-size:15px;padding:0 4px}
 #lis-mild-dlg .lm-item{font-size:12px;color:var(--lis-text-secondary);margin-bottom:10px}
 #lis-mild-dlg .lm-note{font-size:12px;color:var(--lis-text-secondary);margin-bottom:8px;line-height:1.6}
 #lis-mild-dlg .lm-row{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
-#lis-mild-dlg .lm-lb{font-size:12px;color:var(--lis-text);min-width:88px}
+#lis-mild-dlg .lm-lb{font-size:12px;color:var(--lis-text);min-width:34px}
 /* 8.15.12: 80px 放不下占位符「留空＝不放行」（6 个汉字约 72px + 内边距/边框），被截成「留空＝不」，加宽到 108px */
 #lis-mild-dlg .lm-in{width:108px;height:26px;border:1px solid var(--lis-border-strong);border-radius:4px;padding:0 6px;font-size:12px;color:var(--lis-text);background:var(--lis-surface)}
 #lis-mild-dlg .lm-unit{font-size:11px;color:var(--lis-text-secondary);white-space:nowrap}
+#lis-mild-dlg .lm-sel{height:26px;border:1px solid var(--lis-border-strong);border-radius:4px;padding:0 4px;font-size:12px;color:var(--lis-text);background:var(--lis-surface);cursor:pointer}
+#lis-mild-dlg .lm-in-off{opacity:.4;background:var(--lis-surface-subtle)}
 #lis-mild-dlg .lm-pv{font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
 #lis-mild-dlg .lm-pv.on{color:#047857;font-weight:700}
 #lis-mild-dlg .lm-chk{display:block;font-size:12px;color:var(--lis-text);margin:8px 0 4px;cursor:pointer}
@@ -19919,8 +19921,12 @@ window.addEventListener('keydown',function(e){
     for (const r of MILD_ALLOW_RULES) {
       const o = ov.rules[mildRuleKey(r)];
       if (!o) {continue;}
-      if (typeof o.high === 'number' || o.high === null) {r.high = o.high;}
-      if (typeof o.low === 'number' || o.low === null) {r.low = o.low;}
+      // 8.15.14: 单方向三态——off（该方向不放行，等价于规则里没有这个键）/ any（不拦截，=null）/
+      // num（按倍数，=number）。用 highOff/lowOff 显式表达「不放行」，因为 JSON 存不了 undefined。
+      if (o.highOff) {r.high = undefined;}
+      else if (typeof o.high === 'number' || o.high === null) {r.high = o.high;}
+      if (o.lowOff) {r.low = undefined;}
+      else if (typeof o.low === 'number' || o.low === null) {r.low = o.low;}
       if (o.off) {r._off = true;}
       r._overridden = true;
     }
@@ -19932,8 +19938,8 @@ window.addEventListener('keydown',function(e){
         re: new RegExp('^' + _mildReEsc(a.name) + '[\\*＊]?$', 'i'),
         tier: isA ? 'a' : 'b',
         group: 'x:' + a.name,
-        high: isA ? undefined : (a.high === undefined ? null : a.high),
-        low: isA ? undefined : (a.low === undefined ? null : a.low),
+        high: isA ? undefined : (a.highOff ? undefined : (a.high === undefined ? null : a.high)),
+        low: isA ? undefined : (a.lowOff ? undefined : (a.low === undefined ? null : a.low)),
         _added: true, _overridden: true, _addedName: a.name
       });
     }
@@ -19963,10 +19969,10 @@ window.addEventListener('keydown',function(e){
     return true;
   }
   // 给原本「未配规则」的项目新增一条规则
-  function addMildRuleOverride(name, tier, high, low) {
+  function addMildRuleOverride(name, tier, high, low, highOff, lowOff) {
     const ov = loadMildRuleOverrides();
     ov.added = ov.added.filter(a => a && a.name !== name);
-    ov.added.push({name, tier: tier === 'a' ? 'a' : 'b', high, low});
+    ov.added.push({name, tier: tier === 'a' ? 'a' : 'b', high, low, highOff: !!highOff, lowOff: !!lowOff});
     _mildOvLog(ov, 'x:' + name, name, '未配规则',
       tier === 'a' ? '甲类（全放行）' : `乙类 高${high === null ? '不放行' : high + '×'} / 低${low === null ? '不放行' : low + '×'}`);
     saveMildRuleOverrides(ov);
@@ -20023,16 +20029,22 @@ window.addEventListener('keydown',function(e){
   // 只改「倍数」：倍数才是稳定参数（参考范围随性别/年龄变），旁边实时换算绝对值让你看到实际放行线。
   // 已配规则 → 调倍数 / 停用 / 恢复默认；未配规则 → 当场新增（甲类全放行 或 乙类带倍数）。
   // 放宽（超出默认值，或从「不放行」变成「放行」）二次确认；所有改动写入留痕，可 lisMildRuleLog() 导出。
-  function _mildIsLoosening(rule0, hv, lv, isNew) {
-    if (isNew || !rule0) {return true;} // 从「不放行」变成「放行」本身就是放宽
+  // 8.15.14: 单方向「是否放宽」判断。三态取值：undefined=不放行 / null=不拦截 / number=倍数
+  function _mildDirLoosening(rule0, key, finalVal, isNew) {
+    if (finalVal === undefined) {return false;}   // 改成「不放行」永远不算放宽
+    // 新增规则时：倍数恰为 1（只放到参考限本身）等于没放宽，不该弹确认；不拦截(null)与 >1 才算放宽
+    if (isNew || !rule0) {return finalVal !== 1;}
     const i = MILD_ALLOW_RULES.indexOf(rule0);
     const d = (i >= 0 && i < MILD_RULE_DEFAULTS.length) ? MILD_RULE_DEFAULTS[i] : null;
     if (!d) {return true;}
-    const dH = typeof d.high === 'number' ? d.high : null;
-    const dL = typeof d.low === 'number' ? d.low : null;
-    if (hv !== null && (dH === null || hv > dH)) {return true;}
-    if (lv !== null && (dL === null || lv < dL)) {return true;}
-    return false;
+    const dv = d[key];
+    if (finalVal === null) {return dv !== null;}   // 改成「不拦截」：默认本来就不拦截则不算放宽
+    if (dv === null) {return false;}               // 默认是「不拦截」，现在给了数值 = **收紧**，不是放宽
+    if (dv === undefined) {return true;}           // 默认是「不放行」，现在给了数值 = 放宽
+    return key === 'high' ? finalVal > dv : finalVal < dv;
+  }
+  function _mildIsLoosening(rule0, hFinal, lFinal, isNew) {
+    return _mildDirLoosening(rule0, 'high', hFinal, isNew) || _mildDirLoosening(rule0, 'low', lFinal, isNew);
   }
 
   // 8.15.10: ⚙ 按钮的 data-* → mildItemFromRaw 形状（详情抽屉与右栏检视器共用同一份还原逻辑）
@@ -20090,6 +20102,16 @@ window.addEventListener('keydown',function(e){
   //   存储仍存**倍数**（规则模型不变），四舍五入到 4 位，避免 12.5/9.8 = 1.27551… 这类长小数。
   // 已配规则 → 改值 / 停用 / 恢复默认；未配规则 → 当场新增（甲类全放行 或 乙类带数值）。
   // 放宽（超出默认值，或从「不放行」变成「放行」）二次确认；所有改动写入留痕。
+  // 8.15.9 起：详情抽屉/右栏检视器结果表项目名后的 ⚙ —— 轻微放行范围设置。
+  // 8.15.14: ① 调整方式改为**填绝对值**（现场心智是「放到 12.5 为止」），倍数自动算出显示在后面；
+  //          ② 输入框改 `type=text`——`type=number` 的上下箭头挡路且清空不便（用户反馈）；
+  //          ③ 每个方向可**单独**设「不放行 / 按数值放行 / 不拦截（一律放行）」。
+  //             这三态与规则模型一一对应，不引入新语义：
+  //               不放行 → rule.high = undefined（mildAllowItem 直接拦下）
+  //               按数值 → rule.high = 倍数（number）
+  //               不拦截 → rule.high = null（limit=Infinity，该方向一律放行）
+  //             存储仍存**倍数**，四舍五入 4 位；「不放行」用 highOff/lowOff 显式表达（JSON 存不了 undefined）。
+  // 放宽（超出默认值，或从「不放行」变成「放行」）二次确认；所有改动写入留痕。
   function openMildRuleDialog(item) {
     const name = String((item && (item.CName || item.name)) || '');
     if (!name) {return;}
@@ -20113,9 +20135,20 @@ window.addEventListener('keydown',function(e){
     const refTxt = (limits.lln !== null || limits.uln !== null)
       ? '本标本参考范围：' + (limits.lln === null ? '—' : fmt(limits.lln)) + ' ~ ' + (limits.uln === null ? '—' : fmt(limits.uln))
       : (limits.refText
-        ? '参考范围文本「' + esc(limits.refText) + '」未能解析出数值上下限，本方向只能按倍数设置'
-        : '本标本数据里没有参考范围字段，本方向只能按倍数设置');
+        ? '参考范围文本「' + esc(limits.refText) + '」未能解析出数值上下限，该方向只能按倍数填写'
+        : '本标本数据里没有参考范围字段，该方向只能按倍数填写');
     let tier = isTierA ? 'a' : 'b';
+    // 每个方向的当前模式：off=不放行 / num=按数值 / any=不拦截
+    const modeOf = key => {
+      if (!rule0 || rule0.tier !== 'b') {return 'off';}
+      const v = rule0[key];
+      if (v === null) {return 'any';}
+      if (typeof v === 'number') {return 'num';}
+      return 'off';
+    };
+    // 新增规则时默认「按数值」，其余按现有规则还原
+    let hMode = isNew ? 'num' : modeOf('high');
+    let lMode = isNew ? 'num' : modeOf('low');
 
     const dlg = document.createElement('div');
     dlg.id = 'lis-mild-dlg';
@@ -20134,78 +20167,107 @@ window.addEventListener('keydown',function(e){
 
     const body = dlg.querySelector('#lm-body');
     const btnReset = dlg.querySelector('#lm-reset');
-    // 8.15.14: 记下「初值」与「原倍数」——绝对值只显示 2 位小数，若每次都用「绝对值 ÷ 参考范围」
-    // 重新换算，来回一趟会让倍数漂移（如 9.8×1.03 显示成 10.09，再除回 9.8 得 1.0296）。
-    // 那样「打开对话框什么都不改、直接保存」就会静默改掉规则，不可接受。
-    // 规则：输入框内容与初值**完全一致**时，沿用原倍数；只有真被改过才重新换算。
+    // 8.15.14: 记「初值」与「原倍数」——绝对值只显示 2 位小数，若每次都用「绝对值 ÷ 参考范围」重算，
+    // 来回一趟会让倍数漂移（9.8×1.03=10.094 → 显示 10.09 → 除回 9.8=1.0296），
+    // 那样「打开对话框什么都不改、直接保存」就会静默改掉规则。输入与初值完全一致时沿用原倍数。
     let initH = '', initL = '';
     const origH = (rule0 && typeof rule0.high === 'number') ? rule0.high : null;
     const origL = (rule0 && typeof rule0.low === 'number') ? rule0.low : null;
 
+    function dirRow(which) {
+      const isHigh = which === 'high';
+      const mode = isHigh ? hMode : lMode;
+      const abs = isHigh ? absH : absL;
+      const lim = isHigh ? limits.uln : limits.lln;
+      const idPfx = isHigh ? 'lm-high' : 'lm-low';
+      const rv = rule0 ? rule0[which] : undefined;
+      let val = '';
+      if (typeof rv === 'number') {val = abs ? fmt(lim * rv) : String(rv);}
+      else if (isNew && mode === 'num') {
+        // 8.15.14: 新增规则时默认值就是**参考值的上限/下限本身**（倍数=1，等于还没放宽）——
+        // 现场在这个基线上往上调，比从空白开始直观
+        val = abs ? fmt(lim) : '1';
+      }
+      if (isHigh) {initH = val;} else {initL = val;}
+      const on = mode === 'num';
+      return '<div class="lm-row">' +
+        '<span class="lm-lb">' + (isHigh ? '偏高' : '偏低') + '</span>' +
+        '<select id="' + idPfx + '-mode" class="lm-sel" title="该方向单独设置：不放行＝异常一律留人工；按数值＝填放行到多少；不拦截＝该方向一律放行">' +
+          '<option value="off"' + (mode === 'off' ? ' selected' : '') + '>不放行</option>' +
+          '<option value="num"' + (mode === 'num' ? ' selected' : '') + '>按数值放行</option>' +
+          '<option value="any"' + (mode === 'any' ? ' selected' : '') + '>不拦截</option>' +
+        '</select>' +
+        '<input id="' + idPfx + '" class="lm-in' + (on ? '' : ' lm-in-off') + '" type="text" inputmode="decimal" ' +
+          'placeholder="' + (abs ? '放行至' : '倍数') + '" value="' + val + '"' + (on ? '' : ' disabled') + '>' +
+        (abs && on ? unitHTML : '') +
+        '<span class="lm-pv" id="' + idPfx + '-pv"></span></div>';
+    }
+
     function segHTML() {
       const offChk = isNew ? '' :
         '<label class="lm-chk"><input type="checkbox" id="lm-off"' + ((rule0 && rule0._off) ? ' checked' : '') +
-        '> 一律不放行（停用该项目的放行）</label>';
+        '> 整条规则停用（该项目永不自动放行）</label>';
       if (tier === 'a') {
         return '<div class="lm-note">甲类：该项目<b>任何方向</b>的异常都直接放行，不设数值范围。</div>' + offChk;
       }
-      // 初值：有规则时按当前倍数换算成绝对值显示（无范围时退回显示倍数）；新增时留空，强制现场自己填
-      let hVal = '';
-      if (rule0 && typeof rule0.high === 'number') {
-        hVal = absH ? fmt(limits.uln * rule0.high) : String(rule0.high);
-      }
-      let lVal = '';
-      if (rule0 && typeof rule0.low === 'number') {
-        lVal = absL ? fmt(limits.lln * rule0.low) : String(rule0.low);
-      }
-      initH = hVal; initL = lVal; // 供 readInputs 判断「有没有真被改过」
       return '<div class="lm-note">' + refTxt + '</div>' +
-        '<div class="lm-row"><span class="lm-lb">' + (absH ? '偏高放行至' : '偏高放行倍数') + '</span>' +
-          '<input id="lm-high" class="lm-in" type="number" step="0.01" ' + (absH ? 'min="0"' : 'min="1"') +
-          ' placeholder="留空＝不放行" value="' + hVal + '">' + (absH ? unitHTML : '') +
-          '<span class="lm-pv" id="lm-pv-h"></span></div>' +
-        '<div class="lm-row"><span class="lm-lb">' + (absL ? '偏低放行至' : '偏低放行倍数') + '</span>' +
-          '<input id="lm-low" class="lm-in" type="number" step="0.01" ' + (absL ? 'min="0"' : 'min="0" max="1"') +
-          ' placeholder="留空＝不放行" value="' + lVal + '">' + (absL ? unitHTML : '') +
-          '<span class="lm-pv" id="lm-pv-l"></span></div>' +
-        offChk +
-        '<div class="lm-warn">⚠️ 放宽后该项目的异常结果会被 <b>F4 批审</b>与<b>白天方案自动审核</b>直接放行，' +
-        '不再人工复核。<br>危急值 / 堵孔 0 值 / 传染病阳性 / 心肌危急线是独立安全门，<b>不受此处影响</b>。</div>';
+        dirRow('high') + dirRow('low') + offChk +
+        '<div class="lm-warn">⚠️ 设为「按数值放行」或「不拦截」后，该方向的异常结果会被 <b>F4 批审</b>与' +
+        '<b>白天方案自动审核</b>直接放行，不再人工复核。<br>' +
+        '危急值 / 堵孔 0 值 / 传染病阳性 / 心肌危急线是独立安全门，<b>不受此处影响</b>。</div>';
     }
 
     // 读输入并统一换算成「倍数」（存储模型用的是倍数）
     function readInputs() {
+      const hSel = body.querySelector('#lm-high-mode'), lSel = body.querySelector('#lm-low-mode');
       const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
-      const hRaw = hi ? hi.value.trim() : '';
-      const lRaw = lo ? lo.value.trim() : '';
+      const hM = hSel ? hSel.value : 'off';
+      const lM = lSel ? lSel.value : 'off';
+      const hRaw = (hi && !hi.disabled) ? hi.value.trim() : '';
+      const lRaw = (lo && !lo.disabled) ? lo.value.trim() : '';
       const hv = hRaw !== '' ? Number(hRaw) : null;
       const lv = lRaw !== '' ? Number(lRaw) : null;
-      const hMult = (hRaw === '' || isNaN(hv)) ? null
+      const hNum = (hRaw === '' || isNaN(hv)) ? null
         : (hRaw === initH && origH !== null) ? origH
           : (absH ? hv / limits.uln : hv);
-      const lMult = (lRaw === '' || isNaN(lv)) ? null
+      const lNum = (lRaw === '' || isNaN(lv)) ? null
         : (lRaw === initL && origL !== null) ? origL
           : (absL ? lv / limits.lln : lv);
-      return {hv, lv, hMult, lMult};
+      // 该方向最终取值：undefined=不放行 / null=不拦截 / number=倍数
+      const hFinal = hM === 'off' ? undefined : (hM === 'any' ? null : hNum);
+      const lFinal = lM === 'off' ? undefined : (lM === 'any' ? null : lNum);
+      return {hM, lM, hRaw, lRaw, hv, lv, hNum, lNum, hFinal, lFinal};
     }
 
-    function wirePreview() {
-      const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
-      if (!hi || !lo) {return;}
-      const pv = () => {
-        const r = readInputs();
-        const ph = body.querySelector('#lm-pv-h'), pl = body.querySelector('#lm-pv-l');
-        // 绝对值模式下把算出的倍数显示出来（倍数是规则内部量，现场关心的是「放到多少」）
-        ph.textContent = r.hMult === null ? '→ 不放行'
-          : (absH ? '＝ ' + fmtM(r.hMult) + '× 上限' : (limits.uln !== null ? '→ 放行至 ' + fmt(limits.uln * r.hMult) : ''));
-        pl.textContent = r.lMult === null ? '→ 不放行'
-          : (absL ? '＝ ' + fmtM(r.lMult) + '× 下限' : (limits.lln !== null ? '→ 放行至 ' + fmt(limits.lln * r.lMult) : ''));
-        ph.className = 'lm-pv' + (r.hMult !== null ? ' on' : '');
-        pl.className = 'lm-pv' + (r.lMult !== null ? ' on' : '');
+    function updatePreview() {
+      const ph = body.querySelector('#lm-pv-h'), pl = body.querySelector('#lm-pv-l');
+      if (!ph || !pl) {return;}
+      const r = readInputs();
+      const txt = (mode, num, abs, lim, side) => {
+        if (mode === 'off') {return '→ 不放行';}
+        if (mode === 'any') {return '→ 一律放行';}
+        if (num === null) {return '→ 请填数值';}
+        return abs ? '＝ ' + fmtM(num) + '× ' + side
+          : (lim !== null ? '→ 放行至 ' + fmt(lim * num) : '');
       };
-      hi.addEventListener('input', pv);
-      lo.addEventListener('input', pv);
-      pv();
+      ph.textContent = txt(r.hM, r.hNum, absH, limits.uln, '上限');
+      pl.textContent = txt(r.lM, r.lNum, absL, limits.lln, '下限');
+      ph.className = 'lm-pv' + (r.hM === 'num' ? ' on' : '');
+      pl.className = 'lm-pv' + (r.lM === 'num' ? ' on' : '');
+    }
+
+    // 切换模式时只切换输入框可用态，**不重渲染**——否则会丢掉用户已输入但还没保存的值
+    function wireModeSwitch() {
+      [['#lm-high-mode', '#lm-high'], ['#lm-low-mode', '#lm-low']].forEach(pair => {
+        const sel = body.querySelector(pair[0]), inp = body.querySelector(pair[1]);
+        if (!sel || !inp) {return;}
+        sel.addEventListener('change', () => {
+          const on = sel.value === 'num';
+          inp.disabled = !on;
+          inp.classList.toggle('lm-in-off', !on);
+          updatePreview();
+        });
+      });
     }
 
     function render() {
@@ -20223,7 +20285,8 @@ window.addEventListener('keydown',function(e){
       } else {
         body.innerHTML = segHTML();
       }
-      wirePreview();
+      wireModeSwitch();
+      updatePreview();
       btnReset.style.display = (!isNew && ovd) ? '' : 'none';
     }
     render();
@@ -20279,7 +20342,7 @@ window.addEventListener('keydown',function(e){
     function onKey(e) {if (e.key === 'Escape') {close();}}
     document.addEventListener('keydown', onKey);
     // 8.15.13: 不再「点外部关闭」——容器已 pointer-events:none，且用户需要在弹窗开着时
-    // 滚动/查看背后的结果表来定倍数，误关会打断操作。关闭走 ✕ / 取消 / Esc。
+    // 滚动/查看背后的结果表来定值，误关会打断操作。关闭走 ✕ / 取消 / Esc。
     dlg.querySelector('.lm-close').addEventListener('click', close);
     dlg.querySelector('#lm-cancel').addEventListener('click', close);
 
@@ -20295,39 +20358,49 @@ window.addEventListener('keydown',function(e){
       const offEl = body.querySelector('#lm-off');
       const off = !!(offEl && offEl.checked);
       if (tier === 'a') {
-        if (isNew) {addMildRuleOverride(name, 'a', undefined, undefined);}
+        if (isNew) {addMildRuleOverride(name, 'a', undefined, undefined, true, true);}
         else {setMildRuleOverride(rule0, {off}, name);}
       } else {
         const r = readInputs();
-        if (r.hv !== null && (isNaN(r.hv) || r.hv <= 0)) {showToast('偏高放行值需为正数', 'error'); return;}
-        if (r.lv !== null && (isNaN(r.lv) || r.lv <= 0)) {showToast('偏低放行值需为正数', 'error'); return;}
-        // 换算成倍数后越界 = 恒不放行，直接拦下并提示留空（比让它静默失效清楚）
-        if (r.hMult !== null && r.hMult < 1) {
+        // 选了「按数值放行」却没填有效数字 —— 明确报错，不让它静默变成别的语义
+        if (r.hM === 'num' && (r.hRaw === '' || isNaN(r.hv))) {
+          showToast('偏高选了「按数值放行」，请填一个数值；不想放行请改选「不放行」', 'error'); return;
+        }
+        if (r.lM === 'num' && (r.lRaw === '' || isNaN(r.lv))) {
+          showToast('偏低选了「按数值放行」，请填一个数值；不想放行请改选「不放行」', 'error'); return;
+        }
+        // 换算成倍数后越界 = 恒不放行，直接拦下并提示（比让它静默失效清楚）
+        if (r.hNum !== null && r.hNum < 1) {
           showToast(absH
-            ? '偏高放行值不能低于参考上限 ' + fmt(limits.uln) + '（那样等于不放行），请留空'
-            : '偏高倍数不能小于 1（那样等于不放行），请留空', 'warning');
+            ? '偏高放行值不能低于参考上限 ' + fmt(limits.uln) + '（那样等于不放行），请留空或改选「不放行」'
+            : '偏高倍数不能小于 1（那样等于不放行），请留空或改选「不放行」', 'warning');
           return;
         }
-        if (r.lMult !== null && r.lMult > 1) {
+        if (r.lNum !== null && r.lNum > 1) {
           showToast(absL
-            ? '偏低放行值不能高于参考下限 ' + fmt(limits.lln) + '（那样等于不放行），请留空'
-            : '偏低倍数不能大于 1（那样等于不放行），请留空', 'warning');
+            ? '偏低放行值不能高于参考下限 ' + fmt(limits.lln) + '（那样等于不放行），请留空或改选「不放行」'
+            : '偏低倍数不能大于 1（那样等于不放行），请留空或改选「不放行」', 'warning');
           return;
         }
-        if (!off && r.hMult === null && r.lMult === null) {
-          showToast('请至少填一个方向的值，或勾选「一律不放行」', 'error'); return;
+        if (!off && r.hFinal === undefined && r.lFinal === undefined) {
+          showToast('两个方向都选了「不放行」，这条规则没有意义；请至少放行一个方向，或勾选「整条规则停用」', 'error');
+          return;
         }
-        if (!off && _mildIsLoosening(rule0, r.hMult, r.lMult, isNew)) {
+        if (!off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew)) {
           const msg = '确认放宽「' + name + '」的放行范围？\n\n' +
-            '放宽后该项目的异常结果会被 F4 批审与白天方案自动审核直接放行，不再人工复核。\n' +
+            '放宽后该方向的异常结果会被 F4 批审与白天方案自动审核直接放行，不再人工复核。\n' +
             '（本次改动会记入留痕，控制台 lisMildRuleLog() 可查看/导出）';
           if (!window.confirm(msg)) {return;}
         }
         // 存储仍用倍数，四舍五入到 4 位（12.5 / 9.8 = 1.27551… → 1.2755）
-        const hStore = r.hMult === null ? null : Math.round(r.hMult * 1e4) / 1e4;
-        const lStore = r.lMult === null ? null : Math.round(r.lMult * 1e4) / 1e4;
-        if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore);}
-        else {setMildRuleOverride(rule0, {high: hStore, low: lStore, off}, name);}
+        const hStore = r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4;
+        const lStore = r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4;
+        const patch = {
+          high: hStore, low: lStore,
+          highOff: r.hFinal === undefined, lowOff: r.lFinal === undefined, off
+        };
+        if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore, patch.highOff, patch.lowOff);}
+        else {setMildRuleOverride(rule0, patch, name);}
       }
       showToast('已保存，立即生效', 'success');
       close();
