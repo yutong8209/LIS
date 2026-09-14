@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.15
+// @version      8.15.16
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20028,11 +20028,11 @@ window.addEventListener('keydown',function(e){
   // 8.15.9: 详情面板 ⚙ —— 轻微放行范围设置对话框
   // 只改「倍数」：倍数才是稳定参数（参考范围随性别/年龄变），旁边实时换算绝对值让你看到实际放行线。
   // 已配规则 → 调倍数 / 停用 / 恢复默认；未配规则 → 当场新增（甲类全放行 或 乙类带倍数）。
-  // 放宽（超出默认值，或从「不放行」变成「放行」）二次确认；所有改动写入留痕，可 lisMildRuleLog() 导出。
+  // 放宽（超出默认值，或从「不放行」变成「放行」）不再弹确认框，只给非阻断提示（8.15.16）；所有改动写入留痕，可 lisMildRuleLog() 导出。
   // 8.15.14: 单方向「是否放宽」判断。三态取值：undefined=不放行 / null=不拦截 / number=倍数
   function _mildDirLoosening(rule0, key, finalVal, isNew) {
     if (finalVal === undefined) {return false;}   // 改成「不放行」永远不算放宽
-    // 新增规则时：倍数恰为 1（只放到参考限本身）等于没放宽，不该弹确认；不拦截(null)与 >1 才算放宽
+    // 新增规则时：倍数恰为 1（只放到参考限本身）等于没放宽，不算放宽；不拦截(null)与 >1 才算放宽
     if (isNew || !rule0) {return finalVal !== 1;}
     const i = MILD_ALLOW_RULES.indexOf(rule0);
     const d = (i >= 0 && i < MILD_RULE_DEFAULTS.length) ? MILD_RULE_DEFAULTS[i] : null;
@@ -20101,7 +20101,7 @@ window.addEventListener('keydown',function(e){
   //   提示里说明——这样极端情况下仍能设置，不会因为没范围就完全没法用。
   //   存储仍存**倍数**（规则模型不变），四舍五入到 4 位，避免 12.5/9.8 = 1.27551… 这类长小数。
   // 已配规则 → 改值 / 停用 / 恢复默认；未配规则 → 当场新增（甲类全放行 或 乙类带数值）。
-  // 放宽（超出默认值，或从「不放行」变成「放行」）二次确认；所有改动写入留痕。
+  // 放宽（超出默认值，或从「不放行」变成「放行」）只给非阻断提示，不弹确认框（8.15.16）；所有改动写入留痕。
   // 8.15.9 起：详情抽屉/右栏检视器结果表项目名后的 ⚙ —— 轻微放行范围设置。
   // 8.15.14: ① 调整方式改为**填绝对值**（现场心智是「放到 12.5 为止」），倍数自动算出显示在后面；
   //          ② 输入框改 `type=text`——`type=number` 的上下箭头挡路且清空不便（用户反馈）；
@@ -20111,7 +20111,7 @@ window.addEventListener('keydown',function(e){
   //               按数值 → rule.high = 倍数（number）
   //               不拦截 → rule.high = null（limit=Infinity，该方向一律放行）
   //             存储仍存**倍数**，四舍五入 4 位；「不放行」用 highOff/lowOff 显式表达（JSON 存不了 undefined）。
-  // 放宽（超出默认值，或从「不放行」变成「放行」）二次确认；所有改动写入留痕。
+  // 放宽（超出默认值，或从「不放行」变成「放行」）只给非阻断提示，不弹确认框（8.15.16）；所有改动写入留痕。
   function openMildRuleDialog(item) {
     const name = String((item && (item.CName || item.name)) || '');
     if (!name) {return;}
@@ -20357,6 +20357,8 @@ window.addEventListener('keydown',function(e){
     dlg.querySelector('#lm-save').addEventListener('click', () => {
       const offEl = body.querySelector('#lm-off');
       const off = !!(offEl && offEl.checked);
+      // 8.15.16: 本次保存是否属于「放宽」——只用来决定提示文案/颜色，**不再用来弹确认框**
+      let loosened = false;
       if (tier === 'a') {
         if (isNew) {addMildRuleOverride(name, 'a', undefined, undefined, true, true);}
         else {setMildRuleOverride(rule0, {off}, name);}
@@ -20386,12 +20388,11 @@ window.addEventListener('keydown',function(e){
           showToast('两个方向都选了「不放行」，这条规则没有意义；请至少放行一个方向，或勾选「整条规则停用」', 'error');
           return;
         }
-        if (!off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew)) {
-          const msg = '确认放宽「' + name + '」的放行范围？\n\n' +
-            '放宽后该方向的异常结果会被 F4 批审与白天方案自动审核直接放行，不再人工复核。\n' +
-            '（本次改动会记入留痕，控制台 lisMildRuleLog() 可查看/导出）';
-          if (!window.confirm(msg)) {return;}
-        }
+        // 8.15.16: 「确认放宽？」二次确认已去掉——现场反馈每次保存都被拦一道很打断，
+        // 而弹窗里那段黄底警示（.lm-warn）+ 保存后的 warning toast + 留痕已经把风险讲清楚。
+        // 判定函数保留：放宽与否仍要区分，只是改成**非阻断**提示（见下方 showToast），
+        // 且不改变任何判定口径（_mildIsLoosening 一行未动）。
+        loosened = !off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew);
         // 存储仍用倍数，四舍五入到 4 位（12.5 / 9.8 = 1.27551… → 1.2755）
         const hStore = r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4;
         const lStore = r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4;
@@ -20402,7 +20403,11 @@ window.addEventListener('keydown',function(e){
         if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore, patch.highOff, patch.lowOff);}
         else {setMildRuleOverride(rule0, patch, name);}
       }
-      showToast('已保存，立即生效', 'success');
+      // 8.15.16: 放宽不再弹确认框，改用 warning 色 toast 说明后果——「放宽」这件事仍然可见，
+      // 不会变成静默放行；每次改动照旧写入留痕（控制台 lisMildRuleLog() 查看/导出）。
+      showToast(loosened
+        ? '已放宽放行范围并立即生效 —— 该方向异常结果不再人工复核（改动已记留痕）'
+        : '已保存，立即生效', loosened ? 'warning' : 'success');
       close();
       _refreshAfterMildRuleChange();
     });
