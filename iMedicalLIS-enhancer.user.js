@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.30
+// @version      8.15.31
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20263,8 +20263,10 @@ window.addEventListener('keydown',function(e){
         group: 'x:' + merged.name,
         high: isA ? undefined : (merged.highOff ? undefined : (merged.high === undefined ? null : merged.high)),
         low: isA ? undefined : (merged.lowOff ? undefined : (merged.low === undefined ? null : merged.low)),
-        highAbs: isA ? undefined : (typeof merged.highAbs === 'number' ? merged.highAbs : undefined),
-        lowAbs: isA ? undefined : (typeof merged.lowAbs === 'number' ? merged.lowAbs : undefined),
+        highOff: !!merged.highOff,
+        lowOff: !!merged.lowOff,
+        highAbs: isA ? undefined : (typeof merged.highAbs === 'number' ? merged.highAbs : (merged.highAbs === null ? null : undefined)),
+        lowAbs: isA ? undefined : (typeof merged.lowAbs === 'number' ? merged.lowAbs : (merged.lowAbs === null ? null : undefined)),
         _off: !!merged.off,
         _added: true, _overridden: true, _addedName: merged.name
       });
@@ -20297,6 +20299,10 @@ window.addEventListener('keydown',function(e){
           ov.added.splice(idx, 1);
         } else {
           Object.assign(ov.added[idx], patch);
+          if (patch.highAbs === undefined) {delete ov.added[idx].highAbs;}
+          if (patch.lowAbs === undefined) {delete ov.added[idx].lowAbs;}
+          if (patch.high === undefined) {delete ov.added[idx].high;}
+          if (patch.low === undefined) {delete ov.added[idx].low;}
         }
       }
     }
@@ -20306,7 +20312,13 @@ window.addEventListener('keydown',function(e){
       ov.rules[key] = Object.assign({}, ov.rules[key] || {});
       if (patch.m) {ov.rules[key].m = Object.assign({}, ov.rules[key].m || {}, patch.m);}
       if (patch.f) {ov.rules[key].f = Object.assign({}, ov.rules[key].f || {}, patch.f);}
-      if (!patch.m && !patch.f) {Object.assign(ov.rules[key], patch);}
+      if (!patch.m && !patch.f) {
+        Object.assign(ov.rules[key], patch);
+        if (patch.highAbs === undefined) {delete ov.rules[key].highAbs;}
+        if (patch.lowAbs === undefined) {delete ov.rules[key].lowAbs;}
+        if (patch.high === undefined) {delete ov.rules[key].high;}
+        if (patch.low === undefined) {delete ov.rules[key].low;}
+      }
     }
     _mildOvLog(ov, key, label || key, before, patch === null ? '默认' : JSON.stringify(ov.rules[key]));
     saveMildRuleOverrides(ov);
@@ -20547,9 +20559,11 @@ window.addEventListener('keydown',function(e){
 
       const modeOf = key => {
         if (!rule0 || rule0.tier !== 'b') {return 'off';}
+        if (subRule[key + 'Off'] === true) {return 'off';}
         const v = subRule[key];
         const vAbs = subRule[key + 'Abs'];
-        if (v === null && vAbs === undefined) {return 'any';}
+        if (v === undefined && vAbs === undefined) {return 'off';}
+        if (v === null && (vAbs === null || vAbs === undefined)) {return 'any';}
         if (typeof v === 'number' || typeof vAbs === 'number') {return 'num';}
         return 'off';
       };
@@ -20559,13 +20573,17 @@ window.addEventListener('keydown',function(e){
       const lM = isNew ? (absL ? 'num' : 'off') : modeOf('low');
 
       let valH = '', valL = '';
-      if (typeof subRule.highAbs === 'number') {valH = String(subRule.highAbs);}
-      else if (typeof subRule.high === 'number') {valH = absH ? fmt(lim.uln * subRule.high) : String(subRule.high);}
-      else if (isNew && hM === 'num') {valH = absH ? fmt(lim.uln) : '';}
+      if (hM === 'num') {
+        if (typeof subRule.highAbs === 'number') {valH = String(subRule.highAbs);}
+        else if (typeof subRule.high === 'number') {valH = absH ? fmt(lim.uln * subRule.high) : String(subRule.high);}
+        else if (isNew) {valH = absH ? fmt(lim.uln) : '';}
+      }
 
-      if (typeof subRule.lowAbs === 'number') {valL = String(subRule.lowAbs);}
-      else if (typeof subRule.low === 'number') {valL = absL ? fmt(lim.lln * subRule.low) : String(subRule.low);}
-      else if (isNew && lM === 'num') {valL = absL ? fmt(lim.lln) : '';}
+      if (lM === 'num') {
+        if (typeof subRule.lowAbs === 'number') {valL = String(subRule.lowAbs);}
+        else if (typeof subRule.low === 'number') {valL = absL ? fmt(lim.lln * subRule.low) : String(subRule.low);}
+        else if (isNew) {valL = absL ? fmt(lim.lln) : '';}
+      }
       return {
         hM, lM,
         hVal: valH, lVal: valL,
@@ -20612,10 +20630,22 @@ window.addEventListener('keydown',function(e){
       if (!st) {return;}
       const hSel = body.querySelector('#lm-high-mode'), lSel = body.querySelector('#lm-low-mode');
       const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
-      if (hSel) {st.hM = hSel.value;}
-      if (lSel) {st.lM = lSel.value;}
-      if (hi && !hi.disabled) {st.hVal = hi.value.trim();}
-      if (lo && !lo.disabled) {st.lVal = lo.value.trim();}
+      if (hSel) {
+        st.hM = hSel.value;
+        if (st.hM !== 'num') {
+          st.hVal = '';
+        } else if (hi && !hi.disabled) {
+          st.hVal = hi.value.trim();
+        }
+      }
+      if (lSel) {
+        st.lM = lSel.value;
+        if (st.lM !== 'num') {
+          st.lVal = '';
+        } else if (lo && !lo.disabled) {
+          st.lVal = lo.value.trim();
+        }
+      }
     }
 
     function dirRow(which) {
@@ -20676,38 +20706,52 @@ window.addEventListener('keydown',function(e){
       const hv = hRaw !== '' ? Number(hRaw) : null;
       const lv = lRaw !== '' ? Number(lRaw) : null;
 
-      let hNum = null, newHighAbs = undefined;
-      if (hRaw !== '' && !isNaN(hv)) {
-        if (absH) {
-          hNum = (hRaw === st.initH && st.origH !== null) ? st.origH : hv / lims.uln;
-          newHighAbs = (st.highAbs !== undefined) ? hv : undefined;
-        } else {
-          // 8.15.29: 无参考上限时，填写的数值作为绝对阈值 highAbs，倍数置 null
-          newHighAbs = hv;
-          hNum = null;
-        }
+      let hNum = null, newHighAbs = undefined, hFinal = undefined;
+      if (hM === 'off') {
+        hFinal = undefined;
+        hNum = null;
+        newHighAbs = undefined;
       } else if (hM === 'any') {
+        hFinal = null;
         hNum = null;
         newHighAbs = null;
+      } else if (hM === 'num') {
+        if (hRaw !== '' && !isNaN(hv)) {
+          if (absH) {
+            hNum = (hRaw === st.initH && st.origH !== null) ? st.origH : hv / lims.uln;
+            newHighAbs = (st.highAbs !== undefined) ? hv : undefined;
+          } else {
+            // 8.15.29: 无参考上限时，填写的数值作为绝对阈值 highAbs，倍数置 null
+            newHighAbs = hv;
+            hNum = null;
+          }
+          hFinal = hNum !== null ? hNum : null;
+        }
       }
 
-      let lNum = null, newLowAbs = undefined;
-      if (lRaw !== '' && !isNaN(lv)) {
-        if (absL) {
-          lNum = (lRaw === st.initL && st.origL !== null) ? st.origL : lv / lims.lln;
-          newLowAbs = (st.lowAbs !== undefined) ? lv : undefined;
-        } else {
-          // 8.15.29: 无参考下限时，填写的数值作为绝对下限 lowAbs，倍数置 null
-          newLowAbs = lv;
-          lNum = null;
-        }
+      let lNum = null, newLowAbs = undefined, lFinal = undefined;
+      if (lM === 'off') {
+        lFinal = undefined;
+        lNum = null;
+        newLowAbs = undefined;
       } else if (lM === 'any') {
+        lFinal = null;
         lNum = null;
         newLowAbs = null;
+      } else if (lM === 'num') {
+        if (lRaw !== '' && !isNaN(lv)) {
+          if (absL) {
+            lNum = (lRaw === st.initL && st.origL !== null) ? st.origL : lv / lims.lln;
+            newLowAbs = (st.lowAbs !== undefined) ? lv : undefined;
+          } else {
+            // 8.15.29: 无参考下限时，填写的数值作为绝对下限 lowAbs，倍数置 null
+            newLowAbs = lv;
+            lNum = null;
+          }
+          lFinal = lNum !== null ? lNum : null;
+        }
       }
 
-      const hFinal = hM === 'off' ? undefined : (hM === 'any' ? null : (hNum !== null ? hNum : null));
-      const lFinal = lM === 'off' ? undefined : (lM === 'any' ? null : (lNum !== null ? lNum : null));
       return { st, lims, absH, absL, hM, lM, hRaw, lRaw, hv, lv, hNum, lNum, hFinal, lFinal, newHighAbs, newLowAbs };
     }
 
@@ -20741,6 +20785,7 @@ window.addEventListener('keydown',function(e){
           const on = sel.value === 'num';
           inp.disabled = !on;
           inp.classList.toggle('lm-in-off', !on);
+          if (!on) {inp.value = '';}
           saveCurrentTabInputs();
           updatePreview();
         });
@@ -20876,12 +20921,12 @@ window.addEventListener('keydown',function(e){
             return;
           }
 
-          const hStore = r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4;
-          const lStore = r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4;
+          const hStore = r.hM === 'num' ? (r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4) : (r.hM === 'any' ? null : undefined);
+          const lStore = r.lM === 'num' ? (r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4) : (r.lM === 'any' ? null : undefined);
 
           patch[sx] = {
             high: hStore, low: lStore,
-            highOff: r.hFinal === undefined, lowOff: r.lFinal === undefined,
+            highOff: r.hM === 'off', lowOff: r.lM === 'off',
             highAbs: r.newHighAbs, lowAbs: r.newLowAbs
           };
 
@@ -20911,12 +20956,12 @@ window.addEventListener('keydown',function(e){
           return;
         }
         loosened = !off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew);
-        const hStore = r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4;
-        const lStore = r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4;
+        const hStore = r.hM === 'num' ? (r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4) : (r.hM === 'any' ? null : undefined);
+        const lStore = r.lM === 'num' ? (r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4) : (r.lM === 'any' ? null : undefined);
 
         const patch = {
           high: hStore, low: lStore,
-          highOff: r.hFinal === undefined, lowOff: r.lFinal === undefined, off,
+          highOff: r.hM === 'off', lowOff: r.lM === 'off', off,
           highAbs: r.newHighAbs, lowAbs: r.newLowAbs
         };
         if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore, patch.highOff, patch.lowOff, patch.highAbs, patch.lowAbs);}
