@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.24
+// @version      8.15.25
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1459,19 +1459,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 #lis-detail-body{flex:1!important;overflow-y:scroll!important;overflow-x:hidden!important;padding:16px 20px;min-height:0!important;position:relative;overscroll-behavior:contain;contain:content;background:var(--lis-bg)}
 #lis-detail-body .result-section{margin-bottom:20px}
 #lis-detail-body .result-section h5{margin:0 0 12px;color:var(--lis-text);font-size:14px;padding-bottom:8px;border-bottom:1px solid var(--lis-border)}
-.result-table{width:100%;border-collapse:collapse;font-size:12px;line-height:1.25}
-.result-table th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-weight:700;padding:4px 6px;text-align:left;white-space:nowrap;font-size:11px;border-bottom:1px solid var(--lis-border);line-height:1.2}
+.result-table{width:100%;border-collapse:collapse;font-size:13px;line-height:1.25}
+.result-table th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-weight:700;padding:3px 6px;text-align:left;white-space:nowrap;font-size:11.5px;border-bottom:1px solid var(--lis-border);line-height:1.2}
 .result-table th::after{content:none!important}
 .result-table td{padding:2.5px 6px;border-bottom:1px solid #eee;overflow:hidden;text-overflow:ellipsis;color:var(--lis-text);vertical-align:middle;line-height:1.25}
-/* 8.15.24: 双栏紧凑行高（生化等大项目报告）——进一步压缩内边距，行高控制在21px左右，减少滚动一屏看全 */
-.result-table.compact th{padding:2px 5px;font-size:10.5px;line-height:1.15}
-.result-table.compact td{padding:1.5px 5px;font-size:11.5px;line-height:1.2}
-.result-table.compact td:nth-child(3){font-size:12px}
-.result-table.compact .hist-tag{padding:0 4px;font-size:10.5px;margin:0 1px;line-height:1.3}
-.result-table.compact .res-tag{padding:1px 5px;font-size:11.5px;line-height:1.2}
+/* 8.15.25: 适度调大双栏紧凑字号，行高保持在22-23px紧凑舒适区间，兼顾清晰易读与免滚动一屏看全 */
+.result-table.compact th{padding:2px 5px;font-size:11px;line-height:1.2}
+.result-table.compact td{padding:2px 5px;font-size:12.5px;line-height:1.25}
+.result-table.compact td:nth-child(3){font-size:13px}
+.result-table.compact .hist-tag{padding:1px 4px;font-size:11px;margin:0 1px;line-height:1.3}
+.result-table.compact .res-tag{padding:1.5px 6px;font-size:12.5px;line-height:1.25}
 .result-table.compact tr:last-child td{border-bottom:none}
 .result-table tr:hover{background:rgba(241,245,249,.6)}
-/* 8.15.24 方案 A：微胶囊标签流（Modern Pill / Tag System）
+/* 8.15.25 方案 A：微胶囊标签流（Modern Pill / Tag System）
    彻底告别大面积高饱和满色底与整格厚重色块，行底色恢复纯白，所有测定结果统一包裹于圆角微胶囊内。
    微胶囊只包含数值与紧凑箭头/标记，单位置于胶囊外侧（统一为柔和浅灰 #888），杜绝背景与文字冲突。
    视觉层级：
@@ -1484,23 +1484,23 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
    - 堵孔0值（生化）：醒目紫底微徽章 [ 0 ⚠️ 堵孔 ]（bg:#7c3aed;color:#fff）；
    - 传染病特殊阳性：金黄底黑字微徽章 [ 阳性+ ]（bg:#fef08a;color:#713f12;border:1px solid #facc15）。
 */
-.result-table .res-tag{display:inline-flex;align-items:center;gap:2px;padding:1.5px 6px;border-radius:4px;font-size:12px;line-height:1.25;font-weight:700;box-sizing:border-box;vertical-align:middle}
+.result-table .res-tag{display:inline-flex;align-items:center;gap:2px;padding:2px 7px;border-radius:4px;font-size:13px;line-height:1.25;font-weight:700;box-sizing:border-box;vertical-align:middle}
 .result-table .res-tag.normal{background:#f0fdf4;color:#15803d!important;border:1px solid #dcfce7;font-weight:700}
 .result-table .normal, .result-table td.normal{color:#15803d!important;font-weight:700}
 .result-table .res-tag.mild-high{background:#fffbeb;color:#c2410c;border:1px solid #fed7aa}
 .result-table .res-tag.mild-low{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
 .result-table .res-tag.high{background:#ea580c;color:#fff}
 .result-table .res-tag.low{background:#1d4ed8;color:#fff}
-.result-table .res-tag.critical{background:#b91c1c;color:#fff;font-weight:800;font-size:13px}
+.result-table .res-tag.critical{background:#b91c1c;color:#fff;font-weight:800;font-size:13.5px}
 .result-table .res-tag.zero{background:#7c3aed;color:#fff}
 .result-table .res-tag.inf-special{background:#fef08a;color:#713f12;border:1px solid #facc15}
 .result-table .res-tag.abnormal{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
 .result-table .res-tag.empty{color:#999;font-weight:400}
-.result-table .res-arrow{font-size:11px;font-weight:700;display:inline-block;line-height:1}
-.result-table .res-unit{font-size:10.5px;color:#888;font-weight:400;margin-left:4px;vertical-align:middle}
+.result-table .res-arrow{font-size:11.5px;font-weight:700;display:inline-block;line-height:1}
+.result-table .res-unit{font-size:11px;color:#888;font-weight:400;margin-left:4px;vertical-align:middle}
 
 .result-table .history{background:#f8f9fa}
-.result-table .hist-tag{display:inline-flex;align-items:center;justify-content:center;margin:1px 2px;padding:1px 5px;border-radius:4px;font-size:11px;white-space:nowrap;line-height:1.4;box-sizing:border-box}
+.result-table .hist-tag{display:inline-flex;align-items:center;justify-content:center;margin:1px 2px;padding:1px 5px;border-radius:4px;font-size:11.5px;white-space:nowrap;line-height:1.4;box-sizing:border-box}
 .result-table .hist-tag.normal{background:#e8f5e9;color:#2e7d32;border:1px solid #c8e6c9;font-weight:600}
 .result-table .hist-tag.abnormal{background:#fdf2f8;color:#be185d;border:1px solid #fce7f3}
 .result-table .hist-tag.high{background:#ea580c;color:#fff}
@@ -1509,7 +1509,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table .hist-tag.low.mild{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
 .result-table .hist-tag.critical{background:#b91c1c;color:#fff;font-weight:700}
 .result-table .hist-tag.nodate{background:#f5f5f5;color:#999;border:1px solid #ddd}
-.result-table .hist-date{font-size:9px;color:#999;display:block;margin-top:-1px}
+.result-table .hist-date{font-size:9.5px;color:#999;display:block;margin-top:-1px}
 /* 8.11.10: 去掉 justify-content:space-between——提示行 margin-right:auto 已把主操作推到最右，
    二者叠加属冗余（auto margin 优先吃掉全部剩余空间，space-between 无空闲可分配，渲染结果相同） */
 #lis-detail-footer{padding:10px 18px;background:var(--lis-bg);border-top:1px solid var(--lis-border);display:flex;align-items:center;flex-shrink:0;box-sizing:border-box;height:52px}
@@ -14903,14 +14903,14 @@ window.addEventListener('keydown',function(e){
         return Object.keys(freq).sort((a, b) => freq[b] - freq[a])[0];
       });
       const thDates = hdrDates
-        .map(d => (d ? `<th style="font-size:11px">${esc(d)}</th>` : '<th style="font-size:11px">-</th>'))
+        .map(d => (d ? `<th style="font-size:11.5px">${esc(d)}</th>` : '<th style="font-size:11.5px">-</th>'))
         .join('');
 
       // 8.15.6: 本标本的分类缓存（供「轻微带内＝浅色」判定；拿不到时退化为按项目现算）
       const _liveForMild = getLiveClassification(specimen && (specimen.ReportDR || specimen.reportDR));
       for (let _ci = 0; _ci < _detailCols; _ci++) {
         const _colItems = itemInfo.slice(_ci * _detailColSize, Math.min((_ci + 1) * _detailColSize, itemInfo.length));
-        html += `<table class="result-table${_detailCols > 1 ? ' compact' : ''}" style="font-size:12px;flex:1;min-width:0">`;
+        html += `<table class="result-table${_detailCols > 1 ? ' compact' : ''}" style="flex:1;min-width:0">`;
 
       html += `<thead><tr><th style='width:20px'>QC</th><th>项目${_detailCols > 1 ? ' / 参考' : ''}</th><th>结果</th>${_detailCols > 1 ? '' : '<th>参考范围</th>'}${thDates}<th style="width:34px" title="查看该项目历史（跨组）">🔎</th></tr></thead>`;
       html += '<tbody>';
@@ -15106,12 +15106,12 @@ window.addEventListener('keydown',function(e){
 
         html += `<tr style="${rowStyle}">
                     <td style="text-align:center">${qcHtml}</td>
-                    <td style="font-weight:500;white-space:nowrap"><div style="display:inline-flex;align-items:center;vertical-align:middle"><span style="display:inline-block;max-width:${_detailCols > 1 ? '108px' : '136px'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}</span>${mildBtn}</div>${_detailCols > 1 ? '<span style="font-size:10px;color:#888;font-weight:400;margin-left:3px"> ' + esc(refRange) + '</span>' : ''}</td>
+                    <td style="font-weight:500;white-space:nowrap"><div style="display:inline-flex;align-items:center;vertical-align:middle"><span style="display:inline-block;max-width:${_detailCols > 1 ? '112px' : '140px'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle" title="${esc(r.CName || '')}${_detailCols > 1 ? '  ' + esc(refWithUnit) : ''}">${esc(r.CName || '-')}</span>${mildBtn}</div>${_detailCols > 1 ? '<span style="font-size:11px;color:#888;font-weight:400;margin-left:3px"> ' + esc(refRange) + '</span>' : ''}</td>
                     <td class="${tagClass}" style="white-space:nowrap"${resTitle}>${resTagHTML}${resUnitHTML}</td>
-                    ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:11px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
-                    <td style="font-size:11px">${hist.cells[0]}</td>
-                    <td style="font-size:11px">${hist.cells[1]}</td>
-                    <td style="font-size:11px">${hist.cells[2]}</td>
+                    ${_detailCols > 1 ? '' : '<td style="color:#888;font-size:12px;white-space:nowrap">' + esc(refWithUnit) + '</td>'}
+                    <td style="font-size:11.5px">${hist.cells[0]}</td>
+                    <td style="font-size:11.5px">${hist.cells[1]}</td>
+                    <td style="font-size:11.5px">${hist.cells[2]}</td>
                     <td style="text-align:center"><button class="detail-hist-item" data-key="${esc(r.TestCodeDR || r.TCCode || '')}" data-name="${esc(r.CName || '')}" data-syn="${esc(r.Synonym || r.Code || '')}" title="查看该项目历史（跨组）">🔎</button></td>
                 </tr>`;
       });
