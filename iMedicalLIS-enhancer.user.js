@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.15.22
+// @version      8.15.23
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1471,11 +1471,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .result-table.compact .hist-tag{padding:1px 4px;font-size:11px;margin:0 1px}
 .result-table.compact tr:last-child td{border-bottom:none}
 .result-table tr:hover{background:rgba(241,245,249,.6)}
-/* 8.15.22 方案 A：微胶囊标签流（Modern Pill / Tag System）
-   彻底告别大面积高饱和满色底与整格厚重色块，行底色恢复纯白，只有测定结果包裹于圆角微胶囊内。
+/* 8.15.23 方案 A：微胶囊标签流（Modern Pill / Tag System）
+   彻底告别大面积高饱和满色底与整格厚重色块，行底色恢复纯白，所有测定结果统一包裹于圆角微胶囊内。
    微胶囊只包含数值与紧凑箭头/标记，单位置于胶囊外侧（统一为柔和浅灰 #888），杜绝背景与文字冲突。
    视觉层级：
-   - 正常项：无底色无框，健康纯正绿色加粗（#16a34a），绝对不发黑！
+   - 正常项：浅薄荷淡绿底 + 极细浅绿边 + 翠绿健康字（bg:#f0fdf4;color:#15803d;border:1px solid #dcfce7），全端胶囊风格统一！
    - 轻微偏高（带内·可批审）：柔和淡琥珀底 + 细金边 + 暖橙色字与细箭头（bg:#fffbeb;color:#c2410c;border:1px solid #fed7aa）；
    - 轻微偏低（带内·可批审）：柔和淡雾蓝底 + 细蓝边 + 宝蓝色字与细箭头（bg:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe）；
    - 显著偏高（超带·须人工）：紧凑实色橙底微徽章 [ 42.8 ▲ ]（bg:#ea580c;color:#fff）；
@@ -1485,8 +1485,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
    - 传染病特殊阳性：金黄底黑字微徽章 [ 阳性+ ]（bg:#fef08a;color:#713f12;border:1px solid #facc15）。
 */
 .result-table .res-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:4px;font-size:12.5px;line-height:1.35;font-weight:700;box-sizing:border-box;vertical-align:middle}
-.result-table .res-tag.normal{color:#16a34a!important;background:transparent;padding:2px 0;font-weight:700}
-.result-table .normal, .result-table td.normal{color:#16a34a!important;font-weight:700}
+.result-table .res-tag.normal{background:#f0fdf4;color:#15803d!important;border:1px solid #dcfce7;font-weight:700}
+.result-table .normal, .result-table td.normal{color:#15803d!important;font-weight:700}
 .result-table .res-tag.mild-high{background:#fffbeb;color:#c2410c;border:1px solid #fed7aa}
 .result-table .res-tag.mild-low{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
 .result-table .res-tag.high{background:#ea580c;color:#fff}
@@ -16480,7 +16480,7 @@ window.addEventListener('keydown',function(e){
 .hist-gtable th{background:var(--lis-surface-subtle);color:var(--lis-text-secondary);font-size:11px;padding:4px 8px;text-align:left;font-weight:600}
 .hist-gtable td{padding:4px 8px;border-top:1px solid var(--lis-surface-subtle);vertical-align:top}
 .hist-gtable tr.hist-row-cur td{background:#ecfdf5}
-.hist-val{font-weight:700;color:#16a34a!important;white-space:nowrap}
+.hist-val{font-weight:700;color:#15803d!important;background:#f0fdf4;border:1px solid #dcfce7;border-radius:4px;padding:1px 6px;white-space:nowrap;display:inline-block}
 /* 8.15.22: 患者历史浮层同步采用微胶囊标签，正常项严格为经典绿 #16a34a */
 .hist-val.H{color:#fff!important;background:#ea580c;border-radius:4px;padding:1px 6px}
 .hist-val.H.mild{color:#c2410c!important;background:#fffbeb;border:1px solid #fed7aa;border-radius:4px;padding:1px 5px}
