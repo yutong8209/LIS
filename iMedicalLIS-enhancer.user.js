@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.0
+// @version      8.16.1
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9057,7 +9057,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     try {
       wsLoading = true;
       setWSStatusNote(force ? '强制刷新中...' : '加载中...');
-      try { syncMildRuleOverrides(false).catch(() => {}); } catch (e) {}
+      // 8.16.1: 移除此处的 syncMildRuleOverrides 调用——sync 已有 startup+visibilitychange 两个触发点，
+      // 放在 loadWSData 里会在 save→refresh→loadWSData 路径上造成竞态覆盖用户刚保存的数据。
 
       // 8.7.0: 本次加载的查询日期窗口（平时=选中单日；自动审核运行中=开启日~今天）
       const [qStart, qEnd] = getWSQueryRange();
@@ -20306,7 +20307,14 @@ window.addEventListener('keydown',function(e){
       }
 
       // 情况 2：远端更新（其它电脑修改并上传）→ 覆盖本地并刷新重算
+      // 8.16.1: 用户显式保存后 10s 内不覆盖——防止 save→refresh→loadWSData→sync 竞态冲掉刚保存的数据
       if (remoteUpdatedAt > localUpdatedAt && remoteHasData) {
+        if (Date.now() - _mildJustSavedTs < 10000) {
+          dbg('[LIS-Mild] 检测到刚保存，跳过远端覆盖 (防竞态)');
+          // 刚保存的本地可能比远端新但 updated_at 相近——补推一次确保网关与本地一致
+          if (localHasData) { mildPushGatewayRules(local).catch(() => {}); }
+          return true;
+        }
         _mildRuleOv = {
           rules: remote.rules || {},
           added: Array.isArray(remote.added) ? remote.added : [],
@@ -20348,12 +20356,14 @@ window.addEventListener('keydown',function(e){
     _mildRuleOv = o;
     return o;
   }
+  let _mildJustSavedTs = 0; // 8.16.1: 用户显式保存后 10s 内禁止 sync 覆盖本地（防竞态）
   function saveMildRuleOverrides(o, syncToGateway = true) {
     _mildRuleOv = o;
     if (o && typeof o === 'object') {
       o.updated_at = o.updated_at || Date.now();
     }
     try {localStorage.setItem(K.mildRules, JSON.stringify(o));} catch (e) {dbg('放行范围覆盖保存失败:', e);}
+    _mildJustSavedTs = Date.now(); // 标记刚保存——阻止 sync 立即覆盖
     if (syncToGateway && o) {
       mildPushGatewayRules(o).catch(e => dbg('[LIS-Mild] 网关同步推送失败:', e));
     }
