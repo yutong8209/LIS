@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.7
+// @version      8.16.8
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1028,8 +1028,8 @@
 .aal-summary-bar{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--lis-border);border-radius:6px;padding:6px 14px;margin-bottom:9px;font-size:12px;color:var(--lis-text-secondary);flex-wrap:wrap}
 .aal-summary-item{display:inline-flex;align-items:center;gap:4px;font-weight:600}
 .aal-summary-item.normal{color:#059669}
-.aal-summary-item.abnormal{color:#d97706}
-.aal-summary-item.skip{color:#b45309}
+.aal-summary-item.abnormal{color:#2563eb}
+.aal-summary-item.skip{color:#d97706}
 .aal-date-divider{font-size:11px;font-weight:700;color:var(--lis-slate-500);padding:7px 4px 4px;margin-top:5px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.3px}
 .aal-date-divider::after{content:'';flex:1;height:1px;background:var(--lis-border)}
 /* 8.9.1: 运行状态时间线（暂停/恢复/开启/关闭/到期） */
@@ -1048,16 +1048,24 @@
 #lis-auto-audit-log-box .aal-fold-head .aal-fold-latest{color:var(--lis-slate-500);font-weight:600;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #lis-auto-audit-log-box .aal-fold-head .aal-fold-arrow{margin-left:auto;color:var(--lis-text-muted);font-size:11px;flex:0 0 auto}
 #lis-auto-audit-log-box .aal-fold-head.folded{background:var(--lis-surface-subtle);color:var(--lis-slate-500)}
-.aal-card{background:#fff;border:1px solid var(--lis-border);border-radius:7px;margin-bottom:6px;box-shadow:0 1px 2px rgba(0,0,0,.03);transition:border-color .15s,box-shadow .15s;overflow:hidden}
-.aal-card:hover{border-color:var(--lis-border-strong);box-shadow:0 2px 7px rgba(0,0,0,.05)}
-.aal-card.open{border-color:var(--lis-teal-500);box-shadow:0 3px 10px rgba(20,184,166,.1)}
+/* 8.16.8: 自动审核记录卡片按「审核结论」三色分层（复用工作台卡片的四色语言）——
+   绿=全正常通过 / 蓝=轻度异常通过（工作台里蓝＝轻微可批）/ 橙=未通过（留人工，工作台里橙＝需人工）。
+   三处同时上色（左侧 4px 色条 + 极淡底 + 实心徽章）保证一眼分清，不用逐字读。 */
+.aal-card{background:#fff;border:1px solid var(--lis-border);border-left:4px solid var(--lis-border);border-radius:7px;margin-bottom:6px;box-shadow:0 1px 2px rgba(0,0,0,.03);transition:border-color .15s,box-shadow .15s;overflow:hidden}
+.aal-card.st-normal{background:#f8fdfa;border-left-color:#059669}
+.aal-card.st-abnormal{background:#f6faff;border-left-color:#2563eb}
+.aal-card.st-skip{background:#fffbf3;border-left-color:#d97706}
+.aal-card:hover{border-top-color:var(--lis-border-strong);border-right-color:var(--lis-border-strong);border-bottom-color:var(--lis-border-strong);box-shadow:0 2px 7px rgba(0,0,0,.05)}
+/* 展开态只染另外三边，保住左侧状态色条（否则 .open 的 border-color 会把状态色一起覆盖掉） */
+.aal-card.open{border-top-color:var(--lis-teal-500);border-right-color:var(--lis-teal-500);border-bottom-color:var(--lis-teal-500);box-shadow:0 3px 10px rgba(20,184,166,.1)}
 .aal-card-main{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;cursor:pointer;user-select:none;gap:10px;min-height:34px}
 .aal-card-left{display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:1;min-width:0}
 .aal-card-right{display:flex;align-items:center;gap:7px;flex-shrink:0}
-#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:center;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.25}
-#lis-auto-audit-log-box .aal-badge.normal{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
-#lis-auto-audit-log-box .aal-badge.abnormal{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
-#lis-auto-audit-log-box .aal-badge.skip{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+/* 8.16.8: 徽章改**实心底 + 白字**（原来是浅底深字，和卡片底几乎同色、扫一眼分不出） */
+#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:center;padding:2.5px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.25;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.10)}
+#lis-auto-audit-log-box .aal-badge.normal{background:#059669}
+#lis-auto-audit-log-box .aal-badge.abnormal{background:#2563eb}
+#lis-auto-audit-log-box .aal-badge.skip{background:#d97706}
 .aal-pat-name{font-size:13px;font-weight:700;color:var(--lis-text);white-space:nowrap}
 .aal-labno{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11.5px;color:var(--lis-slate-500);background:var(--lis-surface-subtle);padding:1px 6px;border-radius:4px;white-space:nowrap;line-height:1.35}
 .aal-test-pill{font-size:11px;font-weight:600;color:var(--lis-slate-700);background:var(--lis-bg);border:1px solid var(--lis-border);padding:1.5px 7px;border-radius:4px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3}
@@ -1068,7 +1076,7 @@
 .aal-card.open .aal-chevron{transform:rotate(180deg);color:var(--lis-teal-600)}
 .aal-card-sub{padding:0 14px 8px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;border-top:1px dashed var(--lis-surface-subtle);margin-top:0;padding-top:6px}
 .aal-abn-summary{display:flex;align-items:center;gap:5px;flex-wrap:wrap;flex:1}
-.aal-abn-chip-count{font-size:10px;font-weight:700;background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:3px;white-space:nowrap;line-height:1.3}
+.aal-abn-chip-count{font-size:10px;font-weight:700;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:3px;white-space:nowrap;line-height:1.3}
 #lis-auto-audit-log-box .aal-abn-item{display:inline-flex;align-items:center;gap:3px;padding:1.5px 6px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap}
 /* 8.15.17: 同结果表——满色底白字＝须人工，白底彩字＝可批审（mild） */
 #lis-auto-audit-log-box .aal-abn-item.hi{background:#ea580c;color:#fff;border-color:#9a3412}
@@ -26161,12 +26169,14 @@ window.addEventListener('keydown',function(e){
     let q = '';
     const fmtDay = d =>
       d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    // 8.16.8: 徽章文案直接说结论（原来「异常 / 跳过」歧义：异常到底是过了还是没过？）
+    //   正常 → 全正常通过自动审核；异常 → 轻度异常通过自动审核；跳过 → 未通过（留人工）
     const badge = s =>
       s.t === 'abnormal'
-        ? '<span class="aal-badge abnormal">⚠ 异常</span>'
+        ? '<span class="aal-badge abnormal">⚡ 轻度异常通过</span>'
         : s.t === 'skip'
-          ? '<span class="aal-badge skip">⏭ 跳过</span>'
-          : '<span class="aal-badge normal">✓ 正常</span>';
+          ? '<span class="aal-badge skip">⏭ 未通过</span>'
+          : '<span class="aal-badge normal">✓ 正常通过</span>';
 
     // 8.5.75: 渲染时把每行样本对象挂到映射，展开时直接取日志持久化的完整结果，不依赖当前工作台缓存
     const _aalSamples = {};
@@ -26259,8 +26269,14 @@ window.addEventListener('keydown',function(e){
           else if (st === 'ZERO') {cls = 'aal-abn-item zero'; pre = '0:';}
           // 8.15.6: m=1＝记录时判定在轻微放行带内 → 浅色 + 虚线边（F4 可批审）
           if (x.m === 1 && (st === 'HIGH' || st === 'LOW')) {cls += ' mild';}
-          const text = (x.n || '') + ' ' + String(x.r || '') + (x.u ? ' ' + x.u : '');
-          return '<span class="' + cls + '">' + (pre ? pre + ' ' : '') + esc(text) + '</span>';
+          // 8.16.8: 项目名压成检验科规范英文简称（WBC / NEU# / ALT…，复用工作台卡片与推送同一套
+          //   aaPushItemAbbr 字典），悬停 title 看全称——原来一行全中文长名，一眼扫不出重点。
+          const fullName = x.n || '';
+          const abbr = aaPushItemAbbr(fullName);
+          const text = abbr + ' ' + String(x.r || '') + (x.u ? ' ' + x.u : '');
+          const tip = fullName + ' ' + String(x.r || '') + (x.u ? ' ' + x.u : '')
+            + (st === 'HIGH' ? '（偏高）' : st === 'LOW' ? '（偏低）' : '');
+          return '<span class="' + cls + '" title="' + escAttr(tip) + '">' + (pre ? pre + ' ' : '') + esc(text) + '</span>';
         }).join('');
         subHTML = `
           <div class="aal-card-sub">
@@ -26283,8 +26299,11 @@ window.addEventListener('keydown',function(e){
 
       const canExpand = !!(s.d || (s.items && s.items.length));
 
+      // 8.16.8: 卡片按审核结论三色分层（左侧色条 + 淡底 + 实心徽章，见 .aal-card.st-*）
+      const stateCls = s.t === 'abnormal' ? 'st-abnormal' : s.t === 'skip' ? 'st-skip' : 'st-normal';
+
       return `
-        <div class="aal-card" data-rdr="${escAttr(s.d || '')}" data-toggle-exp="${_rid}">
+        <div class="aal-card ${stateCls}" data-rdr="${escAttr(s.d || '')}" data-toggle-exp="${_rid}">
           <div class="aal-card-main">
             <div class="aal-card-left">
               ${badge(s)}
@@ -26355,9 +26374,9 @@ window.addEventListener('keydown',function(e){
           sumBox.innerHTML = `
             <div class="aal-summary-bar">
               <span>当前共 <b>${totalCount}</b> 个标本</span>
-              <span class="aal-summary-item normal">✓ 正常 <b>${normalCount}</b></span>
-              <span class="aal-summary-item abnormal">⚠ 异常 <b>${abnormalCount}</b></span>
-              <span class="aal-summary-item skip">⏭ 跳过 <b>${skipCount}</b></span>
+              <span class="aal-summary-item normal">✓ 正常通过 <b>${normalCount}</b></span>
+              <span class="aal-summary-item abnormal">⚡ 轻度异常通过 <b>${abnormalCount}</b></span>
+              <span class="aal-summary-item skip">⏭ 未通过 <b>${skipCount}</b></span>
             </div>`;
         } else {
           sumBox.innerHTML = '';
