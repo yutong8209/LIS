@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.5
+// @version      8.16.6
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1160,10 +1160,19 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 /* --- 筛选标签栏 (Row 2: 工作组 + 仪器 + 分类) --- */
 #lis-ws-tabs{background:var(--lis-surface);height:38px;padding:0 14px;display:flex!important;align-items:center!important;justify-content:space-between!important;flex-shrink:0!important;overflow-x:auto;scrollbar-width:none;position:relative;z-index:3;border-bottom:1px solid var(--lis-border)}
 #lis-ws-tabs::-webkit-scrollbar{display:none}
-.ws-filter-left{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none}
+.ws-filter-left{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;position:relative}
 .ws-filter-left::-webkit-scrollbar{display:none}
+/* 8.16.6: 仪器多时仪器小标签会一直铺到右边界，与右侧状态标签顶在一起、看着像同一排标签。
+   左区右缘盖一层白色渐隐——溢出时把被截断的半个仪器标签「淡出」而不是「切断」，
+   一眼看出还有仪器没显示完；没有溢出时内容到不了这里，渐隐自然不可见（无需 JS 判断）。
+   ⚠️ 这里**不能用 mask-image**：实测 mask 会把 position:fixed 的后代一起裁掉——
+   容器内正是 .ws-mach-popover（仪器/工作组下拉浮层，position:fixed），套上 mask 后
+   浮层坐标正确但**整块不可见**（下拉点了没反应）。::after 覆盖层只画在容器自己的框内，
+   不进入后代的绘制，pointer-events:none 也不吃点击。 */
+.ws-filter-left::after{content:'';position:absolute;right:0;top:0;bottom:0;width:18px;pointer-events:none;background:linear-gradient(to right,rgba(255,255,255,0),var(--lis-surface))}
 .ws-filter-divider{width:1px;height:18px;background:var(--lis-border);flex-shrink:0;margin:0 4px}
-.ws-filter-right{display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto}
+/* 8.16.6: 右侧留出呼吸位——接缝处再插一条分隔线（由 renderWSTabs 注入），两组不再「贴脸」 */
+.ws-filter-right{display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto;padding-left:10px}
 .ws-wg-inline{display:inline-flex;align-items:center;gap:2px;background:var(--lis-surface-subtle);padding:2px;border-radius:6px;border:1px solid var(--lis-border);flex-shrink:0}
 .ws-wg-tab{border:none;background:transparent;color:var(--lis-text-secondary);padding:3px 9px;border-radius:4px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .ws-wg-tab:hover{color:var(--lis-text)}
@@ -1206,6 +1215,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
 /* --- 分类标签 --- */
 .ws-cat-hd-inline{display:flex;align-items:center;gap:4px;flex-shrink:0}
+/* 8.16.6: 状态标签（待审/不完整/待排/采集/全部）原先是一排**无容器**的透明标签，
+   紧跟在带边框的仪器小标签后面时两者分不清谁是谁。这里给它们套一个浅底描边容器
+   （与左侧「专业组」分段控件同款），使「仪器筛选」和「状态切换」一眼是两组。 */
+.cat-tabs-box{display:flex;align-items:center;gap:3px;background:var(--lis-surface-subtle);border:1px solid var(--lis-border);border-radius:7px;padding:2px;flex-shrink:0}
 .cat-tab{padding:3px 9px;border-radius:6px;border:1px solid transparent;background:transparent;cursor:pointer;font-size:12px;font-weight:600;transition:all .15s;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;color:var(--lis-text-secondary)}
 .cat-tab:hover{background:var(--lis-surface-subtle);color:var(--lis-text)}
 .cat-tab.on{border-color:transparent;background:var(--lis-primary);color:#fff;font-weight:700;box-shadow:0 1px 2px rgba(37,99,235,.25)}
@@ -10498,7 +10511,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
     h += '</div>'; // close .ws-filter-left
 
-    h += '<div class="ws-filter-right"><div class="ws-cat-hd-inline" data-ws-cat-tabs></div></div>';
+    h += '<div class="ws-filter-right"><span class="ws-filter-divider ws-seam-divider"></span><div class="ws-cat-hd-inline" data-ws-cat-tabs></div></div>';
     tabs.innerHTML = h;
 
     // 工作组下拉展开/收起
@@ -10858,6 +10871,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (!bar) {return;}
     bar.style.flexShrink = '0';
 
+    // 8.16.6: 接缝分隔线随容器一起兜底——外部重建筛选行时若把它弄丢了，这里补回来
+    //（它与 .ws-cat-hd-inline 同属「仪器筛选 / 状态切换」两组的分界，缺了就又贴在一起）
+    const _right = bar.closest('.ws-filter-right');
+    if (_right && !_right.querySelector('.ws-seam-divider')) {
+      const dv = document.createElement('span');
+      dv.className = 'ws-filter-divider ws-seam-divider';
+      _right.insertBefore(dv, bar);
+    }
+
     // 统计各分类数量（基于当前工作组+仪器过滤）
     // 8.9.0: 计数来自统一单遍统计（含当前仪器过滤范围 f* 计数，已排除忽略行）——
     // 此前这里对全量 wsData 再单独跑一遍 getWSAuditBucket O(N)
@@ -10932,11 +10954,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     let h = '';
 
     // 8.10.12: 分类栏仅保留 5 个纯粹小标签，位置绝对固定、永不跳动
+    // 8.16.6: 5 个标签包进 .cat-tabs-box —— 仪器多时它们会与左侧仪器小标签顶到一起，
+    //         加一层浅底容器把「状态切换」和「仪器筛选」在视觉上分成两组。
+    h += '<div class="cat-tabs-box">';
     h += '<button class="cat-tab cat-audit" data-cat="audit">\n            🔍待审 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-incomplete" data-cat="incomplete">\n            📋不完整 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-pending" data-cat="pending">\n            📝待排 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab cat-collected" data-cat="collected" title="病房已采未送到科室的标本（仅供追踪/催送）">\n            🩸采集 <span class="cat-cnt">0</span>\n        </button>';
     h += '<button class="cat-tab" data-cat="all">\n            📃全部 <span class="cat-cnt">0</span>\n        </button>';
+    h += '</div>';
 
     // 8.10.12: 批审功能由下方醒目的「一键批审正常 N · F4」横幅及 F4 热键统一承载，顶部栏不再放置多余批审按钮
     h += '<div class="cat-right"><span class="cat-stats cat-ca" title="当前 CA 认证账号（审核者）"></span></div>';
