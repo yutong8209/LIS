@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.12
+// @version      8.16.13
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -691,7 +691,8 @@
     uw().lisImportMildRules = (str) => {
       try {
         const parsed = typeof str === 'string' ? JSON.parse(str) : str;
-        if (!parsed || typeof parsed !== 'object') throw new Error('无效的 JSON 格式');
+        // 8.16.13: 补花括号——仓库 eslint 一直有且仅有这一条 error（curly），让 lint.sh 常年见红
+        if (!parsed || typeof parsed !== 'object') {throw new Error('无效的 JSON 格式');}
         parsed.updated_at = Date.now();
         saveMildRuleOverrides(parsed, true);
         applyMildRuleOverrides();
