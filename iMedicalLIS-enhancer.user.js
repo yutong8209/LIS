@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.13
+// @version      8.16.14
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -23956,6 +23956,14 @@ window.addEventListener('keydown',function(e){
     return !!on;
   }
   function aaAckCount() {return Object.keys(aaAckLoad()).length;}
+  // 8.16.14: 多标签页同步——「已知晓」存在 localStorage，本页为了少读盘缓存了一份。
+  // 若另一个标签页点了已知晓，本页缓存仍是旧的，抢到自动审核 tick 时会把它再推一次。
+  // storage 事件只在**其它**标签页触发，正好用来失效本页缓存（下次读取时重新加载并清理过期项）。
+  try {
+    window.addEventListener('storage', e => {
+      if (e && e.key === K.aaAck) {_aaAckCache = null;}
+    });
+  } catch (e) {}
   // 清空全部标记（控制台 lisAAckClear() 用）；返回清掉的条数
   function aaAckClearAll() {
     const n = aaAckCount();
