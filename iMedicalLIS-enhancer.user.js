@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.3
+// @version      8.16.4
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -16748,6 +16748,10 @@ window.addEventListener('keydown',function(e){
 #lis-mild-dlg .lm-pv.on{color:#047857;font-weight:700}
 #lis-mild-dlg .lm-chk{display:block;font-size:12px;color:var(--lis-text);margin:8px 0 4px;cursor:pointer}
 #lis-mild-dlg .lm-radio{font-size:12px;margin-right:10px;cursor:pointer}
+/* 8.16.4: 甲类 ⇄ 乙类 可自由切换 —— 标题里的类别标签 + 切换后的醒目提示 */
+#lis-mild-dlg .lm-tier-tag{font-weight:700;color:#0f766e}
+#lis-mild-dlg .lm-tier-tag.changed{color:#b45309}
+#lis-mild-dlg .lm-switch-hint{background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:6px 9px;color:#075985;margin-bottom:8px}
 #lis-mild-dlg .lm-warn{font-size:11.5px;line-height:1.65;color:#7c2d12;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 9px;margin-top:9px}
 #lis-mild-dlg .lm-foot{display:flex;align-items:center;gap:8px;margin-top:13px}
 #lis-mild-dlg .lm-btn{height:28px;border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-primary);border-radius:5px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer}
@@ -20069,6 +20073,9 @@ window.addEventListener('keydown',function(e){
   // 紧急停用：把 MILD_ALLOW_ENABLED 置 false 即整体回到「只批审严格正常」。
   const MILD_ALLOW_ENABLED = true;
   const MILD_TIER_B_MAX_ITEMS = 8;
+  // 8.16.4: 甲类 → 乙类 切换时的**预填倍数**（与规则表里最常用的乙类带一致：上限 1.2× / 下限 0.8×）。
+  // 只是让切过去的瞬间就有一套可用的数值、不必从空白开始填；真正生效的值以保存时输入框里的为准。
+  const MILD_TIER_SWITCH_PREFILL = { high: 1.2, low: 0.8 };
 
   // 规则表按顺序首条命中生效；re 依次测 CName/name → Synonym → Code
   const MILD_ALLOW_RULES = [
@@ -20203,6 +20210,9 @@ window.addEventListener('keydown',function(e){
   // ⚠️ 覆盖只作用于「轻微放行带」——危急值/堵孔0值/传染病阳性/心肌危急线是**独立安全门**，不受影响。
   // 键的选择：乙类规则用 group（WBC/ALT…，稳定可读）；甲类规则无 group，退回 're:' + 正则源码。
   const MILD_RULE_DEFAULTS = MILD_ALLOW_RULES.map(r => ({
+    // 8.16.4: tier 也纳入快照——甲/乙类现在可在 ⚙ 弹窗里人工切换，重建规则表时必须先回到默认类别，
+    // 否则删掉覆盖后规则会永久停留在上一次切过去的类别（high/low 会重置、tier 却不会，静默错判）。
+    tier: r.tier,
     high: r.high, low: r.low, highAbs: r.highAbs, lowAbs: r.lowAbs,
     m: r.m ? { high: r.m.high, low: r.m.low, highAbs: r.m.highAbs, lowAbs: r.m.lowAbs } : undefined,
     f: r.f ? { high: r.f.high, low: r.f.low, highAbs: r.f.highAbs, lowAbs: r.f.lowAbs } : undefined
@@ -20399,6 +20409,7 @@ window.addEventListener('keydown',function(e){
     if (MILD_ALLOW_RULES.length > base) {MILD_ALLOW_RULES.length = base;} // 去掉上一轮追加的新增规则
     for (let i = 0; i < base; i++) {
       const d = MILD_RULE_DEFAULTS[i], r = MILD_ALLOW_RULES[i];
+      r.tier = d.tier; // 8.16.4: 类别先回默认，再由下面的 tier 覆盖改写
       r.high = d.high; r.low = d.low; r.highAbs = d.highAbs; r.lowAbs = d.lowAbs;
       if (d.m) {r.m = { high: d.m.high, low: d.m.low, highAbs: d.m.highAbs, lowAbs: d.m.lowAbs, _off: false };}
       if (d.f) {r.f = { high: d.f.high, low: d.f.low, highAbs: d.f.highAbs, lowAbs: d.f.lowAbs, _off: false };}
@@ -20431,6 +20442,10 @@ window.addEventListener('keydown',function(e){
       if (typeof o.highAbs === 'number' || o.highAbs === null) {r.highAbs = o.highAbs;}
       if (typeof o.lowAbs === 'number' || o.lowAbs === null) {r.lowAbs = o.lowAbs;}
       if (o.off) {r._off = true;}
+      // 8.16.4: 甲类 ⇄ 乙类 的人工切换（tier 覆盖）。甲类默认没有数值带，切到乙类后数值带由
+      // o.high / o.low / o.highAbs / o.lowAbs 走上面的通用分支落进 r；切回甲类时数值带保留在
+      // 覆盖里但不参与判定（mildAllowItem 见到 tier==='a' 直接放行），再切回来即恢复原设置。
+      if (o.tier === 'a' || o.tier === 'b') {r.tier = o.tier;}
       r._overridden = true;
     }
     // 新增规则：锚定「精确项目名」（避免误吞其它项目），追加在末尾——不影响既有首条命中的顺序
@@ -20554,7 +20569,8 @@ window.addEventListener('keydown',function(e){
     const o = _ovr[mildRuleKey(rule)] || (rule.ovKey && rule.group ? _ovr[rule.group] : null);
     if (!o) {return false;}
     if (rule.bySex) {
-      return !!(o.m || o.f || o.high !== undefined || o.low !== undefined || o.off);
+      // 8.16.4: tier 也算「动过」——甲/乙类切换后 ⚙ 要变醒目色，「恢复默认」按钮要出现
+      return !!(o.m || o.f || o.high !== undefined || o.low !== undefined || o.off || o.tier !== undefined);
     }
     return true;
   }
@@ -20811,7 +20827,9 @@ window.addEventListener('keydown',function(e){
     dlg.innerHTML =
       '<div class="lm-box">' +
         '<div class="lm-hd"><span>⚙ 轻微放行范围 <span style="font-size:11px;font-weight:normal;color:#10b981;margin-left:6px;" title="规则已由网关持久化，科室所有电脑实时同步">☁️ 全科室同步</span></span><span class="lm-close" title="关闭">✕</span></div>' +
-        '<div class="lm-item">' + esc(name) + (isTierA ? ' · 甲类' : '') + (isAdded ? ' · 人工新增' : '') + (isBySex ? ' · 分男女' : '') + '</div>' +
+        '<div class="lm-item">' + esc(name) +
+          '<span class="lm-tier-tag" id="lm-tier-tag"></span>' +
+          (isAdded ? ' · 人工新增' : '') + (isBySex ? ' · 分男女' : '') + '</div>' +
         (isBySex ? (
           '<div class="lm-tabs">' +
             '<button type="button" class="lm-tab' + (curSex === 'm' ? ' active' : '') + '" data-sex="m">♂ 男性设置</button>' +
@@ -20897,9 +20915,16 @@ window.addEventListener('keydown',function(e){
         '<label class="lm-chk"><input type="checkbox" id="lm-off"' + (offChecked ? ' checked' : '') +
         '> 整条规则停用（该项目永不自动放行）</label>';
       if (tier === 'a') {
-        return '<div class="lm-note">甲类：该项目<b>任何方向</b>的异常都直接放行，不设数值范围。</div>' + offChk;
+        return '<div class="lm-note">甲类：该项目<b>任何方向</b>的异常都直接放行，不设数值范围。</div>' +
+          (isTierA ? '' :
+            '<div class="lm-note lm-switch-hint">已由<b>乙类</b>切换为<b>甲类</b> —— 这是<b>放宽</b>：保存后该项目任何方向的异常都不再人工复核。'
+            + '原乙类数值带会保留，切回去即恢复。</div>') +
+          offChk;
       }
       return '<div class="lm-note">' + esc(refTxt) + '</div>' +
+        (isTierA ?
+          '<div class="lm-note lm-switch-hint">已由<b>甲类（全放行）</b>切换为<b>乙类</b> —— 这是<b>收紧</b>：请设置每个方向的放行数值，'
+          + '超出放行带的异常将留人工。已按常见口径预填，可直接改。</div>' : '') +
         dirRow('high') + dirRow('low') + offChk +
         '<div class="lm-warn">⚠️ 设为「按数值放行」或「不拦截」后，该方向的异常结果会被 <b>F4 批审</b>与' +
         '<b>白天方案自动审核</b>直接放行，不再人工复核。<br>' +
@@ -21008,20 +21033,53 @@ window.addEventListener('keydown',function(e){
       });
     }
 
+    // 8.16.4: 甲类 → 乙类 的预填。甲类规则在规则表里本来就没有数值带（high/low 全是 undefined），
+    // 切到乙类会是一片「不放行」、保存时被校验拦下，现场要凭空想两个数。这里按 MILD_TIER_SWITCH_PREFILL
+    // 预填一套常用带，让人切过去就看见完整界面、只需微调。
+    // 只在「两个方向都还是不放行」时填——乙→甲→乙 来回切不会冲掉用户已调好的数值。
+    function prefillTierBIfEmpty() {
+      ['m', 'f'].forEach(sx => {
+        const st = state[sx];
+        if (!st) {return;}
+        if (st.hM !== 'off' || st.lM !== 'off') {return;}
+        const lims = st.limits;
+        const absH = lims.uln !== null && lims.uln > 0;
+        const absL = lims.lln !== null && lims.lln > 0;
+        // 取不到参考范围的一侧保持「不放行」——没有基准就不该凭空猜放行线（该侧可手动改「按数值放行」填绝对值）
+        st.hM = absH ? 'num' : 'off';
+        st.lM = absL ? 'num' : 'off';
+        if (absH) {st.hVal = fmt(lims.uln * MILD_TIER_SWITCH_PREFILL.high);}
+        if (absL) {st.lVal = fmt(lims.lln * MILD_TIER_SWITCH_PREFILL.low);}
+      });
+    }
+
     function render() {
-      if (isNew) {
-        body.innerHTML =
-          '<div class="lm-note">该项目<b>当前未配放行规则</b> —— 异常一律留人工。要让它可放行吗？</div>' +
-          '<div class="lm-row"><span class="lm-lb">规则类型</span>' +
-            '<label class="lm-radio"><input type="radio" name="lm-tier" value="b"' + (tier === 'b' ? ' checked' : '') + '> 乙类（按数值）</label>' +
-            '<label class="lm-radio"><input type="radio" name="lm-tier" value="a"' + (tier === 'a' ? ' checked' : '') + '> 甲类（全放行）</label>' +
-          '</div><div id="lm-seg"></div>';
-        body.querySelectorAll('input[name="lm-tier"]').forEach(rd => {
-          rd.addEventListener('change', () => {tier = rd.value; render();});
+      // 8.16.4: 类别单选**始终**显示——此前只在「未配规则」时才给，导致规则表里默认甲类的项目
+      // （红细胞分布宽度/平均血小板体积/球蛋白/白球比/中性粒百分比/肾小球滤过率…）一旦命中规则
+      // 就只剩一句「甲类：任何方向都放行」，再也切不到乙类、也看不到乙类的范围设置界面。
+      const tierRow =
+        '<div class="lm-row"><span class="lm-lb">规则类型</span>' +
+          '<label class="lm-radio" title="按数值：偏高 ≤ 上限×倍数、偏低 ≥ 下限×倍数 才放行"><input type="radio" name="lm-tier" value="b"' + (tier === 'b' ? ' checked' : '') + '> 乙类（按数值）</label>' +
+          '<label class="lm-radio" title="全放行：任何方向的异常都直接放行，不设数值范围"><input type="radio" name="lm-tier" value="a"' + (tier === 'a' ? ' checked' : '') + '> 甲类（全放行）</label>' +
+        '</div>';
+      body.innerHTML =
+        (isNew ? '<div class="lm-note">该项目<b>当前未配放行规则</b> —— 异常一律留人工。要让它可放行吗？</div>' : '') +
+        tierRow +
+        '<div id="lm-seg">' + segHTML() + '</div>';
+      body.querySelectorAll('input[name="lm-tier"]').forEach(rd => {
+        rd.addEventListener('change', () => {
+          const next = rd.value;
+          if (next === tier) {return;}
+          saveCurrentTabInputs();          // 先把当前类别的输入存回 state，来回切不丢
+          tier = next;
+          if (tier === 'b') {prefillTierBIfEmpty();}
+          render();
         });
-        body.querySelector('#lm-seg').innerHTML = segHTML();
-      } else {
-        body.innerHTML = segHTML();
+      });
+      const tagEl = dlg.querySelector('#lm-tier-tag');
+      if (tagEl) {
+        tagEl.textContent = tier === 'a' ? ' · 甲类（全放行）' : ' · 乙类（按数值）';
+        tagEl.classList.toggle('changed', tier !== (isTierA ? 'a' : 'b'));
       }
       wireEvents();
       updatePreview();
@@ -21111,9 +21169,14 @@ window.addEventListener('keydown',function(e){
 
       if (tier === 'a') {
         if (isNew) {addMildRuleOverride(name, 'a', undefined, undefined, true, true);}
-        else {setMildRuleOverride(rule0, {off}, name);}
+        else {
+          // 8.16.4: 乙类 → 甲类 的类别切换。写 tier 标记；原有数值带留在覆盖里不删，
+          // 将来切回乙类即原样恢复（甲类判定不看数值，留着无害）。
+          setMildRuleOverride(rule0, {off, tier: 'a'}, name);
+          loosened = !isTierA && !off;
+        }
       } else if (isBySex) {
-        const patch = { off, m: {}, f: {} };
+        const patch = { off, m: {}, f: {}, tier: 'b' };
         const sexes = ['m', 'f'];
         for (const sx of sexes) {
           const r = readInputsForSex(sx);
@@ -21142,7 +21205,7 @@ window.addEventListener('keydown',function(e){
             highAbs: r.newHighAbs, lowAbs: r.newLowAbs
           };
 
-          if (!off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew, sx)) {
+          if (!off && !isTierA && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew, sx)) {
             loosened = true;
           }
         }
@@ -21167,22 +21230,39 @@ window.addEventListener('keydown',function(e){
           showToast('两个方向都选了「不放行」，这条规则没有意义；请至少放行一个方向，或勾选「整条规则停用」', 'error');
           return;
         }
-        loosened = !off && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew);
+        // 8.16.4: 甲类 → 乙类 是**收紧**，不能沿用 _mildIsLoosening——甲类默认没有数值带
+        // （MILD_RULE_DEFAULTS[i].high === undefined），任何数字都会被它判成「放宽」，提示会完全反过来。
+        loosened = !off && !isTierA && _mildIsLoosening(rule0, r.hFinal, r.lFinal, isNew);
         const hStore = r.hM === 'num' ? (r.hNum === null ? null : Math.round(r.hNum * 1e4) / 1e4) : (r.hM === 'any' ? null : undefined);
         const lStore = r.lM === 'num' ? (r.lNum === null ? null : Math.round(r.lNum * 1e4) / 1e4) : (r.lM === 'any' ? null : undefined);
 
         const patch = {
           high: hStore, low: lStore,
           highOff: r.hM === 'off', lowOff: r.lM === 'off', off,
-          highAbs: r.newHighAbs, lowAbs: r.newLowAbs
+          highAbs: r.newHighAbs, lowAbs: r.newLowAbs,
+          tier: 'b'   // 甲类 → 乙类：显式落盘类别（原本是甲类的规则必须写，否则重建后仍是甲类）
         };
         if (isNew) {addMildRuleOverride(name, 'b', hStore, lStore, patch.highOff, patch.lowOff, patch.highAbs, patch.lowAbs);}
         else {setMildRuleOverride(rule0, patch, name);}
       }
 
-      showToast(loosened
-        ? '已放宽放行范围并同步至网关（全科室生效） —— 该方向异常结果不再人工复核（改动已记留痕）'
-        : '已保存并同步至网关（全科室电脑生效）', loosened ? 'warning' : 'success');
+      // 8.16.4: 类别切换单独给提示——否则「甲类切成乙类」只会弹一句「已保存」，
+      // 现场看不出类别到底有没有真的换过去（这正是本次反馈的痛点）。
+      const switchedToB = !isNew && !isTierA && tier === 'b';
+      const switchedToA = !isNew && isTierA && tier === 'a';
+      let msg;
+      if (off) {
+        msg = '已保存并同步至网关 —— 该规则当前为「整条停用」，该项目异常一律留人工';
+      } else if (switchedToB) {
+        msg = '已切换为乙类（按数值放行）并同步至网关 —— 异常按新设的放行带判定，超出仍留人工';
+      } else if (switchedToA) {
+        msg = '已切换为甲类（全放行）并同步至网关（全科室生效） —— 该项目任何方向的异常都不再人工复核（改动已记留痕）';
+      } else if (loosened) {
+        msg = '已放宽放行范围并同步至网关（全科室生效） —— 该方向异常结果不再人工复核（改动已记留痕）';
+      } else {
+        msg = '已保存并同步至网关（全科室电脑生效）';
+      }
+      showToast(msg, (loosened || switchedToA) ? 'warning' : 'success');
       close();
       _refreshAfterMildRuleChange();
     });
@@ -21267,7 +21347,14 @@ window.addEventListener('keydown',function(e){
     const bad = [];
     const gotOf = it => {
       const r = matchMildRule(it);
-      return !r ? 'NONE' : (r.tier === 'a' ? 'a' : (r.group || '?'));
+      if (!r) {return 'NONE';}
+      // 8.16.4: 断言必须看**默认类别**（MILD_RULE_DEFAULTS），不能看 live 的 r.tier ——
+      // 甲/乙类现在可人工切换，用户把「球蛋白」等甲类项切成乙类后，这里读 live tier 会
+      // 报「规则表被改动/重排」的假警（自检本意是抓正则/顺序回归，与人工放行范围无关）。
+      const i = MILD_ALLOW_RULES.indexOf(r);
+      const d = (i >= 0 && i < MILD_RULE_DEFAULTS.length) ? MILD_RULE_DEFAULTS[i] : null;
+      const t = d ? d.tier : r.tier;
+      return t === 'a' ? 'a' : (r.group || '?');
     };
     for (const pair of MILD_RULE_SELFTEST) {
       const g = gotOf({ CName: pair[0] });
