@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.4
+// @version      8.16.5
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -20769,6 +20769,16 @@ window.addEventListener('keydown',function(e){
     let curSex = (item && (item._sex === 'm' || item._sex === 'f')) ? item._sex : 'm';
     let tier = isTierA ? 'a' : 'b';
 
+    // 8.16.5（关键修复）：**界面读写槽位必须唯一**。
+    // curSex 会被「患者性别」带成 'f'（item._sex 来自 ⚙ 的 data-sex），但**非分男女规则不渲染性别 tab**，
+    // 用户看不到也切不了。此前 segHTML/dirRow/saveCurrentTabInputs 一律读 state[curSex]（＝编辑 state.f），
+    // 而保存分支却写死 readInputsForSex('m')（＝读 state.m）——于是**女患者**标本上：
+    //   · 改任何非分男女项目的放行范围 → 保存写回的仍是 state.m 里的旧值，界面看着「保存成功」但没生效；
+    //   · 甲类 → 乙类 更直接失败：预填值进了 state.f，state.m 两个方向仍是「不放行」→ 被
+    //     「两个方向都选了不放行」校验拦下，什么都存不进去（现场反馈的正是这一条）。
+    // 现在非分男女一律锚定 'm' 槽，读写同一份；分男女规则行为完全不变。
+    const activeSex = () => (isBySex ? curSex : 'm');
+
     function initSexSubState(sx) {
       const subRule = isBySex ? ((rule0 && rule0[sx]) || {}) : (rule0 || {});
       const lim = mildRuleLimits(rule0, item, sx);
@@ -20849,7 +20859,7 @@ window.addEventListener('keydown',function(e){
     const btnReset = dlg.querySelector('#lm-reset');
 
     function saveCurrentTabInputs() {
-      const st = state[curSex];
+      const st = state[activeSex()];
       if (!st) {return;}
       const hSel = body.querySelector('#lm-high-mode'), lSel = body.querySelector('#lm-low-mode');
       const hi = body.querySelector('#lm-high'), lo = body.querySelector('#lm-low');
@@ -20874,7 +20884,7 @@ window.addEventListener('keydown',function(e){
     }
 
     function dirRow(which) {
-      const st = state[curSex];
+      const st = state[activeSex()];
       const isHigh = which === 'high';
       const mode = isHigh ? st.hM : st.lM;
       const lims = st.limits;
@@ -20896,7 +20906,7 @@ window.addEventListener('keydown',function(e){
     }
 
     function segHTML() {
-      const st = state[curSex];
+      const st = state[activeSex()];
       const lims = st.limits;
       const refTxtBase = (lims.lln !== null || lims.uln !== null)
         ? (lims.refText.indexOf('基准') >= 0 || lims.refText.indexOf('包络') >= 0 || lims.refText.indexOf('参考') >= 0
@@ -20996,7 +21006,7 @@ window.addEventListener('keydown',function(e){
       saveCurrentTabInputs();
       const ph = body.querySelector('#lm-high-pv'), pl = body.querySelector('#lm-low-pv');
       if (!ph || !pl) {return;}
-      const r = readInputsForSex(curSex);
+      const r = readInputsForSex(activeSex());
       const txt = (mode, num, abs, lim, side, absVal) => {
         if (mode === 'off') {return '→ 不放行';}
         if (mode === 'any') {return '→ 一律放行';}
@@ -21211,7 +21221,10 @@ window.addEventListener('keydown',function(e){
         }
         setMildRuleOverride(rule0, patch, name);
       } else {
-        const r = readInputsForSex('m');
+        // 8.16.5: 必须读 activeSex() 那一份——非分男女规则锚定 'm'，与界面编辑的槽位一致。
+        // 写死 'm' 时，女患者标本上界面编辑的是 state.f，这里读到的 state.m 是打开弹窗时的原值，
+        // 保存就等于把旧值原样写回（且甲类→乙类会因「两个方向都不放行」直接存不进去）。
+        const r = readInputsForSex(activeSex());
         if (r.hM === 'num' && (r.hRaw === '' || isNaN(r.hv))) {
           showToast('偏高选了「按数值放行」，请填一个数值；不想放行请改选「不放行」', 'error'); return;
         }
