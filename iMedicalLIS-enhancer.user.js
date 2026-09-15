@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.14
+// @version      8.16.15
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14040,15 +14040,140 @@ window.addEventListener('keydown',function(e){
     return null;
   }
 
+  // ==================== 8.16.15: 批审切组守卫 —— 防「切组死循环」 ====================
+  // 现场 bug：开自动审核时，工作台在「原生 LIS ↔ 工作台」之间不停来回切，反复提示
+  // 「切换工作组后继续批审」，伴随审核失败，**手动关掉自动审核也停不下来**，持续很久。
+  // 根因是三条缺陷叠加（缺任何一条都构不成死循环）：
+  //   ① 切组没成功也要重试：跨组标本在当前组选不到 → pausedForSwitch=true + safeSwitchWG + 2.5s 后续跑。
+  //      若该账号对目标工作组无权限 / 原生 changeLogin 未生效 / sel.value 设不进去，
+  //      切组后 resolveCurrentWG() 仍等于旧组 → 下一轮又判「还是跨组」→ 再切 → 无限。
+  //   ② 自动审核关闭检查被绕过：while 循环开头的「queue._autoMode && !autoAuditEnabled() 就 break」
+  //      （22909）在 ensureAuditQueueWorkGroup（22743）**之后**，而后者在需要切组时直接
+  //      `return false` 让 continueAuditQueue 提前返回 —— 于是关掉自动审核也照样一轮轮切下去。
+  //   ③ 全链路没有切组次数上限：loadAbnormalTarget 有 cycle>3、trySwitchBackToOrigin 有 10 次，
+  //      唯独批审这条路径没有；且 _writeFullQueue 每次都刷新 time，loadAuditQueue 的 10 分钟
+  //      过期守卫（按创建时间本可兜底）也永不触发，所以能一直转下去。
+  // 本守卫在三处切组点统一调用：超限或自动审核已关 → 不再切组，清队列并明确告知原因。
+  const AA_QUEUE_MAX_SWITCH = 3; // 单个队列内最多尝试切组 3 次（防同一队列内空转）
+  const AA_STUCK_SWITCH_MAX = 3; // 同一条标本跨队列/跨页面的切组尝试上限
+  const AA_STUCK_TTL_MS = 10 * 60 * 1000; // 「卡住」记录的 10 分钟窗口
+  const K_AA_STUCK_SWITCH = 'LIS_AA_StuckSwitch'; // {key,n,ts} —— 必须落盘，否则自动审核每轮
+  // 新建队列会重新从 0 计数（新队列对象不含 switchCycles），单队列内的上限会被绕过去
+  const K_AA_SWITCH_FUSE = 'LIS_AA_SwitchFuse'; // 切组熔断时间戳：熔断期内自动审核不再尝试跨组批审
+
+  function aaStuckSwitchRead() {
+    try {
+      const o = JSON.parse(localStorage.getItem(K_AA_STUCK_SWITCH) || 'null');
+      if (!o || !o.ts || Date.now() - o.ts > AA_STUCK_TTL_MS) {return null;}
+      return o;
+    } catch (e) {return null;}
+  }
+  function aaStuckSwitchClear() {
+    try {localStorage.removeItem(K_AA_STUCK_SWITCH);} catch (e) {}
+  }
+  // 同一条标本反复切组 → 累加；换标本（说明切组成功推进了）→ 重新计 1
+  function aaStuckSwitchBump(key) {
+    const o = aaStuckSwitchRead();
+    const n = (o && o.key === key) ? ((o.n || 0) + 1) : 1;
+    try {localStorage.setItem(K_AA_STUCK_SWITCH, JSON.stringify({key, n, ts: Date.now()}));} catch (e) {}
+    return n;
+  }
+  function aaSwitchFuseActive() {
+    try {
+      const t = Number(localStorage.getItem(K_AA_SWITCH_FUSE) || 0);
+      return t > 0 && Date.now() - t < AA_STUCK_TTL_MS;
+    } catch (e) {return false;}
+  }
+  function aaSwitchFuseSet() {
+    try {localStorage.setItem(K_AA_SWITCH_FUSE, String(Date.now()));} catch (e) {}
+  }
+  function aaSwitchFuseClear() {
+    try {localStorage.removeItem(K_AA_SWITCH_FUSE);} catch (e) {}
+  }
+
+  // 中止整批并落盘清理。返回 false 便于调用方 `if (!aaQueueGuardSwitch(q)) {...}` 直接短路。
+  function aaQueueForceStop(queue, reason, opts) {
+    const remain = Math.max(0, ((queue && queue.items) || []).length - ((queue && queue.current) || 0));
+    try {delete queue.pausedForSwitch;} catch (e) {}
+    try {saveAuditQueueNow(queue);} catch (e) {} // 顺带取消未落盘的节流写入
+    try {clearAuditQueue();} catch (e) {} // 掐掉落盘队列：否则整页刷新后 checkAuditQueueResume 会让它复活
+    const prog = document.getElementById('lis-audit-progress');
+    if (prog) {prog.remove();}
+    // 无论因何中止都清掉「卡住」记录：否则 10 分钟窗口内用户手动重试会立刻被再拦一次。
+    // 真正的防复发由熔断（fuse）负责——它拦住自动审核「每 30 秒重建队列再来一轮」的节奏。
+    aaStuckSwitchClear();
+    // 因「切不过去」而中止 → 置熔断，让自动审核在窗口期内**只审当前工作组**，
+    // 不再每 30 秒重建一次队列、重来一轮 3 次切组（那样只是把死循环的节奏放慢，并未终止）。
+    // 只对自动模式的队列置熔断，手动 F4 批审不影响自动审核的跨组能力。
+    if (opts && opts.fuse && queue && queue._autoMode) {
+      aaSwitchFuseSet();
+    }
+    const tail = remain > 0 ? ('，剩余 ' + remain + ' 例请人工处理') : '';
+    showToast('⛔ 批审已中止：' + reason + tail, 'error');
+    try {aaStateEventAdd('pause', '批审中止：' + reason + tail);} catch (e) {}
+    dbg('[批审] 切组守卫中止：' + reason);
+    return false;
+  }
+
+  // 返回 true = 允许继续切组/等待续跑；false = 已中止（调用方必须立刻停止本轮）
+  // targetKey：本次要切过去的目标（标本 DR），用于识别「同一条反复卡住」
+  // opts.waiting：不是真要切组，只是在等页面就绪（curDR 尚为空）——不计入切组次数，
+  //               否则页面重载后的「等待」会把正常的 A→B→C 多组批审也顶到上限
+  function aaQueueGuardSwitch(queue, targetKey, opts) {
+    if (!queue) {return false;}
+    // ① 自动审核已关闭/已取消 → 自动模式的队列没有理由再往下跑
+    if (queue._autoMode && (_autoAuditCancelRequested || !autoAuditEnabled())) {
+      return aaQueueForceStop(queue, '自动审核已关闭');
+    }
+    // ② **连续**切组失败上限：切组一旦成功，调用方会把 queue.switchCycles 归零，
+    //    所以这里累加的自然就是「连着几次切不过去」（正常的跨组批审每次都是 1，不会误伤）
+    if (!(opts && opts.waiting)) {
+      queue.switchCycles = (queue.switchCycles || 0) + 1;
+      if (queue.switchCycles > AA_QUEUE_MAX_SWITCH) {
+        return aaQueueForceStop(
+          queue,
+          '已连续尝试切换工作组 ' + queue.switchCycles + ' 次仍未成功（可能当前账号无该工作组权限，或原生切组失败）',
+          {fuse: true}
+        );
+      }
+    }
+    // ③ 跨队列/跨页面：同一条标本反复切组（自动审核每轮新建队列会重置队列内计数，故必须落盘另计）
+    const key = String(targetKey || '');
+    if (key) {
+      const n = aaStuckSwitchBump(key);
+      if (n > AA_STUCK_SWITCH_MAX) {
+        return aaQueueForceStop(
+          queue,
+          '同一条标本已尝试切换工作组 ' + n + ' 次仍未成功（可能该账号无目标工作组权限，或原生切组失败）',
+          {fuse: true}
+        );
+      }
+      dbg('[批审] 切组尝试 ' + (queue.switchCycles || 0) + '/' + AA_QUEUE_MAX_SWITCH + '（该标本累计 ' + n + '/' + AA_STUCK_SWITCH_MAX + '）');
+    }
+    return true;
+  }
+
+  // 切组确认推进（无需切组）→ 清零「连续失败」计数
+  function aaQueueSwitchSucceeded(queue) {
+    if (queue) {queue.switchCycles = 0;}
+    aaStuckSwitchClear();
+  }
+
   async function ensureAuditQueueWorkGroup(queue) {
     const item = currentQueueItem(queue);
     if (!item) {return true;}
     const curDR = String(resolveCurrentWG());
     const itemWg = String(item.wg || '');
-    if (!itemWg || itemWg === curDR) {return true;}
+    if (!itemWg || itemWg === curDR) {
+      aaQueueSwitchSucceeded(queue); // 已在目标组（或无需切组）= 切组确实推进了，清掉卡住记录
+      return true;
+    }
     // curDR 为空时（页面刚重载，全局变量和下拉框都还没就绪），不盲目切组
     // 让 runAuditQueueResume 延迟重试，等页面完全加载后再判断
     if (!curDR) {
+      // 8.16.15: 也过守卫（防页面异常导致 curDR 永远为空、1.5s 一轮空转成死循环）。
+      // waiting=true：这只是在等就绪，不算一次切组失败。
+      if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''), {waiting: true})) {return false;}
       queue.pausedForSwitch = true;
       saveAuditQueueNow(queue);
       runAuditQueueResume(1500);
@@ -14057,9 +14182,12 @@ window.addEventListener('keydown',function(e){
     // 8.15.27: 若首条标本已在当前原生列表中（例如跨组共享视图或机台），则直接复用当前组无需预先切组
     const iframeWin = getReportIframeWin();
     if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+      aaQueueSwitchSucceeded(queue);
       return true;
     }
     // 首条标本不在当前原生列表且所属工作组不同：批审起始直接切换到目标组，消除盲目尝试选行导致的数秒卡顿
+    // 8.16.15: 切组前过守卫——自动审核已关 / 连续切组失败已超限 → 整批中止，不再无限切下去
+    if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {return false;}
     queue.pausedForSwitch = true;
     saveAuditQueueNow(queue);
     const wgName = (WG_MAP[itemWg] || {}).name || itemWg;
@@ -14136,6 +14264,13 @@ window.addEventListener('keydown',function(e){
     }
     // 仅在切组后自动续跑，不弹确认框
     if (queue.pausedForSwitch) {
+      // 8.16.15: 这里是**跨整页重载**的续跑入口，也是「关掉自动审核后仍在切」的关键一环——
+      // 此前只看 pausedForSwitch，不看自动审核开关，于是队列一落盘，之后每次页面重载都会
+      // 自动续跑 → 切组 → 再重载，循环停不下来。现在先过守卫（自动审核已关 / 切组次数超限即中止）。
+      const _curItem = (queue.items && queue.items[queue.current || 0]) || {};
+      // waiting=true：这里只是决定「要不要续跑」，还不是切组动作本身，
+      // 不计入「连续切组失败」——否则会和 ensureAuditQueueWorkGroup 里的判断重复计数
+      if (!aaQueueGuardSwitch(queue, 'dr:' + String(_curItem.reportDR || ''), {waiting: true})) {return;}
       showToast(`切换工作组后继续批审（${remaining} 个标本）...`, 'warning');
       runAuditQueueResume(500);
       return;
@@ -23100,6 +23235,9 @@ window.addEventListener('keydown',function(e){
             // 当前组无法加载该跨组标本：立即切组续跑，彻底消除 waitAndSelectNativeRow 4~4.5秒死等超时！
             if (!selectedOk) {
               dbg('批审: 跨组标本在当前组未找到，立即切组:', item.wg, item.reportDR);
+              // 8.16.15: 切组前过守卫——自动审核已关 / 已切够次数 → 中止整批并跳出，
+              // 这是「关掉自动审核后仍在反复切组」的最后一道闭环（此分支在 while 内，此前完全不看开关）
+              if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {break;}
               if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
               queue.pausedForSwitch = true;
               queue.current = Math.max(0, queue.current - 1);
@@ -23151,6 +23289,8 @@ window.addEventListener('keydown',function(e){
           if (!selectedOk) {
             // 8.5.10: 跨组标本原生列表选不到 → 回退切组续跑（原 8.5.8 机制）
             if (_batchCrossGroup) {
+              // 8.16.15: 同上，切组前过守卫（自动审核已关 / 切组次数超限 → 中止整批）
+              if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {break;}
               if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
               queue.pausedForSwitch = true;
               // 8.9.4: 回退 current——逐条 finally 会无条件 current++，不回退会把当前未处理条
@@ -23725,6 +23865,25 @@ window.addEventListener('keydown',function(e){
     const wasEnabled = autoAuditEnabled();
     _autoAuditCancelRequested = true;
     if (_autoAuditRunning) {_batchAbort = true;}
+    // 8.16.15: 关闭/到期时**立刻**掐掉「切组暂停中」的自动批审队列。
+    // 现场 bug：开着自动审核时批审跨组切组卡住 → pausedForSwitch 落盘 → 每次整页刷新
+    // checkAuditQueueResume 都让它复活、再切组，于是**手动关掉自动审核也停不下来**（只有等
+    // 页面恰好稳定的一瞬才点得中开关）。这里在关闭的同时就清掉落盘的续跑凭据；
+    // 另外 `_batchAbort` 不再只看 `_autoAuditRunning`——切组暂停期间该标志常已复位为 false，
+    // 导致正在跑的那一轮压根收不到中止信号。只对自动模式的队列动手，手动 F4 批审不受影响。
+    try {
+      const _q = loadAuditQueue();
+      if (_q && _q._autoMode) {
+        _batchAbort = true;
+        const _left = Math.max(0, (_q.items || []).length - (_q.current || 0));
+        if (_q.pausedForSwitch) {
+          dbg('[批审] 关闭自动审核：清理切组暂停中的自动批审队列（剩余 ' + _left + ' 例）');
+          const _prog = document.getElementById('lis-audit-progress');
+          if (_prog) {_prog.remove();}
+        }
+        clearAuditQueue();
+      }
+    } catch (e) {}
     if (!wasEnabled && !reason) {return;}
     _autoAudit = {
       schema: 2,
@@ -25622,6 +25781,22 @@ window.addEventListener('keydown',function(e){
       });
       if (cardiacDRs.size) {
         normals = normals.filter(r => !cardiacDRs.has(String(r.ReportDR)));
+      }
+
+      // 8.16.15: 切组熔断期（同一条标本反复切组失败后的 10 分钟）内，自动审核**只审当前工作组**。
+      // 否则 tick 每 30s 会重新建一个队列再试一轮跨组切组——队列是新建对象，队列内的
+      // switchCycles 计数被重置，等于把死循环的节奏放慢而已，并未终止（现场表现为
+      // 「关闭自动审核也停不下来」）。熔断期内跨组标本按「留人工」记账，交给人工/F4。
+      if (aaSwitchFuseActive()) {
+        const _fuseCur = String(resolveCurrentWG());
+        if (_fuseCur) {
+          const _dropped = normals.filter(r => String(r._wg || '') !== _fuseCur);
+          if (_dropped.length) {
+            _dropped.forEach(r => autoAuditSkipOnce(skipped, r, '跨组标本（切换工作组多次未成功，已暂缓跨组批审）'));
+            normals = normals.filter(r => String(r._wg || '') === _fuseCur);
+            dbg('[自动审核] 切组熔断中：' + _dropped.length + ' 例跨组标本本轮不审，仅审当前组 ' + normals.length + ' 例');
+          }
+        }
       }
 
       // 1) 正常标本：批量审核（统计从 queue.done/failed/skipped 读取）
