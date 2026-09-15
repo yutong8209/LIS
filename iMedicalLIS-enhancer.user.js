@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.11
+// @version      8.16.12
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -701,6 +701,17 @@
         return '导入失败: ' + (e.message || e);
       }
     };
+    // 8.16.11: 待审「已知晓」标记的查看/清空（点错了或想让它重新进推送时用）
+    uw().lisAAckList = () => {
+      const o = aaAckLoad();
+      const keys = Object.keys(o);
+      if (!keys.length) {return '（无「已知晓」标记）';}
+      return keys.map(k => k + '\t' + new Date(o[k]).toLocaleString()).join('\n');
+    };
+    uw().lisAAckClear = (dr) => {
+      if (dr) {aaAckSet(dr, false); return '已取消 ' + dr + ' 的「已知晓」标记（该标本恢复进推送）';}
+      return '已清空全部 ' + aaAckClearAll() + ' 个「已知晓」标记（这些标本恢复进推送）';
+    };
   } catch (e) {}
 
   async function fetchJ(u, timeoutMs, externalSignal) {
@@ -1068,7 +1079,7 @@
    组合名跟着一起左右参差，整屏看着就乱。定宽后扫下来像一张表。
    文字**左对齐 + 固定宽度图标位**（不是居中）：三个徽章的文字因此也落在同一竖线上；
    居中的话文字起点仍会随文案长短浮动，等于没对齐。 */
-#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:flex-start;gap:3px;padding:2.5px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.25;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.10);flex:0 0 100px;box-sizing:border-box}
+#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:flex-start;gap:3px;padding:2.5px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.25;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.10);flex:0 0 auto;min-width:100px;box-sizing:border-box}
 #lis-auto-audit-log-box .aal-badge-ic{flex:0 0 14px;text-align:center;font-style:normal}
 #lis-auto-audit-log-box .aal-badge.normal{background:#059669}
 #lis-auto-audit-log-box .aal-badge.abnormal{background:#2563eb}
@@ -12474,6 +12485,9 @@ window.addEventListener('keydown',function(e){
         if (!dr) {return;}
         const on = !aaAckHas(dr);
         aaAckSet(dr, on);
+        // 8.16.12: 取消标记时同时清掉「同标本同原因只记一次」的记忆——否则本页会话内该标本
+        // 已被记为「跳过过」，下一轮不会再进 skipped，取消标记后要等刷新页面才恢复推送。
+        if (!on) {try {delete _autoAuditSkipSeen[dr];} catch (e) {}}
         showToast(
           on
             ? '已标记「已知晓」 —— 该标本不再进自动审核推送（仍留在待审，仍须人工审核）'
@@ -23941,6 +23955,13 @@ window.addEventListener('keydown',function(e){
     return !!on;
   }
   function aaAckCount() {return Object.keys(aaAckLoad()).length;}
+  // 清空全部标记（控制台 lisAAckClear() 用）；返回清掉的条数
+  function aaAckClearAll() {
+    const n = aaAckCount();
+    _aaAckCache = {};
+    aaAckSave();
+    return n;
+  }
 
   function pushAutoAuditNotify(payload) {
     const p = payload || {};
