@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.8
+// @version      8.16.9
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1062,12 +1062,20 @@
 .aal-card-left{display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:1;min-width:0}
 .aal-card-right{display:flex;align-items:center;gap:7px;flex-shrink:0}
 /* 8.16.8: 徽章改**实心底 + 白字**（原来是浅底深字，和卡片底几乎同色、扫一眼分不出） */
-#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:center;padding:2.5px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.25;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.10)}
+/* 8.16.9: 对齐——徽章与姓名都定宽，让「徽章 | 姓名 | 检验号 | 组合」四列在所有卡片上落在同一竖线上。
+   此前徽章宽度随文案长短变（轻度异常通过 7 字 / 正常通过 5 字 / 未通过 4 字），姓名、检验号、
+   组合名跟着一起左右参差，整屏看着就乱。定宽后扫下来像一张表。
+   文字**左对齐 + 固定宽度图标位**（不是居中）：三个徽章的文字因此也落在同一竖线上；
+   居中的话文字起点仍会随文案长短浮动，等于没对齐。 */
+#lis-auto-audit-log-box .aal-badge{display:inline-flex;align-items:center;justify-content:flex-start;gap:3px;padding:2.5px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;line-height:1.25;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.10);flex:0 0 100px;box-sizing:border-box}
+#lis-auto-audit-log-box .aal-badge-ic{flex:0 0 14px;text-align:center;font-style:normal}
 #lis-auto-audit-log-box .aal-badge.normal{background:#059669}
 #lis-auto-audit-log-box .aal-badge.abnormal{background:#2563eb}
 #lis-auto-audit-log-box .aal-badge.skip{background:#d97706}
-.aal-pat-name{font-size:13px;font-weight:700;color:var(--lis-text);white-space:nowrap}
-.aal-labno{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11.5px;color:var(--lis-slate-500);background:var(--lis-surface-subtle);padding:1px 6px;border-radius:4px;white-space:nowrap;line-height:1.35}
+/* 姓名定宽：2~4 字都放得下（超长省略号 + title 看全名），保证检验号列不被姓名长短推着走 */
+.aal-pat-name{font-size:13px;font-weight:700;color:var(--lis-text);white-space:nowrap;flex:0 0 70px;overflow:hidden;text-overflow:ellipsis}
+/* 检验号定宽居中：位数变化（如 12/13 位）也不会把后面的组合名推歪 */
+.aal-labno{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11.5px;color:var(--lis-slate-500);background:var(--lis-surface-subtle);padding:1px 6px;border-radius:4px;white-space:nowrap;line-height:1.35;flex:0 0 auto;min-width:104px;text-align:center;box-sizing:border-box}
 .aal-test-pill{font-size:11px;font-weight:600;color:var(--lis-slate-700);background:var(--lis-bg);border:1px solid var(--lis-border);padding:1.5px 7px;border-radius:4px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3}
 .aal-time{font-size:11px;color:var(--lis-text-muted);white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 #lis-auto-audit-log-box .aal-jump{font-size:11px;font-weight:600;padding:2px 7px;border:1px solid var(--lis-border-strong);background:#fff;color:var(--lis-teal-600);border-radius:4px;cursor:pointer;white-space:nowrap;line-height:1.3;transition:all .15s}
@@ -1076,7 +1084,8 @@
 .aal-card.open .aal-chevron{transform:rotate(180deg);color:var(--lis-teal-600)}
 .aal-card-sub{padding:0 14px 8px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;border-top:1px dashed var(--lis-surface-subtle);margin-top:0;padding-top:6px}
 .aal-abn-summary{display:flex;align-items:center;gap:5px;flex-wrap:wrap;flex:1}
-.aal-abn-chip-count{font-size:10px;font-weight:700;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:3px;white-space:nowrap;line-height:1.3}
+/* 8.16.9: 计数 chip 也定宽居中——「1 项异常」与「10 项异常」宽度不同会把后面的异常项 chip 推歪 */
+.aal-abn-chip-count{font-size:10px;font-weight:700;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:3px;white-space:nowrap;line-height:1.3;flex:0 0 auto;min-width:68px;text-align:center;box-sizing:border-box}
 #lis-auto-audit-log-box .aal-abn-item{display:inline-flex;align-items:center;gap:3px;padding:1.5px 6px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap}
 /* 8.15.17: 同结果表——满色底白字＝须人工，白底彩字＝可批审（mild） */
 #lis-auto-audit-log-box .aal-abn-item.hi{background:#ea580c;color:#fff;border-color:#9a3412}
@@ -26171,12 +26180,13 @@ window.addEventListener('keydown',function(e){
       d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     // 8.16.8: 徽章文案直接说结论（原来「异常 / 跳过」歧义：异常到底是过了还是没过？）
     //   正常 → 全正常通过自动审核；异常 → 轻度异常通过自动审核；跳过 → 未通过（留人工）
+    // 8.16.9: 图标包进定宽 .aal-badge-ic —— 三个徽章的文字因此对齐到同一竖线（见 CSS 注释）
     const badge = s =>
       s.t === 'abnormal'
-        ? '<span class="aal-badge abnormal">⚡ 轻度异常通过</span>'
+        ? '<span class="aal-badge abnormal"><span class="aal-badge-ic">⚡</span>轻度异常通过</span>'
         : s.t === 'skip'
-          ? '<span class="aal-badge skip">⏭ 未通过</span>'
-          : '<span class="aal-badge normal">✓ 正常通过</span>';
+          ? '<span class="aal-badge skip"><span class="aal-badge-ic">⏭</span>未通过</span>'
+          : '<span class="aal-badge normal"><span class="aal-badge-ic">✓</span>正常通过</span>';
 
     // 8.5.75: 渲染时把每行样本对象挂到映射，展开时直接取日志持久化的完整结果，不依赖当前工作台缓存
     const _aalSamples = {};
@@ -26307,7 +26317,7 @@ window.addEventListener('keydown',function(e){
           <div class="aal-card-main">
             <div class="aal-card-left">
               ${badge(s)}
-              <span class="aal-pat-name">${esc(s.n || '未知姓名')}</span>
+              <span class="aal-pat-name" title="${escAttr(s.n || '未知姓名')}">${esc(s.n || '未知姓名')}</span>
               <span class="aal-labno">${esc(s.l || '—')}</span>
               ${profileHTML}
             </div>
