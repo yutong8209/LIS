@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.6
+// @version      8.16.7
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1179,13 +1179,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-wg-tab.on{background:#fff;color:var(--lis-primary);font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.06)}
 .ws-mach-row{display:inline-flex!important;align-items:center;gap:4px;overflow-x:auto;scrollbar-width:none;margin:0;padding:0;max-width:100%;scroll-behavior:smooth}
 .ws-mach-row::-webkit-scrollbar{display:none}
-.ws-mach-tab{border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-text-secondary);padding:3px 8px;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+/* 8.16.7: 仪器小标签瘦身——名称简写（见 computeMachShortLabels）+ 内边距/间距/勾选框各收一点，
+   一排能多放下两三台仪器；字号不动（现场屏幕要看清）。 */
+.ws-mach-tab{border:1px solid var(--lis-border);background:var(--lis-surface);color:var(--lis-text-secondary);padding:3px 7px;border-radius:5px;font-size:11.5px;font-weight:500;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
 .ws-mach-tab:hover{border-color:var(--lis-border-strong);color:var(--lis-text)}
 .ws-mach-tab.on{background:var(--lis-primary-light);border-color:#93c5fd;color:var(--lis-primary);font-weight:600}
-.ws-mach-check{width:13px;height:13px;border:1px solid var(--lis-border);border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;background:#fff;color:var(--lis-primary);flex:0 0 13px}
+.ws-mach-check{width:12px;height:12px;border:1px solid var(--lis-border);border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:900;background:#fff;color:var(--lis-primary);flex:0 0 12px}
 .ws-mach-tab.on .ws-mach-check{background:var(--lis-primary);border-color:var(--lis-primary);color:#fff}
 .ws-tab-name{overflow:hidden;text-overflow:ellipsis;max-width:140px}
-.mach-cnt{background:var(--lis-surface-subtle);color:var(--lis-text-muted);border-radius:10px;padding:0 5px;font-size:10.5px;min-width:16px;text-align:center;line-height:1.5;font-weight:700;font-family:ui-monospace,monospace}
+.mach-cnt{background:var(--lis-surface-subtle);color:var(--lis-text-muted);border-radius:10px;padding:0 4px;font-size:10.5px;min-width:15px;text-align:center;line-height:1.5;font-weight:700;font-family:ui-monospace,monospace}
 .ws-wg-tab.on .mach-cnt{background:var(--lis-primary-light);color:var(--lis-primary)}
 .ws-mach-tab.on .mach-cnt{background:#fff;color:var(--lis-primary)}
 .ws-mach-group{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
@@ -10441,6 +10443,93 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
   }
 
+  // ==================== 8.16.7: 仪器小标签简写 ====================
+  // 需求：仪器名太长（「DXI800化学发光仪」「Getein1600荧光定量」…），一排标签占满整行。
+  // ⚠️ **只在「已选中某个工作组」时的那排仪器小标签上生效**——
+  //    「全部仪器」模式、工作组下拉菜单（.ws-mach-popover）、卡片、详情、导出、菜单栏、
+  //    推送等一切其它位置**一律仍用全称**。简写标签都带 title 全称，悬停即可看全名。
+  // 选名规则（按**同一工作组内所有仪器一起**算，保证组内唯一）：
+  //   ① 类别名（血细胞 / 血凝 / 尿常规 / 发光…）在本组内唯一 → 用类别名（最短、最贴现场叫法）
+  //   ② 类别名在本组内重复（如免疫组 4 台发光仪）→ 改用**型号**（名称开头的字母数字串）
+  //   ③ 两者都拿不到 → 保留全称（不猜、不误伤）
+  //   另：只在**确实更短**（至少省 2 个字）且**短名组内不重复**时才采用，否则保留全称。
+  const MACH_CATEGORY_ALIASES = [
+    [/血细胞|血球|血液细胞|血常规/, '血细胞'],
+    [/凝血|血凝|coag/i, '血凝'],
+    [/尿(液|常规|沉渣|有形成分|分析)/, '尿常规'],
+    [/粪便|大便|便常规|便潜血/, '粪便'],
+    [/核酸|pcr|基因扩增|扩增/i, '核酸'],          // 必须在「荧光/发光」之前：荧光定量PCR 属核酸
+    [/糖化/, '糖化'],
+    [/血沉/, '血沉'],
+    [/血气/, '血气'],
+    [/电解质/, '电解质'],
+    [/血型|配血|交叉配血/, '血型'],
+    [/培养|微生物|药敏|鉴定/, '微生物'],
+    [/微量元素/, '微量元素'],
+    [/过敏原|变应原/, '过敏原'],
+    [/自身抗体|免疫印迹|印迹法/, '自身抗体'],
+    [/特定蛋白|免疫比浊|比浊/, '特定蛋白'],
+    [/血流变/, '血流变'],
+    [/精液/, '精液'],
+    [/白带|阴道分泌物/, '白带'],
+    [/生化/, '生化'],
+    [/化学发光|荧光|发光|酶免|免疫分析|时间分辨/, '发光']
+  ];
+
+  // 名称开头的「字母数字型号」：DXI800化学发光仪→DXI800、Wan200+化学发光仪→Wan200+、BS-2000生化仪→BS-2000
+  function machModelOf(name) {
+    const m = String(name || '').match(/^[A-Za-z][A-Za-z0-9+._/-]{1,19}/);
+    if (!m) {return '';}
+    // 去掉尾部分隔符（BC5390-血球仪 → BC5390），但**保留 `+`**——它是型号的一部分（Wan200+）
+    const s = m[0].replace(/[._/-]+$/, '');
+    if (!s) {return '';}
+    // 无数字又非全大写 → 多半是普通英文单词（如「Sysmex血球仪」），不当型号，交给类别名
+    if (!/\d/.test(s) && !/^[A-Z]{3,}/.test(s)) {return '';}
+    return s;
+  }
+  function machCategoryOf(name) {
+    const s = String(name || '');
+    for (const [re, alias] of MACH_CATEGORY_ALIASES) {
+      if (re.test(s)) {return alias;}
+    }
+    return '';
+  }
+  // 返回 Map(仪器DR → 短名)。算不出短名的机器不进 Map，调用方回退全称。
+  function computeMachShortLabels(machines) {
+    const out = new Map();
+    const list = (machines || []).map(m => ({
+      id: String((m && (m.RowID != null ? m.RowID : m.id)) || ''),
+      name: String((m && (m.CName || m.Name || m.text)) || '')
+    })).filter(m => m.id && m.name);
+    if (!list.length) {return out;}
+
+    const cat = new Map(), model = new Map(), catUse = new Map();
+    list.forEach(m => {
+      const c = machCategoryOf(m.name);
+      cat.set(m.id, c);
+      model.set(m.id, machModelOf(m.name));
+      if (c) {catUse.set(c, (catUse.get(c) || 0) + 1);}
+    });
+
+    const cand = new Map();
+    list.forEach(m => {
+      const c = cat.get(m.id), md = model.get(m.id);
+      let s = '';
+      if (c && catUse.get(c) === 1) {s = c;}     // ① 类别名组内唯一
+      else if (md) {s = md;}                     // ② 同类多台 → 型号
+      if (s) {cand.set(m.id, s);}
+    });
+
+    // 短名之间也要唯一（如两台都叫 BC5390）；且必须真的更短，否则保留全称
+    const used = new Map();
+    cand.forEach(s => used.set(s, (used.get(s) || 0) + 1));
+    list.forEach(m => {
+      const s = cand.get(m.id);
+      if (s && used.get(s) === 1 && s.length <= m.name.length - 2) {out.set(m.id, s);}
+    });
+    return out;
+  }
+
   function buildWSTabsDOM(tabs, wgCounts, mc) {
     let wgHTML = '';
     WG.forEach(w => {
@@ -10458,11 +10547,16 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                 <span class="ws-tab-name">全部仪器</span>
                 <span class="mach-cnt ws-cnt-mach"></span>
             </button>`;
-      sortWSMachines(wsMachines.filter(m => m._wg === wsActiveWG)).forEach(m => {
+      const wgMach = sortWSMachines(wsMachines.filter(m => m._wg === wsActiveWG));
+      // 8.16.7: 该工作组的仪器短名表（只在下面这排标签用；下拉菜单/其它地方仍用全称）
+      const _shortMap = computeMachShortLabels(wgMach);
+      wgMach.forEach(m => {
         const mdr = String(m.RowID || '');
-        h += `<button class="ws-mach-tab ws-mach-multi" data-multi-m="${escAttr(mdr)}" data-wg="${escAttr(wsActiveWG)}">
+        const _full = String(m.CName || m.Name || '');
+        const _short = _shortMap.get(mdr) || _full;
+        h += `<button class="ws-mach-tab ws-mach-multi" data-multi-m="${escAttr(mdr)}" data-wg="${escAttr(wsActiveWG)}" title="${escAttr(_full)}">
                     <span class="ws-mach-check"></span>
-                    <span class="ws-tab-name">${esc(m.CName || m.Name)}</span>
+                    <span class="ws-tab-name">${esc(_short)}</span>
                     <span class="mach-cnt ws-cnt-mach"></span>
                 </button>`;
       });
