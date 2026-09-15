@@ -94,4 +94,5 @@ pip3 install -r ~/脚本/requirements.txt
 - No automated test suite. Verify with `HANDTEST.md`.
 - 密码：HTTP 内网无 WebCrypto 时仅为 base64 可逆存储，勿在共享电脑勾选记住密码。
 - `cache/` 可能曾含接口响应；默认代理已改为不缓存 API，可定期清空 cache。
+- **代理与 GitHub 推送**：当前代理 App（Clash by Hako）采用系统虚拟网卡隧道模式（`utun4`），不依赖 `127.0.0.1:10808` 或其它本地监听端口。系统所有流量（包括 git / curl 等终端请求）由隧道自动透明接管分流。`git push origin main` 直接使用标准 HTTPS 即可直连推送，无需在 `~/.gitconfig` 或终端环境变量中显式配置 `http.proxy`。
 - **工作台「不完整」与手工录入标本语义**：`getWSAuditBucket` 对自动化仪器仍以 LIS 源字段 `IsComplete==='1'` 为硬门槛（非1即 incomplete）。对于 **H900 电解质分析仪 / 手工杂项** 等手工录入标本，LIS 即使保存也不会置 `IsComplete=1`；8.10.23 起通过 `isSpecimenActuallyComplete` 检查实际结果明细，当且仅当全部项目已录入（无空项、无未检）时判定为完整，从而升入「待审」并允许检验人员人工审核（Enter/F4/详情审核）；未录入或缺项标本仍严格留在「不完整」，且自动化批审机器人永久排除这类手工仪器，确保医疗安全。
