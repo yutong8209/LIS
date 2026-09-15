@@ -38,12 +38,44 @@ function section(t) {
 /* ============ A. 静态不变量 ============ */
 section('A. 静态不变量');
 
-// A1. 五处切组/续跑点必须全部过守卫（少一处就是一个逃逸口）；注释里的示例不算
+// A1. 所有切组/续跑点必须过守卫（少一处就是一个逃逸口）；注释里的示例不算
 const guardCalls = src
   .split('\n')
   .filter(l => !l.trim().startsWith('//'))
   .filter(l => /if \(!aaQueueGuardSwitch\(/.test(l)).length;
-ok(guardCalls === 5, '5 处切组/续跑点全部接入守卫（实际 ' + guardCalls + ' 处）');
+ok(guardCalls === 4, '4 处切组/续跑点全部接入守卫（实际 ' + guardCalls + ' 处）');
+
+/* ---- 8.16.16: 跨组判定必须用「可信登录组」，不确定就不切组 ---- */
+
+// A14. 必须存在可信判定函数（只认原生下拉框 / LIS 全局变量）
+ok(/function resolveLoginWGReliable\(\)/.test(src), '存在 resolveLoginWGReliable()（可信登录组）');
+const relFn = src.slice(src.indexOf('function resolveLoginWGReliable()'), src.indexOf('function compareAuditQueueItems('));
+ok(/sl_changeworkgroup/.test(relFn), '可信判定优先读原生下拉框 sl_changeworkgroup');
+ok(/return '';/.test(relFn), '取不到权威值时返回空串（交给调用方按「不确定」处理）');
+ok(!/wsActiveWG/.test(relFn) && !/wsData\.forEach/.test(relFn), '可信判定不再把「视图过滤组」「数据推测组」当登录组');
+
+// A15. 四条会决定「要不要切组」的路径都必须用可信判定
+ok(
+  /async function ensureAuditQueueWorkGroup\(queue\) \{[\s\S]*?const curDR = String\(resolveLoginWGReliable\(\)\)/.test(src),
+  'ensureAuditQueueWorkGroup 的切组决策用可信判定'
+);
+ok(/const curWG = resolveLoginWGReliable\(\);/.test(src), '批审 while 的 _batchCrossGroup 判定用可信判定');
+const crossTrySites = [...src.matchAll(/const _wsCrossGroupTry = !!\(spDR && curDR && spDR !== curDR\);/g)].length;
+ok(crossTrySites === 2, '两条单条审核路径（列表 / 详情）都用可信判定（实际 ' + crossTrySites + ' 处）');
+ok(!/spDR !== resolveCurrentWG\(\)/.test(src), '切组回退条件里不再出现不可信的 resolveCurrentWG()');
+
+// A16. 核心 fail-safe：当前组不可知时「不判跨组、不切组」，直接放行走免切组
+ok(
+  /if \(!curDR\) \{[\s\S]{0,900}?跳过跨组判定，按免切组处理[\s\S]{0,200}?return true;/.test(src),
+  '当前组不可知 → 跳过跨组判定并放行（不再「等 1.5s 重试」，那正是误判入口）'
+);
+
+// A17. 没有机台 DR 时也必须尝试一次免切组，而不是直接切组
+ok(!/\} else if \(item\.mdr\) \{/.test(src), '免切组探测不再要求 item.mdr 存在（否则等于直接切组）');
+
+// A18. item.wg / originWG 兜底也要用可信值（否则不可信值会被固化进队列）
+ok(/wg: row\._wg \|\| resolveLoginWGReliable\(\),/.test(src), '队列条目 wg 兜底用可信判定');
+ok(/originWG: resolveLoginWGReliable\(\)/.test(src), 'originWG（审完切回起始组）用可信判定');
 
 // A2. 守卫必须检查「自动审核已关闭」—— 这是「关不掉」的直接病根
 const guardFn = src.slice(src.indexOf('function aaQueueGuardSwitch('), src.indexOf('// 切组确认推进'));

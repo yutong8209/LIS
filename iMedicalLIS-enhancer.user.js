@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.15
+// @version      8.16.16
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -9634,7 +9634,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     try {
       const old = JSON.parse(localStorage.getItem(K_AUDIT_ORIGIN) || '{}');
       const fresh = Date.now() - (old.ts || 0) < 30 * 60 * 1000;
-      const origin = fresh && old.wg ? old.wg : resolveCurrentWG();
+      // 8.16.16: 起始组只记可信值——记不到就不记（loadAuditOrigin 返回 null），
+      // 之后就不会拿着一个「视图过滤组/推测组」去切回（那是另一次整页重载）
+      const origin = fresh && old.wg ? old.wg : resolveLoginWGReliable();
       localStorage.setItem(
         K_AUDIT_ORIGIN,
         JSON.stringify({ wg: origin, source: source || 'list', ts: Date.now() })
@@ -9662,7 +9664,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   // trySwitchBackToOrigin 因 origin===当前组 直接 no-op，不会被陈旧 origin 误切回。
   function saveAuditOriginCurrent(source) {
     try {
-      const cur = resolveCurrentWG();
+      const cur = resolveLoginWGReliable();
       if (cur) {
         localStorage.setItem(K_AUDIT_ORIGIN, JSON.stringify({ wg: cur, source: source || 'list', ts: Date.now() }));
       }
@@ -9686,7 +9688,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   function trySwitchBackToOrigin() {
     try {
       const origin = loadAuditOrigin();
-      if (!origin || String(origin.wg) === String(resolveCurrentWG())) {
+      if (!origin || String(origin.wg) === String(resolveLoginWGReliable())) {
         _switchBackRetry = 0;
         if (_switchBackTimer) {clearTimeout(_switchBackTimer); _switchBackTimer = null;}
         return;
@@ -10074,6 +10076,29 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
     }
     return best;
+  }
+
+  // ==================== 8.16.16: 「可信登录工作组」 ====================
+  // 只认原生界面给出的权威值：① 顶层 sl_changeworkgroup 下拉框 ② LIS 页面全局 WorkGroupDR。
+  //
+  // 为什么必须与 resolveCurrentWG() 分开：后者有 4 级回退，**后两级都不代表实际登录组**——
+  //   ③ wsActiveWG 是工作台的**视图过滤**（用户可能在看临检 tab，实际登录在生化）；
+  //   ④ 从 wsData 推断「标本最多的组」，会随数据变化**漂移**。
+  // 拿它们做「跨组判定」会得出「非空但错误」的当前组 → 把本组标本误判成跨组 →
+  // 触发切组（整页重载）→ 重载后若仍读不到权威值 → 又误判 → 再切，正是
+  // 8.16.15 那个「工作台与原生 LIS 无限来回切、关掉自动审核也停不下来」死循环的入口。
+  //
+  // 约定：凡是**决定「要不要切组」**的地方一律用本函数；返回 '' 表示「当前组不可知」，
+  // 调用方必须按「不确定 ⇒ 绝不切组」处理——因为免切组（按机台 DR 直接查工作列表）
+  // 本来就不需要知道当前登录组，放行是安全且正确的默认。
+  function resolveLoginWGReliable() {
+    try {
+      const sel = window.top.document.getElementById('sl_changeworkgroup');
+      if (sel && sel.value) {return String(sel.value);}
+    } catch (e) {}
+    const dr = wgDR();
+    if (dr) {return String(dr);}
+    return '';
   }
 
   function compareAuditQueueItems(a, b) {
@@ -13287,7 +13312,9 @@ window.addEventListener('keydown',function(e){
       const ft = document.getElementById('lis-ws-ft-stat');
       if (ft) {ft.textContent = `审核：${specimen.PatName || specimen.Labno || targetDR}`;}
 
-      const curDR = resolveCurrentWG();
+      // 8.16.16: 跨组判定用可信登录组——取不到权威值时 _wsCrossGroupTry 为 false，
+      // 即「不确定就不切组」，只走免切组尝试；避免误判把本组标本当成跨组去切。
+      const curDR = resolveLoginWGReliable();
       const spDR = specimen._wg || '';
       // 8.5.10: 跨组先试不切组——原生报告页可按 WorkGroupMachineDR 直接跨组加载并审核
       // （实测：临检组下免疫组x8 标本可直接审），不再立即切组；仅当原生列表选不到标本
@@ -13345,8 +13372,8 @@ window.addEventListener('keydown',function(e){
           _wsCrossGroupTry &&
           (prep.reason === 'select' || prep.reason === 'detail') &&
           spDR &&
-          resolveCurrentWG() &&
-          spDR !== resolveCurrentWG()
+          resolveLoginWGReliable() &&
+          spDR !== resolveLoginWGReliable()
         ) {
           const wgName = (WG_MAP[spDR] || {}).name || spDR;
           _toast(`未找到标本/详情未加载，切换到${wgName}重试`, 'warning');
@@ -14005,7 +14032,7 @@ window.addEventListener('keydown',function(e){
       if (!isAutoAuditableClassified(sp) && !(String(sp.status) === 'MILD' && sp.mild && sp.mild.ok)) {return;}
       items.push({
         reportDR: String(reportDR),
-        wg: row._wg || resolveCurrentWG(),
+        wg: row._wg || resolveLoginWGReliable(),
         mdr: prWorkGroupMachineDR(row) || '',
         labno: row.Labno || '',
         name: row.PatName || '',
@@ -14026,7 +14053,8 @@ window.addEventListener('keydown',function(e){
       skipped: [],
       current: 0,
       keepWS: isWSVisible(),
-      originWG: resolveCurrentWG()
+      // 8.16.16: 起始组也用可信值——取不到则不记录，批审结束就不会误切回一个错的组
+      originWG: resolveLoginWGReliable()
     };
   }
 
@@ -14162,22 +14190,23 @@ window.addEventListener('keydown',function(e){
   async function ensureAuditQueueWorkGroup(queue) {
     const item = currentQueueItem(queue);
     if (!item) {return true;}
-    const curDR = String(resolveCurrentWG());
+    // 8.16.16: 跨组判定只用**可信**登录组（原生下拉框 / LIS 全局变量），
+    // 不用 resolveCurrentWG() 那套会把「视图过滤组」和「数据推测组」当登录组的回退链。
+    const curDR = String(resolveLoginWGReliable());
     const itemWg = String(item.wg || '');
+    if (!curDR) {
+      // 当前登录组不可知 → 不做跨组判定、**绝不切组**，直接放行让批审走「免切组」选行。
+      // 免切组（按机台 DR 直接查工作列表）本来就不需要知道当前登录组，所以放行是安全的；
+      // 而此前这里是「等 1.5s 重试」，重试期间一旦回退到视图过滤组/推测组拿到**非空但错误**
+      // 的组，就会误判跨组 → 切组（整页重载）→ 重载后照样读不到 → 再切，
+      // 正是现场「工作台与原生 LIS 无限来回切、关掉自动审核也停不下来」的入口。
+      // 代价仅止于「选行失败 → 放回队尾（最多 3 次）→ 留人工」，不会整页重载、不会死循环。
+      dbg('[批审] 取不到权威登录工作组 → 跳过跨组判定，按免切组处理:', item.reportDR);
+      return true;
+    }
     if (!itemWg || itemWg === curDR) {
       aaQueueSwitchSucceeded(queue); // 已在目标组（或无需切组）= 切组确实推进了，清掉卡住记录
       return true;
-    }
-    // curDR 为空时（页面刚重载，全局变量和下拉框都还没就绪），不盲目切组
-    // 让 runAuditQueueResume 延迟重试，等页面完全加载后再判断
-    if (!curDR) {
-      // 8.16.15: 也过守卫（防页面异常导致 curDR 永远为空、1.5s 一轮空转成死循环）。
-      // waiting=true：这只是在等就绪，不算一次切组失败。
-      if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''), {waiting: true})) {return false;}
-      queue.pausedForSwitch = true;
-      saveAuditQueueNow(queue);
-      runAuditQueueResume(1500);
-      return false;
     }
     // 8.15.27: 若首条标本已在当前原生列表中（例如跨组共享视图或机台），则直接复用当前组无需预先切组
     const iframeWin = getReportIframeWin();
@@ -14877,7 +14906,8 @@ window.addEventListener('keydown',function(e){
         return;
       }
 
-      const curDR = resolveCurrentWG();
+      // 8.16.16: 同列表路径——跨组判定一律用可信登录组，不确定则不切组
+      const curDR = resolveLoginWGReliable();
       const spDR = specimen._wg || '';
       // 8.5.10: 跨组先试不切组（同列表路径）；原生列表选不到时才回退切组重试
       const _wsCrossGroupTry = !!(spDR && curDR && spDR !== curDR);
@@ -14909,8 +14939,8 @@ window.addEventListener('keydown',function(e){
             _wsCrossGroupTry &&
             (prep.reason === 'select' || prep.reason === 'detail') &&
             spDR &&
-            resolveCurrentWG() &&
-            spDR !== resolveCurrentWG()
+            resolveLoginWGReliable() &&
+            spDR !== resolveLoginWGReliable()
           ) {
             const wgName = (WG_MAP[spDR] || {}).name || spDR;
             showToast(`未找到标本/详情未加载，切换到${wgName}重试`, 'warning');
@@ -23143,7 +23173,9 @@ window.addEventListener('keydown',function(e){
         }
 
         // 8.5.10: 跨组标本判定与快速切组优化（选不到时才回退切组）
-        const curWG = resolveCurrentWG();
+        // 8.16.16: 用「可信登录组」判定——取不到权威值(空)时 _batchCrossGroup 恒为 false，
+        // 即**不切组**，改走免切组选行 + 放回队尾，从根本上堵住「误判跨组 → 反复切组」。
+        const curWG = resolveLoginWGReliable();
         const _batchCrossGroup = !!(item.wg && curWG && item.wg !== curWG);
 
         const itemWg = item.wg || curWG;
@@ -23220,7 +23252,10 @@ window.addEventListener('keydown',function(e){
             // 8.15.27: 跨组标本快速探测——先检查当前原生列表是否已包含（0ms）；若无则单次快速切机台查询（~70ms，如 x8 免切组场景）
             if (selectNativeRowByReportDR(iframeWin, item.reportDR)) {
               selectedOk = true;
-            } else if (item.mdr) {
+            } else {
+              // 8.16.16: 不再要求 item.mdr 存在——没有机台 DR 时 ShowWorkList 传空机台即
+              // 「查全部机台」，仍属免切组路径。此前写成 `else if (item.mdr)`，等于
+              // **连试都不试**就落到下面的切组分支，把本可免切组的场景白换成一次整页重载。
               iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
               if (iframeWin) {
                 jq = iframeWin.jQuery || iframeWin.$;
@@ -23619,7 +23654,7 @@ window.addEventListener('keydown',function(e){
         progress.remove();
         // 8.5.8: 跨组批审全部完成后，自动切回起始工作组（切回后工作台自动重开）；
         // 有失败/跳过条时留在当前组供核对，不切回
-        if (_originWG && _originWG !== String(resolveCurrentWG())) {
+        if (_originWG && _originWG !== String(resolveLoginWGReliable())) {
           if (failCount === 0 && skipCount === 0) {
             showToast(`批审完成，切回${(WG_MAP[_originWG] || {}).name || _originWG}`, 'success');
             switchBackToOriginWG(_originWG);
