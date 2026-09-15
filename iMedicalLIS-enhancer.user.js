@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.9
+// @version      8.16.10
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14881,6 +14881,16 @@ window.addEventListener('keydown',function(e){
           if (histStatus === 'HIGH') {cls = 'high'; st = 'HIGH';}
           else if (histStatus === 'LOW') {cls = 'low'; st = 'LOW';}
         }
+        // 8.16.10: 历史值也必须判**危急**。LIS 的历史快照（PreResult）只带 H/L 级别标志，
+        // 历史那次是否达到危急不会体现在 abFlag 里 —— 实测低钠 113.8 / 112.5（参考 135-155）
+        // 只标 L，历史列就渲染成普通蓝色低值，与本次 119.7 的深红「危急」自相矛盾，
+        // 现场直接质疑「明明是危急值为什么不是红的」。
+        // 用**当前标本该项的危急范围**复核（同一患者同一项目的危急线一致；PreResult 不带危急范围），
+        // 判不出（LIS 未配危急值）时保持原样，不会误染红。
+        if (cls !== 'critical') {
+          const _ps = compareResultToPanicRange(h.result, r);
+          if (_ps === 'HIGH' || _ps === 'LOW') {cls = 'critical'; st = '';}
+        }
         // 8.15.17: 历史小列不再只按 LIS 的 AbFlag 上色，而是与主结果共用同一套「可批审 / 须人工」判定，
         // 且用**当前生效的放行规则**（含 ⚙ 人工覆盖）现算 —— 所以上调/下调上下限后，
         // 历史列的颜色与形式（白底虚线 vs 满色实线）会跟着一起变，不需要重新打开历史。
@@ -16305,7 +16315,11 @@ window.addEventListener('keydown',function(e){
           // 只用 group 上「最后一份」的 ref 去套所有历史值会误判。
           ref: _histItemRef(it),
           vlow: it.ValueLow,
-          vhigh: it.ValueHigh
+          vhigh: it.ValueHigh,
+          // 8.16.10: 该次记录**自己的**危急范围——历史值是否达危急要靠它判
+          // （LIS 历史快照的 AbFlag 只到 H/L，不体现危急；没有它历史危急值会被画成普通高/低）
+          plow: it.PanicLow || it.CriticalLow || it.CrisisLow || it.DangerLow || '',
+          phigh: it.PanicHigh || it.CriticalHigh || it.CrisisHigh || it.DangerHigh || ''
         });
       });
     });
@@ -16529,20 +16543,31 @@ window.addEventListener('keydown',function(e){
 
   function histRowHTML(g, r) {
     const f = r.flag;
-    const flagCls = f === 'H' || f === 'HH' || f === 'PH' || f === 'UH' ? 'H' : f === 'L' || f === 'LL' || f === 'PL' || f === 'UL' ? 'L' : f === 'A' ? 'A' : '';
-    const flagText =
+    let flagCls = f === 'H' || f === 'HH' || f === 'PH' || f === 'UH' ? 'H' : f === 'L' || f === 'LL' || f === 'PL' || f === 'UL' ? 'L' : f === 'A' ? 'A' : '';
+    let flagText =
       f === 'HH' || f === 'PH' || f === 'UH' ? '↑↑' : f === 'LL' || f === 'PL' || f === 'UL' ? '↓↓' : f === 'H' ? '↑' : f === 'L' ? '↓' : f === 'A' ? '⚠' : '';
     // 8.15.17: 高/低再分两档，与结果表同一形式——可批审加 .mild（白底彩字 + 虚竖条），
     // 否则满色底白字（须人工）。危急（↑↑/↓↓，HH/LL/PH/PL/UH/UL）固定满色红底，不参与 mild 判定。
-    const isCri = f === 'HH' || f === 'PH' || f === 'UH' || f === 'LL' || f === 'PL' || f === 'UL';
-    const valCls = (flagCls === 'H' || flagCls === 'L')
-      ? flagCls + ((!isCri && histRowMild(g, r, flagCls)) ? ' mild' : '')
-      : flagCls;
+    let isCri = f === 'HH' || f === 'PH' || f === 'UH' || f === 'LL' || f === 'PL' || f === 'UL';
+    // 8.16.10: 上面那句「危急固定满色红底」其实**没有对应 CSS 类**（只有 .H/.L/.A）——
+    // 于是历史浮层里真危急值（HH/LL）被画成了普通满色橙/蓝，和普通高/低分不出来。
+    // 这里补两件事：① 用该次记录自己的危急范围复核（LIS 历史 AbFlag 常只到 H/L）；
+    // ② 判为危急时改用 .critical 类（深红），并把标志列升级为 ↑↑/↓↓。
+    if (!isCri) {
+      const _ps = compareResultToRange(r.value, r.plow, r.phigh);
+      if (_ps === 'HIGH') {isCri = true; flagCls = 'H'; flagText = '↑↑';}
+      else if (_ps === 'LOW') {isCri = true; flagCls = 'L'; flagText = '↓↓';}
+    }
+    const valCls = isCri
+      ? 'critical'
+      : (flagCls === 'H' || flagCls === 'L')
+        ? flagCls + (histRowMild(g, r, flagCls) ? ' mild' : '')
+        : flagCls;
     const rowCls = r.meta.isCurrent ? 'hist-row-cur' : '';
     return `<tr class="${rowCls}">
       <td class="hist-date">${esc(r.date)}${r.meta.isCurrent ? '<span class="hist-now">本次</span>' : ''}</td>
       <td class="hist-val ${valCls}">${esc(r.value)}${g.unit ? ' <span class="hist-unit">' + esc(g.unit) + '</span>' : ''}</td>
-      <td class="hist-flag ${flagCls}">${flagText}</td>
+      <td class="hist-flag ${isCri ? 'critical' : flagCls}">${flagText}</td>
       <td class="hist-src">${esc(r.meta.testSetDesc || '')}${r.meta.labno ? ' · ' + esc(r.meta.labno) : ''}${r.meta.wgName ? ' · ' + esc(r.meta.wgName) : ''}</td>
     </tr>`;
   }
@@ -16838,6 +16863,11 @@ window.addEventListener('keydown',function(e){
 .hist-val.L.mild{color:#1d4ed8!important;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:1px 5px}
 .hist-val.A{color:#be185d!important;background:#fdf2f8;border:1px solid #fce7f3;border-radius:4px;padding:1px 5px}
 .hist-val.H:not(.mild) .hist-unit,.hist-val.L:not(.mild) .hist-unit{color:rgba(255,255,255,.9)}
+/* 8.16.10: 危急档——此前注释写着「危急固定满色红底」，但**根本没写这个类**，
+   历史浮层里真危急值（HH/LL）被画成普通满色橙/蓝，和普通高/低分不出来。补上。 */
+.hist-val.critical{color:#fff!important;background:#b91c1c;border:1px solid transparent;border-radius:4px;padding:1px 5px}
+.hist-val.critical .hist-unit{color:rgba(255,255,255,.9)}
+.hist-flag.critical{color:#b91c1c;font-weight:800}
 .hist-flag.H{color:#ea580c;font-weight:800}
 .hist-flag.L{color:#1d4ed8;font-weight:800}
 .hist-flag.A{color:#be185d;font-weight:800}
