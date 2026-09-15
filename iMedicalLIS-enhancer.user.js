@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.10
+// @version      8.16.11
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -99,7 +99,8 @@
     autoAuditPushBuf: 'LIS_AA_PushBuf', // 8.9.6: 连续结果合并推送缓冲区（连续做标本时攒单，防手机连响）
     autoAuditPushLast: 'LIS_AA_PushLastTs', // 8.10.2: 上一条轮次推送发出时刻（前沿即发 + 最短间隔节奏，跨刷新存续）
     mildLog: 'LIS_MildAuditLog', // 8.12.0: F4 轻微异常放行留痕（本地环形 500，不推送不进自动审核日志）
-    mildRules: 'LIS_MildRuleOverrides' // 8.15.9: 轻微放行范围的人工覆盖（详情面板 ⚙ 可调；删掉即恢复默认）
+    mildRules: 'LIS_MildRuleOverrides', // 8.15.9: 轻微放行范围的人工覆盖（详情面板 ⚙ 可调；删掉即恢复默认）
+    aaAck: 'LIS_AA_Ack' // 8.16.11: 待审里「已知晓」的标本（危急/无法自动审核）——不再进自动审核推送
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -1289,6 +1290,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ws-audit-normal{color:#059669}
 .ws-audit-beyond{color:#5b21b6}
 .ab-card-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+/* 8.16.11: 待审卡片「已知晓」按钮——危急 / 无法自动审核的标本点一次就不再进手机推送。
+   只掐推送：卡片照旧红、照旧留在待审、照旧不能自动审核（医疗安全不因「知道了」放松）。 */
+.ab-ack-btn{flex:0 0 auto;font-size:10.5px;font-weight:700;line-height:1.35;padding:1px 7px;border-radius:4px;border:1px solid var(--lis-border-strong);background:#fff;color:var(--lis-text-secondary);cursor:pointer;white-space:nowrap;transition:all .15s}
+.ab-ack-btn:hover{border-color:var(--lis-primary);color:var(--lis-primary);background:var(--lis-primary-light)}
+.ab-ack-btn.on{background:#ecfdf5;border-color:#a7f3d0;color:#047857}
+.ab-ack-btn.on:hover{background:#fef2f2;border-color:#fecaca;color:#b91c1c}
 .ab-card-name{font-size:13px;font-weight:700;color:var(--lis-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
 .ab-card-no{font-family:ui-monospace,monospace;font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
 .ab-card-test{font-size:11px;color:var(--lis-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
@@ -8842,6 +8849,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     dbg('[WS] openWS 被调用');
     if (DEBUG) {console.trace('[WS] openWS 调用栈');}
+    wsMarkUserClosed(false); // 8.16.11: 用户（或用户发起的流程）主动打开 → 解除「别再自动拉回来」标记
 
     applyWSState(loadWSState());
     _abnormalPrewarmDR = '';
@@ -8890,6 +8898,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     saveWSState();
     dbg('[WS] closeWS 被调用');
     if (DEBUG) {console.trace('[WS] closeWS 调用栈');}
+    // 8.16.11: 记下「是用户主动离开工作台」。自动审核的保活（keepWorkbenchOnTop）会看这个标记，
+    // 不再把正在看原始 LIS 的用户强行拉回工作台；用户自己再点开（openWS）即解除。
+    wsMarkUserClosed(true);
     wsEl.classList.remove('show');
     wsEl.style.cssText = 'display:none!important';
     document.body.style.overflow = '';
@@ -9022,6 +9033,23 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     } catch (e) {}
   }
 
+  // ==================== 8.16.11: 「用户主动离开工作台」标记 ====================
+  // 现场：开着自动审核时，回原始 LIS 看东西会被**强行切回工作台**（很烦）。
+  // 原因是自动审核每轮都跑 keepWorkbenchOnTop('自动审核') 保活，还有整页刷新后的自动重开。
+  // 现在：closeWS() 落这个标记 → 保活/自动重开一律让路；用户自己点开工作台（openWS）即清除。
+  // 用 sessionStorage：原始 LIS 内部跳转/刷新后仍然尊重用户「我要待在原始界面」的意愿；
+  // 仅本标签页有效，不影响其它标签页。
+  const WS_USER_CLOSED_KEY = 'LIS_WS_UserClosed';
+  function wsUserClosedWS() {
+    try {return sessionStorage.getItem(WS_USER_CLOSED_KEY) === '1';} catch (e) {return false;}
+  }
+  function wsMarkUserClosed(on) {
+    try {
+      if (on) {sessionStorage.setItem(WS_USER_CLOSED_KEY, '1');}
+      else {sessionStorage.removeItem(WS_USER_CLOSED_KEY);}
+    } catch (e) {}
+  }
+
   function isWSVisible() {
     const wsEl = document.getElementById('lis-ws');
     return !!(wsEl && wsEl.classList.contains('show'));
@@ -9030,6 +9058,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   function keepWorkbenchOnTop(reason) {
     const wsEl = document.getElementById('lis-ws');
     if (!wsEl) {return;}
+    // 8.16.11: 用户主动退出过工作台（在看原始 LIS）→ 不强行拉回来。
+    // 自动审核走的是 iframe（ensureReportPageLoaded 点「报告处理」链接在子框架里审），
+    // **不需要工作台可见**就能继续审，所以让路不影响审核本身。
+    if (wsUserClosedWS()) {
+      dbg('[WS] 用户已主动退出工作台，跳过保活重开：', reason || '');
+      return;
+    }
     if (!wsEl.classList.contains('show')) {
       applyWSState(loadWSState());
       invalidateCaches(); // 确保使用最新数据渲染
@@ -9361,7 +9396,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           setTimeout(() => tryOpen(n - 1), 400);
           return;
         }
-        if (!isWSVisible()) {openWS();}
+        if (!isWSVisible()) {
+          // 8.16.11: 用户主动退出过工作台就不自动重开（否则原始 LIS 里一点刷新就被拉回来）
+          if (wsUserClosedWS()) {dbg('[WS] 用户已主动退出工作台，跳过刷新后自动重开');}
+          else {openWS();}
+        }
         else {loadWSData({ force: true }).catch(() => {});}
       } catch (e) {
         setTimeout(() => tryOpen(n - 1), 400);
@@ -12306,6 +12345,13 @@ window.addEventListener('keydown',function(e){
       h += `<span class="ab-card-name">${highlightText(r.PatName || '', wsSearchQuery)}</span>`;
       h += recheckTagHTML(r);
       h += admTypeBadgeHTML(r);
+      // 8.16.11: 「已知晓」——只在**需要人工**的标本上给（危急 / 超带无法自动审核 / 堵孔0值 / 传染病提示）。
+      // 点一次后该标本不再进自动审核推送（仍照旧留在待审、仍须人工审核）。可再点一次取消。
+      const _ackEligible = _cardCls === 'critical' || _cardCls === 'beyond' || hasCritical || hasZeroSuspect || !!hasInfectionWarning;
+      if (_ackEligible) {
+        const _acked = aaAckHas(r.ReportDR);
+        h += `<button type="button" class="ab-ack-btn${_acked ? ' on' : ''}" data-ack="${escAttr(r.ReportDR || '')}" title="${_acked ? '已标记「已知晓」：该标本不再进自动审核推送；点击可取消标记' : '标记「已知晓」：该标本不再进自动审核推送（仍留在待审、仍须人工审核）'}">${_acked ? '✓ 已知晓' : '已知晓'}</button>`;
+      }
       h += '</div>';
       h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
       h += '</div>';
@@ -12419,6 +12465,24 @@ window.addEventListener('keydown',function(e){
       body.removeEventListener('click', body._abnormalClickHandler);
     }
     body._abnormalClickHandler = e => {
+      // 8.16.11: 「已知晓」按钮 —— 必须先拦下，否则会被下面的卡片点击当成选中卡片
+      const ackBtn = e.target.closest ? e.target.closest('.ab-ack-btn') : null;
+      if (ackBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const dr = String(ackBtn.dataset.ack || '');
+        if (!dr) {return;}
+        const on = !aaAckHas(dr);
+        aaAckSet(dr, on);
+        showToast(
+          on
+            ? '已标记「已知晓」 —— 该标本不再进自动审核推送（仍留在待审，仍须人工审核）'
+            : '已取消「已知晓」标记 —— 该标本恢复进推送',
+          on ? 'success' : 'info'
+        );
+        renderWSTable(); // 重渲染卡片，按钮状态立即跟上
+        return;
+      }
       const card = e.target.closest('.ws-abnormal-card');
       if (!card) {return;}
       const specimen = findWSSpecimenByReportDR(card.dataset.rdr);
@@ -23838,6 +23902,46 @@ window.addEventListener('keydown',function(e){
     _flushNotifyRetry();
   }
   _flushNotifyRetry(); // 启动时若上次遗留待补发队列，30s 泵自动接续
+
+  // ==================== 8.16.11: 「已知晓」——危急 / 无法自动审核的标本不再重复推送 ====================
+  // 现场：开着自动审核 + 推送时，每次退出工作台再进去，待审里那批危急值标本会被再推一次；
+  // 反复响很烦。用户在待审卡片上点一次「已知晓」，该标本就**永久不再进推送**。
+  // ⚠️ 只掐推送：卡片照旧是红色、照旧留在待审、照旧不能自动审核（医疗安全第一，不因为「知道了」就放松）。
+  // 存 ReportDR（标本唯一）→ 同一标本不会因为重开工作台/刷新页面而复活。
+  const AA_ACK_KEEP_DAYS = 7; // 纯存储卫生：ReportDR 唯一，7 天后清掉不会让已处理的老标本复活
+  let _aaAckCache = null;
+  function aaAckSave() {
+    try {localStorage.setItem(K.aaAck, JSON.stringify(_aaAckCache || {}));} catch (e) {}
+  }
+  function aaAckLoad() {
+    if (_aaAckCache) {return _aaAckCache;}
+    let o = {};
+    try {
+      const raw = JSON.parse(localStorage.getItem(K.aaAck) || 'null');
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {o = raw;}
+    } catch (e) {o = {};}
+    const cut = Date.now() - AA_ACK_KEEP_DAYS * 86400000;
+    let dirty = false;
+    Object.keys(o).forEach(k => {if (!(Number(o[k]) > cut)) {delete o[k]; dirty = true;}});
+    _aaAckCache = o;
+    if (dirty) {aaAckSave();}
+    return o;
+  }
+  function aaAckHas(dr) {
+    const k = String(dr || '');
+    if (!k) {return false;}
+    return !!aaAckLoad()[k];
+  }
+  function aaAckSet(dr, on) {
+    const k = String(dr || '');
+    if (!k) {return false;}
+    const o = aaAckLoad();
+    if (on) {o[k] = Date.now();} else {delete o[k];}
+    aaAckSave();
+    return !!on;
+  }
+  function aaAckCount() {return Object.keys(aaAckLoad()).length;}
+
   function pushAutoAuditNotify(payload) {
     const p = payload || {};
     // 8.10.4: 不再发送 Bark subtitle 字段（实测加密推送下 Bark 不还原 subtitle，明文才显示，
@@ -24100,6 +24204,15 @@ window.addEventListener('keydown',function(e){
       if (extra) {_aaPushBufAdd(extra);}
       if (!_aaPushBuf) {return false;}
       const b = _aaPushBuf;
+      // 8.16.11: 已被「已知晓」的条目在发出前再过滤一次——用户可能在缓冲窗口内（合并推送会等
+      // 最短间隔）才点的已知晓，此时条目已入缓冲；冲销其计数贡献后丢弃，避免照旧响一声。
+      const _ackDrop = b.entries.filter(en => en && en.k === 's' && en.e && aaAckHas(en.e.reportDR));
+      if (_ackDrop.length) {
+        _ackDrop.forEach(en => _aaCountBufEntry(b, en, -1));
+        b.entries = b.entries.filter(en => _ackDrop.indexOf(en) === -1);
+        b.updated = Date.now();
+        _aaPushBufSave();
+      }
       const last = {}, order = [];
       b.entries.forEach(en => {if (!(en.id in last)) {order.push(en.id);} last[en.id] = en;}); // 同标本取最后一次
       let passN = 0, abnPassN = 0;
@@ -25291,7 +25404,9 @@ window.addEventListener('keydown',function(e){
     const prevMute = _autoAuditMute;
     _autoAuditMute = true;
     try {
-      // 保活：工作台关闭时自动重开（用户确认：保持运行）
+      // 保活：工作台被整页刷新弄丢时自动重开（保持运行）。
+      // 8.16.11: 但**用户主动退出工作台**（在看原始 LIS）时不重开——keepWorkbenchOnTop 内部会让路；
+      // 审核本身走 iframe，不需要工作台可见，所以「让路」不影响审核继续跑。
       if (!isWSVisible()) {keepWorkbenchOnTop('自动审核');}
       if (!wsData.length) {
         try {await loadWSData();} catch (e) {}
@@ -25580,10 +25695,15 @@ window.addEventListener('keydown',function(e){
       // 3) 清理已消失标本的跳过记录（人工审掉/已出范围的标本不再占位）
       // 8.8.25: 各收尾步骤互相隔离——任何一步抛错都不再吞掉后续的推送
       try {
-        const _liveDRs = new Set(wsData.map(x => String(x.ReportDR)));
-        Object.keys(_autoAuditSkipSeen).forEach(k => {
-          if (!_liveDRs.has(k)) {delete _autoAuditSkipSeen[k];}
-        });
+        // 8.16.11: 只在**完整快照**下清理跳过记录。partial/加载失败时其它工作组/仪器的标本不在
+        // wsData 里，会把它们的跳过记录误删；等数据补全后同一批危急值又被当「新跳过」推一次
+        // ——这正是「退出工作台再进去又推一遍」的来源之一（重开工作台首刷常常是 partial）。
+        if (!_wsDataHealth.partial && !_wsDataHealth.failed) {
+          const _liveDRs = new Set(wsData.map(x => String(x.ReportDR)));
+          Object.keys(_autoAuditSkipSeen).forEach(k => {
+            if (!_liveDRs.has(k)) {delete _autoAuditSkipSeen[k];}
+          });
+        }
       } catch (e) {dbg('清理跳过记录异常:', e);}
 
       // 4) 日志 + 小结（skipped 已去重，只含新跳过）
@@ -25605,12 +25725,15 @@ window.addEventListener('keydown',function(e){
         // 红线（危急值/堵孔0值/传染病阳性/心肌标志物/含负值）不受任何等待限制，立即把缓冲与本轮合并成一条 critical 发出。
         // 隐私红线：用户已确认标本号与接收时间可进推送；姓名/住院号/床号/科室等身份信息绝不含。
         const _notifyMode = autoAuditNotifyMode();
+        // 8.16.11: 已被用户「已知晓」的标本**不进推送**（也再查一次存储，覆盖本轮开始后才点的情况）。
+        // 界面/toast/日志仍含它们（照旧留痕），只有手机推送被掐掉——这正是用户要的「点了就别再推」。
+        const _pushSkipped = skipped.filter(s => !s.ack && !aaAckHas(s.reportDR));
         // 8.13.0: 三档化——all=有动作即推；blocked=有留人工才推；off=不推
-        if (_notifyMode !== 'off' && (_notifyMode === 'all' || skipped.length > 0)) {
+        if (_notifyMode !== 'off' && (_notifyMode === 'all' || _pushSkipped.length > 0)) {
           // 标题分组统计：红线按类别、其余失败归「审核失败」
           const _redCats = [];
           let _otherFailN = 0;
-          skipped.forEach(s => {
+          _pushSkipped.forEach(s => {
             const cat = autoAuditReasonCat(s.reason);
             if (cat) {
               const hit = _redCats.find(x => x[0] === cat);
@@ -25619,9 +25742,12 @@ window.addEventListener('keydown',function(e){
           });
           // 8.13.0: 明细条目按模式过滤（聚合计数不受影响）——all 全带；blocked 只带留人工
           const _evEntries = [];
-          skipped.forEach(s => {_evEntries.push({id: _aaPushEntryId(s), k: 's', e: s});});
+          _pushSkipped.forEach(s => {_evEntries.push({id: _aaPushEntryId(s), k: 's', e: s});});
           audited.forEach(a => {_evEntries.push({id: _aaPushEntryId(a), k: a.t === 'abnormal' ? 'a' : 'n', e: a});});
-          queueAutoAuditPush({passByMn: _passByMn, redCats: _redCats, otherFailN: _otherFailN, entries: aaEventEntriesForPush(_notifyMode, _evEntries), mode: _notifyMode});
+          // 全被「已知晓」掐掉且没有通过项 → 不推空推送
+          if (_redCats.length || _otherFailN > 0 || _evEntries.length > 0) {
+            queueAutoAuditPush({passByMn: _passByMn, redCats: _redCats, otherFailN: _otherFailN, entries: aaEventEntriesForPush(_notifyMode, _evEntries), mode: _notifyMode});
+          }
         }
         // 8.8.25: 本轮完整走完并已推送 → 清空累积器（off 模式也清，避免日后重开时误补报旧轮）
         aaClear();
@@ -25654,9 +25780,12 @@ window.addEventListener('keydown',function(e){
     const _si = auditRecordSpecInfo(r.ReportDR || r.reportDR, r);
     // 8.8.14: 一并携带接收时间（报告时间语境，与工作台卡片一致）——用户已确认标本标识/时间可进推送
     // 8.8.22: 一并携带流水号 EpisodeNo（推送标本头优先用流水号）；8.8.24: 补机器名 mn（推送标题分组）
-    const entry = { reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items };
+    // 8.16.11: ack=1 表示该标本已被用户「已知晓」——日志照旧记（留痕），但**不进推送**
+    const _acked = aaAckHas(key);
+    const entry = { reportDR: String(r.ReportDR || r.reportDR || ''), name: r.PatName || r.name || '', labno: r.Labno || r.labno || '', seq: r.EpisodeNo || r.episodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || r.acceptDT || '', reason, test: _si.test, abn: _si.abn, items: _si.items, ack: _acked };
     skipped.push(entry);
-    aaRecordEvent('留人工', entry); // 8.8.25: 增量持久化
+    // 已「已知晓」的不进推送累积器——否则整页刷新后的「补报」会把它再推一次
+    if (!_acked) {aaRecordEvent('留人工', entry);} // 8.8.25: 增量持久化
   }
 
   // 8.5.76: 结果是否为负值（如 -1.3）——任何仪器/项目出现负值结果即视为不可自动审核，留人工
