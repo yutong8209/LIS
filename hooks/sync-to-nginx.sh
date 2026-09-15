@@ -28,21 +28,36 @@ LOCK_MAX_AGE=600
 if ! mkdir "$LOCK" 2>/dev/null; then
   lock_age="$LOCK_MAX_AGE"
   [ -f "$LOCK/ts" ] && lock_age=$(( $(date +%s) - $(cat "$LOCK/ts" 2>/dev/null || echo 0) ))
-  if [ "$lock_age" -gt "$LOCK_MAX_AGE" ]; then
+  lock_pid="$(cat "$LOCK/pid" 2>/dev/null || echo '')"
+  # 8.16.5: 判据从「只看锁龄」升级为「先看持锁进程是否还活着」。
+  # 钩子是用 nohup 起的后台任务，提交命令一返回就可能被整进程组带走（SIGKILL 无法 trap，
+  # trap EXIT 不会执行，锁留在原地）。此前只能干等 600s 才自动接管，表现是
+  # 「自动同步静默停摆、要人工 rm 锁 + 手动补跑」（2026-09-15 连踩两次）。
+  # 进程已死 → 立刻接管；进程还在 → 按原逻辑留 pending 待补跑。
+  if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+    log "⚠️ 同步锁的持锁进程 ${lock_pid} 已不存在（锁龄 ${lock_age}s），立即接管"
+    rm -rf "$LOCK"
+  elif [ -z "$lock_pid" ] && [ "$lock_age" -gt 30 ]; then
+    # 没有 pid 的锁只可能来自「旧版脚本」或「mkdir 与写 pid 之间被 kill」——
+    # 一次正常同步约 8s，超过 30s 还没写 pid 就一定没有活着的持有者。
+    log "⚠️ 同步锁无持锁进程记录且已存在 ${lock_age}s（>30s），判定为陈旧锁，立即接管"
+    rm -rf "$LOCK"
+  elif [ "$lock_age" -gt "$LOCK_MAX_AGE" ]; then
     log "⚠️ 同步锁已残留 ${lock_age}s（>${LOCK_MAX_AGE}s），判定为陈旧锁，强制接管"
     rm -rf "$LOCK"
-    if ! mkdir "$LOCK" 2>/dev/null; then
-      touch "$PENDING"
-      log "接管失败（另一进程刚好抢到锁），本次标记为待补跑"
-      exit 0
-    fi
   else
     touch "$PENDING"
     log "已有同步在跑，本次标记为待补跑"
     exit 0
   fi
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    touch "$PENDING"
+    log "接管失败（另一进程刚好抢到锁），本次标记为待补跑"
+    exit 0
+  fi
 fi
 date +%s > "$LOCK/ts"
+echo $$ > "$LOCK/pid"
 trap 'rm -rf "$LOCK" 2>/dev/null' EXIT
 
 local_ver="$(grep -m1 '^// @version' "$DIR/iMedicalLIS-enhancer.user.js" | sed 's/.*@version[[:space:]]*//')"
