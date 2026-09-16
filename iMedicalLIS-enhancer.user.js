@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.29
+// @version      8.16.30
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14305,6 +14305,10 @@ window.addEventListener('keydown',function(e){
       // 8.9.4: 跨整页刷新后 CA 会话必然失效，清掉工作组 CA 缓存——否则恢复的首条走秒审快路径
       // 必失败一次（requeue 浪费一轮），下一条才回退慢路径弹 CA 重登
       freshQueue.caReadyByWg = {};
+      // 8.16.30: 跨整页刷新或切组续跑时，清空剩余标本在旧组可能积累的重试次数，确保在正确工作组拥有完整尝试机会
+      (freshQueue.items || []).forEach(it => {
+        if (it) {it.retry = 0;}
+      });
       // 8.9.4: pausedForSwitch 由 continueAuditQueue 在拿到队列锁后才清（见其开头）——拿锁失败
       //（如刷新后残留锁未过期）时标记仍在，据此自动重试直到接手成功（60s > 锁 TTL 45s）
       continueAuditQueue(freshQueue).catch(e => {
@@ -18059,7 +18063,13 @@ window.addEventListener('keydown',function(e){
   }
 
   function isScriptOwnedNativeSelection() {
-    return !!(_auditInProgress || _abnormalAuditInProgress || _detailAuditInProgress);
+    return !!(
+      _auditInProgress ||
+      _abnormalAuditInProgress ||
+      _detailAuditInProgress ||
+      _queueLockToken ||
+      document.getElementById('lis-audit-progress')
+    );
   }
 
   function clearNativeUserSelectLock() {
@@ -22753,7 +22763,7 @@ window.addEventListener('keydown',function(e){
         : today());
       const findStr = '&WorkGroupMachineDR=&ReportStatus=&SttAccDate=' + dateStr;
       if (typeof iframeWin.ShowWorkList === 'function') {iframeWin.ShowWorkList(findStr);}
-      await sleep(options.fast ? 120 : 250);
+      await sleep(options.fast ? 250 : 350);
       dbg('原生工作列表已切换为全部仪器');
     } catch (e) {
       dbg('切换全部仪器列表异常:', e);
@@ -22779,25 +22789,26 @@ window.addEventListener('keydown',function(e){
     } catch (e) {nativeCurDate = '';}
     const dateChanged = !!(wantDate && (!nativeCurDate || wantDate !== nativeCurDate));
     const mdrKey = String(item.mdr || '');
-    const machineChanged = mdrKey && String(me.WorkGroupMachineDR || '') !== mdrKey;
+    const machineChanged = String(me.WorkGroupMachineDR || '') !== mdrKey;
     if (!machineChanged && !dateChanged && !options.force) {return iframeWin;}
     try {
-      if (item.mdr) {
-        if (me.WorkGroupMachineDR !== undefined) {me.WorkGroupMachineDR = item.mdr;}
-        try {
-          jq('#cmb_WorkGroupMachine').combogrid('setValue', item.mdr);
-        } catch (e) {}
-      }
+      if (me.WorkGroupMachineDR !== undefined) {me.WorkGroupMachineDR = mdrKey;}
+      try {
+        jq('#cmb_WorkGroupMachine').combogrid('setValue', mdrKey);
+      } catch (e) {}
       if (wantDate && jq('#dt_wlReportDate').length) {
         try {jq('#dt_wlReportDate').datebox('setValue', wantDate);} catch (e) {}
       }
       // 8.8.2: 登记日非今天 → 标记日期框被切走，会话结束（批审完/自动审核一轮完/关面板/关工作台）恢复今天
       if (wantDate && wantDate !== today()) {_wsDateboxCustom = true;}
       const dateStr = wantDate || nativeCurDate || today();
-      const findStr = '&WorkGroupMachineDR=' + (item.mdr || '') + '&ReportStatus=&SttAccDate=' + dateStr;
+      const findStr = '&WorkGroupMachineDR=' + mdrKey + '&ReportStatus=&SttAccDate=' + dateStr;
       if (typeof iframeWin.ShowWorkList === 'function') {iframeWin.ShowWorkList(findStr);}
-      else if (typeof iframeWin.FindFast === 'function') {iframeWin.FindFast(item.labno || findStr);}
-      await sleep(options.fast ? 70 : options.force ? 120 : machineChanged ? 100 : 60);
+      else if (typeof iframeWin.FindFast === 'function') {
+        if (iframeWin.me) {iframeWin.me.wlFindFlag = 'LabNo';}
+        iframeWin.FindFast(item.labno || findStr);
+      }
+      await sleep(options.fast ? 100 : options.force ? 180 : machineChanged ? 150 : 80);
     } catch (e) {
       dbg('刷新原生工作列表异常:', e);
     }
@@ -22826,15 +22837,26 @@ window.addEventListener('keydown',function(e){
 
   async function waitAndSelectNativeRow(iframeWin, item, options = {}) {
     const timeoutMs = typeof options === 'number' ? options : options.timeoutMs || 9000;
-    const pollMs = (typeof options === 'object' && options.pollMs) || 60;
-    const skipListRefresh = typeof options === 'object' && !!options.skipListRefresh;
-    const selOpts = typeof options === 'object' && options.force ? { force: true } : {};
+    const pollMs = (typeof options === 'object' && options.pollMs) || 50;
+    const selOpts = { force: true }; // 8.16.30: 自动化/批审选行一律强制选行，绝不被手动查看锁或初始未选中误拦截
     const end = Date.now() + timeoutMs;
-    let refreshed = skipListRefresh;
     iframeWin = getReportIframeWin() || iframeWin;
     if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
       return { ok: true, iframeWin };
     }
+
+    // 8.16.30: 缓冲 160ms 检查异步工作列表（ShowWorkList）是否刚渲染返回
+    for (let p = 0; p < 4; p++) {
+      await sleep(40);
+      iframeWin = getReportIframeWin() || iframeWin;
+      if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
+        return { ok: true, iframeWin };
+      }
+    }
+
+    // 8.16.30: 条码快速检索兜底。必须确保 me.wlFindFlag === 'LabNo'，
+    // 严防 LIS 快速检索停留在「流水号(EpisNo)」导致将条码当流水号检索落空，
+    // 进而将 datagrid 误清空为 0 行造成整批连锁选行失败。
     if (
       item.labno &&
       iframeWin &&
@@ -22842,8 +22864,11 @@ window.addEventListener('keydown',function(e){
       canScriptSelectNativeRow(iframeWin, item.reportDR)
     ) {
       try {
+        if (iframeWin.me) {
+          iframeWin.me.wlFindFlag = 'LabNo';
+        }
         iframeWin.FindFast(item.labno);
-        for (let f = 0; f < 8; f++) {
+        for (let f = 0; f < 10; f++) {
           await sleep(50);
           iframeWin = getReportIframeWin() || iframeWin;
           if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
@@ -22852,13 +22877,13 @@ window.addEventListener('keydown',function(e){
         }
       } catch (e) {}
     }
+
+    let refreshed = false;
     while (Date.now() < end) {
       if (!refreshed) {
         refreshed = true;
-        // 8.5.35: force:false — 是否刷新交给 refreshNativeWorkListForItem 内部的 machineChanged 判断。
-        // 之前 force:true 对同机台标本也强制 ShowWorkList 服务端全量查询（每条 1 次多余往返），
-        // 是批审慢的主要冗余来源；异常待审/预热路径本来就只在机器变化时刷新，这里对齐。
-        iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: false });
+        // 8.16.30: 若当前网格中仍未找到，强制调用 refreshNativeWorkListForItem 服务端全量拉取
+        iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true });
       } else {
         await sleep(pollMs);
       }
@@ -23435,6 +23460,7 @@ window.addEventListener('keydown',function(e){
           if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {return false;}
           if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
           queue.pausedForSwitch = true;
+          item.retry = 0; // 8.16.30: 切组前重置该标本重试计数，避免在旧组免切组失败的计数带入新组直接被跳过
           saveAuditQueueNow(queue);
           const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
           const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
@@ -23556,9 +23582,10 @@ window.addEventListener('keydown',function(e){
           if (!selectedOk) {
             progressPhase('选中标本');
             const selectedResult = await waitAndSelectNativeRow(iframeWin, item, {
-              timeoutMs: batchCAReady ? 2000 : batchListFresh ? 3500 : 4500,
+              timeoutMs: batchCAReady ? 3500 : batchListFresh ? 4000 : 5000,
               pollMs: batchCAReady ? 25 : 40,
-              skipListRefresh: batchListFresh
+              skipListRefresh: batchListFresh,
+              force: true
             });
             iframeWin = selectedResult.iframeWin || iframeWin;
             if (iframeWin) {
@@ -23566,19 +23593,20 @@ window.addEventListener('keydown',function(e){
               me = iframeWin.me;
             }
             selectedOk = selectedResult.ok;
-            if (!selectedOk && item.mdr) {
-              dbg('全部仪器列表未找到，回退切换仪器:', item.mdr);
+            if (!selectedOk) {
+              dbg('列表未找到标本，回退刷新列表查询:', item.mdr || '全部仪器', item.labno || item.reportDR);
               iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
               if (iframeWin) {
                 jq = iframeWin.jQuery || iframeWin.$;
                 me = iframeWin.me;
               }
-              batchLastMdr = String(item.mdr);
+              batchLastMdr = String(item.mdr || '');
               batchListFresh = true;
               const retrySel = await waitAndSelectNativeRow(iframeWin, item, {
-                timeoutMs: 2500,
+                timeoutMs: 3000,
                 pollMs: 40,
-                skipListRefresh: true
+                skipListRefresh: true,
+                force: true
               });
               iframeWin = retrySel.iframeWin || iframeWin;
               selectedOk = retrySel.ok;
