@@ -116,6 +116,7 @@ const tickSlice = src.slice(src.indexOf('async function autoAuditTick()'));
 ok(/aaSwitchFuseActive\(\)/.test(tickSlice), '自动审核 tick 尊重切组熔断');
 ok(/_dropped\.forEach\(r => autoAuditSkipOnce\(skipped, r, '跨组标本/.test(tickSlice), '熔断期跨组标本按「留人工」记账（不静默消失）');
 ok(/_fuseCur/.test(tickSlice) && /String\(r\._wg \|\| ''\) !== _fuseCur/.test(tickSlice), '熔断期只审当前工作组标本');
+ok(/const _fuseCur = String\(resolveLoginWGReliable\(\)\);/.test(tickSlice), '熔断期工作组使用权威可信登录组（非视图过滤组）');
 
 // A9. 中止提示必须是 error 类型 —— showToast 在自动审核静默期只放行 error
 ok(/showToast\('⛔ 批审已中止：' \+ reason \+ tail, 'error'\)/.test(src), '中止提示用 error 级（静默期也能看到）');
@@ -183,6 +184,7 @@ section('B1. 自动审核已关闭 → 立即中止（现场病根）');
   ok(box._state.toast.some(t => /批审已中止：自动审核已关闭/.test(t.msg) && t.type === 'error'), '明确提示「自动审核已关闭」（error 级）');
   ok(box._state.toast.some(t => /剩余 2 例/.test(t.msg)), '提示里带剩余待审数量（不让标本静默消失）');
   ok(!box._store.has('LIS_AuditQueue'), '落盘队列已清（页面重载后不会复活）');
+  ok(q._aborted === true, '队列对象置 _aborted = true');
 }
 
 // 场景 B：连续切组失败 → 到上限后中止 + 置熔断

@@ -21,13 +21,22 @@
 3. 改 nginx 配置（`D:\nginx-1.31.2\conf\nginx.conf`），在 9111 的 `location /lis-tools/` 之前加：
 
    ```nginx
+        # Bark 推送中转（含 /notify_status）
         location /notify {
             proxy_pass http://127.0.0.1:8766;
             proxy_set_header X-Real-IP $remote_addr;
         }
-   ```
 
-   （`/notify_status` 以 `/notify` 开头，天然一起命中，无需单独写。）
+        # 轻微放行范围与质控配置全科室多机同步（8.16.0+）
+        location /mild_rules {
+            proxy_pass http://127.0.0.1:8766;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+        location /qc_config {
+            proxy_pass http://127.0.0.1:8766;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+   ```
 4. 验证并重载 nginx：
 
    ```bat
@@ -66,7 +75,7 @@
 
 - 日志：`D:\bark-relay\bark_relay.log`（约 2MB 自动轮转），含每次 Bark 转发结果与安全拦截记录
 - 改 `notify_config.json`（如换 Bark 设备码）后无需重启：每次推送都重新读配置
-- 卸载：双击 **卸载开机自启.bat**，再删掉 nginx.conf 里的 `location /notify` 块并 reload
+- 卸载：双击 **卸载开机自启.bat**，再删掉 nginx.conf 里的 `location /notify`、`/mild_rules`、`/qc_config` 块并 reload
 
 ## 回滚
 

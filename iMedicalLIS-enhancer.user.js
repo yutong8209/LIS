@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.16
+// @version      8.16.17
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -13942,6 +13942,7 @@ window.addEventListener('keydown',function(e){
   const QUEUE_SAVE_THROTTLE = 10; // 每 N 条才全量落盘一次
   let _queueSaveMod = 0;
   function _writeFullQueue(queue) {
+    if (_batchAbort || (queue && queue._aborted)) {return;}
     try {
       localStorage.setItem(K.auditQueue, JSON.stringify({ ...queue, time: Date.now() }));
     } catch (e) {
@@ -13949,6 +13950,7 @@ window.addEventListener('keydown',function(e){
     }
   }
   function _writeQueueProgress(queue) {
+    if (_batchAbort || (queue && queue._aborted)) {return;}
     // 轻量写入：只保留 current 进度，断点续跑仍能继续（在下次全量写时补全其余字段）
     try {
       const raw = localStorage.getItem(K.auditQueue);
@@ -14122,6 +14124,8 @@ window.addEventListener('keydown',function(e){
   // 中止整批并落盘清理。返回 false 便于调用方 `if (!aaQueueGuardSwitch(q)) {...}` 直接短路。
   function aaQueueForceStop(queue, reason, opts) {
     const remain = Math.max(0, ((queue && queue.items) || []).length - ((queue && queue.current) || 0));
+    try {_batchAbort = true;} catch (e) {}
+    if (queue) {queue._aborted = true;}
     try {delete queue.pausedForSwitch;} catch (e) {}
     try {saveAuditQueueNow(queue);} catch (e) {} // 顺带取消未落盘的节流写入
     try {clearAuditQueue();} catch (e) {} // 掐掉落盘队列：否则整页刷新后 checkAuditQueueResume 会让它复活
@@ -20725,8 +20729,10 @@ window.addEventListener('keydown',function(e){
       const remoteHasData = (remote.rules && Object.keys(remote.rules).length > 0) ||
                             (Array.isArray(remote.added) && remote.added.length > 0);
 
-      // 情况 1：网关尚无规则或为空，而本地有规则 → 将本地规则上传网关作为全科室共享种子
-      if (!remoteHasData && localHasData) {
+      // 情况 1：网关从未被初始化过（remoteUpdatedAt === 0 且网关无数据），而本地有规则 → 将本地规则上传网关作为全科室共享种子
+      // 8.16.17: 必须严卡 remoteUpdatedAt === 0！否则某台电脑正常「恢复默认」清空了网关规则后，
+      // 其它电脑拉取时会因 remoteHasData 为假误进此分支，把本地旧数据重新当种子推回网关（无限复活）。
+      if (remoteUpdatedAt === 0 && !remoteHasData && localHasData) {
         local.updated_at = localUpdatedAt || Date.now();
         saveMildRuleOverrides(local, false);
         mildPushGatewayRules(local).catch(() => {});
@@ -20734,9 +20740,10 @@ window.addEventListener('keydown',function(e){
         return true;
       }
 
-      // 情况 2：远端更新（其它电脑修改并上传）→ 覆盖本地并刷新重算
+      // 情况 2：远端更新（其它电脑修改并上传，或远端被清空/恢复默认）→ 覆盖本地并刷新重算
       // 8.16.1: 用户显式保存后 10s 内不覆盖——防止 save→refresh→loadWSData→sync 竞态冲掉刚保存的数据
-      if (remoteUpdatedAt > localUpdatedAt && remoteHasData) {
+      // 8.16.17: 不再要求 remoteHasData 为真——远端规则被清空（全部恢复默认）时，本地必须同样清空并重算！
+      if (remoteUpdatedAt > localUpdatedAt) {
         if (Date.now() - _mildJustSavedTs < 10000) {
           dbg('[LIS-Mild] 检测到刚保存，跳过远端覆盖 (防竞态)');
           // 刚保存的本地可能比远端新但 updated_at 相近——补推一次确保网关与本地一致
@@ -20760,7 +20767,7 @@ window.addEventListener('keydown',function(e){
       }
 
       // 情况 3：本地较新（如离线时修改保存）→ 补推网关
-      if (localUpdatedAt > remoteUpdatedAt && localHasData) {
+      if (localUpdatedAt > remoteUpdatedAt) {
         mildPushGatewayRules(local).catch(() => {});
       }
       return true;
@@ -20966,6 +20973,7 @@ window.addEventListener('keydown',function(e){
     const ov = loadMildRuleOverrides();
     if (!ov.added.some(a => a && a.name === name)) {return false;}
     ov.added = ov.added.filter(a => a && a.name !== name);
+    delete ov.rules['x:' + name];
     _mildOvLog(ov, 'x:' + name, name, '已新增规则', '已删除（回到未配规则）');
     ov.updated_at = Date.now();
     saveMildRuleOverrides(ov);
@@ -23627,13 +23635,15 @@ window.addEventListener('keydown',function(e){
       // 8.15.5: 补上跳过数——此前结束 toast 只报成功/失败，跳过（留人工）只在进度条那行
       // 一闪而过，批审一结束就看不到「有多少条被安全门拦下、需要人工过一遍」。
       const _skipHint = skipCount > 0 ? `，跳过 ${skipCount} 条（需人工过一遍）` : '';
-      if (successCount > 0) {
-        showToast(
-          `批审结束（以列表为准）成功约 ${successCount}` + (failCount ? `，仍有 ${failCount} 条请核对` : '') + _skipHint,
-          (failCount || skipCount) ? 'warning' : 'success'
-        );
-      } else {
-        showToast('❌ 审核全部失败' + _skipHint, 'error');
+      if (!_batchAbort) {
+        if (successCount > 0) {
+          showToast(
+            `批审结束（以列表为准）成功约 ${successCount}` + (failCount ? `，仍有 ${failCount} 条请核对` : '') + _skipHint,
+            (failCount || skipCount) ? 'warning' : 'success'
+          );
+        } else {
+          showToast('❌ 审核全部失败' + _skipHint, 'error');
+        }
       }
 
       // 8.8.27: 若本批审为切组独立续跑（无外层 autoAuditTick 正在等待），在结束或切回原组前主动触发推送与日志结算
@@ -25823,7 +25833,7 @@ window.addEventListener('keydown',function(e){
       // switchCycles 计数被重置，等于把死循环的节奏放慢而已，并未终止（现场表现为
       // 「关闭自动审核也停不下来」）。熔断期内跨组标本按「留人工」记账，交给人工/F4。
       if (aaSwitchFuseActive()) {
-        const _fuseCur = String(resolveCurrentWG());
+        const _fuseCur = String(resolveLoginWGReliable());
         if (_fuseCur) {
           const _dropped = normals.filter(r => String(r._wg || '') !== _fuseCur);
           if (_dropped.length) {
