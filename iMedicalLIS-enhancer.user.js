@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.28
+// @version      8.16.29
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -12695,6 +12695,7 @@ window.addEventListener('keydown',function(e){
   // 8.5.53: opts.accept4=false 时内部静态匹配只认状态变 3（复检标本审核前就是 4）
   function softAuditSuccessHint(iframeWin, reportDR, opts = {}) {
     if (!iframeWin || !reportDR) {return false;}
+    if (isNativeConfirmVisible(iframeWin)) {return false;} // 8.16.29: 确认弹窗仍在绝非审核成功
     const accept4 = opts.accept4 !== undefined ? opts.accept4 : !_auditingPreStatus4;
     if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4 })) {return true;}
     // 自动审核只接受明确状态确认，软提示不能直接记为成功
@@ -18368,13 +18369,69 @@ window.addEventListener('keydown',function(e){
     return closed;
   }
 
-  // 8.16.27: 自动确认原生审核提示弹窗（#win_MessageConfirm 及 messager 确认窗）
+  // 8.16.29: 判定原生审核确认提示弹窗当前是否可见处于待确认状态
+  function isNativeConfirmVisible(iframeWin) {
+    const repWin = getReportIframeWin();
+    const wins = [iframeWin, repWin, window];
+    const visited = new Set();
+    for (const win of wins) {
+      if (!win || visited.has(win)) {continue;}
+      visited.add(win);
+      try {
+        const doc = win.document;
+        if (!doc) {continue;}
+        const jq = win.jQuery || win.$;
+        const modal = doc.getElementById('win_MessageConfirm');
+        if (modal) {
+          let isVisible = false;
+          if (jq) {
+            try {
+              const $m = jq(modal);
+              isVisible = $m.is(':visible') || ($m.parent().length && $m.parent().is(':visible'));
+            } catch (e) {}
+          }
+          if (!isVisible) {
+            isVisible =
+              modal.offsetParent !== null ||
+              (modal.parentElement &&
+                modal.parentElement.classList.contains('window') &&
+                modal.parentElement.style.display !== 'none');
+          }
+          if (isVisible) {return true;}
+        }
+        const allWins = doc.querySelectorAll(
+          '.messager-window:not([style*="display: none"])'
+        );
+        for (const w of allWins) {
+          if (w.offsetParent !== null) {
+            const body = w.querySelector('.messager-body, .panel-body');
+            if (body) {
+              const text = (body.textContent || '').trim();
+              if (
+                (text.indexOf('确定要') !== -1 && (text.indexOf('审核') !== -1 || text.indexOf('保存') !== -1)) ||
+                (text.indexOf('是否确定') !== -1 && text.indexOf('审核') !== -1) ||
+                text.indexOf('超出参考范围') !== -1
+              ) {
+                return true;
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+    return false;
+  }
+
+  // 8.16.27 / 8.16.29: 自动确认原生审核提示弹窗（#win_MessageConfirm 及 messager 确认窗）
   // 现场根因：当标本存在异常/轻微异常项目时，原生 VerifyReportResult 会返回 MaintinArr，
   // 触发 DealInfoArr 打开 #win_MessageConfirm（"结果超出参考范围，确定要审核该报告吗？"），
   // 并等待用户点击 #btn_Confirm 才会真正调用 LabResultSave。未确认前审核永久挂起直至超时漏审。
+  // 8.16.29 优化：移除盲目的 300ms 全局限频，改用弹窗内容去抖，确保连续两个轻异常标本批审时
+  // 第二个标本的确认弹窗绝不会被误拦；同时提供 isNativeConfirmVisible 阻断假成功判定。
+  let _lastConfirmText = '';
   let _lastConfirmClickAt = 0;
   function handleNativeMessageConfirm(iframeWin) {
-    if (Date.now() - _lastConfirmClickAt < 300) {return false;}
+    const now = Date.now();
     const repWin = getReportIframeWin();
     const wins = [iframeWin, repWin, window];
     const visited = new Set();
@@ -18409,8 +18466,12 @@ window.addEventListener('keydown',function(e){
             if (btn) {
               const infoDiv = doc.getElementById('div_showInfo');
               const infoText = (infoDiv ? infoDiv.textContent || '' : '').trim();
+              if (infoText && infoText === _lastConfirmText && now - _lastConfirmClickAt < 400) {
+                return false;
+              }
               dbg('检测到原生审核确认窗口(#win_MessageConfirm):', infoText.slice(0, 100), '-> 自动确认提交审核');
-              _lastConfirmClickAt = Date.now();
+              _lastConfirmText = infoText;
+              _lastConfirmClickAt = now;
               try {
                 if (jq && jq(btn).trigger) {
                   jq(btn).trigger('click');
@@ -18445,12 +18506,16 @@ window.addEventListener('keydown',function(e){
             (text.indexOf('是否确定') !== -1 && text.indexOf('审核') !== -1) ||
             text.indexOf('超出参考范围') !== -1
           ) {
+            if (text && text === _lastConfirmText && now - _lastConfirmClickAt < 400) {
+              return false;
+            }
             const btns = w.querySelectorAll('a.l-btn, button');
             for (const b of btns) {
               const bText = (b.textContent || b.value || '').trim();
               if (bText === '确定' || bText === 'OK' || bText === '是') {
                 dbg('检测到原生 messager 审核确认弹窗，自动点击确定:', text.slice(0, 80));
-                _lastConfirmClickAt = Date.now();
+                _lastConfirmText = text;
+                _lastConfirmClickAt = now;
                 try {
                   jq && jq(b).click ? jq(b).click() : b.click();
                 } catch (e) {
@@ -18640,12 +18705,16 @@ window.addEventListener('keydown',function(e){
             return true;
           }
         } else if (missingAsSuccess && sawTargetRow) {
-          if (!missingSince) {missingSince = Date.now();}
-          // 秒审：IsSaveSuccess 后行消失可更快认定成功
-          const needMs = sawSaveSuccess && turbo ? Math.min(missingStableMs, 60) : missingStableMs;
-          if (Date.now() - missingSince >= needMs) {
-            dbg('原生操作成功（目标行已稳定移出列表）');
-            return true;
+          if (isNativeConfirmVisible(iframeWin)) {
+            missingSince = 0; // 8.16.29: 仍有确认弹窗处于待确认状态，绝不可视为已成功移出列表
+          } else {
+            if (!missingSince) {missingSince = Date.now();}
+            // 秒审：IsSaveSuccess 后行消失可更快认定成功
+            const needMs = sawSaveSuccess && turbo ? Math.min(missingStableMs, 60) : missingStableMs;
+            if (Date.now() - missingSince >= needMs) {
+              dbg('原生操作成功（目标行已稳定移出列表）');
+              return true;
+            }
           }
         }
       }
@@ -18653,38 +18722,42 @@ window.addEventListener('keydown',function(e){
       if (me && me.IsSaveSuccess === true) {
         me.IsSaveSuccess = false;
         sawSaveSuccess = true;
-        if (!expectedStatuses || expectedStatuses.length === 0) {return true;}
-        const found = targetReportDR ? findNativeRowByReportDR(iframeWin, targetReportDR) : null;
-        if (found && isExpectedNativeStatus(found.row, expectedStatuses)) {
-          dbg('原生操作成功（IsSaveSuccess）');
-          return true;
-        }
-        if (!found && targetReportDR && (missingAsSuccess || sawSaveSuccess) && sawTargetRow) {
-          dbg('原生操作成功（IsSaveSuccess，目标行已移出）');
-          return true;
-        }
-        if (targetReportDR && String(me.curReportDR || '') === String(targetReportDR)) {
-          const sel = me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
-          if (sel && String(sel.ReportDR || '') === String(targetReportDR)) {
-            if (isExpectedNativeStatus(sel, expectedStatuses)) {
-              dbg('原生操作成功（IsSaveSuccess + 当前选中行状态）');
-              return true;
-            }
-            if (!found && (missingAsSuccess || sawSaveSuccess) && sawTargetRow) {
-              dbg('原生操作成功（IsSaveSuccess + curReportDR 匹配，行已移出）');
-              return true;
-            }
+        if (isNativeConfirmVisible(iframeWin)) {
+          // 8.16.29: 仍有确认弹窗等待点击，不可据此提前断定成功
+        } else {
+          if (!expectedStatuses || expectedStatuses.length === 0) {return true;}
+          const found = targetReportDR ? findNativeRowByReportDR(iframeWin, targetReportDR) : null;
+          if (found && isExpectedNativeStatus(found.row, expectedStatuses)) {
+            dbg('原生操作成功（IsSaveSuccess）');
+            return true;
           }
-          // 批审：已保存成功且详情目标匹配时，给 UI 极短回写窗口后用 quickVerify
-          if (turbo) {
-            await sleep(35);
-            if (typeof options.quickVerify === 'function' && options.quickVerify()) {
-              dbg('原生操作成功（IsSaveSuccess 后 quickVerify）');
-              return true;
+          if (!found && targetReportDR && (missingAsSuccess || sawSaveSuccess) && sawTargetRow) {
+            dbg('原生操作成功（IsSaveSuccess，目标行已移出）');
+            return true;
+          }
+          if (targetReportDR && String(me.curReportDR || '') === String(targetReportDR)) {
+            const sel = me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
+            if (sel && String(sel.ReportDR || '') === String(targetReportDR)) {
+              if (isExpectedNativeStatus(sel, expectedStatuses)) {
+                dbg('原生操作成功（IsSaveSuccess + 当前选中行状态）');
+                return true;
+              }
+              if (!found && (missingAsSuccess || sawSaveSuccess) && sawTargetRow) {
+                dbg('原生操作成功（IsSaveSuccess + curReportDR 匹配，行已移出）');
+                return true;
+              }
             }
-            if (!findNativeRowByReportDR(iframeWin, targetReportDR) && sawTargetRow) {
-              dbg('原生操作成功（IsSaveSuccess 后行消失）');
-              return true;
+            // 批审：已保存成功且详情目标匹配时，给 UI 极短回写窗口后用 quickVerify
+            if (turbo) {
+              await sleep(35);
+              if (typeof options.quickVerify === 'function' && options.quickVerify()) {
+                dbg('原生操作成功（IsSaveSuccess 后 quickVerify）');
+                return true;
+              }
+              if (!findNativeRowByReportDR(iframeWin, targetReportDR) && sawTargetRow) {
+                dbg('原生操作成功（IsSaveSuccess 后行消失）');
+                return true;
+              }
             }
           }
         }
@@ -19355,6 +19428,7 @@ window.addEventListener('keydown',function(e){
       return false;
     }
     if (iframeWin) {installNativeStatExceptionGuard(iframeWin);}
+    if (me) {me.IsSaveSuccess = false;} // 8.16.29: 严防上一条标本的历史保存成功状态残留污染当前标本
 
     const batchMode = !!options.batchMode;
     // 实时重测 CA，避免调用方传入过期的 caSessionReady=false 导致每条都走慢路径
@@ -19456,7 +19530,7 @@ window.addEventListener('keydown',function(e){
         timeoutMs,
         allowMissingSuccess,
         makeWaitOpts({
-          missingStableMs: 60,
+          missingStableMs: 180,
           failureGraceMs: 600,
           turbo: true
         })
@@ -22836,6 +22910,7 @@ window.addEventListener('keydown',function(e){
   async function auditOneQueueItemOnce(iframeWin, item, options = {}) {
     iframeWin = getReportIframeWin() || iframeWin;
     if (!iframeWin || !item || !item.reportDR) {return { ok: false, iframeWin };}
+    if (iframeWin.me) {iframeWin.me.IsSaveSuccess = false;}
     // 8.5.56: 补审也要识别复检标本（审核前状态 4）——与主循环 8.5.53 对齐：
     // 静态 4 与行消失都不可信，只认状态变 3，否则会把「仍是 4」误判为已审核
     const _salvageRow = wsData.find(r => String(r.ReportDR) === String(item.reportDR)) || null;
@@ -22940,12 +23015,14 @@ window.addEventListener('keydown',function(e){
       if (!result) {
         await sleep(300);
         iframeWin = getReportIframeWin() || iframeWin;
+        handleNativeMessageConfirm(iframeWin);
         result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
                 softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
       }
       if (!result) {
         await sleep(500);
         iframeWin = getReportIframeWin() || iframeWin;
+        handleNativeMessageConfirm(iframeWin);
         result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
                 softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
       }
@@ -22953,6 +23030,7 @@ window.addEventListener('keydown',function(e){
       if (!result) {
         await sleep(1000);
         iframeWin = getReportIframeWin() || iframeWin;
+        handleNativeMessageConfirm(iframeWin);
         result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
                  softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
       }
@@ -23426,6 +23504,7 @@ window.addEventListener('keydown',function(e){
             failCount++;
             continue;
           }
+          me.IsSaveSuccess = false; // 8.16.29: 逐条开始前复位保存成功标记
 
           let selectedOk = batchSkipSelect;
           batchSkipSelect = false;
