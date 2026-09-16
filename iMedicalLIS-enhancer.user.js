@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.26
+// @version      8.16.27
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -12735,6 +12735,7 @@ window.addEventListener('keydown',function(e){
     // 先做几次快速校验，避免「其实已成功却干等满超时」
     for (let i = 0; i < (batchMode ? 6 : 2); i++) {
       if (options.abortCheck && options.abortCheck()) {return false;}
+      handleNativeMessageConfirm(iframeWin);
       if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
           softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 })) {return true;}
       await sleep(batchMode ? 80 : 200);
@@ -13245,6 +13246,7 @@ window.addEventListener('keydown',function(e){
     for (let _dv = 0; _dv < 6; _dv++) {
       await sleep(150);
       iframeWin = getReportIframeWin() || iframeWin;
+      handleNativeMessageConfirm(iframeWin);
       if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !pre4 }) ||
           softAuditSuccessHint(iframeWin, reportDR, { accept4: !pre4 })) {
         dbg('审核延迟确认成功（原生状态）:', specimen.PatName);
@@ -18366,6 +18368,108 @@ window.addEventListener('keydown',function(e){
     return closed;
   }
 
+  // 8.16.27: 自动确认原生审核提示弹窗（#win_MessageConfirm 及 messager 确认窗）
+  // 现场根因：当标本存在异常/轻微异常项目时，原生 VerifyReportResult 会返回 MaintinArr，
+  // 触发 DealInfoArr 打开 #win_MessageConfirm（"结果超出参考范围，确定要审核该报告吗？"），
+  // 并等待用户点击 #btn_Confirm 才会真正调用 LabResultSave。未确认前审核永久挂起直至超时漏审。
+  let _lastConfirmClickAt = 0;
+  function handleNativeMessageConfirm(iframeWin) {
+    if (Date.now() - _lastConfirmClickAt < 300) {return false;}
+    const repWin = getReportIframeWin();
+    const wins = [iframeWin, repWin, window];
+    const visited = new Set();
+
+    for (const win of wins) {
+      if (!win || visited.has(win)) {continue;}
+      visited.add(win);
+      try {
+        const doc = win.document;
+        if (!doc) {continue;}
+        const jq = win.jQuery || win.$;
+
+        // 1. 原生结果异常/超范围提示窗口 (#win_MessageConfirm)
+        const modal = doc.getElementById('win_MessageConfirm');
+        if (modal) {
+          let isVisible = false;
+          if (jq) {
+            try {
+              const $m = jq(modal);
+              isVisible = $m.is(':visible') || ($m.parent().length && $m.parent().is(':visible'));
+            } catch (e) {}
+          }
+          if (!isVisible) {
+            isVisible =
+              modal.offsetParent !== null ||
+              (modal.parentElement &&
+                modal.parentElement.classList.contains('window') &&
+                modal.parentElement.style.display !== 'none');
+          }
+          if (isVisible) {
+            const btn = doc.getElementById('btn_Confirm');
+            if (btn) {
+              const infoDiv = doc.getElementById('div_showInfo');
+              const infoText = (infoDiv ? infoDiv.textContent || '' : '').trim();
+              dbg('检测到原生审核确认窗口(#win_MessageConfirm):', infoText.slice(0, 100), '-> 自动确认提交审核');
+              _lastConfirmClickAt = Date.now();
+              try {
+                if (jq && jq(btn).trigger) {
+                  jq(btn).trigger('click');
+                } else if (jq && jq(btn).click) {
+                  jq(btn).click();
+                } else {
+                  btn.click();
+                }
+              } catch (e) {
+                try {
+                  btn.click();
+                } catch (e2) {}
+              }
+              return true;
+            }
+          }
+        }
+
+        // 2. EasyUI 模态 confirm 对话框 (.messager-window 中的确定)
+        const allWins = doc.querySelectorAll(
+          '.messager-window:not([style*="display: none"]), .window:not([style*="display: none"])'
+        );
+        for (const w of allWins) {
+          if (w.offsetParent === null) {continue;}
+          const body = w.querySelector('.messager-body, .panel-body');
+          if (!body) {continue;}
+          const text = (body.textContent || '').trim();
+          // 如果包含不完整提示，绝不自动确认（留人工处理）
+          if (classifyNativeMessage(text) === 'incomplete') {continue;}
+          if (
+            (text.indexOf('确定要') !== -1 && (text.indexOf('审核') !== -1 || text.indexOf('保存') !== -1)) ||
+            (text.indexOf('是否确定') !== -1 && text.indexOf('审核') !== -1) ||
+            text.indexOf('超出参考范围') !== -1
+          ) {
+            const btns = w.querySelectorAll('a.l-btn, button');
+            for (const b of btns) {
+              const bText = (b.textContent || b.value || '').trim();
+              if (bText === '确定' || bText === 'OK' || bText === '是') {
+                dbg('检测到原生 messager 审核确认弹窗，自动点击确定:', text.slice(0, 80));
+                _lastConfirmClickAt = Date.now();
+                try {
+                  jq && jq(b).click ? jq(b).click() : b.click();
+                } catch (e) {
+                  try {
+                    b.click();
+                  } catch (e2) {}
+                }
+                return true;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        dbg('handleNativeMessageConfirm error:', e);
+      }
+    }
+    return false;
+  }
+
   function installNativeStatExceptionGuard(iframeWin) {
     if (!iframeWin) {return;}
     try {
@@ -18524,6 +18628,7 @@ window.addEventListener('keydown',function(e){
       jq = iframeWin ? iframeWin.jQuery || iframeWin.$ : window.jQuery;
       me = iframeWin ? iframeWin.me : me;
       closeIgnorableNativeExceptionDialogs(doc, jq);
+      handleNativeMessageConfirm(iframeWin);
 
       if (targetReportDR && expectedStatuses && expectedStatuses.length) {
         const found = findNativeRowByReportDR(iframeWin, targetReportDR);
@@ -19315,6 +19420,7 @@ window.addEventListener('keydown',function(e){
       jq(btn).click();
       dbg('已点击审核按钮, targetReportDR=' + targetReportDR);
     }
+    handleNativeMessageConfirm(iframeWin);
 
     let caDetected = false;
     let authLoginDetected = false;
@@ -19329,11 +19435,13 @@ window.addEventListener('keydown',function(e){
       try {
         if (typeof iframeWin.ReportSave === 'function') {
           iframeWin.ReportSave('A', '');
+          handleNativeMessageConfirm(iframeWin);
           return true;
         }
       } catch (e) {}
       try {
         jq(btn).click();
+        handleNativeMessageConfirm(iframeWin);
         return true;
       } catch (e2) {}
       return false;
@@ -19449,6 +19557,7 @@ window.addEventListener('keydown',function(e){
         for (let i = 0; i < (batchMode ? 20 : 30); i++) {
           if (options.abortCheck && options.abortCheck()) {return false;}
           iframeWin = getReportIframeWin() || iframeWin;
+          handleNativeMessageConfirm(iframeWin);
           if (
             verifyAuditSucceededByReportDR(iframeWin, targetReportDR) ||
             softAuditSuccessHint(iframeWin, targetReportDR)
@@ -23537,10 +23646,6 @@ window.addEventListener('keydown',function(e){
               auditResult = true;
               dbg('批审单项超时后校验成功', item.reportDR);
             } else {
-              if (_batchCrossGroup) {
-                triggerCrossGroupSwitch('单项超时未确认');
-                break;
-              }
               if (!requeueAuditItem(queue, item, '单项超时未确认')) {skipCount++;}
               continue;
             }
@@ -23570,6 +23675,7 @@ window.addEventListener('keydown',function(e){
             for (let _dv = 0; _dv < 6; _dv++) {
               await sleep(250);
               iframeWin = getReportIframeWin() || iframeWin;
+              handleNativeMessageConfirm(iframeWin);
               if (
                 verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_itemPre4 }) ||
                 softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_itemPre4 })
@@ -23588,11 +23694,6 @@ window.addEventListener('keydown',function(e){
               batchCAReady = true;
               queue.caReadyByWg[itemWg] = true;
             } else {
-              // 8.16.26: 跨组标本免切组审核未确认成功（由于当前组无该项目权限等原因），回退切到目标组续审
-              if (_batchCrossGroup) {
-                triggerCrossGroupSwitch('审核未确认');
-                break;
-              }
               // 未确认成功：优先队尾重试，不要直接放弃（真漏审多由此产生）
               if (!requeueAuditItem(queue, item, '审核未确认成功')) {
                 queue.failed.push({ ...item, reason: '审核未确认成功' });
@@ -23602,10 +23703,6 @@ window.addEventListener('keydown',function(e){
             }
           }
         } catch (e) {
-          if (_batchCrossGroup) {
-            triggerCrossGroupSwitch('异常: ' + (e.message || ''));
-            break;
-          }
           if (!requeueAuditItem(queue, item, e.message || '异常')) {
             queue.failed.push({ ...item, reason: e.message });
             _aaRecordQueueItem('留人工', item, e.message || '审核异常');
