@@ -16,6 +16,11 @@ export NO_PROXY="localhost,127.0.0.1,192.168.*,10.*"
 export no_proxy="localhost,127.0.0.1,192.168.*,10.*"
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+mkdir -p "$DIR/.cache"
+# 先记一行「开始」：否则脚本在 scp 阶段就失败（下面的 exit 1）时，日志里什么都看不到，
+# 事后无法区分「没点过」和「点了但失败」（本次排查就踩过这个坑）。
+cmd_log() { echo "[$(date '+%F %T')] $*" >>"$DIR/.cache/nginx_sync.log"; }
+cmd_log "==> 手动同步（同步脚本到nginx.command，本地 $(sed -n 's|^// @version[[:space:]]*||p' "$DIR/iMedicalLIS-enhancer.user.js" | head -1)）"
 echo "==> 同步脚本 + vendor + 原生IE启动器 → $WIN_USER@$WIN_HOST:$WIN_DIR/"
 echo "    iMedicalLIS-enhancer.user.js + vendor/xlsx.full.min.js + vendor/jszip.min.js"
 echo "    + 配置工作台-原生IE直达.bat / setup-native-ie.bat / 启动病历-原生IE.bat(.vbs) / launch_ie.vbs"
@@ -26,11 +31,13 @@ scp -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=2 \
   echo "   ① 设置 → 应用 → 可选功能 → 添加可选功能 → 搜索并安装「OpenSSH 服务器」"
   echo "   ② 管理员 PowerShell 执行：Start-Service sshd; Set-Service sshd -StartupType Automatic"
   echo "   ③ 确认 D:\\nginx-1.31.2\\lis-tools\\ 和 D:\\nginx-1.31.2\\lis-tools\\vendor\\ 目录已建好"
+  cmd_log "❌ 手动同步失败：userscript scp 传输失败（网关不可达 / SSH 未开 / 免密未配）"
   exit 1
 }
 scp -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=2 \
   "$DIR/vendor/xlsx.full.min.js" "$DIR/vendor/jszip.min.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/vendor/" || {
   echo "❌ vendor 传输失败：确认 nginx 机 D:\\nginx-1.31.2\\lis-tools\\vendor\\ 目录已存在"
+  cmd_log "❌ 手动同步失败：vendor scp 传输失败"
   exit 1
 }
 # 8.15.4: 补上原生 IE 启动器（合并为单次 scp，减少频繁建立连接）
