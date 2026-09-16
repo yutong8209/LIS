@@ -21,12 +21,42 @@ mkdir -p "$CACHE"
 
 log() { echo "[$(date '+%F %T')] $*" >>"$LOG"; }
 
-# 8.16.20: 连通性预检（放在抢锁之前——不可达时既不留锁也不写状态）
-# 不在科室网段时，后面 3 轮 scp 会各自 ConnectTimeout=8s 依次超时 ≈ 24s；改为前台执行后
-# 这会明显拖慢 commit。先用 2s 的 TCP 探活快速判定，不通立即返回。
-# （`nc -G` 是 macOS/BSD 的连接超时选项；本脚本只在 Mac 上跑。）
-if ! nc -z -G 4 "$WIN_HOST" 22 2>/dev/null; then
-  log "⚠️ 网关机 ${WIN_HOST}:22 不可达（不在科室网段？）→ 跳过本次同步"
+# 清理可能被 IDE / Agent 终端注入的代理环境变量，强制局域网请求直连
+unset http_proxy https_proxy all_proxy ALL_PROXY HTTP_PROXY HTTPS_PROXY
+export NO_PROXY="localhost,127.0.0.1,192.168.*,10.*"
+export no_proxy="localhost,127.0.0.1,192.168.*,10.*"
+
+# 8.16.20+8.16.33: 连通性预检（放在抢锁之前——不可达时既不留锁也不写状态）
+# 不在科室网段时，快速判定并退出，不拖慢 commit。
+# 探活策略：
+# 1. 优先探测 Nginx HTTP 9111（响应通常 <20ms，稳如泰山）
+# 2. 若 HTTP 可达，顺带预热/探测 SSH 22 端口（带 0.5s 重试，抵御 Wi-Fi 节能唤醒与 ARP 缓存超时）
+# 3. 若均不可达（如在科室外网），2s 内快速退出
+is_gateway_reachable() {
+  # 优先探测 HTTP 端口 9111
+  if curl --noproxy "*" -s -m 2 -I "http://${WIN_HOST}:9111/lis-tools/iMedicalLIS-enhancer.user.js" >/dev/null 2>&1; then
+    # HTTP 通了说明机器在线且在局域网；预热 SSH 端口并探测连通性
+    if nc -z -G 2 "$WIN_HOST" 22 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+    if nc -z -G 2 "$WIN_HOST" 22 2>/dev/null; then
+      return 0
+    fi
+    # HTTP 通但 nc 探测 22 未返回（可能是 Windows sshd 拒收空探针），仍放行由 scp 自带重试兜底
+    log "⚠️ 网关机 ${WIN_HOST}:9111(HTTP) 正常但 22(SSH) 探针未响应，尝试直接 scp"
+    return 0
+  fi
+
+  # 若 HTTP 未通，再用 nc 试探 22 端口（快速 2s 超时）
+  if nc -z -G 2 "$WIN_HOST" 22 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+if ! is_gateway_reachable; then
+  log "⚠️ 网关机 ${WIN_HOST} 不可达（不在科室网段或未开机）→ 跳过本次同步"
   exit 1
 fi
 
@@ -74,21 +104,25 @@ commit="$(git -C "$DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
 log "==> 开始同步（commit ${commit}，版本 ${local_ver}）"
 
 scp_err=""
-# BatchMode：免密失败时快速报错而不是挂在密码输入上
-scp -o BatchMode=yes -o ConnectTimeout=8 \
+# BatchMode：免密失败时快速报错而不是挂在密码输入上；ConnectionAttempts=2 应对瞬时连接抖动
+scp -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=2 \
   "$DIR/iMedicalLIS-enhancer.user.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/" 2>>"$LOG" || scp_err="userscript"
 if [ -z "$scp_err" ]; then
-  scp -o BatchMode=yes -o ConnectTimeout=8 \
+  scp -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=2 \
     "$DIR/vendor/xlsx.full.min.js" "$DIR/vendor/jszip.min.js" \
     "$WIN_USER@$WIN_HOST:$WIN_DIR/vendor/" 2>>"$LOG" || scp_err="vendor"
 fi
 # 原生 IE 启动器（工作台弹窗里的配置包下载链接指向网关机；失败不阻塞主同步）
+# 合并为单次 scp 传输，减少 Windows sshd 频繁握手开销
 if [ -z "$scp_err" ]; then
+  launcher_files=()
   for f in "配置工作台-原生IE直达.bat" "setup-native-ie.bat" "启动病历-原生IE.bat" "启动病历-原生IE.vbs" "launch_ie.vbs"; do
-    [ -f "$DIR/$f" ] || continue
-    scp -o BatchMode=yes -o ConnectTimeout=8 \
-      "$DIR/$f" "$WIN_USER@$WIN_HOST:$WIN_DIR/" 2>>"$LOG" || { scp_err="launcher:$f"; break; }
+    [ -f "$DIR/$f" ] && launcher_files+=("$DIR/$f")
   done
+  if [ ${#launcher_files[@]} -gt 0 ]; then
+    scp -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=2 \
+      "${launcher_files[@]}" "$WIN_USER@$WIN_HOST:$WIN_DIR/" 2>>"$LOG" || scp_err="launcher"
+  fi
 fi
 
 if [ -n "$scp_err" ]; then
@@ -96,8 +130,8 @@ if [ -n "$scp_err" ]; then
   exit 1
 fi
 
-# 用 HTTP 实测 nginx 返回的版本，确认部署真实生效（scp 成功 ≠ nginx 立即可用）
-remote_ver="$(curl -s -m 6 "$NGINX_URL" | grep -m1 '^// @version' | sed 's/.*@version[[:space:]]*//')"
+# 用 HTTP 实测 nginx 返回的版本，确认部署真实生效（scp 成功 ≠ nginx 立即可用；--noproxy 防止环境代理干扰）
+remote_ver="$(curl --noproxy "*" -s -m 6 "$NGINX_URL" | grep -m1 '^// @version' | sed 's/.*@version[[:space:]]*//')"
 if [ "$remote_ver" = "$local_ver" ]; then
   echo "$commit|$local_ver|$(date '+%F %T')" >"$STATE"
   log "✅ 同步成功并验证：nginx 已提供 ${local_ver}（commit ${commit}）"

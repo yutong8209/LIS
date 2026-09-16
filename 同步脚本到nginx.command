@@ -10,11 +10,17 @@ WIN_USER="1"
 WIN_HOST="192.168.31.111"     # nginx 网关机 IP（= 篡改猴更新地址里的那台）
 WIN_DIR="D:/nginx-1.31.2/lis-tools"   # nginx 静态目录（与 nginx.conf 里的 alias 保持一致）
 
+# 清理代理环境变量，强制局域网直连
+unset http_proxy https_proxy all_proxy ALL_PROXY HTTP_PROXY HTTPS_PROXY
+export NO_PROXY="localhost,127.0.0.1,192.168.*,10.*"
+export no_proxy="localhost,127.0.0.1,192.168.*,10.*"
+
 DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "==> 同步脚本 + vendor + 原生IE启动器 → $WIN_USER@$WIN_HOST:$WIN_DIR/"
 echo "    iMedicalLIS-enhancer.user.js + vendor/xlsx.full.min.js + vendor/jszip.min.js"
 echo "    + 配置工作台-原生IE直达.bat / setup-native-ie.bat / 启动病历-原生IE.bat(.vbs) / launch_ie.vbs"
-scp "$DIR/iMedicalLIS-enhancer.user.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/" || {
+scp -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=2 \
+  "$DIR/iMedicalLIS-enhancer.user.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/" || {
   echo
   echo "❌ 传输失败。若从未开启过 SSH，请在 nginx 那台 Windows 上："
   echo "   ① 设置 → 应用 → 可选功能 → 添加可选功能 → 搜索并安装「OpenSSH 服务器」"
@@ -22,18 +28,21 @@ scp "$DIR/iMedicalLIS-enhancer.user.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/" || {
   echo "   ③ 确认 D:\\nginx-1.31.2\\lis-tools\\ 和 D:\\nginx-1.31.2\\lis-tools\\vendor\\ 目录已建好"
   exit 1
 }
-scp "$DIR/vendor/xlsx.full.min.js" "$DIR/vendor/jszip.min.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/vendor/" || {
+scp -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=2 \
+  "$DIR/vendor/xlsx.full.min.js" "$DIR/vendor/jszip.min.js" "$WIN_USER@$WIN_HOST:$WIN_DIR/vendor/" || {
   echo "❌ vendor 传输失败：确认 nginx 机 D:\\nginx-1.31.2\\lis-tools\\vendor\\ 目录已存在"
   exit 1
 }
-# 8.15.4: 补上原生 IE 启动器——此前本手动脚本只推 3 个文件，而 hooks/sync-to-nginx.sh
-# 会推这 5 个启动器；两者清单不一致，自动同步失败后用手动脚本补跑会漏掉启动器，
-# 导致工作台弹窗里的配置包下载链接取到旧版/404。失败不阻塞主同步（与钩子同口径）。
+# 8.15.4: 补上原生 IE 启动器（合并为单次 scp，减少频繁建立连接）
+launcher_files=()
 for f in "配置工作台-原生IE直达.bat" "setup-native-ie.bat" "启动病历-原生IE.bat" "启动病历-原生IE.vbs" "launch_ie.vbs"; do
-  [ -f "$DIR/$f" ] || continue
-  scp "$DIR/$f" "$WIN_USER@$WIN_HOST:$WIN_DIR/" || {
-    echo "⚠️ 启动器 $f 传输失败（不影响脚本与 vendor，可稍后重试）"
-  }
+  [ -f "$DIR/$f" ] && launcher_files+=("$DIR/$f")
 done
+if [ ${#launcher_files[@]} -gt 0 ]; then
+  scp -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=2 \
+    "${launcher_files[@]}" "$WIN_USER@$WIN_HOST:$WIN_DIR/" || {
+    echo "⚠️ 启动器传输失败（不影响脚本与 vendor，可稍后重试）"
+  }
+fi
 echo
 echo "✅ 同步完成。三台电脑的篡改猴会各自自动检查更新；急着要的话在篡改猴「实用工具」里手动点「检查更新」。"
