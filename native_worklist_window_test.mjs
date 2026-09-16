@@ -727,6 +727,289 @@ ok(
   '轻微放行规则表与判定函数仍在（本次只修选行链路，不动医学规则）'
 );
 
+/* ================= G. 检验号快速检索：执行真实原生 FindFast ================= */
+section('G. 检验号快速检索（执行真实原生 FindFast，非重写副本）');
+
+const FIND_FAST_FILE = path.join(
+  HERE,
+  'cache/js/iMedicalLIS/lis/js/jsLisReportResultM.js'
+);
+const findFastSrc = (() => {
+  const s = fs.readFileSync(FIND_FAST_FILE, 'utf8');
+  const i = s.indexOf('function FindFast(value)');
+  return i < 0 ? null : braceSlice(s, i, 'native FindFast');
+})();
+ok(!!findFastSrc, '切出真实原生 FindFast');
+
+// 原生在 rows.length==1 时自动选中第 0 行（本方案的立足点，必须钉住）
+const initMSrc = fs.readFileSync(
+  path.join(HERE, 'cache/js/iMedicalLIS/lis/js/jsLisReportResultInitM.js'),
+  'utf8'
+);
+ok(
+  /if \(data\.rows\.length==1\)[\s\S]{0,120}?selectRow', 0\)/.test(initMSrc),
+  '原生 onLoadSuccess：列表只剩 1 行时自动 selectRow(0)（目标永远落在第 0 行）'
+);
+ok(/wlFindFlag: 'LabNo'/.test(initMSrc), '原生快速检索类型默认就是 LabNo（＝截图里的「检验号」）');
+
+function makeFindFastSandbox(opts) {
+  const rec = {loadData: [], showWorkList: [], leftCleared: 0};
+  const me = {
+    wlFindFlag: opts.wlFindFlag,
+    GridSourceData: opts.gridSourceData,
+    FindFastFlag: '0',
+    SelectRowEpisodeNo: 'seed'
+  };
+  function mkEl(sel) {
+    return {
+      length: 1,
+      datagrid: (m, arg) => {
+        if (sel === '#dgLeftReportItem' && m === 'loadData') {
+          rec.leftCleared++;
+        }
+        if (sel === '#dgWorkList' && m === 'loadData') {
+          rec.loadData.push(arg);
+        }
+        return undefined;
+      },
+      datebox: () => opts.dateValue,
+      combogrid: () => opts.machineValue,
+      combobox: () => opts.statusValue,
+      val: () => undefined
+    };
+  }
+  const sandbox = {
+    console,
+    $: (sel) => mkEl(sel),
+    me,
+    ShowWorkList: (s) => rec.showWorkList.push(s),
+    GetCurentDate: () => '2026-09-17',
+    RefreshWorkList: () => {
+      rec.refreshCalls = (rec.refreshCalls || 0) + 1;
+    }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(findFastSrc, sandbox);
+  sandbox.__rec = rec;
+  sandbox.__me = me;
+  return sandbox;
+}
+
+const rowsForFind = [
+  {ReportDR: 'DR-A', Labno: 'LAB0001', EpisodeNo: '1000001', PatName: '甲'},
+  {ReportDR: 'DR-B', Labno: 'LAB0002', EpisodeNo: '1000002', PatName: '乙'},
+  {ReportDR: 'DR-TARGET', Labno: 'LAB9999', EpisodeNo: '1099999', PatName: '丙'}
+];
+
+{
+  // G1：状态/机台下拉为空 → 走**客户端**精确匹配，收敛成 1 行（目标）
+  const box = makeFindFastSandbox({
+    wlFindFlag: 'LabNo',
+    gridSourceData: rowsForFind,
+    dateValue: '2026-09-17',
+    machineValue: '',
+    statusValue: ''
+  });
+  box.__labno = 'LAB9999';
+  vm.runInContext('FindFast(__labno)', box);
+  const r = box.__rec;
+  eq(r.loadData.length, 1, 'G1 客户端路径只调一次 loadData（收敛列表）');
+  eq(r.loadData[0].total, 1, 'G1 收敛后 total=1');
+  eq(r.loadData[0].rows.length, 1, 'G1 收敛后只有 1 行');
+  eq(r.loadData[0].rows[0].ReportDR, 'DR-TARGET', 'G1 留下的正是目标标本（→ 原生会自动选中第 0 行）');
+  eq(box.__me.FindFastFlag, '1', 'G1 原生置 FindFastFlag=1');
+  eq(r.showWorkList.length, 0, 'G1 命中本地数据时不需要服务端查询');
+
+  // G2：状态+机台都有值（现场常态：机台=DXI800、状态=未审核）→ 走**服务端**精确查询
+  const box2 = makeFindFastSandbox({
+    wlFindFlag: 'LabNo',
+    gridSourceData: rowsForFind,
+    dateValue: '2026-09-17',
+    machineValue: 'MDR-DXI800',
+    statusValue: '1'
+  });
+  box2.__labno = 'LAB9999';
+  vm.runInContext('FindFast(__labno)', box2);
+  const r2 = box2.__rec;
+  eq(r2.showWorkList.length, 1, 'G2 走服务端查询一次');
+  ok(/Labno=LAB9999/.test(r2.showWorkList[0]), 'G2 查询串带 Labno=<条码>');
+  ok(/ReportStatus=0/.test(r2.showWorkList[0]), 'G2 查询限定 ReportStatus=0（未审核）');
+  ok(/WorkGroupMachineDR=MDR-DXI800/.test(r2.showWorkList[0]), 'G2 查询限定当前机台');
+  eq(r2.loadData.length, 0, 'G2 服务端路径不自行收敛列表（等查询返回）');
+
+  // G3：本地没有该条码 → 客户端遍历落空 → 退回「仅带 Labno」的服务端查询
+  const box3 = makeFindFastSandbox({
+    wlFindFlag: 'LabNo',
+    gridSourceData: rowsForFind,
+    dateValue: '2026-09-17',
+    machineValue: '',
+    statusValue: ''
+  });
+  box3.__labno = 'LAB-NOT-HERE';
+  vm.runInContext('FindFast(__labno)', box3);
+  const r3 = box3.__rec;
+  eq(r3.showWorkList.length, 1, 'G3 落空后退回服务端查询');
+  ok(/Labno=LAB-NOT-HERE/.test(r3.showWorkList[0]), 'G3 退回查询只带 Labno（跨组也能捞到）');
+
+  // G4：检索类型被切成「流水号(EpisNo)」时，条码会被当流水号做**子串**匹配 → 一条都不命中；
+  // 而且因为 wlFindFlag != 'LabNo'，原生**不会**退回服务端查询，而是直接
+  // loadData({total:0, rows:[]}) 把工作列表**清成 0 行** —— 这正是 8.16.30 注释里说的
+  // 「将 datagrid 误清空为 0 行造成整批连锁选行失败」，也是必须钉死 LabNo 的根本原因。
+  const box4 = makeFindFastSandbox({
+    wlFindFlag: 'EpisNo',
+    gridSourceData: rowsForFind,
+    dateValue: '2026-09-17',
+    machineValue: '',
+    statusValue: ''
+  });
+  box4.__labno = 'LAB9999';
+  vm.runInContext('FindFast(__labno)', box4);
+  const r4 = box4.__rec;
+  eq(r4.loadData.length, 1, 'G4 类型错成 EpisNo 时仍会调 loadData（直接覆盖列表）');
+  eq(r4.loadData[0].total, 0, 'G4 覆盖后 total=0（工作列表被清空）');
+  eq(r4.loadData[0].rows.length, 0, 'G4 一行都不剩');
+  eq(r4.showWorkList.length, 0, 'G4 且不会退回服务端查询（只有 LabNo 模式才有那层兜底）');
+}
+
+/* ================= H. 脚本侧：tryNativeFindFastSelect ================= */
+section('H. 脚本侧检验号检索封装（真实切片）');
+
+const fnFindFast = sliceFunction(src, 'tryNativeFindFastSelect');
+ok(!!fnFindFast, '切出真实 tryNativeFindFastSelect');
+ok(!!fnWait, '已有 waitAndSelectNativeRow 切片');
+
+if (fnFindFast && fnWait && fnSelect && fnFullRows) {
+  function makeFFSandbox(opts) {
+    const rec = {findFastCalls: [], inputVal: null, wlFlag: null, selAttempts: 0};
+    const iframeWin = {
+      me: {
+        get wlFindFlag() {
+          return rec.wlFlag;
+        },
+        set wlFindFlag(v) {
+          rec.wlFlag = v;
+        }
+      },
+      jQuery: null,
+      FindFast: (v) => {
+        rec.findFastCalls.push(v);
+      }
+    };
+    const jq = (sel) => {
+      if (sel === '#txt_FindFast') {
+        return {
+          length: 1,
+          val: (v) => {
+            if (v !== undefined) {
+              rec.inputVal = v;
+            }
+            return rec.inputVal;
+          }
+        };
+      }
+      if (sel === NATIVE_SEL) {
+        return opts.gridEnv ? opts.gridEnv.gridEl : {length: 0, datagrid: () => undefined};
+      }
+      return {length: 0, datagrid: () => undefined, val: () => undefined};
+    };
+    iframeWin.jQuery = jq;
+    iframeWin.$ = jq;
+    const sandbox = {
+      console,
+      NATIVE_WORKLIST_SEL: NATIVE_SEL,
+      DATAGRID_SELECTORS: [NATIVE_SEL],
+      dbg: () => {},
+      sleep: () => new Promise((r) => setTimeout(r, 0)),
+      canScriptSelectNativeRow: () => opts.allowSelect !== false,
+      getReportIframeWin: () => iframeWin
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(fnFullRows, sandbox);
+    vm.runInContext(fnScrollBody, sandbox);
+    vm.runInContext(fnWindowHas, sandbox);
+    vm.runInContext(fnScrollTo, sandbox);
+    vm.runInContext(fnSelectedDR, sandbox);
+    // 选行用可控桩：selectOK 为真时直接让网格选中目标（模拟原生「1 行自动选中」）
+    vm.runInContext(
+      'function selectNativeRowByReportDR(w, dr, o) {' +
+        'if (!__opts.selectOK) {return false;}' +
+        'if (w && w.me) {w.me.selectedGrid = {datagrid: () => ({ReportDR: dr})};}' +
+        '__rec.selAttempts++; return true;}',
+      sandbox
+    );
+    sandbox.__rec = rec;
+    sandbox.__opts = opts;
+    sandbox.__w = iframeWin;
+    vm.runInContext(fnFindFast, sandbox);
+    return sandbox;
+  }
+
+  // H1：正常路径——钉死 LabNo、写入可见输入框、调用 FindFast、轮询后返回 ok
+  const h1 = makeFFSandbox({allowSelect: true, selectOK: true});
+  h1.__item = {reportDR: 'DR-TARGET', labno: 'LAB9999'};
+  const h1res = await vm.runInContext(
+    'tryNativeFindFastSelect(__w, __item, 400)',
+    h1
+  );
+  eq(h1res.ok, true, 'H1 命中后返回 ok=true');
+  eq(h1.__rec.wlFlag, 'LabNo', 'H1 把检索类型钉死为 LabNo（防下拉停在流水号）');
+  eq(h1.__rec.inputVal, 'LAB9999', 'H1 同步写入可见输入框 #txt_FindFast');
+  eq(h1.__rec.findFastCalls.length, 1, 'H1 调用了原生 FindFast');
+  eq(h1.__rec.findFastCalls[0], 'LAB9999', 'H1 传的是条码号本身');
+
+  // H2：选行一直不成功 → 有界返回 ok=false（不空等、不谎报）
+  const h2 = makeFFSandbox({allowSelect: true, selectOK: false});
+  h2.__item = {reportDR: 'DR-TARGET', labno: 'LAB9999'};
+  const t0 = Date.now();
+  const h2res = await vm.runInContext('tryNativeFindFastSelect(__w, __item, 200)', h2);
+  const h2ms = Date.now() - t0;
+  eq(h2res.ok, false, 'H2 选行不成功 → 如实返回 ok=false');
+  ok(h2ms < 1500, 'H2 有界（实际 ' + h2ms + 'ms，未超预算量级）');
+
+  // H3：用户正在查看别的标本（选行锁）→ 不抢选行、不调用 FindFast
+  const h3 = makeFFSandbox({allowSelect: false, selectOK: true});
+  h3.__item = {reportDR: 'DR-TARGET', labno: 'LAB9999'};
+  const h3res = await vm.runInContext('tryNativeFindFastSelect(__w, __item, 200)', h3);
+  eq(h3res.ok, false, 'H3 被选行锁挡住 → ok=false');
+  eq(h3.__rec.findFastCalls.length, 0, 'H3 完全没有调用原生 FindFast（不干扰用户）');
+
+  // H4：没有条码号 / 没有 FindFast → 直接放弃
+  const h4 = makeFFSandbox({allowSelect: true, selectOK: true});
+  h4.__item = {reportDR: 'DR-TARGET', labno: ''};
+  const h4res = await vm.runInContext('tryNativeFindFastSelect(__w, __item, 200)', h4);
+  eq(h4res.ok, false, 'H4 无条码号 → ok=false');
+  eq(h4.__rec.findFastCalls.length, 0, 'H4 不调用 FindFast');
+}
+
+/* ================= I. 静态不变量（检验号检索接入） ================= */
+section('I. 静态不变量（检验号检索接入）');
+
+ok(/async function tryNativeFindFastSelect\(iframeWin, item, budgetMs\)/.test(src), '存在 tryNativeFindFastSelect');
+ok(
+  /iframeWin\.me\.wlFindFlag = 'LabNo'/.test(src),
+  '封装里必须钉死 me.wlFindFlag = LabNo'
+);
+ok(/jq\('#txt_FindFast'\)\.val\(labno\)/.test(src), '封装里同步写可见输入框 #txt_FindFast');
+ok(
+  /tryNativeFindFastSelect\(/.test(src) &&
+    (src.match(/tryNativeFindFastSelect\(/g) || []).length >= 2,
+  'waitAndSelectNativeRow 里真的调用了它（定义 + 调用）'
+);
+ok(/Math\.min\(1500, Math\.max\(400,/.test(src), '检索预算有界（≤1500ms，且给后续兜底留余地）');
+ok(
+  !/for \(let f = 0; f < 10; f\+\+\)/.test(src),
+  '旧的「10×50ms 小兜底」已移除（预算太小，服务端查询常来不及返回）'
+);
+ok(
+  /const _ffRemain = end - Date\.now\(\);/.test(src),
+  '检索预算按剩余超时时间计算（不把整条超时耗在检索上）'
+);
+// 医学规则零改动
+ok(
+  /const MILD_ALLOW_RULES = \[/.test(src) && /function mildAllowItem\(/.test(src),
+  '轻微放行规则与判定未受影响（本次只改选行链路）'
+);
+
 /* ================= 汇总 ================= */
 console.log('\n────────────────────────────');
 console.log('通过 ' + pass + ' 项，失败 ' + fail + ' 项');

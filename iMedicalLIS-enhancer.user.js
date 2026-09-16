@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.32
+// @version      8.16.33
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -23135,6 +23135,55 @@ window.addEventListener('keydown',function(e){
     Promise.resolve(refreshNativeWorkListAllMachines(w, { fast: true, dateStr: today() })).catch(() => {});
   }
 
+  // ==================== 8.16.33: 原生「检验号快速检索」精确定位 ====================
+  // 现场用户发现：工作列表右上角那个下拉默认就是「检验号」，在右边输入框里输入条码号即可定位。
+  // 这条路比「滚动到目标行」可靠得多，原因在原生代码里写得很清楚：
+  //   · jsLisReportResultInitM.js:210  me.wlFindFlag 默认 'LabNo'（＝下拉的「检验号」）
+  //   · jsLisReportResultM.js:2170     FindFast(value)
+  //   · 同文件 2220-2224  LabNo 模式走**精确匹配** source.toLowerCase()==value.toLowerCase()
+  //   · 同文件 2244    命中后 $('#dgWorkList').datagrid('loadData',{total:1, rows:[该标本]})
+  //   · jsLisReportResultInitM.js:1920  原生 onLoadSuccess 见 rows.length==1 → 自动 selectRow(0)
+  // 也就是说：列表被收敛成「只有这一条」，目标**永远落在第 0 行**——
+  // 从根本上绕开 datagrid-scrollview「排在渲染窗口外的行选不中」那个陷阱（滚动只是退路）。
+  // 本页 GridSourceData 里没有该标本时（跨组 / 尚未加载完），原生会自己退回服务端查询
+  // （同文件 2181-2187 带 ReportStatus=0 的 ShowWorkList、2233-2237 仅带 Labno 的 ShowWorkList），
+  // 所以这条路对跨组标本同样有效，等于顺带把「免切组」也走通了。
+  //
+  // ⚠️ 检索类型必须钉死为 LabNo：下拉被切到「流水号(EpisNo)」时，条码会被当流水号精确匹配，
+  // 必然落空并可能把 datagrid 清成 0 行 → 整批连锁选行失败（8.16.30 踩过）。
+  // 返回 {ok, iframeWin}；ok=true 表示**已经真正选中**（内部走 selectNativeRowByReportDR 的生效校验）。
+  async function tryNativeFindFastSelect(iframeWin, item, budgetMs) {
+    const labno = String((item && item.labno) || '');
+    if (!labno || !iframeWin || typeof iframeWin.FindFast !== 'function') {return {ok: false, iframeWin};}
+    if (!canScriptSelectNativeRow(iframeWin, item.reportDR)) {return {ok: false, iframeWin};}
+    try {
+      if (iframeWin.me) {iframeWin.me.wlFindFlag = 'LabNo';}
+      // 同步写进可见输入框：一是与原生 UI 一致（用户看得见脚本在查哪一条），
+      // 二是万一原生还有依赖输入框内容的路径（keydown/Enter）也不会错位。
+      try {
+        const jq = iframeWin.jQuery || iframeWin.$;
+        if (jq && jq('#txt_FindFast').length) {jq('#txt_FindFast').val(labno);}
+      } catch (e) {}
+      iframeWin.FindFast(labno);
+      dbg('批审: 已用检验号快速检索定位:', labno, 'DR=' + item.reportDR);
+    } catch (e) {
+      dbg('批审: 检验号快速检索调用失败:', labno, e.message);
+      return {ok: false, iframeWin};
+    }
+    // 服务端查询 + 渲染是异步的，按预算轮询；命中即返回（不空等）
+    const end = Date.now() + Math.max(200, budgetMs);
+    let win = iframeWin;
+    while (Date.now() < end) {
+      await sleep(60);
+      win = getReportIframeWin() || win;
+      if (win && selectNativeRowByReportDR(win, item.reportDR, {force: true})) {
+        return {ok: true, iframeWin: win};
+      }
+    }
+    dbg('批审: 检验号快速检索未定位到标本:', labno, 'DR=' + item.reportDR);
+    return {ok: false, iframeWin: win};
+  }
+
   async function waitAndSelectNativeRow(iframeWin, item, options = {}) {
     const timeoutMs = typeof options === 'number' ? options : options.timeoutMs || 9000;
     const pollMs = (typeof options === 'object' && options.pollMs) || 50;
@@ -23156,28 +23205,19 @@ window.addEventListener('keydown',function(e){
       }
     }
 
-    // 8.16.30: 条码快速检索兜底。必须确保 me.wlFindFlag === 'LabNo'，
-    // 严防 LIS 快速检索停留在「流水号(EpisNo)」导致将条码当流水号检索落空，
-    // 进而将 datagrid 误清空为 0 行造成整批连锁选行失败。
-    if (
-      item.labno &&
-      iframeWin &&
-      typeof iframeWin.FindFast === 'function' &&
-      canScriptSelectNativeRow(iframeWin, item.reportDR)
-    ) {
-      try {
-        if (iframeWin.me) {
-          iframeWin.me.wlFindFlag = 'LabNo';
-        }
-        iframeWin.FindFast(item.labno);
-        for (let f = 0; f < 10; f++) {
-          await sleep(50);
-          iframeWin = getReportIframeWin() || iframeWin;
-          if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
-            return { ok: true, iframeWin };
-          }
-        }
-      } catch (e) {}
+    // 8.16.30 / 8.16.33: 原生「检验号快速检索」精确定位（原为 10×50ms 的小兜底，现改为
+    // 首选兜底并放宽预算）。理由见 tryNativeFindFastSelect 上方注释：它是「目标永远落在
+    // 第 0 行」的确定性路径，比依赖虚拟滚动翻页可靠得多；对跨组标本还能顺带走通免切组。
+    // 预算取剩余时间的一部分，给后面的全量刷新 / 滚动兜底留余地。
+    const _ffRemain = end - Date.now();
+    if (_ffRemain > 200) {
+      const _ff = await tryNativeFindFastSelect(
+        iframeWin,
+        item,
+        Math.min(1500, Math.max(400, Math.floor(_ffRemain * 0.6)))
+      );
+      iframeWin = _ff.iframeWin || iframeWin;
+      if (_ff.ok) {return { ok: true, iframeWin };}
     }
 
     // 8.16.32: 目标是否已在**完整列表**里（只是可能还没被渲染出来）
