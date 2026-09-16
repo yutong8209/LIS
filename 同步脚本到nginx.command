@@ -44,5 +44,24 @@ if [ ${#launcher_files[@]} -gt 0 ]; then
     echo "⚠️ 启动器传输失败（不影响脚本与 vendor，可稍后重试）"
   }
 fi
+# ==================== 版本回验（scp 成功 ≠ nginx 真的在提供新版） ====================
+# 缓存 / 目录写错 / nginx 未 reload 都会让「传输成功」变成静默失效，所以必须回验实际返回的版本。
+# 显式 --noproxy '*'：本机代理会拦内网并把回验变成 502 假象（本次排查中被误导过一次）。
+local_ver="$(grep -m1 '^// @version' "$DIR/iMedicalLIS-enhancer.user.js" | sed 's/.*@version[[:space:]]*//')"
+remote_ver="$(curl --noproxy '*' -s -m 8 "http://$WIN_HOST:9111/lis-tools/iMedicalLIS-enhancer.user.js" \
+  | grep -m1 '^// @version' | sed 's/.*@version[[:space:]]*//')"
 echo
-echo "✅ 同步完成。三台电脑的篡改猴会各自自动检查更新；急着要的话在篡改猴「实用工具」里手动点「检查更新」。"
+if [ "$remote_ver" = "$local_ver" ]; then
+  echo "✅ 同步完成并回验通过：网关已提供 $remote_ver"
+  echo "   三台电脑的篡改猴会各自自动检查更新；急着要的话在篡改猴「实用工具」里手动点「检查更新」。"
+  sync_result="✅ 同步成功并验证：nginx 已提供 ${local_ver}（手动 command）"
+else
+  echo "⚠️ scp 已完成，但网关实际返回「${remote_ver:-无响应}」，本地是 $local_ver"
+  echo "   请检查网关机 nginx（D:\\nginx-1.31.2\\lis-tools\\ 与 nginx.conf 的 alias 是否一致）后重跑本脚本。"
+  sync_result="⚠️ scp 完成但回验不一致：网关返回「${remote_ver:-无响应}」，本地 ${local_ver}"
+fi
+# 写进与 hooks/sync-to-nginx.sh 同一个日志，便于事后核对「哪次是手动推的、推的是哪版」
+mkdir -p "$DIR/.cache"
+echo "[$(date '+%F %T')] ${sync_result}" >>"$DIR/.cache/nginx_sync.log"
+echo
+echo "（日志：$DIR/.cache/nginx_sync.log）"
