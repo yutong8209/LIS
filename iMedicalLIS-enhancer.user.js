@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.27
+// @version      8.16.28
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -22769,10 +22769,12 @@ window.addEventListener('keydown',function(e){
     ) {
       try {
         iframeWin.FindFast(item.labno);
-        await sleep(80);
-        iframeWin = getReportIframeWin() || iframeWin;
-        if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
-          return { ok: true, iframeWin };
+        for (let f = 0; f < 8; f++) {
+          await sleep(50);
+          iframeWin = getReportIframeWin() || iframeWin;
+          if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
+            return { ok: true, iframeWin };
+          }
         }
       } catch (e) {}
     }
@@ -23077,16 +23079,16 @@ window.addEventListener('keydown',function(e){
 
       // 跨组续跑后页面重载，wsData 可能为空——等待工作台数据加载完成
       // 否则 resolveQueueItemRow 找不到标本行，全部被跳过为「分类缓存缺失」
-      if (!wsData.length) {
+      if (wsLoading || !wsData.length) {
         updateBatchProgress('正在加载工作台数据...', 0);
         let _wsWaited = 0;
-        while (!wsData.length && _wsWaited < 150) {
+        while ((wsLoading || !wsData.length) && _wsWaited < 150) {
           await new Promise(r => setTimeout(r, 100));
           _wsWaited++;
         }
         // keepWorkbenchOnTop 未调用或 loadWSData 失败时，主动加载
         if (!wsData.length) {
-          try { await loadWSData(); } catch (e) { dbg('批审前加载工作台数据失败:', e); }
+          try { await loadWSData({ force: true }); } catch (e) { dbg('批审前加载工作台数据失败:', e); }
         }
         if (!wsData.length) {
           showToast('工作台数据加载失败，请刷新工作台后重试', 'error');
@@ -23300,9 +23302,10 @@ window.addEventListener('keydown',function(e){
         }
         let liveClassified = getLiveClassification(item.reportDR);
         if (!liveClassified || (liveRow && isClassificationStale(liveRow))) {
-          if (liveRow) {
+          const rowForClassify = liveRow || findWSSpecimenByReportDR(item.reportDR) || item.row || item;
+          if (rowForClassify) {
             try {
-              liveClassified = await fetchAndClassifySpecimen(liveRow);
+              liveClassified = await fetchAndClassifySpecimen(rowForClassify);
               if (liveClassified && liveClassified.reportDR) {
                 wsClassifiedCache[liveClassified.reportDR] = liveClassified;
                 _classifyVersion++;
@@ -23313,12 +23316,16 @@ window.addEventListener('keydown',function(e){
           }
         }
         if (!liveClassified) {
-          queue.skipped.push({ ...item, reason: '分类缓存缺失，需刷新后重试' });
-          _aaRecordQueueItem('留人工', item, '分类缓存缺失，需刷新后重试');
-          skipCount++;
-          queue.current++;
-          saveAuditQueueNow(queue);
-          continue;
+          if (item.status === 'NORMAL') {
+            liveClassified = { status: 'NORMAL', reportDR: item.reportDR, items: item.items || [] };
+          } else {
+            queue.skipped.push({ ...item, reason: '分类缓存缺失，需刷新后重试' });
+            _aaRecordQueueItem('留人工', item, '分类缓存缺失，需刷新后重试');
+            skipCount++;
+            queue.current++;
+            saveAuditQueueNow(queue);
+            continue;
+          }
         }
         // 8.12.0: 逐条活体复检——NORMAL 走原口径；F4 轻微异常条目（status MILD）用最新分类重跑
         // 轻微带判定（classifyMildAbnormal 内部有 _classifyVersion 记忆），数据变了会如实拦下
@@ -23350,9 +23357,6 @@ window.addEventListener('keydown',function(e){
           if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {return false;}
           if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
           queue.pausedForSwitch = true;
-          // 8.9.4: 回退 current——逐条 finally 会无条件 current++，不回退会把当前未处理条
-          // 静默跳过（恢复后从下一条继续，该条既不在 done 也不在 failed，真漏审且无计数）
-          queue.current = Math.max(0, queue.current - 1);
           saveAuditQueueNow(queue);
           const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
           const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
@@ -23493,8 +23497,8 @@ window.addEventListener('keydown',function(e){
               batchLastMdr = String(item.mdr);
               batchListFresh = true;
               const retrySel = await waitAndSelectNativeRow(iframeWin, item, {
-                timeoutMs: 500,
-                pollMs: 25,
+                timeoutMs: 2500,
+                pollMs: 40,
                 skipListRefresh: true
               });
               iframeWin = retrySel.iframeWin || iframeWin;
@@ -23504,8 +23508,9 @@ window.addEventListener('keydown',function(e){
           if (!selectedOk) {
             // 8.5.10: 跨组标本原生列表选不到 → 回退切组续跑（原 8.5.8 机制）
             if (_batchCrossGroup) {
-              triggerCrossGroupSwitch('未找到标本');
-              break;
+              if (triggerCrossGroupSwitch('未找到标本')) {
+                break;
+              }
             }
             if (!requeueAuditItem(queue, item, '原生列表未找到')) {
               skipCount++;
@@ -23712,7 +23717,9 @@ window.addEventListener('keydown',function(e){
         } finally {
           _auditingPreStatus4 = false; // 8.5.53: 该条审核结束重置
           _auditingCrossGroup = false; // 8.16.25: 同上（不留残标记影响后续同组标本）
-          queue.current++;
+          if (!queue.pausedForSwitch) {
+            queue.current++;
+          }
           saveAuditQueueTick(queue);
           refreshQueueLock();
           refreshAuditLock(auditLockId);
