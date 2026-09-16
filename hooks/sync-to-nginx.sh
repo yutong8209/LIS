@@ -21,16 +21,6 @@ mkdir -p "$CACHE"
 
 log() { echo "[$(date '+%F %T')] $*" >>"$LOG"; }
 
-# 清理代理环境变量，强制局域网直连。
-# 与 同步脚本到nginx.command 保持一致（它一直有这段，本脚本此前漏了）。
-# 两个实际影响：
-#   ① 末尾的 curl 回验会走 HTTP_PROXY：被代理拦下时返回 502/000，
-#      于是「scp 明明成功、回验却报不一致」→ 误判同步失败。
-#   ② 某些代理实现会把内网 IP 也吞进隧道，导致 scp 连不上网关机。
-unset http_proxy https_proxy all_proxy ALL_PROXY HTTP_PROXY HTTPS_PROXY
-export NO_PROXY="localhost,127.0.0.1,192.168.*,10.*"
-export no_proxy="localhost,127.0.0.1,192.168.*,10.*"
-
 # 清理可能被 IDE / Agent 终端注入的代理环境变量，强制局域网请求直连
 unset http_proxy https_proxy all_proxy ALL_PROXY HTTP_PROXY HTTPS_PROXY
 export NO_PROXY="localhost,127.0.0.1,192.168.*,10.*"
