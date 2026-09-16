@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.19
+// @version      8.16.20
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -638,6 +638,72 @@
     document.body.appendChild(panel);
   }
   function lisDebugLog() {return _dbgLog.join('\n');}
+  // 8.16.20: 跨组切组一键诊断——把「决定要不要切组」的全部输入一次摊开。
+  // 控制台执行 lisDiagWG() 即可，返回文本并自动尝试复制到剪贴板。
+  // 用法：F4 出现「不停切组」后立刻执行，把输出发给开发即可定位是
+  //   ① 可信登录组读错（来源/值不对）② 标本 wg/mdr 为空或非法
+  //   ③ 切组值不在下拉框选项内（切了等于没切）④ 免切组探测确实查不到。
+  function lisDiagWG() {
+    const L = [];
+    L.push('=== LIS 增强助手 · 跨组切组诊断 ===');
+    L.push('时间: ' + new Date().toLocaleString());
+    try {
+      L.push('脚本版本: ' + (typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : '(取不到 GM_info)'));
+    } catch (e) {L.push('脚本版本: 读取异常');}
+    try {
+      const sel = window.top.document.getElementById('sl_changeworkgroup');
+      if (!sel) {
+        L.push('原生下拉框 sl_changeworkgroup: ❌ 未找到（可信登录组只能退到 LIS 全局变量）');
+      } else {
+        L.push('原生下拉框 sl_changeworkgroup.value = 「' + String(sel.value) + '」');
+        const opts = [...sel.options].map(o => String(o.value) + '=' + String(o.text || '').trim());
+        L.push('  该下拉框可选值(' + opts.length + '个): ' + opts.join(' | '));
+      }
+    } catch (e) {
+      L.push('原生下拉框 sl_changeworkgroup: ❌ 读取异常 ' + (e && e.message));
+    }
+    try {L.push('LIS 全局 WorkGroupDR = 「' + String(wgDR()) + '」');} catch (e) {}
+    try {L.push('resolveLoginWGReliable() = 「' + String(resolveLoginWGReliable()) + '」  ← 跨组判定只用它');} catch (e) {}
+    try {L.push('resolveCurrentWG() = 「' + String(resolveCurrentWG()) + '」  （含视图过滤/数据推测，仅展示用）');} catch (e) {}
+    L.push('脚本认识的工作组 WG_MAP: ' + Object.keys(WG_MAP).map(k => k + '=' + ((WG_MAP[k] || {}).name || '')).join(' | '));
+    try {
+      const q = loadAuditQueue();
+      if (q && q.items && q.items.length) {
+        L.push('--- 批审队列：共 ' + q.items.length + ' 条，current=' + (q.current || 0) + '，originWG=「' + String(q.originWG || '') + '」，switchCycles=' + (q.switchCycles || 0) + ' ---');
+        q.items.slice(0, 20).forEach((it, i) => {
+          L.push('  [' + i + '] wg=「' + String(it.wg || '') + '」 mdr=「' + String(it.mdr || '') + '」 accDate=' + String(it.accDate || '') + ' labno=' + String(it.labno || '') + ' name=' + String(it.name || ''));
+        });
+      } else {
+        L.push('--- 批审队列：空（当前不在批审中）---');
+      }
+    } catch (e) {L.push('批审队列: 读取异常');}
+    try {
+      const w = getReportIframeWin();
+      L.push(
+        '原生报告页 iframe: ' +
+          (w ? ('存在；jQuery=' + !!((w.jQuery || w.$)) + ' me=' + !!w.me + ' ShowWorkList=' + (typeof w.ShowWorkList === 'function') + ' me.WorkGroupMachineDR=「' + String(w.me && w.me.WorkGroupMachineDR || '') + '」') : '不存在')
+      );
+    } catch (e) {}
+    try {
+      const t = aaStuckSwitchRead();
+      L.push('「同一条标本反复切组」落盘记录: ' + (t ? ('key=' + t.key + ' n=' + t.n) : '无'));
+    } catch (e) {}
+    try {L.push('切组熔断是否生效: ' + (aaSwitchFuseActive() ? '是（10 分钟内只审当前组）' : '否'));} catch (e) {}
+    L.push('--- 最近 40 条调试日志 ---');
+    L.push(_dbgLog.slice(-40).join('\n'));
+    const txt = L.join('\n');
+    try {console.log(txt);} catch (e) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = txt;
+      ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    } catch (e) {}
+    return txt + '\n\n（以上已尝试复制到剪贴板；若没复制成功，可执行 lisDebugLog() 再取一次日志）';
+  }
   // 8.15.5: 轻微异常放行留痕的读取/导出。留痕原本只写 localStorage.LIS_MildAuditLog（环形 500、
   // 不推送），除了开发者没人看得到，且清缓存即丢。这里给现场一个只读出口：先导出再清，
   // 也便于把「这条按哪条规则放行」发给开发核对。控制台：lisMildAuditLog() / lisExportMildAuditLog()
@@ -668,6 +734,7 @@
   try {
     uw().showDebugPanel = showDebugPanel;
     uw().lisDebugLog = lisDebugLog;
+    uw().lisDiagWG = lisDiagWG; // 8.16.20: 跨组切组一键诊断（控制台执行 lisDiagWG()）
     uw().lisMildAuditLog = lisMildAuditLog;
     uw().lisExportMildAuditLog = lisExportMildAuditLog;
     uw().lisSelfTestMildRules = lisSelfTestMildRules; // 规则表自检（返回未通过项数组，空数组=通过）
@@ -9619,7 +9686,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         showToast(`未找到工作组切换控件，请手动切到${wgName}`, 'warning');
         return false;
       }
-      if (String(sel.value) === String(dr)) {return true;} // 已在目标组
+      if (String(sel.value) === String(dr)) {
+        dbg('[小组] 切组跳过：目标 ' + dr + ' 已是下拉框当前值');
+        return true; // 已在目标组
+      }
       // 8.8.27: 切组时若工作台可见，标记重载后立即自动重开工作台并保持状态，避免漏出原始 LIS 页面
       try {
         if (isWSVisible()) {
@@ -9627,7 +9697,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           saveWSState();
         }
       } catch (e) {}
+      dbg('[小组] 执行切组：' + String(sel.value) + ' → ' + dr + '（' + wgName + '）');
       sel.value = String(dr);
+      // 8.16.20: 值不在下拉框选项里时 sel.value 会被置空 → changeLogin 切不出正确状态，
+      // 而重载后 curDR 仍是旧组 → 又判跨组 → 又一次切组（现场「不停切组」的一种成因）。这里显式暴露。
+      dbg(
+        '[小组] 设置后 sel.value = 「' + String(sel.value) + '」' +
+          (String(sel.value) === String(dr) ? ' ✓ 生效' : ' ❌ 未生效（该值不在下拉框选项内，切组必然失败）')
+      );
       // 调用父框架原生 changeLogin，与用户手动选工作组完全一致
       if (typeof topWin.changeLogin === 'function') {
         topWin.changeLogin(sel);
@@ -10111,13 +10188,35 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   // 约定：凡是**决定「要不要切组」**的地方一律用本函数；返回 '' 表示「当前组不可知」，
   // 调用方必须按「不确定 ⇒ 绝不切组」处理——因为免切组（按机台 DR 直接查工作列表）
   // 本来就不需要知道当前登录组，放行是安全且正确的默认。
+  // 8.16.20: 记录可信登录组的**来源**并只在值变化时写日志——
+  // 现场「不停切组」排障的关键一环：必须能一眼看出 curDR 是从原生下拉框读到的，
+  // 还是退回到 LIS 全局变量（后者不一定等于实际登录组，是误判跨组的高危来源）。
+  let _lastRelWG = '';
   function resolveLoginWGReliable() {
     try {
       const sel = window.top.document.getElementById('sl_changeworkgroup');
-      if (sel && sel.value) {return String(sel.value);}
+      if (sel && sel.value) {
+        const v = String(sel.value);
+        if (_lastRelWG !== 'sel:' + v) {
+          _lastRelWG = 'sel:' + v;
+          dbg('[小组] 可信登录组 = ' + v + '（来源：原生下拉框 sl_changeworkgroup）');
+        }
+        return v;
+      }
     } catch (e) {}
     const dr = wgDR();
-    if (dr) {return String(dr);}
+    if (dr) {
+      const v = String(dr);
+      if (_lastRelWG !== 'gvar:' + v) {
+        _lastRelWG = 'gvar:' + v;
+        dbg('[小组] 可信登录组 = ' + v + '（来源：LIS 全局 WorkGroupDR —— 下拉框没读到，此值未必是实际登录组）');
+      }
+      return v;
+    }
+    if (_lastRelWG !== 'none') {
+      _lastRelWG = 'none';
+      dbg('[小组] 可信登录组 = 空（下拉框与 LIS 全局变量都读不到）');
+    }
     return '';
   }
 
@@ -14266,6 +14365,7 @@ window.addEventListener('keydown',function(e){
           aaQueueSwitchSucceeded(queue);
           return true;
         }
+        dbgNativeListDigest(iframeWin, '[批审·起始]');
       } catch (e) {
         dbg('[批审] 免切组探测异常:', e);
       }
@@ -22445,6 +22545,34 @@ window.addEventListener('keydown',function(e){
 
 
   // --- 按 ReportDR 在原生工作列表中选中行 ---
+  // 8.16.20: 把原生工作列表现状写进调试日志——排障「免切组探测失败」的关键一步。
+  // 单看「没选到行」无法区分两种完全不同的成因：
+  //   ① 列表压根没查出来（显示 0 行 / 控件没找到）→ 查询参数或页面状态问题；
+  //   ② 列表有行但没有目标标本 → 该标本确实不在当前登录组的可见范围内（真跨组，只能切组）。
+  // 有了行数与前几行的 ReportDR/机台DR，一眼可辨。
+  function dbgNativeListDigest(iframeWin, tag) {
+    try {
+      const jq = iframeWin && (iframeWin.jQuery || iframeWin.$);
+      if (!jq) {dbg(tag + ' 原生列表摘要: jq 不存在'); return;}
+      const el = jq(NATIVE_WORKLIST_SEL);
+      if (!el.length || !el.datagrid) {
+        dbg(tag + ' 原生列表摘要: 未找到工作列表控件 ' + NATIVE_WORKLIST_SEL);
+        return;
+      }
+      let rows = null;
+      try {const d = el.datagrid('getData'); rows = d && d.rows ? d.rows : null;} catch (e) {}
+      if (!rows) {try {rows = el.datagrid('getRows');} catch (e) {}}
+      rows = rows || [];
+      const head = rows
+        .slice(0, 8)
+        .map(r => String(r.ReportDR || '') + '/' + String(r.Labno || '') + '/机台' + String(r.WorkGroupMachineDR || ''))
+        .join(' , ');
+      dbg(tag + ' 原生列表摘要: 共 ' + rows.length + ' 行；前几行 = ' + (head || '(空)'));
+    } catch (e) {
+      dbg(tag + ' 原生列表摘要异常: ' + (e && e.message));
+    }
+  }
+
   function selectNativeRowByReportDR(iframeWin, reportDR, options = {}) {
     const jq = iframeWin.jQuery || iframeWin.$;
     if (!jq) {
@@ -23337,7 +23465,11 @@ window.addEventListener('keydown',function(e){
             }
             // 当前组无法加载该跨组标本：立即切组续跑，彻底消除 waitAndSelectNativeRow 4~4.5秒死等超时！
             if (!selectedOk) {
-              dbg('批审: 跨组标本在当前组未找到，立即切组:', item.wg, item.reportDR);
+              dbg(
+                '批审: 跨组标本在当前组未找到，立即切组: 标本wg=' + item.wg + ' 机台mdr=' + item.mdr +
+                  ' 当前登录组=' + curWG + ' DR=' + item.reportDR
+              );
+              dbgNativeListDigest(iframeWin, '[批审·主循环]');
               // 8.16.15: 切组前过守卫——自动审核已关 / 已切够次数 → 中止整批并跳出，
               // 这是「关掉自动审核后仍在反复切组」的最后一道闭环（此分支在 while 内，此前完全不看开关）
               if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {break;}
