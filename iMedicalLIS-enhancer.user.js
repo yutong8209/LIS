@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.22
+// @version      8.16.23
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -628,6 +628,8 @@
   const _dbgFlush = () => {
     try {sessionStorage.setItem(K_DBGLOG, JSON.stringify(_dbgLog));} catch (e) {}
   };
+  // 命中即视为「不可丢失」的日志（切组决策、登录组来源、页面加载标记）
+  const _DBG_URGENT_RE = /\[批审\]|\[小组\]|页面加载 #|切组|免切组/;
   let _dbgFlushTimer = null;
   const dbg = (...args) => {
     // 8.9.0: 环形缓冲始终写入——生产 DEBUG=false 时面板此前永远是空的，
@@ -636,8 +638,11 @@
     if (DEBUG) {console.log('[LIS]', msg);}
     _dbgLog.push(msg);
     if (_dbgLog.length > _DBG_MAX) {_dbgLog.splice(0, _dbgLog.length - _DBG_MAX);}
-    // 防抖落盘：批审/分类时日志密集，避免每条都 stringify 整份日志
-    if (!_dbgFlushTimer) {
+    // 8.16.23: 关键日志**立即**落盘，不走防抖 —— 切组重载随时会打断页面，
+    // 而防抖窗口（200ms）内的那几条恰恰是「切出去之前的最后几条」，正是最需要的证据。
+    if (_DBG_URGENT_RE.test(msg)) {
+      _dbgFlush();
+    } else if (!_dbgFlushTimer) {
       _dbgFlushTimer = setTimeout(() => {_dbgFlushTimer = null; _dbgFlush();}, 200);
     }
   };
@@ -23140,6 +23145,14 @@ window.addEventListener('keydown',function(e){
     // 8.10.0: 进一步移到异常/详情审核冲突检查之后——冲突返回时若已清标志，
     // _recheckResume 只认 pausedForSwitch 才重试，队列会无人接手、整批剩余标本静默漏审
     if (queue.pausedForSwitch) {delete queue.pausedForSwitch; saveAuditQueueNow(queue);}
+    // 8.16.23: 每次真正进入批审处理都留一条带上下文的锚点。跨组续跑会**多次**进入本函数，
+    // 于是「F4 之后到底有没有真的开始批审」「一共续跑了几次」一眼可查——
+    // 现场两次抓取都拿不到 [批审] 日志，靠这条就能立刻区分「F4 没触发」与「触发了但没跨组」。
+    dbg(
+      '[批审] ===== 进入批审处理：队列 ' + ((queue.items || []).length) + ' 条，从第 ' + (queue.current || 0) +
+        ' 条起，登录组=' + resolveLoginWGReliable() + '，originWG=' + String(queue.originWG || '') +
+        (queue._autoMode ? '，自动模式' : '，手动 F4') + ' ====='
+    );
     if (queue.keepWS) {keepWorkbenchOnTop('批审开始');}
     const resumeWSRefresh = !!wsTimer;
     stopWSRefresh();
