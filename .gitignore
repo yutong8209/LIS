@@ -85,3 +85,6 @@ notify_config.json
 bark-relay/notify_config.json
 bark-relay/bark_relay.log
 bark-relay/bark_relay.log.old
+
+# 8.16.17: 含医院 HIS 内部实现与异或密钥，不公开（本地保留）
+DHCC病历插件诊断结论.md
