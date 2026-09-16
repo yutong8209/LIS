@@ -9,14 +9,17 @@
  *   B. 逻辑仿真   —— 把守卫函数真代码抽出来跑场景（含「正常多组批审不许被误伤」）
  *
  * 用法：node aa_switch_guard_test.mjs
+ *      LIS_SRC=/tmp/old.user.js node aa_switch_guard_test.mjs   # 反向验证：旧版必须失败
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SRC_PATH = path.join(HERE, 'iMedicalLIS-enhancer.user.js');
+// 8.16.31: 支持 LIS_SRC 指向任意版本的 userscript —— 测试写完必须拿旧版反向验证一次
+const SRC_PATH = process.env.LIS_SRC ? path.resolve(process.env.LIS_SRC) : path.join(HERE, 'iMedicalLIS-enhancer.user.js');
 const src = fs.readFileSync(SRC_PATH, 'utf8');
+console.log('源码: ' + SRC_PATH);
 
 let pass = 0,
   fail = 0;
@@ -142,10 +145,31 @@ ok(/n\s*>\s*AA_STUCK_SWITCH_MAX/.test(guardFn), '同一条标本累计超限即�
 // A4. 跨队列计数必须落盘（自动审核每轮新建队列，内存计数会被重置）
 ok(/K_AA_STUCK_SWITCH/.test(src) && /localStorage\.setItem\(K_AA_STUCK_SWITCH/.test(src), '「卡住」计数落盘（跨队列/跨页面生效）');
 
-// A5. 切组成功必须归零，否则正常的 A→B→C 多组批审会被误伤
+// A5. 切组成功必须归零，否则正常的 A→B→C 多组批审会被误伤。
+// ⚠️ 8.16.31 修正：旧断言用 /aaQueueSwitchSucceeded\(queue\)/ 计数并把**函数定义行**
+// （`function aaQueueSwitchSucceeded(queue) {`）也算进去，于是恒为 2、永远通过——
+// 是个没有牙齿的断言。改成：排除定义行后统计真实调用点，并额外钉住
+// 「调用点必须被『已到目标组』条件包住」——这正是现场「守卫计数被每轮清零 → 死循环」的根因。
 ok(/function aaQueueSwitchSucceeded\(/.test(src), '存在「切组成功」归零函数');
-const succeedCalls = [...src.matchAll(/aaQueueSwitchSucceeded\(queue\)/g)].length;
-ok(succeedCalls >= 2, '「无需切组」的两条路径都归零（实际 ' + succeedCalls + ' 处）');
+const succeedCallSites = src
+  .split('\n')
+  .filter(l => !l.trim().startsWith('//'))
+  .filter(l => /aaQueueSwitchSucceeded\(/.test(l) && !/function aaQueueSwitchSucceeded\(/.test(l)).length;
+ok(succeedCallSites === 1, '归零调用点只有 1 处（实际 ' + succeedCallSites + ' 处）');
+// ensureAuditQueueWorkGroup 不再切组，因此**只有「确认已到目标组」才允许清零**
+const eqwgForReset = src.slice(
+  src.indexOf('async function ensureAuditQueueWorkGroup(queue)'),
+  src.indexOf('function runAuditQueueResume(')
+);
+ok(
+  /if \(curDR && itemWg && itemWg === curDR\) \{\s*\n\s*aaQueueSwitchSucceeded\(queue\);/.test(eqwgForReset),
+  'ensureAuditQueueWorkGroup 只在「已到目标组」时清零守卫计数'
+);
+const _resetIdx = eqwgForReset.indexOf('aaQueueSwitchSucceeded(queue);');
+ok(
+  _resetIdx > 0 && /if \(curDR && itemWg && itemWg === curDR\) \{/.test(eqwgForReset.slice(Math.max(0, _resetIdx - 120), _resetIdx)),
+  '清零调用点紧邻「已到目标组」守卫（无该守卫 = 无条件清零 = 守卫失效）'
+);
 
 // A6. 跨整页重载的续跑入口必须过守卫（此前只看 pausedForSwitch）
 const resumeFn = src.slice(src.indexOf('function checkAuditQueueResume('), src.indexOf('// 8.9.0: auditSelectedSpecimens'));

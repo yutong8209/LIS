@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.30
+// @version      8.16.31
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8992,21 +8992,24 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   }
 
   let _queueLockToken = ''; // 8.5.82: 本队列实例的锁 token——refresh/release 必须校验，防同标签旧循环误续期/误删新循环的锁
+  // 8.16.31: 成功时返回**本次获取的 token**（失败返回 ''，空串为假值，`if (!token)` 判定语义不变）。
+  // 调用方必须把 token 传给 releaseQueueLock —— 否则两轮循环共用同一个模块变量时，
+  // 旧循环的 finally 会拿被新循环覆盖过的 token 去比，代际保护形同虚设。
   function acquireQueueLock() {
     try {
       const raw = localStorage.getItem(K.auditQueueLock);
       if (raw) {
         const lock = JSON.parse(raw);
-        if (lock.owner !== _tabId && Date.now() - (lock.ts || 0) < AUDIT_QUEUE_LOCK_TTL) {return false;}
+        if (lock.owner !== _tabId && Date.now() - (lock.ts || 0) < AUDIT_QUEUE_LOCK_TTL) {return '';}
       }
       const token = Math.random().toString(36).slice(2);
       localStorage.setItem(K.auditQueueLock, JSON.stringify({ owner: _tabId, token, ts: Date.now() }));
       const check = JSON.parse(localStorage.getItem(K.auditQueueLock) || '{}');
-      if (check.owner === _tabId && check.token === token) {_queueLockToken = token; return true;}
-      return false;
+      if (check.owner === _tabId && check.token === token) {_queueLockToken = token; return token;}
+      return '';
     } catch (e) {
       // 无法可靠读写锁时宁可不自动审核，避免双标签页并发审核
-      return false;
+      return '';
     }
   }
 
@@ -9021,14 +9024,28 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     } catch (e) {}
   }
 
-  function releaseQueueLock() {
+  // token 可选：传入 = 释放本次循环持有的那一代锁（推荐，代际保护完整）；
+  // 不传 = 沿用模块内当前 token（仅 pagehide 这类「本页持有的锁一律释放」的场景使用）。
+  function releaseQueueLock(token) {
+    const myToken = token !== undefined ? String(token || '') : _queueLockToken;
     try {
       const raw = localStorage.getItem(K.auditQueueLock);
-      if (!raw) {return;}
-      const lock = JSON.parse(raw);
-      // 8.5.82: 校验 token——旧循环的 finally 不得删掉新循环刚获得的锁（token 缺失视为旧版锁，owner 匹配即删）
-      if (lock.owner === _tabId && (lock.token === undefined || lock.token === _queueLockToken)) {localStorage.removeItem(K.auditQueueLock);}
+      if (raw) {
+        const lock = JSON.parse(raw);
+        // 8.5.82: 校验 token——旧循环的 finally 不得删掉新循环刚获得的锁（token 缺失视为旧版锁，owner 匹配即删）
+        if (lock.owner === _tabId && lock.token !== undefined && myToken && lock.token !== myToken) {
+          // 锁已换代（新循环持有）→ 既不动锁，也不动 token
+        } else if (lock.owner === _tabId && (lock.token === undefined || lock.token === myToken)) {
+          localStorage.removeItem(K.auditQueueLock);
+        }
+      }
     } catch (e) {}
+    // 8.16.31: **必须**作废本次持有的 token。此前不清 → `_queueLockToken` 一直是上次批审的旧值：
+    //   ① isScriptOwnedNativeSelection()（18070）恒为真 → canScriptSelectNativeRow 的
+    //      「用户手动选行保护」永久失效，用户正在原生页查看的标本会被脚本抢走；
+    //   ② 残留 token 与共享变量叠加，会让旧循环误判自己仍持锁，从而删掉/续期新循环的锁。
+    // 只有确认没被新循环换代时才清，代际保护不丢。
+    if (_queueLockToken && _queueLockToken === myToken) {_queueLockToken = '';}
   }
 
   // 8.10.5: 自动审核主循环跨标签页主互斥锁（覆盖正常批量+异常逐条全周期，防止双标签页抢选行与审核按钮）
@@ -14093,7 +14110,34 @@ window.addEventListener('keydown',function(e){
         accDate: rowAcceptDateStr(row), // 8.7.0: 登记日期——跨午夜/历史标本审核时切原生列表日期用
         fingerprint: specimenFingerprint(row),
         status: sp.status || '',
-        retry: 0
+        retry: 0,
+        // 8.16.31: 最小必要「原生查询上下文」。跨整页刷新/切组续跑后 wsData 尚为空时，
+        // 队列条目是唯一能重建明细查询的东西——此前只存 reportDR(小写) 与精简字段，
+        // 重建出的行查不到明细（fetchAndClassifySpecimen 只读 ReportDR/TodoReportDR）→
+        // 恒返回 UNCERTAIN → 被当成「待定标本不可自动审核」静默留人工且补审正则不匹配 → 漏审。
+        // ⚠️ 这些必须是**原生**字段：status 是分类结论（NORMAL/MILD），绝不能当原生状态用；
+        //    IsComplete / _mn 是安全判定必需（完整性、堵孔仪器白名单、传染病 x8 比对），
+        //    缺任何一个都会静默丢红线，故一并固化。
+        q: {
+          ReportDR: String(reportDR),
+          MachineParameterDR: prMachineParameterDR(row) || '',
+          WorkGroupMachineDR: prWorkGroupMachineDR(row) || '',
+          ReportStatus: String(row.Status || row.ReportStatus || ''), // 原生状态（1 待审 / 3 已审 / 4 复检 / 5 取消）
+          EpisodeNo: row.EpisodeNo || '',
+          TransmitDate: row.TransmitDate || '',
+          IsComplete: row.IsComplete !== undefined ? row.IsComplete : '',
+          NoResRows: row.NoResRows !== undefined ? row.NoResRows : '',
+          AcceptDT: row.AcceptDT || '',
+          _pending: row._pending ? 1 : 0,
+          _mn: row._mn || '',
+          _mdr: prWorkGroupMachineDR(row) || '',
+          _wg: row._wg || '',
+          PatName: row.PatName || '',
+          Labno: row.Labno || '',
+          RegNo: row.RegNo || '',
+          TestSetDesc: row.TestSetDesc || '',
+          ItemDesc: row.ItemDesc || ''
+        }
       });
     });
     items.sort(compareAuditQueueItems);
@@ -14108,6 +14152,39 @@ window.addEventListener('keydown',function(e){
       keepWS: isWSVisible(),
       // 8.16.16: 起始组也用可信值——取不到则不记录，批审结束就不会误切回一个错的组
       originWG: resolveLoginWGReliable()
+    };
+  }
+
+  // 8.16.31: 由队列条目恢复「原生查询上下文」——wsData 里没有该行时（跨整页刷新/切组续跑、
+  // 数据不完整）用它重建一份**只含原生字段**的行，交给 fetchAndClassifySpecimen 重新拉明细
+  // 与最新标本状态。绝不把分类结论（NORMAL/MILD）当原生状态，也不凭空造成功。
+  // 返回 null 表示条目里没有可用的 ReportDR —— 调用方必须按 fail-closed 处理。
+  function queueItemNativeRow(item) {
+    if (!item) {return null;}
+    const q = item.q || {};
+    const reportDR = String(item.reportDR || q.ReportDR || '');
+    if (!reportDR) {return null;}
+    const mdr = q.WorkGroupMachineDR || item.mdr || '';
+    return {
+      ReportDR: reportDR,
+      MachineParameterDR: q.MachineParameterDR || '',
+      WorkGroupMachineDR: mdr,
+      Status: String(q.ReportStatus || ''),
+      ReportStatus: String(q.ReportStatus || ''),
+      EpisodeNo: q.EpisodeNo || '',
+      TransmitDate: q.TransmitDate || '',
+      IsComplete: q.IsComplete !== undefined ? q.IsComplete : '',
+      NoResRows: q.NoResRows !== undefined ? q.NoResRows : '',
+      AcceptDT: q.AcceptDT || '',
+      _pending: q._pending ? 1 : 0,
+      _mn: q._mn || '',
+      _mdr: mdr,
+      _wg: q._wg || item.wg || '',
+      PatName: q.PatName || item.name || '',
+      Labno: q.Labno || item.labno || '',
+      RegNo: q.RegNo || '',
+      TestSetDesc: q.TestSetDesc || item.testSet || '',
+      ItemDesc: q.ItemDesc || ''
     };
   }
 
@@ -14200,25 +14277,27 @@ window.addEventListener('keydown',function(e){
 
   // 返回 true = 允许继续切组/等待续跑；false = 已中止（调用方必须立刻停止本轮）
   // targetKey：本次要切过去的目标（标本 DR），用于识别「同一条反复卡住」
-  // opts.waiting：不是真要切组，只是在等页面就绪（curDR 尚为空）——不计入切组次数，
-  //               否则页面重载后的「等待」会把正常的 A→B→C 多组批审也顶到上限
+  // opts.waiting：不是真要切组，只是在等页面就绪（curDR 尚为空）——**完全不计入**任何切组计数，
+  //               否则页面重载后的「等待」会把正常的 A→B→C 多组批审也顶到上限。
+  // 8.16.31: waiting 此前仍会累加「同一条标本卡住」的落盘计数（aaStuckSwitchBump），
+  // 属于「额外增加真实切组计数」；真正的切组动作（非 waiting）照旧两重计数，两个上限都保留。
   function aaQueueGuardSwitch(queue, targetKey, opts) {
     if (!queue) {return false;}
     // ① 自动审核已关闭/已取消 → 自动模式的队列没有理由再往下跑
     if (queue._autoMode && (_autoAuditCancelRequested || !autoAuditEnabled())) {
       return aaQueueForceStop(queue, '自动审核已关闭');
     }
+    // 等待页面就绪：不是切组动作，不计数（上限由真实切组路径兜住）
+    if (opts && opts.waiting) {return true;}
     // ② **连续**切组失败上限：切组一旦成功，调用方会把 queue.switchCycles 归零，
     //    所以这里累加的自然就是「连着几次切不过去」（正常的跨组批审每次都是 1，不会误伤）
-    if (!(opts && opts.waiting)) {
-      queue.switchCycles = (queue.switchCycles || 0) + 1;
-      if (queue.switchCycles > AA_QUEUE_MAX_SWITCH) {
-        return aaQueueForceStop(
-          queue,
-          '已连续尝试切换工作组 ' + queue.switchCycles + ' 次仍未成功（可能当前账号无该工作组权限，或原生切组失败）',
-          {fuse: true}
-        );
-      }
+    queue.switchCycles = (queue.switchCycles || 0) + 1;
+    if (queue.switchCycles > AA_QUEUE_MAX_SWITCH) {
+      return aaQueueForceStop(
+        queue,
+        '已连续尝试切换工作组 ' + queue.switchCycles + ' 次仍未成功（可能当前账号无该工作组权限，或原生切组失败）',
+        {fuse: true}
+      );
     }
     // ③ 跨队列/跨页面：同一条标本反复切组（自动审核每轮新建队列会重置队列内计数，故必须落盘另计）
     const key = String(targetKey || '');
@@ -14268,10 +14347,21 @@ window.addEventListener('keydown',function(e){
     // 真的选不到才会切组（那里仍保留 aaQueueGuardSwitch 守卫与次数上限，不会死循环）。
     const curDR = String(resolveLoginWGReliable());
     const itemWg = String(item.wg || '');
-    if (curDR && itemWg && itemWg !== curDR) {
+    // ==================== 8.16.31: 只有「确认推进」才允许清零守卫计数 ====================
+    // 现场缺陷：这里原本无条件 `aaQueueSwitchSucceeded(queue)`，而本函数**不做任何切组**、
+    // 每轮 continueAuditQueue 都会走到 —— 于是它把 aaQueueGuardSwitch 累加的
+    // queue.switchCycles 与落盘的「同一条标本卡住」记录**每轮清零**，
+    // 守卫的「连续失败上限 3 次」「同一条标本上限 3 次」永远到不了，
+    // 跨组死循环（切组 → 整页重载 → 续跑 → 再切组）无法被兜住。
+    // 现在：只有**确实已到目标组**（本轮真的推进到位）才清零；组信息不可信时保守不动。
+    if (curDR && itemWg && itemWg === curDR) {
+      aaQueueSwitchSucceeded(queue);
+    } else if (curDR && itemWg) {
       dbg('[批审] 起始点不切组（跨组先试免切组）: 标本wg=' + itemWg + ' 登录组=' + curDR + ' DR=' + item.reportDR);
+      // 未到目标组 → 本函数没有推进任何东西，**不得**清零计数（清零 = 守卫失效）
+    } else {
+      dbg('[批审] 起始点工作组不可信（登录组/标本组取不到），保留守卫计数不作清零');
     }
-    aaQueueSwitchSucceeded(queue);
     return true;
   }
 
@@ -18440,11 +18530,52 @@ window.addEventListener('keydown',function(e){
   // 第二个标本的确认弹窗绝不会被误拦；同时提供 isNativeConfirmVisible 阻断假成功判定。
   let _lastConfirmText = '';
   let _lastConfirmClickAt = 0;
+  // 8.16.31: 当前脚本审核目标（DR）+ 时间戳。原生确认窗只在「脚本正在审这条标本」时才允许自动点击，
+  // 避免用户手动操作原生页时被脚本代按「确定」，也避免把上一条标本的弹窗误确认到下一条。
+  let _auditingTargetDR = '';
+  let _auditingTargetAt = 0;
+  const NATIVE_CONFIRM_TARGET_TTL = 20000; // 单条审核的等待窗口远小于此值
+  function setAuditingTargetDR(dr) {
+    _auditingTargetDR = dr ? String(dr) : '';
+    _auditingTargetAt = _auditingTargetDR ? Date.now() : 0;
+  }
+  function clearAuditingTargetDR(dr) {
+    if (!dr || !_auditingTargetDR || String(_auditingTargetDR) === String(dr)) {
+      _auditingTargetDR = '';
+      _auditingTargetAt = 0;
+    }
+  }
+  // 8.16.31: 原生确认窗「可自动确认」判定——只认已知的审核/超范围确认文案。
+  // 未知文案、结果不完整（含「结果为空/未录入/必填项目」）、危急提示一律不自动确认（留人工）。
+  // 注意：这里只做**收窄**，不新增任何医学规则；危急的否定语境（无危急/非危急）沿用既有口径。
+  function isAutoConfirmableNativeText(text) {
+    const t = String(text || '').trim();
+    if (!t) {return false;}
+    if (classifyNativeMessage(t) === 'incomplete') {return false;}
+    if (t.indexOf('危急') !== -1 && t.indexOf('无危急') === -1 && t.indexOf('非危急') === -1) {return false;}
+    return (
+      (t.indexOf('确定要') !== -1 && (t.indexOf('审核') !== -1 || t.indexOf('保存') !== -1)) ||
+      (t.indexOf('是否确定') !== -1 && t.indexOf('审核') !== -1) ||
+      t.indexOf('超出参考范围') !== -1
+    );
+  }
   function handleNativeMessageConfirm(iframeWin) {
     const now = Date.now();
     const repWin = getReportIframeWin();
     const wins = [iframeWin, repWin, window];
     const visited = new Set();
+    // 8.16.31: 自动确认准入条件（此前完全没有）——必须「脚本正在审核」+「审核目标新鲜」。
+    // 之前只要弹窗可见就点 #btn_Confirm：用户手动在原生页操作时会被代按确定，
+    // 且完全不校验文案（未知提示 / 结果不完整 / 危急提示一律照点）。
+    const _confirmTarget = String(_auditingTargetDR || '');
+    const _scriptAuditing = isScriptOwnedNativeSelection();
+    const _confirmTargetFresh = !!_confirmTarget && now - _auditingTargetAt < NATIVE_CONFIRM_TARGET_TTL;
+    const _confirmAllowed = _scriptAuditing && _confirmTargetFresh;
+    // 弹窗所属窗口的「当前标本」必须与审核目标一致（任一权威来源都不允许冲突）
+    const confirmTargetMatches = win => {
+      const drs = [getNativeWorkListSelectedDR(win), String((win && win.me && win.me.curReportDR) || '')].filter(Boolean);
+      return drs.length > 0 && drs.every(d => d === _confirmTarget);
+    };
 
     for (const win of wins) {
       if (!win || visited.has(win)) {continue;}
@@ -18479,6 +18610,21 @@ window.addEventListener('keydown',function(e){
               if (infoText && infoText === _lastConfirmText && now - _lastConfirmClickAt < 400) {
                 return false;
               }
+              // 8.16.31: 四道闸——① 脚本审核中 ② 目标新鲜 ③ 文案在允许清单内 ④ 窗口标本==审核目标。
+              // 任一不满足 → 不点（保守留人工，由单条超时兜底），绝不扩大医学规则。
+              if (!_confirmAllowed || !isAutoConfirmableNativeText(infoText) || !confirmTargetMatches(win)) {
+                dbg(
+                  '原生确认窗未自动确认（保守留人工）: 文案=',
+                  infoText.slice(0, 80),
+                  '脚本审核中=',
+                  _scriptAuditing,
+                  '目标=',
+                  _confirmTarget,
+                  '窗口标本=',
+                  [getNativeWorkListSelectedDR(win), (win.me && win.me.curReportDR) || ''].join('/')
+                );
+                continue;
+              }
               dbg('检测到原生审核确认窗口(#win_MessageConfirm):', infoText.slice(0, 100), '-> 自动确认提交审核');
               _lastConfirmText = infoText;
               _lastConfirmClickAt = now;
@@ -18509,16 +18655,13 @@ window.addEventListener('keydown',function(e){
           const body = w.querySelector('.messager-body, .panel-body');
           if (!body) {continue;}
           const text = (body.textContent || '').trim();
-          // 如果包含不完整提示，绝不自动确认（留人工处理）
-          if (classifyNativeMessage(text) === 'incomplete') {continue;}
-          if (
-            (text.indexOf('确定要') !== -1 && (text.indexOf('审核') !== -1 || text.indexOf('保存') !== -1)) ||
-            (text.indexOf('是否确定') !== -1 && text.indexOf('审核') !== -1) ||
-            text.indexOf('超出参考范围') !== -1
-          ) {
-            if (text && text === _lastConfirmText && now - _lastConfirmClickAt < 400) {
-              return false;
-            }
+          // 8.16.31: 统一走同一套收窄判定——不完整 / 危急 / 未知文案一律不自动确认，
+          // 并且同样要求「脚本审核中 + 目标匹配」（此前这里没有目标绑定）
+          if (!_confirmAllowed || !confirmTargetMatches(win) || !isAutoConfirmableNativeText(text)) {continue;}
+          if (text && text === _lastConfirmText && now - _lastConfirmClickAt < 400) {
+            return false;
+          }
+          {
             const btns = w.querySelectorAll('a.l-btn, button');
             for (const b of btns) {
               const bText = (b.textContent || b.value || '').trim();
@@ -19459,6 +19602,8 @@ window.addEventListener('keydown',function(e){
       const sel = me && me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
       if (!targetReportDR && sel) {targetReportDR = String(sel.ReportDR || '');}
     } catch (e) {}
+    // 8.16.31: 记录「脚本正在审哪一条」——原生确认窗只允许在目标匹配时才自动点击（见 handleNativeMessageConfirm）
+    if (isAudit) {setAuditingTargetDR(targetReportDR);}
     const auditCtx = auditTargetContext(iframeWin, targetReportDR);
     const targetWasPresent = auditCtx.rowPresent;
     // 8.5.53: 复检标本关闭「行消失=成功」（审核前就是 4，行可能因 CA 流程暂时消失）
@@ -22919,7 +23064,10 @@ window.addEventListener('keydown',function(e){
     return false;
   }
 
-  function requeueAuditItem(queue, item, reason) {
+  // opts.tech：技术性缺数据（明细未获取/详情为空）→ 记入 skipped 时打 _tech 标记，
+  // 补审轮据此收录（见 continueAuditQueue 的 salvage 收集）。只能由技术失败路径打，
+  // 绝不放宽补审正则——否则「轻微带校验未过」「结果不完整」等**安全拦截**也会被塞进补审。
+  function requeueAuditItem(queue, item, reason, opts) {
     item.retry = (item.retry || 0) + 1;
     // 最多队尾重试 3 次（选行失败/未确认等），提高「真漏审」补上的机会
     if (item.retry <= 3) {
@@ -22927,7 +23075,9 @@ window.addEventListener('keydown',function(e){
       dbg('批审临时跳过，放回队尾重试:', item.name || item.labno || item.reportDR, reason, 'retry=', item.retry);
       return true;
     }
-    queue.skipped.push({ ...item, reason });
+    const _skip = { ...item, reason };
+    if (opts && opts.tech) {_skip._tech = true;}
+    queue.skipped.push(_skip);
     return false;
   }
 
@@ -22951,25 +23101,42 @@ window.addEventListener('keydown',function(e){
     // 8.10.0: 补审轮是全部审核入口中唯一不做 live 分类复检的——被队尾重试的条目
     // 可能在批审开始不久即通过校验、批末才补审，中途结果被仪器修正（转异常/危急/待定）
     // 会漏拦。补审前重查一次分类；拿不到或不可自动审核则放弃补审、留人工
-    if (_salvageRow) {
-      let _svClassified = getLiveClassification(item.reportDR);
-      if (!_svClassified || isClassificationStale(_salvageRow)) {
-        try {
-          _svClassified = await fetchAndClassifySpecimen(_salvageRow);
-          if (_svClassified && _svClassified.reportDR) {
-            wsClassifiedCache[_svClassified.reportDR] = _svClassified;
-            _classifyVersion++;
-          }
-        } catch (e) {
-          dbg('补审前重分类失败:', item.reportDR, e.message);
+    // 8.16.31: 复检**必须无条件执行**——此前整段包在 `if (_salvageRow)` 里，wsData 无该行时
+    // （跨整页刷新/切组续跑、数据不完整）复检被整段跳过，补审会在**没有任何活体分类**的情况下
+    // 直接选行审核（fail-open）。现在无活体行就用队列条目固化的原生上下文重建再查，
+    // 连上下文都没有（无 ReportDR）→ 直接留人工。无最新数据一律不放行。
+    const _svRow = _salvageRow || queueItemNativeRow(item);
+    let _svClassified = _svRow ? getLiveClassification(item.reportDR) : null;
+    // 与主循环同口径：无活体行 / 无缓存 / 缓存过期 → 必须重取，且**重取失败不得沿用旧缓存**
+    const _svNeedFresh = !_svClassified || !_salvageRow || isClassificationStale(_svRow);
+    let _svFreshOk = !_svNeedFresh;
+    if (_svRow && _svNeedFresh) {
+      try {
+        const _svFresh = await fetchAndClassifySpecimen(_svRow);
+        if (_svFresh && _svFresh.reportDR) {
+          wsClassifiedCache[_svFresh.reportDR] = _svFresh;
+          _classifyVersion++;
+          _svClassified = _svFresh;
+          _svFreshOk = true;
         }
+      } catch (e) {
+        dbg('补审前重分类失败:', item.reportDR, e.message);
       }
-      // 8.16.26: 补审同样放行轻微异常标本（status MILD）——与主循环 23214 对齐，避免轻微异常进补审被 100% 误杀
-      const _svMildEval = String(item.status) === 'MILD' ? classifyMildAbnormal(_svClassified) : null;
-      if (!_svClassified || (!isAutoAuditableClassified(_svClassified) && !(_svMildEval && _svMildEval.ok))) {
-        dbg('补审复检：分类缺失或不可自动审核，留人工:', item.reportDR);
-        return { ok: false, iframeWin, reclassified: true };
-      }
+    }
+    // 8.16.26: 补审同样放行轻微异常标本（status MILD）——与主循环 23214 对齐，避免轻微异常进补审被 100% 误杀
+    const _svMildEval = String(item.status) === 'MILD' ? classifyMildAbnormal(_svClassified) : null;
+    const _svEmpty =
+      !!_svClassified && _svClassified.status === 'UNCERTAIN' && (!Array.isArray(_svClassified.items) || _svClassified.items.length === 0);
+    if (!_svClassified || !_svFreshOk || _svEmpty || (!isAutoAuditableClassified(_svClassified) && !(_svMildEval && _svMildEval.ok))) {
+      dbg(
+        '补审复检：分类缺失/未取到最新/不可自动审核，留人工:',
+        item.reportDR,
+        '有无活体行=',
+        !!_salvageRow,
+        '重取成功=',
+        _svFreshOk
+      );
+      return { ok: false, iframeWin, reclassified: true };
     }
     // 8.5.82: 补审首轮尊重用户选行锁（批审刚结束、进度条未消失的瞬间用户可能正在原生页查看标本），
     // 被挡住再走下方 force 升级路径——补审目标不变：列表里不留未审
@@ -23064,6 +23231,7 @@ window.addEventListener('keydown',function(e){
     } finally {
       _auditingPreStatus4 = false; // 8.5.56: 复位，避免影响后续判定
       _auditingCrossGroup = false; // 8.16.25: 同上
+      clearAuditingTargetDR(item.reportDR); // 8.16.31: 作废本条审核目标（确认窗不得跨条误确认）
     }
   }
 
@@ -23115,7 +23283,9 @@ window.addEventListener('keydown',function(e){
       showToast('正在审核中，请稍候', 'warning');
       return;
     }
-    if (!acquireQueueLock()) {
+    // 8.16.31: 捕获本次循环持有的锁 token，释放时必须回传——防旧循环清新循环的锁
+    const queueLockToken = acquireQueueLock();
+    if (!queueLockToken) {
       showToast('其他标签页正在批审，请稍候', 'warning');
       releaseAuditLock(auditLockId);
       return;
@@ -23126,13 +23296,13 @@ window.addEventListener('keydown',function(e){
     if (_abnormalAuditInProgress) {
       showToast('正在审核异常标本中，请稍候', 'warning');
       releaseAuditLock(auditLockId);
-      releaseQueueLock();
+      releaseQueueLock(queueLockToken);
       return;
     }
     if (_detailAuditInProgress) {
       showToast('正在详情面板审核中，请稍候', 'warning');
       releaseAuditLock(auditLockId);
-      releaseQueueLock();
+      releaseQueueLock(queueLockToken);
       return;
     }
     // 8.9.4: 切组暂停标记在真正拿到队列锁之后才清——此前 runAuditQueueResume 在拿锁前就清并落盘，
@@ -23241,6 +23411,7 @@ window.addEventListener('keydown',function(e){
       let totalCount = queue.items.length;
       let queuePausedForSwitch = false;
       let queuePausedForData = false; // 8.9.4: 数据健康暂停（区别于切组暂停，补审轮须跳过）
+      let _salvageUnfinished = 0; // 8.16.31: 补审轮被中止时「未尝试」的条数——终态必须如实说明，不得误报全成功
       let batchLastMdr = '';
       let batchListFresh = false;
       let batchSkipSelect = false;
@@ -23404,31 +23575,48 @@ window.addEventListener('keydown',function(e){
           continue;
         }
         let liveClassified = getLiveClassification(item.reportDR);
-        if (!liveClassified || (liveRow && isClassificationStale(liveRow))) {
-          const rowForClassify = liveRow || findWSSpecimenByReportDR(item.reportDR) || item.row || item;
+        // 8.16.31: 无活体行（跨整页刷新/切组续跑、工作台数据不完整）时也必须重取——
+        // 此前只看缓存的年龄/指纹，无行可查就整段跳过，等于拿可能过期的分类放行。
+        const _needFresh = !liveClassified || !liveRow || isClassificationStale(liveRow);
+        let _freshOk = !_needFresh;
+        if (_needFresh) {
+          // 8.16.31: 行来源优先级 —— 活体行 > 工作台行 > **队列条目固化的原生上下文**。
+          // 此前最后兜底是 `item.row || item`，而 item 只有小写 reportDR 且 item.row 从不落盘，
+          // 于是 fetchAndClassifySpecimen 拿不到 ReportDR → 恒返回 UNCERTAIN → 被当医学拦截。
+          const rowForClassify = liveRow || findWSSpecimenByReportDR(item.reportDR) || queueItemNativeRow(item);
           if (rowForClassify) {
             try {
-              liveClassified = await fetchAndClassifySpecimen(rowForClassify);
-              if (liveClassified && liveClassified.reportDR) {
-                wsClassifiedCache[liveClassified.reportDR] = liveClassified;
+              const _fresh = await fetchAndClassifySpecimen(rowForClassify);
+              if (_fresh && _fresh.reportDR) {
+                wsClassifiedCache[_fresh.reportDR] = _fresh;
                 _classifyVersion++;
+                liveClassified = _fresh;
+                _freshOk = true;
               }
             } catch (e) {
               dbg('批审前重分类失败:', item.reportDR, e.message);
             }
           }
         }
-        if (!liveClassified) {
-          if (item.status === 'NORMAL') {
-            liveClassified = { status: 'NORMAL', reportDR: item.reportDR, items: item.items || [] };
+        // 8.16.31: 「拿不到最新数据」的两种形态都要按**技术性缺数据**处理，绝不凭旧分类放行：
+        //   ① 重取失败/没有可用查询上下文（_freshOk=false）→ 仍只剩可能过期的旧缓存；
+        //   ② 明细为空（LIS 结果回传竞态 / 已取消）→ 分类为 UNCERTAIN 且 items 为空。
+        // 注意 ② 只认「UNCERTAIN 且无任何项目」——带项目的 UNCERTAIN 是**医学**判定（含待定项），
+        // 必须落到下面的留人工，不能当技术失败反复重试。
+        const _liveEmpty = !!liveClassified && liveClassified.status === 'UNCERTAIN' && (!Array.isArray(liveClassified.items) || liveClassified.items.length === 0);
+        if (!liveClassified || !_freshOk || _liveEmpty) {
+          const _techReason = _liveEmpty ? '详情结果为空（需刷新后重试）' : '分类明细未获取（需刷新后重试）';
+          // 有限重试（requeueAuditItem 内 ≤3 次），耗尽后打 _tech 标记进补审；**绝不**凭队列里
+          // 那份旧 NORMAL 分类构造放行对象——无最新数据不可放行。
+          if (requeueAuditItem(queue, item, _techReason, {tech: true})) {
+            dbg('批审: ' + _techReason + '，放回队尾重试:', item.reportDR, 'retry=', item.retry);
           } else {
-            queue.skipped.push({ ...item, reason: '分类缓存缺失，需刷新后重试' });
-            _aaRecordQueueItem('留人工', item, '分类缓存缺失，需刷新后重试');
+            _aaRecordQueueItem('留人工', item, _techReason);
             skipCount++;
-            queue.current++;
-            saveAuditQueueNow(queue);
-            continue;
           }
+          queue.current++;
+          saveAuditQueueNow(queue);
+          continue;
         }
         // 8.12.0: 逐条活体复检——NORMAL 走原口径；F4 轻微异常条目（status MILD）用最新分类重跑
         // 轻微带判定（classifyMildAbnormal 内部有 _classifyVersion 记忆），数据变了会如实拦下
@@ -23824,6 +24012,7 @@ window.addEventListener('keydown',function(e){
         } finally {
           _auditingPreStatus4 = false; // 8.5.53: 该条审核结束重置
           _auditingCrossGroup = false; // 8.16.25: 同上（不留残标记影响后续同组标本）
+          clearAuditingTargetDR(item.reportDR); // 8.16.31: 作废本条审核目标
           if (!queue.pausedForSwitch) {
             queue.current++;
           }
@@ -23847,7 +24036,12 @@ window.addEventListener('keydown',function(e){
         const salvage = [];
         (queue.failed || []).forEach(f => salvage.push(f));
         (queue.skipped || []).forEach(s => {
-          if (s && /未确认|未找到|详情未加载|详情结果为空|超时/.test(String(s.reason || ''))) {salvage.push(s);}
+          // 8.16.31: 技术性缺数据（明细未获取等）用**显式标记**入补审，而不是放宽这条正则——
+          // 放宽正则会连带把「轻微带校验未过」「结果不完整」「标本已取消」等**安全拦截**
+          // 也塞进补审，那是最容易出事的一类改动。标记只能由技术失败路径打上。
+          if (s && (s._tech === true || /未确认|未找到|详情未加载|详情结果为空|超时/.test(String(s.reason || '')))) {
+            salvage.push(s);
+          }
         });
         // 去重
         const seen = new Set();
@@ -23863,8 +24057,16 @@ window.addEventListener('keydown',function(e){
           updateBatchProgress(`补审 ${need.length} 条未确认标本...`, 95);
           dbg('批审补审轮次:', need.length);
           const stillFail = [];
+          let _salvageAttempted = 0;
           for (let i = 0; i < need.length; i++) {
-            if (_batchAbort || isAuditLockAborted(auditLockId)) {break;}
+            if (_batchAbort || isAuditLockAborted(auditLockId)) {
+              // 8.16.31: 中止时**未尝试的尾部必须保留为未完成**——此前直接 break，
+              // 未尝试的条目既不在 stillFail 也不在 skipped，随后 queue.failed = stillFail
+              // 把它们整体抹掉，终态却按 successCount 报成功（静默漏审）。
+              dbg('批审补审轮被中止，剩余 ' + (need.length - i) + ' 条未尝试，保留为未完成');
+              break;
+            }
+            _salvageAttempted = i + 1;
             refreshAuditLock(auditLockId); // 补审轮也要心跳，多条补审同样可能超过 45s
             const it = need[i];
             updateBatchProgress(
@@ -23886,12 +24088,31 @@ window.addEventListener('keydown',function(e){
               _aaRecordQueueItem('留人工', it, '补审仍未确认');
             }
           }
-          queue.failed = stillFail;
-          failCount = stillFail.length;
+          // 8.16.31: 未尝试的尾部并入「未完成」——保留 + 按 reportDR 去重，绝不静默丢弃。
+          // 这里只做**保留**，不触发任何自动续跑（避免无限循环）。
+          const _attemptedSet = new Set(need.slice(0, _salvageAttempted).map(x => String(x.reportDR || '')));
+          const _unattempted = need.filter(x => !_attemptedSet.has(String(x.reportDR || '')));
+          _salvageUnfinished = _unattempted.length;
+          if (_salvageUnfinished) {
+            aaStateEventAdd('pause', '批审补审被中止：' + _salvageUnfinished + ' 条未尝试，已保留为未完成（需人工核对）');
+          }
+          const _mergedFail = [];
+          const _seenFail = new Set();
+          stillFail.concat(_unattempted).forEach(x => {
+            const id = String(x.reportDR || '');
+            if (!id || _seenFail.has(id)) {return;}
+            _seenFail.add(id);
+            _mergedFail.push(x);
+          });
+          queue.failed = _mergedFail;
+          failCount = _mergedFail.length;
           // 从 skipped 里去掉已补审成功的
           if (queue.skipped && queue.skipped.length) {
             const doneSet = new Set((queue.done || []).map(d => String(d.reportDR)));
-            queue.skipped = queue.skipped.filter(s => !doneSet.has(String(s.reportDR)));
+            // 8.16.31: 同时剔除已并入 failed 的条目——否则同一条既算「失败」又算「跳过」，
+            // 终态汇总虚高，看不出到底还剩几条未完成
+            const failSet = new Set((queue.failed || []).map(f => String(f.reportDR)));
+            queue.skipped = queue.skipped.filter(s => !doneSet.has(String(s.reportDR)) && !failSet.has(String(s.reportDR)));
             skipCount = queue.skipped.length;
           }
         }
@@ -23900,26 +24121,37 @@ window.addEventListener('keydown',function(e){
       const fill = document.getElementById('lis-prog-fill');
       const text = document.getElementById('lis-prog-text');
       if (fill) {fill.style.width = '100%';}
-      if (text) {text.textContent = `完成: ${successCount} 成功, ${failCount} 失败, ${skipCount} 跳过`;}
+      // 8.16.31: 补审未完成必须显式进终态汇总，不能因为 current 走到底就报全成功
+      const _unfinishedHint = _salvageUnfinished ? `, ${_salvageUnfinished} 未完成` : '';
+      if (text) {
+        text.textContent = `完成: ${successCount} 成功, ${failCount} 失败, ${skipCount} 跳过${_unfinishedHint}`;
+      }
 
       if (queuePausedForSwitch) {
         if (text) {text.textContent = '正在切换工作组，稍后自动继续...';}
         return;
       }
 
-      if (queue.current >= queue.items.length) {clearAuditQueue();}
+      // 8.16.31: 有「补审未完成」时**不清队列**——未审标本不能随队列一起消失。
+      // 注意：这里只是保留落盘记录供人工核对，不会自动续跑（items 已走到末尾，
+      // checkAuditQueueResume 的剩余数 ≤0，不会触发新一轮），不引入无限循环。
+      if (queue.current >= queue.items.length && !_salvageUnfinished) {clearAuditQueue();}
       // 提示仅供参考；以列表是否消失为准
       // 8.15.5: 补上跳过数——此前结束 toast 只报成功/失败，跳过（留人工）只在进度条那行
       // 一闪而过，批审一结束就看不到「有多少条被安全门拦下、需要人工过一遍」。
       const _skipHint = skipCount > 0 ? `，跳过 ${skipCount} 条（需人工过一遍）` : '';
+      const _unfinHint = _salvageUnfinished ? `，补审 ${_salvageUnfinished} 条未完成（队列已保留，请核对）` : '';
       if (!_batchAbort) {
         if (successCount > 0) {
           showToast(
-            `批审结束（以列表为准）成功约 ${successCount}` + (failCount ? `，仍有 ${failCount} 条请核对` : '') + _skipHint,
-            (failCount || skipCount) ? 'warning' : 'success'
+            `批审结束（以列表为准）成功约 ${successCount}` +
+              (failCount ? `，仍有 ${failCount} 条请核对` : '') +
+              _skipHint +
+              _unfinHint,
+            failCount || skipCount || _salvageUnfinished ? 'warning' : 'success'
           );
         } else {
-          showToast('❌ 审核全部失败' + _skipHint, 'error');
+          showToast('❌ 审核全部失败' + _skipHint + _unfinHint, 'error');
         }
       }
 
@@ -23957,7 +24189,8 @@ window.addEventListener('keydown',function(e){
       dbg('批量审核失败:', e);
       showToast('审核失败: ' + e.message, 'error');
     } finally {
-      releaseQueueLock();
+      clearAuditingTargetDR(); // 8.16.31: 整批结束 → 确认窗目标彻底作废（不留残目标）
+      releaseQueueLock(queueLockToken);
       releaseAuditLock(auditLockId);
       stopAuditLockHeartbeat(auditLockId);
       // 8.7.0: 审过历史/跨午夜标本时原生日期框被切走过，恢复回今天，避免原生页面停在旧日期
