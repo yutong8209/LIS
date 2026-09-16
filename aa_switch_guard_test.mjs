@@ -73,6 +73,27 @@ ok(
 // A17. 没有机台 DR 时也必须尝试一次免切组，而不是直接切组
 ok(!/\} else if \(item\.mdr\) \{/.test(src), '免切组探测不再要求 item.mdr 存在（否则等于直接切组）');
 
+// A19. 8.16.19: 批审**起始点**（ensureAuditQueueWorkGroup）也必须走「免切组优先」——
+// 此前它只查一次「当前原生列表」，而批审刚启动时列表通常还停在默认日期/上一个机台，
+// 这一步几乎必然落空 → 本可免切组的标本被真切一次组（整页重载），批审跑完再切回起始组
+// （第二次整页重载）——现场看到的「切回原生 LIS 又切回工作台」就是这一去一回。
+const eqwgSlice = src.slice(
+  src.indexOf('async function ensureAuditQueueWorkGroup(queue)'),
+  src.indexOf('function runAuditQueueResume(')
+);
+ok(
+  /await refreshNativeWorkListForItem\(iframeWin, item, \{ force: true, fast: true \}\)/.test(eqwgSlice),
+  '批审起始点也做免切组探测（按机台 DR 查工作列表），命中就不切组'
+);
+ok(
+  /报告页未就绪 → 不预先切组，交由主循环走免切组[\s\S]{0,200}?return true;/.test(eqwgSlice),
+  '报告页未就绪时不预先切组（过早切组＝白来一次整页重载）'
+);
+ok(
+  /if \(!WG_MAP\[curDR\]\) \{[\s\S]{0,400}?return true;/.test(eqwgSlice),
+  '原生工作组取值不在 WG_MAP 口径内 → 不判跨组、不切组（防两边取值不同源导致「每次都切」）'
+);
+
 // A18. item.wg / originWG 兜底也要用可信值（否则不可信值会被固化进队列）
 ok(/wg: row\._wg \|\| resolveLoginWGReliable\(\),/.test(src), '队列条目 wg 兜底用可信判定');
 ok(/originWG: resolveLoginWGReliable\(\)/.test(src), 'originWG（审完切回起始组）用可信判定');

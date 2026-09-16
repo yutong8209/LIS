@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.18
+// @version      8.16.19
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -14232,14 +14232,54 @@ window.addEventListener('keydown',function(e){
       aaQueueSwitchSucceeded(queue); // 已在目标组（或无需切组）= 切组确实推进了，清掉卡住记录
       return true;
     }
+    // 8.16.19: 取值口径一致性校验——curDR 必须是脚本认识的工作组 DR（WG_MAP 的 key）。
+    // item.wg 一定来自 WG_MAP（队列构建用 row._wg / 兜底也是 WG_MAP 口径）。若原生下拉框的
+    // value（或 LIS 全局 WorkGroupDR）与 WG_MAP **不同源**（原生改版、value 里装的是别的编号），
+    // 那么 itemWg !== curDR 就**恒成立**：每次批审、每次单审都会判「跨组」→ 白切一趟
+    // （去 + 回两次整页重载，正是现场现象），而 safeSwitchWG 拿一个不认识的 DR 去
+    // `sel.value = dr` 也切不出正确状态。按既定原则「不确定 ⇒ 绝不切组」处理。
+    if (!WG_MAP[curDR]) {
+      dbg('[批审] 原生工作组值不在已知 WG_MAP 内 → 不判跨组、不切组:', 'curDR=' + curDR, 'itemWg=' + itemWg);
+      return true;
+    }
     // 8.15.27: 若首条标本已在当前原生列表中（例如跨组共享视图或机台），则直接复用当前组无需预先切组
-    const iframeWin = getReportIframeWin();
+    let iframeWin = getReportIframeWin();
     if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
       aaQueueSwitchSucceeded(queue);
       return true;
     }
+    // ==================== 8.16.19: 批审起始点也走「免切组优先」 ====================
+    // 现场反馈：无论 F4 批审数个标本，还是只审一个，都会「切回原生 LIS 又切回工作台」。
+    // 成因就在本函数——批审**起始点**此前只有上面那一次「查当前原生列表」，而批审刚启动时
+    // 原生列表通常还停在「默认日期 / 上一个机台」，这一步几乎必然落空 → 本可免切组的标本
+    // 被换成一次**真实切组**（整页重载）；批审跑完再按 originWG 切回起始组（第二次整页重载）。
+    // 一去一回两次整页重载，正是现场看到的现象。而批审主循环（8.15.27 / 8.16.16 的快速探测）
+    // 本来就是「先按机台 DR 免切组探测、探测不到才切组」——起始点没跟上，于是白切一趟。
+    // 现在起始点补齐同一步：按该标本的机台 DR 直接查工作列表（ShowWorkList 传空机台＝查全部机台）。
+    const _canProbe = !!(iframeWin && (iframeWin.jQuery || iframeWin.$) && iframeWin.me);
+    if (_canProbe) {
+      try {
+        const probed = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
+        iframeWin = probed || getReportIframeWin() || iframeWin;
+        if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
+          dbg('[批审] 免切组探测命中（按机台查工作列表）→ 不切组:', item.reportDR, 'wg', itemWg, 'vs', curDR);
+          aaQueueSwitchSucceeded(queue);
+          return true;
+        }
+      } catch (e) {
+        dbg('[批审] 免切组探测异常:', e);
+      }
+    } else {
+      // 报告页尚未就绪（jq/me 取不到），探测此刻做不了 → **本就在这里切组是过早的**：
+      // 放行交给批审主循环，它会先 ensureReportPageLoaded，再按 8.15.27 的快速探测决定，
+      // 真的选不到才「立即切组」（不会先吃满 waitAndSelectNativeRow 的超时）。
+      dbg('[批审] 报告页未就绪 → 不预先切组，交由主循环走免切组:', item.reportDR, 'wg', itemWg, 'vs', curDR);
+      return true;
+    }
+    // 免切组确实选不到（真跨组 / 该机台在本组不可见）→ 才切组
     // 首条标本不在当前原生列表且所属工作组不同：批审起始直接切换到目标组，消除盲目尝试选行导致的数秒卡顿
     // 8.16.15: 切组前过守卫——自动审核已关 / 连续切组失败已超限 → 整批中止，不再无限切下去
+    dbg('[批审] 免切组探测失败 → 切换工作组:', item.reportDR, 'wg', itemWg, 'vs', curDR);
     if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {return false;}
     queue.pausedForSwitch = true;
     saveAuditQueueNow(queue);
