@@ -25,7 +25,7 @@ log() { echo "[$(date '+%F %T')] $*" >>"$LOG"; }
 # 不在科室网段时，后面 3 轮 scp 会各自 ConnectTimeout=8s 依次超时 ≈ 24s；改为前台执行后
 # 这会明显拖慢 commit。先用 2s 的 TCP 探活快速判定，不通立即返回。
 # （`nc -G` 是 macOS/BSD 的连接超时选项；本脚本只在 Mac 上跑。）
-if ! nc -z -G 2 "$WIN_HOST" 22 2>/dev/null; then
+if ! nc -z -G 4 "$WIN_HOST" 22 2>/dev/null; then
   log "⚠️ 网关机 ${WIN_HOST}:22 不可达（不在科室网段？）→ 跳过本次同步"
   exit 1
 fi
