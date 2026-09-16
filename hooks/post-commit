@@ -1,7 +1,18 @@
 #!/bin/bash
-# post-commit：commit 涉及 userscript / vendor 时，后台自动同步到科室 nginx（fire-and-forget，不阻塞提交）
+# post-commit：commit 涉及 userscript / vendor 时，自动同步到科室 nginx
 # 日志：.cache/nginx_sync.log；手动补跑：bash hooks/sync-to-nginx.sh
 # 逃生口：LIS_NO_SYNC=1 git commit ... 跳过本次自动同步
+#
+# 8.16.20：从「nohup 后台 fire-and-forget」改为**前台**执行。
+#   旧写法 `nohup bash sync-to-nginx.sh >/dev/null 2>&1 &` 的问题不是 nohup 不够，
+#   而是**整进程组会被带走**：agent / 终端一返回，后台子进程收到 SIGKILL（无法 trap），
+#   结果是「同步失败 + 锁留在原地」。现场表现极具误导性——
+#   日志里是 `Connection closed` / `ssh: connect ... No route to host`，看着像网络不通，
+#   但此刻网络其实是通的：手动跑同一条命令就成功。
+#   （8.16.5 只修了「锁残留的自动接管」，没修「同步本身被杀」这个根因，
+#     所以自动同步几乎必失败，要靠下次提交或人工补跑才补上。）
+#   一次同步实测约 4s（含 curl 回验）；不在科室网段时由 sync-to-nginx.sh 的
+#   连通性预检在 2s 内跳过。代价很小，换来的是「提交完 = 网关机已是新版本」这个确定结论。
 [ "${LIS_NO_SYNC:-0}" = "1" ] && exit 0
 
 DIR="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
@@ -13,5 +24,6 @@ case "$files" in
   *) exit 0 ;;  # 本次提交不涉及脚本文件，无需同步
 esac
 
-nohup bash "$DIR/hooks/sync-to-nginx.sh" >/dev/null 2>&1 &
+bash "$DIR/hooks/sync-to-nginx.sh"
+# 同步失败不影响提交结果（细节已写进 .cache/nginx_sync.log）
 exit 0
