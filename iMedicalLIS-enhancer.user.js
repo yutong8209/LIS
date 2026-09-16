@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.25
+// @version      8.16.26
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -10128,7 +10128,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const rowA = resolveQueueItemRow(a) || { _wg: a.wg, _mdr: a.mdr, AcceptDT: '', Labno: a.labno };
     const rowB = resolveQueueItemRow(b) || { _wg: b.wg, _mdr: b.mdr, AcceptDT: '', Labno: b.labno };
     // 当前工作组优先，减少切组次数
-    const curWg = resolveCurrentWG();
+    const curWg = resolveLoginWGReliable() || resolveCurrentWG();
     const aIsCur = String(rowA._wg || a.wg) === curWg ? 0 : 1;
     const bIsCur = String(rowB._wg || b.wg) === curWg ? 0 : 1;
     if (aIsCur !== bIsCur) {return aIsCur - bIsCur;}
@@ -18554,7 +18554,7 @@ window.addEventListener('keydown',function(e){
           dbg('原生操作成功（IsSaveSuccess）');
           return true;
         }
-        if (!found && targetReportDR && missingAsSuccess && sawTargetRow) {
+        if (!found && targetReportDR && (missingAsSuccess || sawSaveSuccess) && sawTargetRow) {
           dbg('原生操作成功（IsSaveSuccess，目标行已移出）');
           return true;
         }
@@ -18565,13 +18565,13 @@ window.addEventListener('keydown',function(e){
               dbg('原生操作成功（IsSaveSuccess + 当前选中行状态）');
               return true;
             }
-            if (!found && missingAsSuccess && sawTargetRow) {
+            if (!found && (missingAsSuccess || sawSaveSuccess) && sawTargetRow) {
               dbg('原生操作成功（IsSaveSuccess + curReportDR 匹配，行已移出）');
               return true;
             }
           }
           // 批审：已保存成功且详情目标匹配时，给 UI 极短回写窗口后用 quickVerify
-          if (turbo && missingAsSuccess) {
+          if (turbo) {
             await sleep(35);
             if (typeof options.quickVerify === 'function' && options.quickVerify()) {
               dbg('原生操作成功（IsSaveSuccess 后 quickVerify）');
@@ -22753,7 +22753,9 @@ window.addEventListener('keydown',function(e){
           dbg('补审前重分类失败:', item.reportDR, e.message);
         }
       }
-      if (!_svClassified || !isAutoAuditableClassified(_svClassified)) {
+      // 8.16.26: 补审同样放行轻微异常标本（status MILD）——与主循环 23214 对齐，避免轻微异常进补审被 100% 误杀
+      const _svMildEval = String(item.status) === 'MILD' ? classifyMildAbnormal(_svClassified) : null;
+      if (!_svClassified || (!isAutoAuditableClassified(_svClassified) && !(_svMildEval && _svMildEval.ok))) {
         dbg('补审复检：分类缺失或不可自动审核，留人工:', item.reportDR);
         return { ok: false, iframeWin, reclassified: true };
       }
@@ -23231,6 +23233,31 @@ window.addEventListener('keydown',function(e){
         const curWG = resolveLoginWGReliable();
         const _batchCrossGroup = !!(item.wg && curWG && item.wg !== curWG);
 
+        const triggerCrossGroupSwitch = reason => {
+          dbg(
+            '批审: 跨组免切组' + reason + '，回退切到目标工作组: 标本wg=' + item.wg + ' 当前登录组=' + curWG + ' DR=' + item.reportDR
+          );
+          // 8.16.15: 切组前过守卫（自动审核已关 / 切组次数超限 → 中止整批）
+          if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {return false;}
+          if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
+          queue.pausedForSwitch = true;
+          // 8.9.4: 回退 current——逐条 finally 会无条件 current++，不回退会把当前未处理条
+          // 静默跳过（恢复后从下一条继续，该条既不在 done 也不在 failed，真漏审且无计数）
+          queue.current = Math.max(0, queue.current - 1);
+          saveAuditQueueNow(queue);
+          const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
+          const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
+          showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
+          queuePausedForSwitch = true;
+          try {
+            sessionStorage.setItem(WS_REOPEN_KEY, '1');
+            saveWSState();
+          } catch (e) {}
+          safeSwitchWG(item.wg);
+          runAuditQueueResume(2500);
+          return true;
+        };
+
         const itemWg = item.wg || curWG;
         // 每条开始时以真实 Ukey 为准（已认证则全局就绪，不要被过期缓存拖回慢路径）
         batchCAReady = isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin) || !!queue.caReadyByWg[itemWg];
@@ -23368,24 +23395,7 @@ window.addEventListener('keydown',function(e){
           if (!selectedOk) {
             // 8.5.10: 跨组标本原生列表选不到 → 回退切组续跑（原 8.5.8 机制）
             if (_batchCrossGroup) {
-              // 8.16.15: 同上，切组前过守卫（自动审核已关 / 切组次数超限 → 中止整批）
-              if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {break;}
-              if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
-              queue.pausedForSwitch = true;
-              // 8.9.4: 回退 current——逐条 finally 会无条件 current++，不回退会把当前未处理条
-              // 静默跳过（恢复后从下一条继续，该条既不在 done 也不在 failed，真漏审且无计数）
-              queue.current = Math.max(0, queue.current - 1);
-              saveAuditQueueNow(queue);
-              const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
-              const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
-              showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
-              queuePausedForSwitch = true;
-              try {
-                sessionStorage.setItem(WS_REOPEN_KEY, '1');
-                saveWSState();
-              } catch (e) {}
-              safeSwitchWG(item.wg);
-              runAuditQueueResume(2500);
+              triggerCrossGroupSwitch('未找到标本');
               break;
             }
             if (!requeueAuditItem(queue, item, '原生列表未找到')) {
@@ -23527,6 +23537,10 @@ window.addEventListener('keydown',function(e){
               auditResult = true;
               dbg('批审单项超时后校验成功', item.reportDR);
             } else {
+              if (_batchCrossGroup) {
+                triggerCrossGroupSwitch('单项超时未确认');
+                break;
+              }
               if (!requeueAuditItem(queue, item, '单项超时未确认')) {skipCount++;}
               continue;
             }
@@ -23574,6 +23588,11 @@ window.addEventListener('keydown',function(e){
               batchCAReady = true;
               queue.caReadyByWg[itemWg] = true;
             } else {
+              // 8.16.26: 跨组标本免切组审核未确认成功（由于当前组无该项目权限等原因），回退切到目标组续审
+              if (_batchCrossGroup) {
+                triggerCrossGroupSwitch('审核未确认');
+                break;
+              }
               // 未确认成功：优先队尾重试，不要直接放弃（真漏审多由此产生）
               if (!requeueAuditItem(queue, item, '审核未确认成功')) {
                 queue.failed.push({ ...item, reason: '审核未确认成功' });
@@ -23583,6 +23602,10 @@ window.addEventListener('keydown',function(e){
             }
           }
         } catch (e) {
+          if (_batchCrossGroup) {
+            triggerCrossGroupSwitch('异常: ' + (e.message || ''));
+            break;
+          }
           if (!requeueAuditItem(queue, item, e.message || '异常')) {
             queue.failed.push({ ...item, reason: e.message });
             _aaRecordQueueItem('留人工', item, e.message || '审核异常');
