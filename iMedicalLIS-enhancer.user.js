@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.31
+// @version      8.16.32
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19017,6 +19017,15 @@ window.addEventListener('keydown',function(e){
       if (!me || String(me.curReportDR || '') !== target) {return false;}
       const jq = iframeWin.jQuery || iframeWin.$;
       if (!jq) {return false;}
+      // 8.16.32: 详情「身份」校验——原生在详情加载成功回调里写
+      //   $('#text_MajorConclusion').attr('name', ReportDR)  （jsLisReportResultM.js:743）
+      // 原生 ReportSave 也拿它当守卫（同文件 1004 行：name 与当前 ReportDR 不符 → 「请等报告加载完整再保存！」）。
+      // 而脚本自己会把 me.curReportDR 写成目标值（见 selectNativeRowByReportDR），
+      // 若只信 curReportDR 就是**自证循环**：上一条标本的残留详情会被判成「目标的详情已就绪」。
+      // 标记已存在且不等于目标 → 详情确实属于别的报告，一律不算就绪（fail-closed）。
+      // 标记为空（本页尚未成功加载过任何详情）时不额外判否，保持原有判据不变。
+      const nativeDetailDR = String(jq('#text_MajorConclusion').attr('name') || '');
+      if (nativeDetailDR && nativeDetailDR !== target) {return false;}
       const leftRows = jq('#dgLeftReportItem').datagrid('getRows') || [];
       const rightRows = jq('#dgRightReportItem').length ? jq('#dgRightReportItem').datagrid('getRows') || [] : [];
       if (!(leftRows.length || rightRows.length)) {return false;}
@@ -22760,6 +22769,99 @@ window.addEventListener('keydown',function(e){
   }
 
 
+  // ==================== 8.16.32: 原生工作列表「虚拟滚动窗口」适配 ====================
+  // 现场：生化组 100+ 条、正常 CRP 排在列表最后；三个标本（生化正常 CRP + 免疫异常铁蛋白/AFP）
+  // 反复测试时偶发只剩 CRP 未审，切回原生 LIS 发现该行**根本没被选中**。
+  //
+  // 根因：原生工作列表是 easyui **虚拟滚动视图**（cache/.../jsLisReportResultInitM.js:1774
+  // `view:scrollview`，上面的 `pagination: true` 是注释掉的），而 datagrid-scrollview.js 的
+  // populate() 会把全量数组覆盖成「窗口」：
+  //     state.data.rows = [前 this.index 个 {} 占位].concat(当前窗口那 pageSize 行)
+  // 偏偏 getData().rows / getRows() 返回的就是这个被覆盖过的数组 ——
+  // 完整数据只存在于 state.data.firstRows（scrollview 自己维护）与 me.GridSourceData。
+  // 所以「只在 getRows() 里按 ReportDR 找行」在目标索引落在渲染窗口之外时**恒找不到**：
+  // 选行失败 → 重试/补审全部落空 → 静默留人工；用户切回原生看到的就是「没选中任何行」。
+  // 原生自己的做法（InitM:1936-1943）是**先 Scrovll.scrollTop(25*index) 把该页滚出来、
+  // 等 onLoadSuccess 之后才 selectRow** —— 脚本此前只做了后半步。
+  //
+  // 取「完整工作列表行」：优先 scrollview 的 firstRows（它就是滚动分页的切片源，索引与
+  // grid 行号一致），退回原生 ShowWorkList 存的 me.GridSourceData。
+  function nativeWorkListFullRows(el, iframeWin) {
+    try {
+      const data = el.datagrid('getData');
+      if (data && Array.isArray(data.firstRows) && data.firstRows.length) {return data.firstRows;}
+    } catch (e) {}
+    try {
+      const gs = iframeWin && iframeWin.me ? iframeWin.me.GridSourceData : null;
+      if (Array.isArray(gs) && gs.length) {return gs;}
+    } catch (e) {}
+    try {
+      const rows = el.datagrid('getRows');
+      return Array.isArray(rows) ? rows : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // 滚动视图真正绑定 scroll.datagrid 的是 dc.body2（原生 Scrovll=dc.body2），必须滚它才触发翻页
+  function nativeWorkListScrollBody(el) {
+    try {
+      const view2 = el.closest('.datagrid').find('.datagrid-view2').find('.datagrid-body').eq(0);
+      if (view2.length) {return view2;}
+      const bodies = el.closest('.datagrid').find('.datagrid-body');
+      return bodies.length ? bodies.eq(bodies.length - 1) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // 该行是否已经**渲染**在窗口里（窗口外是 {} 占位，ReportDR 为空）
+  function nativeWindowHasRow(el, idx, reportDR) {
+    try {
+      const rows = el.datagrid('getRows') || [];
+      const r = rows[idx];
+      return !!(r && String(r.ReportDR || '') === String(reportDR));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 按原生口径把目标行滚进渲染窗口（行高 25 与 InitM:1937 一致）。
+  // 返回 true 表示滚动指令已发出；真正的渲染是异步的，调用方需要轮询 nativeWindowHasRow。
+  function scrollNativeWorkListToIndex(el, idx) {
+    const body = nativeWorkListScrollBody(el);
+    if (!body || !body.length) {return false;}
+    try {
+      const want = Math.max(0, Math.round(25 * idx));
+      const maxTop = Math.max(0, (body[0].scrollHeight || 0) - (body[0].clientHeight || 0));
+      const clamped = Math.min(want, maxTop);
+      let top = clamped;
+      // 滚动值没变化时浏览器不会派发 scroll 事件，而 scrollview 的翻页**只**由该事件驱动
+      // → 已经停在同一位置的重试会白等。往目标方向回退一行，保证每次调用都真能触发一次处理。
+      let cur = 0;
+      try {
+        cur = Number(body.scrollTop()) || 0;
+      } catch (e) {cur = 0;}
+      if (clamped > 0 && Math.abs(cur - clamped) < 1) {top = Math.max(0, clamped - 25);}
+      body.scrollTop(top);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 选行是否**真的生效**——原生 selectRow 对窗口外的索引拿不到行对象（scrollview 的
+  // finder.getRow 会取到 undefined），此时 onSelect 拿到的 row 是 undefined，
+  // 行既没被标 selected、详情也不会加载。必须自己校验，不能凭「调用过 selectRow」当成功。
+  function nativeWorkListSelectedDR(el) {
+    try {
+      const sel = el.datagrid('getSelected');
+      return sel ? String(sel.ReportDR || '') : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
   // --- 按 ReportDR 在原生工作列表中选中行 ---
   function selectNativeRowByReportDR(iframeWin, reportDR, options = {}) {
     const jq = iframeWin.jQuery || iframeWin.$;
@@ -22799,8 +22901,37 @@ window.addEventListener('keydown',function(e){
             }
           }
           if (targetIdx < 0) {
-            dbg('selectNativeRow:', sel, '未找到 ReportDR:', reportDR, '共', dataRows.length, '行');
-            continue;
+            // 8.16.32: 当前渲染窗口里没有 → 到**完整列表**里定位真实行号。
+            // 命中说明这条标本确实在本机台列表里，只是排在虚拟滚动窗口之外
+            // （现场：生化 100+ 条里的最后一条正常 CRP）。按原生口径先滚动把该页
+            // populate 出来，本轮返回 false，由异步调用方（waitAndSelectNativeRow）
+            // 稍后重试即可命中；绝不在这里谎报「已选中」。
+            const fullRows = nativeWorkListFullRows(el, iframeWin);
+            let fullIdx = -1;
+            for (let i = 0; i < fullRows.length; i++) {
+              if (String(fullRows[i].ReportDR) === String(reportDR)) {fullIdx = i; break;}
+            }
+            if (fullIdx < 0) {
+              dbg('selectNativeRow:', sel, '未找到 ReportDR:', reportDR, '窗口', dataRows.length, '行 / 完整列表', fullRows.length, '行');
+              continue;
+            }
+            if (!nativeWindowHasRow(el, fullIdx, reportDR)) {
+              const scrolled = scrollNativeWorkListToIndex(el, fullIdx);
+              dbg(
+                'selectNativeRow: 目标在渲染窗口外，索引',
+                fullIdx,
+                '/ 完整列表',
+                fullRows.length,
+                '行（窗口',
+                dataRows.length,
+                '行）→ 已驱动原生滚动',
+                scrolled,
+                '，待下一轮重试'
+              );
+              continue;
+            }
+            targetIdx = fullIdx;
+            targetRow = fullRows[fullIdx];
           }
 
           const opts = el.datagrid('options') || {};
@@ -22846,6 +22977,30 @@ window.addEventListener('keydown',function(e){
           if (!domClicked) {
             // 回退：用 selectRow
             el.datagrid('selectRow', targetIdx);
+          }
+
+          // 8.16.32: 校验选行**是否真的生效**。原生 scrollview 的 finder.getRow 对窗口外索引
+          // 取不到行对象，此时 selectRow / DOM 点击都可能「静默没选中」（行没标 selected、
+          // 详情不会加载）。此前不校验就 return true，调用方以为已选好、直接去点审核按钮，
+          // 原生守卫随即拦下 → 表现为「这条标本没被选中、也没被审掉」的静默漏审。
+          let selDR = nativeWorkListSelectedDR(el);
+          if (selDR !== String(reportDR)) {
+            try {
+              el.datagrid('selectRow', targetIdx);
+            } catch (e) {
+              dbg('selectNativeRow: selectRow 回退失败', e.message);
+            }
+            selDR = nativeWorkListSelectedDR(el);
+          }
+          if (selDR !== String(reportDR)) {
+            dbg(
+              'selectNativeRow: 选行未生效，目标未成为原生选中行',
+              sel,
+              'idx=' + targetIdx,
+              '实际选中=' + (selDR || '(空)'),
+              'domClicked=' + domClicked
+            );
+            continue;
           }
 
           if (iframeWin.me) {
@@ -22990,8 +23145,10 @@ window.addEventListener('keydown',function(e){
       return { ok: true, iframeWin };
     }
 
-    // 8.16.30: 缓冲 160ms 检查异步工作列表（ShowWorkList）是否刚渲染返回
-    for (let p = 0; p < 4; p++) {
+    // 8.16.30: 缓冲检查异步工作列表（ShowWorkList）是否刚渲染返回
+    // 8.16.32: 4→6 次（约 240ms）——目标排在虚拟滚动窗口之外时，selectNativeRowByReportDR
+    // 会先驱动原生滚动，scrollview 的翻页是「50ms 防抖 + 异步 populate」，需要多等一两轮
+    for (let p = 0; p < 6; p++) {
       await sleep(40);
       iframeWin = getReportIframeWin() || iframeWin;
       if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
@@ -23023,14 +23180,35 @@ window.addEventListener('keydown',function(e){
       } catch (e) {}
     }
 
+    // 8.16.32: 目标是否已在**完整列表**里（只是可能还没被渲染出来）
+    const targetInFullList = () => {
+      if (!iframeWin) {return false;}
+      try {
+        const _jq = iframeWin.jQuery || iframeWin.$;
+        if (!_jq) {return false;}
+        const el = _jq(NATIVE_WORKLIST_SEL);
+        if (!el.length || !el.datagrid) {return false;}
+        return nativeWorkListFullRows(el, iframeWin).some(
+          r => r && String(r.ReportDR || '') === String(item.reportDR)
+        );
+      } catch (e) {
+        return false;
+      }
+    };
+
     let refreshed = false;
     while (Date.now() < end) {
-      if (!refreshed) {
+      const _inFull = targetInFullList();
+      if (!refreshed && !_inFull && !options.skipListRefresh) {
         refreshed = true;
+        // 目标压根不在当前列表里（机台/日期不对）→ 才需要服务端重查
         // 8.16.30: 若当前网格中仍未找到，强制调用 refreshNativeWorkListForItem 服务端全量拉取
         iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true });
       } else {
-        await sleep(pollMs);
+        // 8.16.32: 目标已在完整列表里（只是排在虚拟滚动窗口外）→ **不要再重发全量查询**：
+        // 那会把刚驱动的滚动位置与列表顺序一起冲掉，形成「越刷越选不到」的循环。
+        // 只等滚动 populate 落地后重试选行即可。
+        await sleep(_inFull ? 60 : pollMs);
       }
       iframeWin = getReportIframeWin() || iframeWin;
       if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
