@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.17
+// @version      8.16.18
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -5720,6 +5720,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     return '';
   }
+  // 8.16.18: 操作者取值改为「配置优先、默认留空」——各组 group.defaultOperator 一律为空串，
+  // 真实姓名不再出现在代码里（公开仓库不带个人信息）。取值链：
+  //   cfg.operators[组]（工作台「批号和操作者设置」里填的）→ group.defaultOperator（空）→ ''
+  // 用户填的值由 qeSaveConfig 存 localStorage，并经 /qe-config 同步到科室网关机，
+  // 全程不落仓库文件、不经过 GitHub。首次使用需在面板里填一次，之后自动带入。
   function qeGetOperator(cfg, group) {
     return (cfg.operators && cfg.operators[group.id]) || group.defaultOperator || '';
   }
@@ -7668,15 +7673,18 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     });
 
     // --- 操作者设置 HTML ---
+    // 8.16.18: 不再内置任何操作者姓名（公开仓库不带个人信息）。
+    // 三组输入框留空并给提示：用户填一次 → qeSaveConfig 存 localStorage → 同步科室网关机，
+    // 全程不落仓库文件、不经过 GitHub。
     const operatorGroups = [
-      { ids: ['blood', 'coag', 'urine'], label: '临检（血常规/凝血/尿常规）', def: '' },
-      { ids: ['biochem', 'lipid'], label: '生化（含血脂）', def: '' },
-      { ids: ['endocrine', 'tumor', 'cardiac', 'infection'], label: '免疫组', def: '' }
+      { ids: ['blood', 'coag', 'urine'], label: '临检（血常规/凝血/尿常规）' },
+      { ids: ['biochem', 'lipid'], label: '生化（含血脂）' },
+      { ids: ['endocrine', 'tumor', 'cardiac', 'infection'], label: '免疫组' }
     ];
     let operatorHtml = '';
     operatorGroups.forEach(og => {
-      const val = (cfg.operators && cfg.operators[og.ids[0]]) || og.def;
-      operatorHtml += `<div class="qe-lot-item"><span>${og.label}</span><input type="text" class="qe-op-input" data-ids="${og.ids.join(',')}" value="${esc(val)}" style="flex:1;min-width:0"></div>`;
+      const val = (cfg.operators && cfg.operators[og.ids[0]]) || '';
+      operatorHtml += `<div class="qe-lot-item"><span>${og.label}</span><input type="text" class="qe-op-input" data-ids="${og.ids.join(',')}" value="${esc(val)}" placeholder="填写操作者姓名" title="填一次并「保存并同步网关」后自动带入；存本机与科室网关机，不会进入代码仓库" style="flex:1;min-width:0"></div>`;
     });
 
     panel.innerHTML = `
@@ -8007,6 +8015,18 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     if (!cfg.selectedGroups || !cfg.selectedGroups.length) {
       qeSetStatus('请至少选择一个导出项目。', 'error');
+      return;
+    }
+    // 8.16.18: 操作者必填校验——各组不再内置默认姓名（公开仓库不带个人信息），
+    // 改由用户在「批号和操作者设置」里填写。只校验本次要导出的组，避免生成一列空白的操作者。
+    const _missOp = QE_GROUPS.filter(g => cfg.selectedGroups.includes(g.id) && !qeGetOperator(cfg, g));
+    if (_missOp.length) {
+      qeSetStatus('请先在「批号和操作者设置」里填写操作者：' + _missOp.map(g => g.name).join('、'), 'error');
+      const _firstOp = document.querySelector('.qe-op-input');
+      if (_firstOp) {
+        try {_firstOp.scrollIntoView({ block: 'center' });} catch (e) {}
+        try {_firstOp.focus();} catch (e) {}
+      }
       return;
     }
 
