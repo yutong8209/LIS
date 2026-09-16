@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.20
+// @version      8.16.21
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -611,15 +611,55 @@
 
   // ==================== 调试日志 ====================
   const DEBUG = false;
-  const _dbgLog = [];
+  // 8.16.21: 日志**跨整页重载**保留（sessionStorage，仅本标签页、关标签即清）。
+  // 起因：现场报「F4 只审 2 条标本却不停切组」，但**切组 = 整页重载 = 内存环形缓冲清空**，
+  // 用户事后跑 lisDiagWG() 只能看到「最后一次加载之后」的日志，完整过程永远抓不到 ——
+  // 于是这个 bug 既复现不了也证明不了。现在启动先把上一轮日志读回，再补一条
+  // 「页面加载 #N」分隔标记：**加载次数就是整页重载次数，一眼可数**。
+  const K_DBGLOG = 'LIS_DbgLog';
+  const K_DBGLOADCNT = 'LIS_DbgLoadCount';
+  const _DBG_MAX = 600;
+  let _dbgLog = (() => {
+    try {
+      const a = JSON.parse(sessionStorage.getItem(K_DBGLOG) || '[]');
+      return Array.isArray(a) ? a : [];
+    } catch (e) {return [];}
+  })();
+  const _dbgFlush = () => {
+    try {sessionStorage.setItem(K_DBGLOG, JSON.stringify(_dbgLog));} catch (e) {}
+  };
+  let _dbgFlushTimer = null;
   const dbg = (...args) => {
-    // 8.9.0: 环形缓冲始终写入（500 条上限）——生产 DEBUG=false 时面板此前永远是空的，
+    // 8.9.0: 环形缓冲始终写入——生产 DEBUG=false 时面板此前永远是空的，
     // 医院现场排障没有抓手；console 输出仍受 DEBUG 控制
     const msg = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
     if (DEBUG) {console.log('[LIS]', msg);}
     _dbgLog.push(msg);
-    if (_dbgLog.length > 500) {_dbgLog.splice(0, _dbgLog.length - 500);}
+    if (_dbgLog.length > _DBG_MAX) {_dbgLog.splice(0, _dbgLog.length - _DBG_MAX);}
+    // 防抖落盘：批审/分类时日志密集，避免每条都 stringify 整份日志
+    if (!_dbgFlushTimer) {
+      _dbgFlushTimer = setTimeout(() => {_dbgFlushTimer = null; _dbgFlush();}, 200);
+    }
   };
+  // 整页导航/切组重载前强制落盘，保证「切出去之前的最后几条」不丢
+  try {window.addEventListener('pagehide', () => {_dbgFlush();});} catch (e) {}
+  // 每次页面加载插分隔标记 + 累计次数 + 「因何而来」——判断「这次加载是不是切组引起的」的铁证
+  try {
+    const _loadN = Number(sessionStorage.getItem(K_DBGLOADCNT) || 0) + 1;
+    sessionStorage.setItem(K_DBGLOADCNT, String(_loadN));
+    let _why = '首次进入 / 用户手动刷新';
+    try {
+      if (sessionStorage.getItem(WS_REOPEN_KEY) === '1') {_why = '工作台自动重开（切组或刷新后恢复）';}
+      const _q = loadAuditQueue();
+      if (_q && _q.pausedForSwitch) {
+        _why =
+          '★★ 切组续跑（pausedForSwitch=true · originWG=' + String(_q.originWG || '') +
+          ' · 剩 ' + Math.max(0, (_q.items || []).length - (_q.current || 0)) + ' 条）★★';
+      }
+    } catch (e) {}
+    _dbgLog.push('════════ 页面加载 #' + _loadN + ' · ' + _why + ' · ' + new Date().toLocaleTimeString() + ' ════════');
+    _dbgFlush();
+  } catch (e) {}
   // 在页面底部显示/隐藏调试面板（控制台调用 showDebugPanel()）。
   // 8.15.3: 必须挂到 unsafeWindow——原 Alt+D 绑定已在 8.11.x 移除，而函数留在 IIFE 闭包内，
   // 既无调用方也无导出，导致 500 条环形日志只进不出、现场排障彻底没有抓手。
@@ -638,6 +678,16 @@
     document.body.appendChild(panel);
   }
   function lisDebugLog() {return _dbgLog.join('\n');}
+  // 8.16.21: 清空跨重载保留的日志与加载计数。排障前先执行一次，日志里就只含本次操作，
+  // 不会被上一次的加载标记混淆：「清空 → 按 F4 → lisDiagWG()」是标准抓取姿势。
+  function lisClearLog() {
+    try {
+      _dbgLog.length = 0;
+      sessionStorage.removeItem(K_DBGLOG);
+      sessionStorage.removeItem(K_DBGLOADCNT);
+    } catch (e) {}
+    return '已清空调试日志与页面加载计数（现在按 F4 复现，然后执行 lisDiagWG()）';
+  }
   // 8.16.20: 跨组切组一键诊断——把「决定要不要切组」的全部输入一次摊开。
   // 控制台执行 lisDiagWG() 即可，返回文本并自动尝试复制到剪贴板。
   // 用法：F4 出现「不停切组」后立刻执行，把输出发给开发即可定位是
@@ -689,7 +739,17 @@
       L.push('「同一条标本反复切组」落盘记录: ' + (t ? ('key=' + t.key + ' n=' + t.n) : '无'));
     } catch (e) {}
     try {L.push('切组熔断是否生效: ' + (aaSwitchFuseActive() ? '是（10 分钟内只审当前组）' : '否'));} catch (e) {}
-    L.push('--- 最近 40 条调试日志 ---');
+    try {
+      const loads = _dbgLog.filter(l => l.indexOf('页面加载 #') !== -1);
+      L.push('--- 页面加载次数: ' + loads.length + ' 次（= 整页重载次数；明显多于标本数就是有多余切组）---');
+      loads.slice(-15).forEach(l => L.push('  ' + l));
+    } catch (e) {}
+    try {
+      const keyl = _dbgLog.filter(l => /\[批审\]|\[小组\]|切组|免切组|页面加载/.test(l));
+      L.push('--- 关键日志（切组 / 登录组相关，最多 60 条）---');
+      keyl.slice(-60).forEach(l => L.push('  ' + l));
+    } catch (e) {}
+    L.push('--- 最近 40 条原始日志 ---');
     L.push(_dbgLog.slice(-40).join('\n'));
     const txt = L.join('\n');
     try {console.log(txt);} catch (e) {}
@@ -735,6 +795,7 @@
     uw().showDebugPanel = showDebugPanel;
     uw().lisDebugLog = lisDebugLog;
     uw().lisDiagWG = lisDiagWG; // 8.16.20: 跨组切组一键诊断（控制台执行 lisDiagWG()）
+    uw().lisClearLog = lisClearLog; // 8.16.21: 清空日志与加载计数（抓取前先清一次）
     uw().lisMildAuditLog = lisMildAuditLog;
     uw().lisExportMildAuditLog = lisExportMildAuditLog;
     uw().lisSelfTestMildRules = lisSelfTestMildRules; // 规则表自检（返回未通过项数组，空数组=通过）
