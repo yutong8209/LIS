@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.21
+// @version      8.16.22
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -686,7 +686,10 @@
       sessionStorage.removeItem(K_DBGLOG);
       sessionStorage.removeItem(K_DBGLOADCNT);
     } catch (e) {}
-    return '已清空调试日志与页面加载计数（现在按 F4 复现，然后执行 lisDiagWG()）';
+    return (
+      '已清空调试日志与页面加载计数。⚠️ 清空后必须**立刻**按 F4 复现，再执行 lisDiagWG()；' +
+      '若在复现之后才清，抓回来会是空日志。通常并不需要清空——日志已跨整页重载保留。'
+    );
   }
   // 8.16.20: 跨组切组一键诊断——把「决定要不要切组」的全部输入一次摊开。
   // 控制台执行 lisDiagWG() 即可，返回文本并自动尝试复制到剪贴板。
@@ -743,6 +746,15 @@
       const loads = _dbgLog.filter(l => l.indexOf('页面加载 #') !== -1);
       L.push('--- 页面加载次数: ' + loads.length + ' 次（= 整页重载次数；明显多于标本数就是有多余切组）---');
       loads.slice(-15).forEach(l => L.push('  ' + l));
+      // 8.16.22 防呆：日志极少 / 没有加载标记，几乎一定是「复现之前先清了日志」。
+      // 上次现场正是如此——把三段指引一起粘进控制台，lisClearLog() 把刚按 F4 产生的
+      // 日志一并清掉，抓回来只剩 1 条，白跑一趟。这里直接把正确姿势写进输出里。
+      if (_dbgLog.length < 12 || loads.length === 0) {
+        L.push('⚠️⚠️ 本次抓取很可能不完整 —— 日志仅 ' + _dbgLog.length + ' 条、页面加载标记 ' + loads.length + ' 次。');
+        L.push('    正确姿势只需两步：① 直接按 F4 复现（让它切完）② 执行 lisDiagWG()。');
+        L.push('    【不要】先执行 lisClearLog() —— 那会把刚复现出来的日志一起清掉。');
+        L.push('    （日志已跨整页重载保留，无需清空即可看到全过程）');
+      }
     } catch (e) {}
     try {
       const keyl = _dbgLog.filter(l => /\[批审\]|\[小组\]|切组|免切组|页面加载/.test(l));
