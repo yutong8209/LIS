@@ -98,6 +98,30 @@ ok(probeSlice.length > 100, '定位到「跨组快速探测」代码段');
 ok(/跨组快速探测未命中[\s\S]{0,200}?转完整选行/.test(probeSlice), '探测未命中 → 转完整选行（不再立即切组）');
 ok(!/safeSwitchWG\(/.test(probeSlice), '快速探测段内不得出现 safeSwitchWG（不得立即切组）');
 
+// A20. 8.16.25: 跨组标本必须关闭「行消失 = 审核成功」。
+// 免切组审核的跨组标本**不在当前登录组的原生列表里**，findNativeRowByReportDR 对它恒返回 null，
+// 于是「审核后行消失」恒成立；再叠加 softAuditSuccessHint 里「CA 已认证 + 焦点已移开」，
+// 就会**无条件判成功**，把其实没审掉的标本记成已完成
+// （现场：批审 2 条都提示成功、刷新后总留 1 条 → 静默漏审，最危险的一类 bug）。
+// 三条审核路径全部要收敛；同组标本保持原样（行消失对它是可靠信号）。
+ok(/let _auditingCrossGroup = false;/.test(src), '存在跨组审核标记（默认 false，同组行为不变）');
+ok(
+  /missingAsSuccess: !_itemPre4 && !_batchCrossGroup,/.test(src),
+  '批审主循环：跨组标本关闭 missingAsSuccess'
+);
+ok(
+  /missingAsSuccess: auditCtx\.allowMissingSuccess && !preStatus4 && !_auditCrossGroup,/.test(src),
+  '详情/异常审核：跨组标本关闭 missingAsSuccess'
+);
+ok(
+  /missingAsSuccess: !_salvagePre4 && !_salvageCrossGroup,/.test(src),
+  '补审路径：跨组标本关闭 missingAsSuccess'
+);
+ok(
+  /if \(!_auditingCrossGroup \|\| me\.IsSaveSuccess === true\) \{return true;\}/.test(src),
+  'softAuditSuccessHint：跨组时「列表里找不到该行」必须另有 IsSaveSuccess 佐证'
+);
+
 // A18. item.wg / originWG 兜底也要用可信值（否则不可信值会被固化进队列）
 ok(/wg: row\._wg \|\| resolveLoginWGReliable\(\),/.test(src), '队列条目 wg 兜底用可信判定');
 ok(/originWG: resolveLoginWGReliable\(\)/.test(src), 'originWG（审完切回起始组）用可信判定');

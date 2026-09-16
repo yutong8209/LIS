@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.24
+// @version      8.16.25
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -12661,6 +12661,12 @@ window.addEventListener('keydown',function(e){
   // 复检标本审核前状态就是 4，静态 4 匹配/行消失不可信，成功判定只认状态变 3 或动态信号。
   // 由 executeNativeAudit / _auditFromDetailPanel / 批审主循环在审核期间设置。
   let _auditingPreStatus4 = false;
+  // 8.16.25: 本次审核的标本是否属于「别的登录组」（免切组审核场景）。
+  // 用途：跨组标本不在当前登录组的原生列表里，`findNativeRowByReportDR` 对它恒返回 null，
+  // 于是「行消失 = 审核成功」这条对同组标本可靠的启发式，套在跨组标本上会**恒判成功**，
+  // 把其实没审掉的标本记成已完成（现场：批审 2 条都提示成功，刷新后总留 1 条）。
+  // 同组标本保持原有宽容（原生审核后行常从待审列表移出），因此不无条件收紧。
+  let _auditingCrossGroup = false;
 
   // 8.5.53: opts.accept4=false 时，状态 4（复审）不算「已审核成功」——
   // 复检标本审核前状态就是 4，静态匹配会误判；必须等状态变 3 或动态信号
@@ -12699,8 +12705,16 @@ window.addEventListener('keydown',function(e){
       // 已审核标志 + 焦点已离开本条（原生审后常自动下一条）
       if (me.IsAuthed === true && String(me.curReportDR || '') !== String(reportDR)) {
         const found = findNativeRowByReportDR(iframeWin, reportDR);
-        if (!found) {return true;}
-        if (isExpectedNativeStatus(found.row, accept4 ? ['3', '4'] : ['3'])) {return true;}
+        // 8.16.25: 跨组标本的「列表里找不到该行」**不能单独作为成功证据**。
+        // 免切组审核的跨组标本本来就不在当前登录组的原生列表里，`!found` 恒成立；
+        // 再叠加「CA 已认证 + 焦点已移开」，这条启发式会**无条件判成功**，
+        // 把**其实没审掉**的标本记成已完成（现场：批审 2 条都提示成功，刷新后总留 1 条）。
+        // 跨组时必须要有原生「保存成功」标志佐证；同组标本保持原样（行消失对它是可靠信号）。
+        if (!found) {
+          if (!_auditingCrossGroup || me.IsSaveSuccess === true) {return true;}
+        } else if (isExpectedNativeStatus(found.row, accept4 ? ['3', '4'] : ['3'])) {
+          return true;
+        }
       }
       if (me.IsSaveSuccess === true && String(me.curReportDR || '') === String(reportDR)) {return true;}
     } catch (e) {}
@@ -13114,6 +13128,14 @@ window.addEventListener('keydown',function(e){
     // 8.5.53: 审核前已是 status 4（复检/复审标本）——静态 4 匹配不可信，需等状态变 3 或动态信号
     const preStatus4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
     _auditingPreStatus4 = preStatus4; // 8.5.53: 审核期间供内部 verify/soft 兜底
+    // 8.16.25: 本条是否属于「别的登录组」（免切组审核场景）——用于关闭「行消失=成功」，
+    // 原因见 softAuditSuccessHint 内的说明：跨组标本不在当前登录组的原生列表里，行消失不可信
+    const _auditCrossGroup = !!(
+      specimen._wg &&
+      resolveLoginWGReliable() &&
+      String(specimen._wg) !== String(resolveLoginWGReliable())
+    );
+    _auditingCrossGroup = _auditCrossGroup; // 8.16.25: 供 softAuditSuccessHint 收紧「行消失=成功」
     const auditCtx = auditTargetContext(iframeWin, reportDR);
     const caReady = isCASessionReady(iframeWin);
     const deadline = options.deadline || Date.now() + (fast ? (caReady ? 14000 : 40000) : 60000);
@@ -13131,7 +13153,9 @@ window.addEventListener('keydown',function(e){
       keepWS: !!options.keepWS,
       caSessionReady: caReady,
       // 8.5.53: 复检标本关闭「行消失=成功」（审核前就是 4，行可能因 CA 流程暂时消失）
-      missingAsSuccess: auditCtx.allowMissingSuccess && !preStatus4,
+      // 8.16.25: 跨组标本同样关闭——免切组审核时它不在当前登录组的原生列表里，
+      // 「行消失」恒成立，会把没审掉的标本误判成功（同批审路径的处理保持一致）
+      missingAsSuccess: auditCtx.allowMissingSuccess && !preStatus4 && !_auditCrossGroup,
       preStatus4, // 8.5.53: 传审核前状态标记，内部成功判定排除静态 4
       targetReportDR: reportDR,
       abortCheck,
@@ -13179,6 +13203,7 @@ window.addEventListener('keydown',function(e){
       return await _executeNativeAuditImpl(iframeWin, specimen, options);
     } finally {
       _auditingPreStatus4 = false; // 8.5.53: 审核结束重置
+      _auditingCrossGroup = false; // 8.16.25: 同上（不留残标记影响后续同组标本）
     }
   }
 
@@ -22704,6 +22729,11 @@ window.addEventListener('keydown',function(e){
     // 静态 4 与行消失都不可信，只认状态变 3，否则会把「仍是 4」误判为已审核
     const _salvageRow = wsData.find(r => String(r.ReportDR) === String(item.reportDR)) || null;
     const _salvagePre4 = !!(_salvageRow && String(_salvageRow.Status || _salvageRow.ReportStatus || '') === '4');
+    // 8.16.25: 跨组标本同样关闭「行消失=成功」——免切组审核时它不在当前登录组的原生列表里，
+    // 行消失恒成立，会把没审掉的标本误判成功（同批审主循环的处理保持一致）
+    const _salvageCrossGroup = !!(
+      item.wg && resolveLoginWGReliable() && String(item.wg) !== String(resolveLoginWGReliable())
+    );
     if (verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 })) {
       return { ok: true, iframeWin, already: true };
     }
@@ -22781,6 +22811,7 @@ window.addEventListener('keydown',function(e){
 
     const caReady = isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin);
     _auditingPreStatus4 = _salvagePre4; // 8.5.56: 让内部 verify/soft 兜底按复检语义判定
+    _auditingCrossGroup = _salvageCrossGroup; // 8.16.25: 跨组时关闭「行消失=成功」
     try {
       let result = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
         action: 'audit',
@@ -22789,7 +22820,7 @@ window.addEventListener('keydown',function(e){
         timeoutMs: caReady ? 4000 : 8000,
         keepWS: !!options.keepWS,
         caSessionReady: caReady,
-        missingAsSuccess: !_salvagePre4, // 复检标本不认「行消失=成功」（8.5.56）
+        missingAsSuccess: !_salvagePre4 && !_salvageCrossGroup, // 复检（8.5.56）与跨组（8.16.25）都不认「行消失=成功」
         preStatus4: _salvagePre4,
         targetReportDR: item.reportDR
       });
@@ -22816,6 +22847,7 @@ window.addEventListener('keydown',function(e){
       return { ok: !!result, iframeWin };
     } finally {
       _auditingPreStatus4 = false; // 8.5.56: 复位，避免影响后续判定
+      _auditingCrossGroup = false; // 8.16.25: 同上
     }
   }
 
@@ -23417,6 +23449,7 @@ window.addEventListener('keydown',function(e){
           // 8.5.53: 批审复检标本（审核前 status 4）——静态 4/行消失不可信，需等状态变 3 或动态信号
           const _itemPre4 = liveRow && String(liveRow.Status || liveRow.ReportStatus || '') === '4';
           _auditingPreStatus4 = _itemPre4; // 8.5.53: 该条审核期间内部 verify/soft 兜底
+          _auditingCrossGroup = _batchCrossGroup; // 8.16.25: 跨组时关闭「行消失=成功」（见 softAuditSuccessHint）
           let sawCAPath = false;
           let auditResult = await clickNativeAuditButton(iframeWin, 'btn_ReportAuth', {
             action: 'audit',
@@ -23425,7 +23458,12 @@ window.addEventListener('keydown',function(e){
             timeoutMs: batchCAReady ? 2200 : 6000,
             keepWS: queue.keepWS,
             caSessionReady: batchCAReady,
-            missingAsSuccess: !_itemPre4, // 详情已就绪；行消失或状态 3 均算成功（复检标本除外）
+            // 8.16.25: 跨组标本**关闭「行消失=成功」**。免切组审核的跨组标本本来就不在
+            // 当前登录组的原生列表里（findNativeRowByReportDR 对它恒返回 null），审核后
+            // 任何一次列表刷新都会让「行消失」成立，于是把**其实没审掉**的标本误判成功
+            // （现场：批审 2 条都提示成功，刷新后总留 1 条）。同组标本的「行消失」是
+            // 可靠信号（审核前它确实在列表里），保持不变。
+            missingAsSuccess: !_itemPre4 && !_batchCrossGroup,
             preStatus4: _itemPre4, // 8.5.53
             targetReportDR: item.reportDR,
             abortCheck: itemAbort,
@@ -23553,6 +23591,7 @@ window.addEventListener('keydown',function(e){
           dbg('逐行审核异常:', item.name, e.message);
         } finally {
           _auditingPreStatus4 = false; // 8.5.53: 该条审核结束重置
+          _auditingCrossGroup = false; // 8.16.25: 同上（不留残标记影响后续同组标本）
           queue.current++;
           saveAuditQueueTick(queue);
           refreshQueueLock();
