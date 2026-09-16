@@ -39,11 +39,14 @@ function section(t) {
 section('A. 静态不变量');
 
 // A1. 所有切组/续跑点必须过守卫（少一处就是一个逃逸口）；注释里的示例不算
+// 8.16.24: 批审起始点（ensureAuditQueueWorkGroup）已不再切组 → 守卫点由 4 处收敛到 2 处：
+//   · checkAuditQueueResume（跨整页重载后的续跑入口，waiting 模式，不计数）
+//   · 批审 while 内「完整选行也选不到」时的兜底切组
 const guardCalls = src
   .split('\n')
   .filter(l => !l.trim().startsWith('//'))
   .filter(l => /if \(!aaQueueGuardSwitch\(/.test(l)).length;
-ok(guardCalls === 4, '4 处切组/续跑点全部接入守卫（实际 ' + guardCalls + ' 处）');
+ok(guardCalls === 2, '2 处切组/续跑点全部接入守卫（实际 ' + guardCalls + ' 处）');
 
 /* ---- 8.16.16: 跨组判定必须用「可信登录组」，不确定就不切组 ---- */
 
@@ -64,35 +67,36 @@ const crossTrySites = [...src.matchAll(/const _wsCrossGroupTry = !!\(spDR && cur
 ok(crossTrySites === 2, '两条单条审核路径（列表 / 详情）都用可信判定（实际 ' + crossTrySites + ' 处）');
 ok(!/spDR !== resolveCurrentWG\(\)/.test(src), '切组回退条件里不再出现不可信的 resolveCurrentWG()');
 
-// A16. 核心 fail-safe：当前组不可知时「不判跨组、不切组」，直接放行走免切组
-ok(
-  /if \(!curDR\) \{[\s\S]{0,900}?跳过跨组判定，按免切组处理[\s\S]{0,200}?return true;/.test(src),
-  '当前组不可知 → 跳过跨组判定并放行（不再「等 1.5s 重试」，那正是误判入口）'
-);
-
-// A17. 没有机台 DR 时也必须尝试一次免切组，而不是直接切组
-ok(!/\} else if \(item\.mdr\) \{/.test(src), '免切组探测不再要求 item.mdr 存在（否则等于直接切组）');
-
-// A19. 8.16.19: 批审**起始点**（ensureAuditQueueWorkGroup）也必须走「免切组优先」——
-// 此前它只查一次「当前原生列表」，而批审刚启动时列表通常还停在默认日期/上一个机台，
-// 这一步几乎必然落空 → 本可免切组的标本被真切一次组（整页重载），批审跑完再切回起始组
-// （第二次整页重载）——现场看到的「切回原生 LIS 又切回工作台」就是这一去一回。
+// A16. 核心不变量（8.16.24 定稿）：**批审起始点绝不切组**。
+// 回归根因 = 8.15.27（09-14 15:34）把起始点从 `return true`（跨组先试不切组）
+// 改成「不在当前原生列表就立即切组」，而判据只是**一次** selectNativeRowByReportDR——
+// 批审刚启动时原生列表还停在默认日期/上一个机台，这一步几乎必然落空，
+// 于是每条跨组标本都白切一趟组（整页重载 + 重新 CA + 工作台重建）。
+// 现场原话：「14 号及之前的标本审报告是不切组的，就这两天出的问题」。
 const eqwgSlice = src.slice(
   src.indexOf('async function ensureAuditQueueWorkGroup(queue)'),
   src.indexOf('function runAuditQueueResume(')
 );
-ok(
-  /await refreshNativeWorkListForItem\(iframeWin, item, \{ force: true, fast: true \}\)/.test(eqwgSlice),
-  '批审起始点也做免切组探测（按机台 DR 查工作列表），命中就不切组'
+ok(!/safeSwitchWG\(/.test(eqwgSlice), '批审起始点不再切组（不得出现 safeSwitchWG）');
+ok(!/pausedForSwitch/.test(eqwgSlice), '批审起始点不再设置 pausedForSwitch（不制造整页重载）');
+ok(/跨组先试免切组/.test(eqwgSlice), '起始点保留「跨组先试不切组」的语义说明');
+
+// A17. 没有机台 DR 时也必须尝试一次免切组，而不是直接切组
+ok(!/\} else if \(item\.mdr\) \{/.test(src), '免切组探测不再要求 item.mdr 存在（否则等于直接切组）');
+
+// A19. 批审主循环里「快速探测未命中」**不得立即切组**（8.15.27 的第二个退化点）。
+// 那个探测用 fast:true（只等 70ms），而 ShowWorkList 是异步查询、70ms 远未返回，
+// 探测几乎必然落空 → 每条跨组标本都白切一趟组。
+// 现在探测只做「抢占式命中」，未命中就落回完整选行
+// （waitAndSelectNativeRow：轮询等待列表返回 + FindFast 条码兜底 + 按机台/日期刷新），
+// 真的选不到才由后面的 !selectedOk 分支切组。
+const probeSlice = src.slice(
+  src.indexOf('if (_batchCrossGroup && !selectedOk) {'),
+  src.indexOf("            progressPhase('选中标本');")
 );
-ok(
-  /报告页未就绪 → 不预先切组，交由主循环走免切组[\s\S]{0,200}?return true;/.test(eqwgSlice),
-  '报告页未就绪时不预先切组（过早切组＝白来一次整页重载）'
-);
-ok(
-  /if \(!WG_MAP\[curDR\]\) \{[\s\S]{0,400}?return true;/.test(eqwgSlice),
-  '原生工作组取值不在 WG_MAP 口径内 → 不判跨组、不切组（防两边取值不同源导致「每次都切」）'
-);
+ok(probeSlice.length > 100, '定位到「跨组快速探测」代码段');
+ok(/跨组快速探测未命中[\s\S]{0,200}?转完整选行/.test(probeSlice), '探测未命中 → 转完整选行（不再立即切组）');
+ok(!/safeSwitchWG\(/.test(probeSlice), '快速探测段内不得出现 safeSwitchWG（不得立即切组）');
 
 // A18. item.wg / originWG 兜底也要用可信值（否则不可信值会被固化进队列）
 ok(/wg: row\._wg \|\| resolveLoginWGReliable\(\),/.test(src), '队列条目 wg 兜底用可信判定');

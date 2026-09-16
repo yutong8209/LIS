@@ -22,7 +22,7 @@ A Mac toolbox (`~/脚本`) centered on **iMedicalLIS-enhancer.user.js** — a Ta
 | `mcp-image-reader/` | MCP server: `read_image`, `describe_image` tools. |
 | `质控模板/` | 9 个质控数据上传模板 xlsx（血常规/生化/凝血/血脂/尿常规/内分泌/肿瘤/心肌/传染病） |
 | `lis_proxy.py` | 反向代理 & 代码缓存器 — 默认只缓存静态前端到 `cache/`（`--cache-api` 才缓存接口） |
-| `hooks/` | **自动同步+纪律守卫钩子**（`core.hooksPath` 已指向此目录，对任何 agent/人的提交生效）：pre-commit 拦「改脚本不 bump @version」和「改 vendor 不更新 VENDOR_SHA256」；post-commit 在提交涉及 `.user.js`/`vendor` 时后台 scp 到科室 nginx 并 curl 回验版本；日志 `.cache/nginx_sync.log`；`LIS_NO_SYNC=1 git commit` 跳过自动同步，`--no-verify` 跳过守卫检查 |
+| `hooks/` | **自动同步+纪律守卫钩子**（`core.hooksPath` 已指向此目录，对任何 agent/人的提交生效）：pre-commit 拦「改脚本不 bump @version」和「改 vendor 不更新 VENDOR_SHA256」；post-commit 在提交涉及 `.user.js`/`vendor` 时**前台** scp 到科室 nginx 并 curl 回验版本（8.16.20 起改前台：此前 `nohup ... &` 会被整进程组带走，日志报的 `No route to host` 是假象；不在科室网段时由 `nc -z -G 2` 预检 2s 内跳过）；日志 `.cache/nginx_sync.log`；`LIS_NO_SYNC=1 git commit` 跳过自动同步，`--no-verify` 跳过守卫检查 |
 | `同步脚本到nginx.command` | 手动同步脚本到 nginx 网关机（一般用不到，钩子会自动同步） |
 | `menubar/lis-audit.5s.sh` | SwiftBar 菜单栏插件 — 显示当前筛选范围的可批审/异常待审数（读 serve.py 的 `/stats`） |
 | `HANDTEST.md` | 发布前手测清单（批审 / F4 必测） |

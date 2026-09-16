@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.23
+// @version      8.16.24
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -611,60 +611,18 @@
 
   // ==================== 调试日志 ====================
   const DEBUG = false;
-  // 8.16.21: 日志**跨整页重载**保留（sessionStorage，仅本标签页、关标签即清）。
-  // 起因：现场报「F4 只审 2 条标本却不停切组」，但**切组 = 整页重载 = 内存环形缓冲清空**，
-  // 用户事后跑 lisDiagWG() 只能看到「最后一次加载之后」的日志，完整过程永远抓不到 ——
-  // 于是这个 bug 既复现不了也证明不了。现在启动先把上一轮日志读回，再补一条
-  // 「页面加载 #N」分隔标记：**加载次数就是整页重载次数，一眼可数**。
-  const K_DBGLOG = 'LIS_DbgLog';
-  const K_DBGLOADCNT = 'LIS_DbgLoadCount';
-  const _DBG_MAX = 600;
-  let _dbgLog = (() => {
-    try {
-      const a = JSON.parse(sessionStorage.getItem(K_DBGLOG) || '[]');
-      return Array.isArray(a) ? a : [];
-    } catch (e) {return [];}
-  })();
-  const _dbgFlush = () => {
-    try {sessionStorage.setItem(K_DBGLOG, JSON.stringify(_dbgLog));} catch (e) {}
-  };
-  // 命中即视为「不可丢失」的日志（切组决策、登录组来源、页面加载标记）
-  const _DBG_URGENT_RE = /\[批审\]|\[小组\]|页面加载 #|切组|免切组/;
-  let _dbgFlushTimer = null;
+  const _dbgLog = [];
   const dbg = (...args) => {
-    // 8.9.0: 环形缓冲始终写入——生产 DEBUG=false 时面板此前永远是空的，
+    // 8.9.0: 环形缓冲始终写入（500 条上限）——生产 DEBUG=false 时面板此前永远是空的，
     // 医院现场排障没有抓手；console 输出仍受 DEBUG 控制
+    // 8.16.24: 回退掉 8.16.21~8.16.23 临时加的「落 sessionStorage + 页面加载标记」那套：
+    // 切组的根因已定位并修复（见 ensureAuditQueueWorkGroup），不再需要跨重载抓日志，
+    // 也不再让用户做任何抓取动作。
     const msg = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
     if (DEBUG) {console.log('[LIS]', msg);}
     _dbgLog.push(msg);
-    if (_dbgLog.length > _DBG_MAX) {_dbgLog.splice(0, _dbgLog.length - _DBG_MAX);}
-    // 8.16.23: 关键日志**立即**落盘，不走防抖 —— 切组重载随时会打断页面，
-    // 而防抖窗口（200ms）内的那几条恰恰是「切出去之前的最后几条」，正是最需要的证据。
-    if (_DBG_URGENT_RE.test(msg)) {
-      _dbgFlush();
-    } else if (!_dbgFlushTimer) {
-      _dbgFlushTimer = setTimeout(() => {_dbgFlushTimer = null; _dbgFlush();}, 200);
-    }
+    if (_dbgLog.length > 500) {_dbgLog.splice(0, _dbgLog.length - 500);}
   };
-  // 整页导航/切组重载前强制落盘，保证「切出去之前的最后几条」不丢
-  try {window.addEventListener('pagehide', () => {_dbgFlush();});} catch (e) {}
-  // 每次页面加载插分隔标记 + 累计次数 + 「因何而来」——判断「这次加载是不是切组引起的」的铁证
-  try {
-    const _loadN = Number(sessionStorage.getItem(K_DBGLOADCNT) || 0) + 1;
-    sessionStorage.setItem(K_DBGLOADCNT, String(_loadN));
-    let _why = '首次进入 / 用户手动刷新';
-    try {
-      if (sessionStorage.getItem(WS_REOPEN_KEY) === '1') {_why = '工作台自动重开（切组或刷新后恢复）';}
-      const _q = loadAuditQueue();
-      if (_q && _q.pausedForSwitch) {
-        _why =
-          '★★ 切组续跑（pausedForSwitch=true · originWG=' + String(_q.originWG || '') +
-          ' · 剩 ' + Math.max(0, (_q.items || []).length - (_q.current || 0)) + ' 条）★★';
-      }
-    } catch (e) {}
-    _dbgLog.push('════════ 页面加载 #' + _loadN + ' · ' + _why + ' · ' + new Date().toLocaleTimeString() + ' ════════');
-    _dbgFlush();
-  } catch (e) {}
   // 在页面底部显示/隐藏调试面板（控制台调用 showDebugPanel()）。
   // 8.15.3: 必须挂到 unsafeWindow——原 Alt+D 绑定已在 8.11.x 移除，而函数留在 IIFE 闭包内，
   // 既无调用方也无导出，导致 500 条环形日志只进不出、现场排障彻底没有抓手。
@@ -683,104 +641,6 @@
     document.body.appendChild(panel);
   }
   function lisDebugLog() {return _dbgLog.join('\n');}
-  // 8.16.21: 清空跨重载保留的日志与加载计数。排障前先执行一次，日志里就只含本次操作，
-  // 不会被上一次的加载标记混淆：「清空 → 按 F4 → lisDiagWG()」是标准抓取姿势。
-  function lisClearLog() {
-    try {
-      _dbgLog.length = 0;
-      sessionStorage.removeItem(K_DBGLOG);
-      sessionStorage.removeItem(K_DBGLOADCNT);
-    } catch (e) {}
-    return (
-      '已清空调试日志与页面加载计数。⚠️ 清空后必须**立刻**按 F4 复现，再执行 lisDiagWG()；' +
-      '若在复现之后才清，抓回来会是空日志。通常并不需要清空——日志已跨整页重载保留。'
-    );
-  }
-  // 8.16.20: 跨组切组一键诊断——把「决定要不要切组」的全部输入一次摊开。
-  // 控制台执行 lisDiagWG() 即可，返回文本并自动尝试复制到剪贴板。
-  // 用法：F4 出现「不停切组」后立刻执行，把输出发给开发即可定位是
-  //   ① 可信登录组读错（来源/值不对）② 标本 wg/mdr 为空或非法
-  //   ③ 切组值不在下拉框选项内（切了等于没切）④ 免切组探测确实查不到。
-  function lisDiagWG() {
-    const L = [];
-    L.push('=== LIS 增强助手 · 跨组切组诊断 ===');
-    L.push('时间: ' + new Date().toLocaleString());
-    try {
-      L.push('脚本版本: ' + (typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : '(取不到 GM_info)'));
-    } catch (e) {L.push('脚本版本: 读取异常');}
-    try {
-      const sel = window.top.document.getElementById('sl_changeworkgroup');
-      if (!sel) {
-        L.push('原生下拉框 sl_changeworkgroup: ❌ 未找到（可信登录组只能退到 LIS 全局变量）');
-      } else {
-        L.push('原生下拉框 sl_changeworkgroup.value = 「' + String(sel.value) + '」');
-        const opts = [...sel.options].map(o => String(o.value) + '=' + String(o.text || '').trim());
-        L.push('  该下拉框可选值(' + opts.length + '个): ' + opts.join(' | '));
-      }
-    } catch (e) {
-      L.push('原生下拉框 sl_changeworkgroup: ❌ 读取异常 ' + (e && e.message));
-    }
-    try {L.push('LIS 全局 WorkGroupDR = 「' + String(wgDR()) + '」');} catch (e) {}
-    try {L.push('resolveLoginWGReliable() = 「' + String(resolveLoginWGReliable()) + '」  ← 跨组判定只用它');} catch (e) {}
-    try {L.push('resolveCurrentWG() = 「' + String(resolveCurrentWG()) + '」  （含视图过滤/数据推测，仅展示用）');} catch (e) {}
-    L.push('脚本认识的工作组 WG_MAP: ' + Object.keys(WG_MAP).map(k => k + '=' + ((WG_MAP[k] || {}).name || '')).join(' | '));
-    try {
-      const q = loadAuditQueue();
-      if (q && q.items && q.items.length) {
-        L.push('--- 批审队列：共 ' + q.items.length + ' 条，current=' + (q.current || 0) + '，originWG=「' + String(q.originWG || '') + '」，switchCycles=' + (q.switchCycles || 0) + ' ---');
-        q.items.slice(0, 20).forEach((it, i) => {
-          L.push('  [' + i + '] wg=「' + String(it.wg || '') + '」 mdr=「' + String(it.mdr || '') + '」 accDate=' + String(it.accDate || '') + ' labno=' + String(it.labno || '') + ' name=' + String(it.name || ''));
-        });
-      } else {
-        L.push('--- 批审队列：空（当前不在批审中）---');
-      }
-    } catch (e) {L.push('批审队列: 读取异常');}
-    try {
-      const w = getReportIframeWin();
-      L.push(
-        '原生报告页 iframe: ' +
-          (w ? ('存在；jQuery=' + !!((w.jQuery || w.$)) + ' me=' + !!w.me + ' ShowWorkList=' + (typeof w.ShowWorkList === 'function') + ' me.WorkGroupMachineDR=「' + String(w.me && w.me.WorkGroupMachineDR || '') + '」') : '不存在')
-      );
-    } catch (e) {}
-    try {
-      const t = aaStuckSwitchRead();
-      L.push('「同一条标本反复切组」落盘记录: ' + (t ? ('key=' + t.key + ' n=' + t.n) : '无'));
-    } catch (e) {}
-    try {L.push('切组熔断是否生效: ' + (aaSwitchFuseActive() ? '是（10 分钟内只审当前组）' : '否'));} catch (e) {}
-    try {
-      const loads = _dbgLog.filter(l => l.indexOf('页面加载 #') !== -1);
-      L.push('--- 页面加载次数: ' + loads.length + ' 次（= 整页重载次数；明显多于标本数就是有多余切组）---');
-      loads.slice(-15).forEach(l => L.push('  ' + l));
-      // 8.16.22 防呆：日志极少 / 没有加载标记，几乎一定是「复现之前先清了日志」。
-      // 上次现场正是如此——把三段指引一起粘进控制台，lisClearLog() 把刚按 F4 产生的
-      // 日志一并清掉，抓回来只剩 1 条，白跑一趟。这里直接把正确姿势写进输出里。
-      if (_dbgLog.length < 12 || loads.length === 0) {
-        L.push('⚠️⚠️ 本次抓取很可能不完整 —— 日志仅 ' + _dbgLog.length + ' 条、页面加载标记 ' + loads.length + ' 次。');
-        L.push('    正确姿势只需两步：① 直接按 F4 复现（让它切完）② 执行 lisDiagWG()。');
-        L.push('    【不要】先执行 lisClearLog() —— 那会把刚复现出来的日志一起清掉。');
-        L.push('    （日志已跨整页重载保留，无需清空即可看到全过程）');
-      }
-    } catch (e) {}
-    try {
-      const keyl = _dbgLog.filter(l => /\[批审\]|\[小组\]|切组|免切组|页面加载/.test(l));
-      L.push('--- 关键日志（切组 / 登录组相关，最多 60 条）---');
-      keyl.slice(-60).forEach(l => L.push('  ' + l));
-    } catch (e) {}
-    L.push('--- 最近 40 条原始日志 ---');
-    L.push(_dbgLog.slice(-40).join('\n'));
-    const txt = L.join('\n');
-    try {console.log(txt);} catch (e) {}
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = txt;
-      ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      ta.remove();
-    } catch (e) {}
-    return txt + '\n\n（以上已尝试复制到剪贴板；若没复制成功，可执行 lisDebugLog() 再取一次日志）';
-  }
   // 8.15.5: 轻微异常放行留痕的读取/导出。留痕原本只写 localStorage.LIS_MildAuditLog（环形 500、
   // 不推送），除了开发者没人看得到，且清缓存即丢。这里给现场一个只读出口：先导出再清，
   // 也便于把「这条按哪条规则放行」发给开发核对。控制台：lisMildAuditLog() / lisExportMildAuditLog()
@@ -811,8 +671,6 @@
   try {
     uw().showDebugPanel = showDebugPanel;
     uw().lisDebugLog = lisDebugLog;
-    uw().lisDiagWG = lisDiagWG; // 8.16.20: 跨组切组一键诊断（控制台执行 lisDiagWG()）
-    uw().lisClearLog = lisClearLog; // 8.16.21: 清空日志与加载计数（抓取前先清一次）
     uw().lisMildAuditLog = lisMildAuditLog;
     uw().lisExportMildAuditLog = lisExportMildAuditLog;
     uw().lisSelfTestMildRules = lisSelfTestMildRules; // 规则表自检（返回未通过项数组，空数组=通过）
@@ -9764,10 +9622,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         showToast(`未找到工作组切换控件，请手动切到${wgName}`, 'warning');
         return false;
       }
-      if (String(sel.value) === String(dr)) {
-        dbg('[小组] 切组跳过：目标 ' + dr + ' 已是下拉框当前值');
-        return true; // 已在目标组
-      }
+      if (String(sel.value) === String(dr)) {return true;} // 已在目标组
       // 8.8.27: 切组时若工作台可见，标记重载后立即自动重开工作台并保持状态，避免漏出原始 LIS 页面
       try {
         if (isWSVisible()) {
@@ -9775,14 +9630,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           saveWSState();
         }
       } catch (e) {}
-      dbg('[小组] 执行切组：' + String(sel.value) + ' → ' + dr + '（' + wgName + '）');
       sel.value = String(dr);
-      // 8.16.20: 值不在下拉框选项里时 sel.value 会被置空 → changeLogin 切不出正确状态，
-      // 而重载后 curDR 仍是旧组 → 又判跨组 → 又一次切组（现场「不停切组」的一种成因）。这里显式暴露。
-      dbg(
-        '[小组] 设置后 sel.value = 「' + String(sel.value) + '」' +
-          (String(sel.value) === String(dr) ? ' ✓ 生效' : ' ❌ 未生效（该值不在下拉框选项内，切组必然失败）')
-      );
       // 调用父框架原生 changeLogin，与用户手动选工作组完全一致
       if (typeof topWin.changeLogin === 'function') {
         topWin.changeLogin(sel);
@@ -10266,35 +10114,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
   // 约定：凡是**决定「要不要切组」**的地方一律用本函数；返回 '' 表示「当前组不可知」，
   // 调用方必须按「不确定 ⇒ 绝不切组」处理——因为免切组（按机台 DR 直接查工作列表）
   // 本来就不需要知道当前登录组，放行是安全且正确的默认。
-  // 8.16.20: 记录可信登录组的**来源**并只在值变化时写日志——
-  // 现场「不停切组」排障的关键一环：必须能一眼看出 curDR 是从原生下拉框读到的，
-  // 还是退回到 LIS 全局变量（后者不一定等于实际登录组，是误判跨组的高危来源）。
-  let _lastRelWG = '';
   function resolveLoginWGReliable() {
     try {
       const sel = window.top.document.getElementById('sl_changeworkgroup');
-      if (sel && sel.value) {
-        const v = String(sel.value);
-        if (_lastRelWG !== 'sel:' + v) {
-          _lastRelWG = 'sel:' + v;
-          dbg('[小组] 可信登录组 = ' + v + '（来源：原生下拉框 sl_changeworkgroup）');
-        }
-        return v;
-      }
+      if (sel && sel.value) {return String(sel.value);}
     } catch (e) {}
     const dr = wgDR();
-    if (dr) {
-      const v = String(dr);
-      if (_lastRelWG !== 'gvar:' + v) {
-        _lastRelWG = 'gvar:' + v;
-        dbg('[小组] 可信登录组 = ' + v + '（来源：LIS 全局 WorkGroupDR —— 下拉框没读到，此值未必是实际登录组）');
-      }
-      return v;
-    }
-    if (_lastRelWG !== 'none') {
-      _lastRelWG = 'none';
-      dbg('[小组] 可信登录组 = 空（下拉框与 LIS 全局变量都读不到）');
-    }
+    if (dr) {return String(dr);}
     return '';
   }
 
@@ -14391,85 +14217,34 @@ window.addEventListener('keydown',function(e){
   async function ensureAuditQueueWorkGroup(queue) {
     const item = currentQueueItem(queue);
     if (!item) {return true;}
-    // 8.16.16: 跨组判定只用**可信**登录组（原生下拉框 / LIS 全局变量），
-    // 不用 resolveCurrentWG() 那套会把「视图过滤组」和「数据推测组」当登录组的回退链。
+    // ==================== 8.16.24: 本函数不再切组 ====================
+    // 恢复 8.5.10 的「跨组先试不切组」：原生报告页支持按 WorkGroupMachineDR 直接查
+    // 别的工作列表（现场实测可行），所以批审**起始点不需要预先切组**。
+    //
+    // 回归始末（现场原话：「14 号及之前的标本审报告是不切组的，就这两天出的问题」）：
+    //   8.15.27（09-14 15:34）为消除「跨组选行 4.5s 超时死等」，把这里原本的
+    //     `// 8.5.10 ... 不再预先切组；主循环内选不到标本时才回退切组` + `return true`
+    //   改成「不在当前原生列表 → 立即切组」；同一提交还把主循环的「完整选行」换成
+    //   「快速探测失败 → 立即切组」。两处合起来把跨组批审从「先试免切组」退化成
+    //   「必切组」——而两个判据都过于苛刻：
+    //     · 起始点只看**一次** selectNativeRowByReportDR，而批审刚启动时原生列表通常
+    //       还停在默认日期/上一个机台，这一步几乎必然落空；
+    //     · 主循环的探测用 fast:true（只等 70ms），而 ShowWorkList 是异步查询，
+    //       70ms 远未返回，所以探测也几乎必然落空。
+    //   结果就是每次都白切一趟：整页重载 + 重新 CA 认证（现场那个「是否记住密码」弹窗）
+    //   + 工作台重建。
+    //
+    // 现在起始点一律放行，把「要不要切组」完全交给批审主循环 ——
+    // 主循环会先按机台 DR 免切组探测，再走**完整选行**（waitAndSelectNativeRow：
+    // 轮询等待工作列表返回 + FindFast 条码兜底 + 按机台/日期刷新列表），
+    // 真的选不到才会切组（那里仍保留 aaQueueGuardSwitch 守卫与次数上限，不会死循环）。
     const curDR = String(resolveLoginWGReliable());
     const itemWg = String(item.wg || '');
-    if (!curDR) {
-      // 当前登录组不可知 → 不做跨组判定、**绝不切组**，直接放行让批审走「免切组」选行。
-      // 免切组（按机台 DR 直接查工作列表）本来就不需要知道当前登录组，所以放行是安全的；
-      // 而此前这里是「等 1.5s 重试」，重试期间一旦回退到视图过滤组/推测组拿到**非空但错误**
-      // 的组，就会误判跨组 → 切组（整页重载）→ 重载后照样读不到 → 再切，
-      // 正是现场「工作台与原生 LIS 无限来回切、关掉自动审核也停不下来」的入口。
-      // 代价仅止于「选行失败 → 放回队尾（最多 3 次）→ 留人工」，不会整页重载、不会死循环。
-      dbg('[批审] 取不到权威登录工作组 → 跳过跨组判定，按免切组处理:', item.reportDR);
-      return true;
+    if (curDR && itemWg && itemWg !== curDR) {
+      dbg('[批审] 起始点不切组（跨组先试免切组）: 标本wg=' + itemWg + ' 登录组=' + curDR + ' DR=' + item.reportDR);
     }
-    if (!itemWg || itemWg === curDR) {
-      aaQueueSwitchSucceeded(queue); // 已在目标组（或无需切组）= 切组确实推进了，清掉卡住记录
-      return true;
-    }
-    // 8.16.19: 取值口径一致性校验——curDR 必须是脚本认识的工作组 DR（WG_MAP 的 key）。
-    // item.wg 一定来自 WG_MAP（队列构建用 row._wg / 兜底也是 WG_MAP 口径）。若原生下拉框的
-    // value（或 LIS 全局 WorkGroupDR）与 WG_MAP **不同源**（原生改版、value 里装的是别的编号），
-    // 那么 itemWg !== curDR 就**恒成立**：每次批审、每次单审都会判「跨组」→ 白切一趟
-    // （去 + 回两次整页重载，正是现场现象），而 safeSwitchWG 拿一个不认识的 DR 去
-    // `sel.value = dr` 也切不出正确状态。按既定原则「不确定 ⇒ 绝不切组」处理。
-    if (!WG_MAP[curDR]) {
-      dbg('[批审] 原生工作组值不在已知 WG_MAP 内 → 不判跨组、不切组:', 'curDR=' + curDR, 'itemWg=' + itemWg);
-      return true;
-    }
-    // 8.15.27: 若首条标本已在当前原生列表中（例如跨组共享视图或机台），则直接复用当前组无需预先切组
-    let iframeWin = getReportIframeWin();
-    if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
-      aaQueueSwitchSucceeded(queue);
-      return true;
-    }
-    // ==================== 8.16.19: 批审起始点也走「免切组优先」 ====================
-    // 现场反馈：无论 F4 批审数个标本，还是只审一个，都会「切回原生 LIS 又切回工作台」。
-    // 成因就在本函数——批审**起始点**此前只有上面那一次「查当前原生列表」，而批审刚启动时
-    // 原生列表通常还停在「默认日期 / 上一个机台」，这一步几乎必然落空 → 本可免切组的标本
-    // 被换成一次**真实切组**（整页重载）；批审跑完再按 originWG 切回起始组（第二次整页重载）。
-    // 一去一回两次整页重载，正是现场看到的现象。而批审主循环（8.15.27 / 8.16.16 的快速探测）
-    // 本来就是「先按机台 DR 免切组探测、探测不到才切组」——起始点没跟上，于是白切一趟。
-    // 现在起始点补齐同一步：按该标本的机台 DR 直接查工作列表（ShowWorkList 传空机台＝查全部机台）。
-    const _canProbe = !!(iframeWin && (iframeWin.jQuery || iframeWin.$) && iframeWin.me);
-    if (_canProbe) {
-      try {
-        const probed = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
-        iframeWin = probed || getReportIframeWin() || iframeWin;
-        if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR)) {
-          dbg('[批审] 免切组探测命中（按机台查工作列表）→ 不切组:', item.reportDR, 'wg', itemWg, 'vs', curDR);
-          aaQueueSwitchSucceeded(queue);
-          return true;
-        }
-        dbgNativeListDigest(iframeWin, '[批审·起始]');
-      } catch (e) {
-        dbg('[批审] 免切组探测异常:', e);
-      }
-    } else {
-      // 报告页尚未就绪（jq/me 取不到），探测此刻做不了 → **本就在这里切组是过早的**：
-      // 放行交给批审主循环，它会先 ensureReportPageLoaded，再按 8.15.27 的快速探测决定，
-      // 真的选不到才「立即切组」（不会先吃满 waitAndSelectNativeRow 的超时）。
-      dbg('[批审] 报告页未就绪 → 不预先切组，交由主循环走免切组:', item.reportDR, 'wg', itemWg, 'vs', curDR);
-      return true;
-    }
-    // 免切组确实选不到（真跨组 / 该机台在本组不可见）→ 才切组
-    // 首条标本不在当前原生列表且所属工作组不同：批审起始直接切换到目标组，消除盲目尝试选行导致的数秒卡顿
-    // 8.16.15: 切组前过守卫——自动审核已关 / 连续切组失败已超限 → 整批中止，不再无限切下去
-    dbg('[批审] 免切组探测失败 → 切换工作组:', item.reportDR, 'wg', itemWg, 'vs', curDR);
-    if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {return false;}
-    queue.pausedForSwitch = true;
-    saveAuditQueueNow(queue);
-    const wgName = (WG_MAP[itemWg] || {}).name || itemWg;
-    showToast('切换到' + wgName + '开始批审...', 'info');
-    try {
-      sessionStorage.setItem(WS_REOPEN_KEY, '1');
-      saveWSState();
-    } catch (e) {}
-    safeSwitchWG(itemWg);
-    runAuditQueueResume(2500);
-    return false;
+    aaQueueSwitchSucceeded(queue);
+    return true;
   }
 
   function runAuditQueueResume(delayMs) {
@@ -22623,34 +22398,6 @@ window.addEventListener('keydown',function(e){
 
 
   // --- 按 ReportDR 在原生工作列表中选中行 ---
-  // 8.16.20: 把原生工作列表现状写进调试日志——排障「免切组探测失败」的关键一步。
-  // 单看「没选到行」无法区分两种完全不同的成因：
-  //   ① 列表压根没查出来（显示 0 行 / 控件没找到）→ 查询参数或页面状态问题；
-  //   ② 列表有行但没有目标标本 → 该标本确实不在当前登录组的可见范围内（真跨组，只能切组）。
-  // 有了行数与前几行的 ReportDR/机台DR，一眼可辨。
-  function dbgNativeListDigest(iframeWin, tag) {
-    try {
-      const jq = iframeWin && (iframeWin.jQuery || iframeWin.$);
-      if (!jq) {dbg(tag + ' 原生列表摘要: jq 不存在'); return;}
-      const el = jq(NATIVE_WORKLIST_SEL);
-      if (!el.length || !el.datagrid) {
-        dbg(tag + ' 原生列表摘要: 未找到工作列表控件 ' + NATIVE_WORKLIST_SEL);
-        return;
-      }
-      let rows = null;
-      try {const d = el.datagrid('getData'); rows = d && d.rows ? d.rows : null;} catch (e) {}
-      if (!rows) {try {rows = el.datagrid('getRows');} catch (e) {}}
-      rows = rows || [];
-      const head = rows
-        .slice(0, 8)
-        .map(r => String(r.ReportDR || '') + '/' + String(r.Labno || '') + '/机台' + String(r.WorkGroupMachineDR || ''))
-        .join(' , ');
-      dbg(tag + ' 原生列表摘要: 共 ' + rows.length + ' 行；前几行 = ' + (head || '(空)'));
-    } catch (e) {
-      dbg(tag + ' 原生列表摘要异常: ' + (e && e.message));
-    }
-  }
-
   function selectNativeRowByReportDR(iframeWin, reportDR, options = {}) {
     const jq = iframeWin.jQuery || iframeWin.$;
     if (!jq) {
@@ -23145,14 +22892,6 @@ window.addEventListener('keydown',function(e){
     // 8.10.0: 进一步移到异常/详情审核冲突检查之后——冲突返回时若已清标志，
     // _recheckResume 只认 pausedForSwitch 才重试，队列会无人接手、整批剩余标本静默漏审
     if (queue.pausedForSwitch) {delete queue.pausedForSwitch; saveAuditQueueNow(queue);}
-    // 8.16.23: 每次真正进入批审处理都留一条带上下文的锚点。跨组续跑会**多次**进入本函数，
-    // 于是「F4 之后到底有没有真的开始批审」「一共续跑了几次」一眼可查——
-    // 现场两次抓取都拿不到 [批审] 日志，靠这条就能立刻区分「F4 没触发」与「触发了但没跨组」。
-    dbg(
-      '[批审] ===== 进入批审处理：队列 ' + ((queue.items || []).length) + ' 条，从第 ' + (queue.current || 0) +
-        ' 条起，登录组=' + resolveLoginWGReliable() + '，originWG=' + String(queue.originWG || '') +
-        (queue._autoMode ? '，自动模式' : '，手动 F4') + ' ====='
-    );
     if (queue.keepWS) {keepWorkbenchOnTop('批审开始');}
     const resumeWSRefresh = !!wsTimer;
     stopWSRefresh();
@@ -23531,13 +23270,14 @@ window.addEventListener('keydown',function(e){
             }
           }
           if (_batchCrossGroup && !selectedOk) {
-            // 8.15.27: 跨组标本快速探测——先检查当前原生列表是否已包含（0ms）；若无则单次快速切机台查询（~70ms，如 x8 免切组场景）
+            // 8.15.27: 跨组标本快速探测——先检查当前原生列表是否已包含（0ms）；
+            // 若无则单次快速按机台查询（~70ms，如 x8 免切组场景）。命中即可省下完整选行的等待。
             if (selectNativeRowByReportDR(iframeWin, item.reportDR)) {
               selectedOk = true;
             } else {
               // 8.16.16: 不再要求 item.mdr 存在——没有机台 DR 时 ShowWorkList 传空机台即
               // 「查全部机台」，仍属免切组路径。此前写成 `else if (item.mdr)`，等于
-              // **连试都不试**就落到下面的切组分支，把本可免切组的场景白换成一次整页重载。
+              // **连试都不试**就落到切组分支，把本可免切组的场景白换成一次整页重载。
               iframeWin = await refreshNativeWorkListForItem(iframeWin, item, { force: true, fast: true });
               if (iframeWin) {
                 jq = iframeWin.jQuery || iframeWin.$;
@@ -23549,31 +23289,17 @@ window.addEventListener('keydown',function(e){
                 batchListFresh = true;
               }
             }
-            // 当前组无法加载该跨组标本：立即切组续跑，彻底消除 waitAndSelectNativeRow 4~4.5秒死等超时！
+            // ==================== 8.16.24: 探测未命中 → 不再「立即切组」 ====================
+            // 8.15.27 此处原本是「当前组无法加载该跨组标本：立即切组续跑，彻底消除
+            // waitAndSelectNativeRow 4~4.5 秒死等超时」。问题是那个探测用 fast:true
+            // **只等 70ms**，而 ShowWorkList 是异步查询、70ms 远未返回，探测几乎必然落空
+            // → 每一条跨组标本都白切一趟组（整页重载 + 重新 CA 认证 + 工作台重建）。
+            // 现场「14 号之前不切组、这两天不停切组」的回归正是这里。
+            // 现在探测只承担「抢占式命中」；未命中就落回下面的**完整选行**
+            // （waitAndSelectNativeRow：轮询等待工作列表返回 + FindFast 条码兜底 +
+            // 按机台/日期刷新列表），真的选不到才由再下面的 !selectedOk 分支切组。
             if (!selectedOk) {
-              dbg(
-                '批审: 跨组标本在当前组未找到，立即切组: 标本wg=' + item.wg + ' 机台mdr=' + item.mdr +
-                  ' 当前登录组=' + curWG + ' DR=' + item.reportDR
-              );
-              dbgNativeListDigest(iframeWin, '[批审·主循环]');
-              // 8.16.15: 切组前过守卫——自动审核已关 / 已切够次数 → 中止整批并跳出，
-              // 这是「关掉自动审核后仍在反复切组」的最后一道闭环（此分支在 while 内，此前完全不看开关）
-              if (!aaQueueGuardSwitch(queue, 'dr:' + String(item.reportDR || ''))) {break;}
-              if (batchCAReady && resolveCurrentWG()) {queue.caReadyByWg[resolveCurrentWG()] = true;}
-              queue.pausedForSwitch = true;
-              queue.current = Math.max(0, queue.current - 1);
-              saveAuditQueueNow(queue);
-              const wgName = (WG_MAP[item.wg] || {}).name || item.wg;
-              const nextCaHint = queue.caReadyByWg[item.wg] ? '（该组已 CA，秒审）' : '（该组首条将自动 CA）';
-              showToast('切换到' + wgName + '继续批审' + nextCaHint, 'warning');
-              queuePausedForSwitch = true;
-              try {
-                sessionStorage.setItem(WS_REOPEN_KEY, '1');
-                saveWSState();
-              } catch (e) {}
-              safeSwitchWG(item.wg);
-              runAuditQueueResume(2500);
-              break;
+              dbg('[批审] 跨组快速探测未命中（列表尚未返回），转完整选行:', item.reportDR, 'mdr=' + item.mdr);
             }
           }
           if (!selectedOk) {
