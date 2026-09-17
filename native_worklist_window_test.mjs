@@ -995,6 +995,9 @@ ok(
     (src.match(/tryNativeFindFastSelect\(/g) || []).length >= 2,
   'waitAndSelectNativeRow 里真的调用了它（定义 + 调用）'
 );
+const idxFF = src.indexOf('tryNativeFindFastSelect(\n          iframeWin,');
+const idx6Loop = src.indexOf('for (let p = 0; p < 6; p++)');
+ok(idxFF !== -1 && idx6Loop !== -1 && idxFF < idx6Loop, '8.16.34: 快速检索必须排在 6 轮 240ms 盲等循环之前（消除冗余发呆）');
 ok(/Math\.min\(1500, Math\.max\(400,/.test(src), '检索预算有界（≤1500ms，且给后续兜底留余地）');
 ok(
   !/for \(let f = 0; f < 10; f\+\+\)/.test(src),

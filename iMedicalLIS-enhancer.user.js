@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.33
+// @version      8.16.34
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -23194,30 +23194,33 @@ window.addEventListener('keydown',function(e){
       return { ok: true, iframeWin };
     }
 
+    // 8.16.34: 原生「检验号快速检索」零等待精确定位
+    // 关键性能优化：初次在当前网格未直接命中时，若有条码号且支持快速检索，立即执行快速检索！
+    // 根本原因：一旦上一条标本用 FindFast 检索过，当前网格就只收敛为该条标本（1行）；
+    // 此时后续标本在当前网格必未命中。如果先跑 6 轮 sleep(40)（盲等 240ms），每条标本都会白白浪费 240ms 发呆！
+    // 优先立即 FindFast：通常 10~20ms 直接命中并自动选中第 0 行，单条直接省去 240ms 冗余盲等！
+    const labno = String((item && item.labno) || '');
+    if (labno && iframeWin && typeof iframeWin.FindFast === 'function' && typeof tryNativeFindFastSelect === 'function') {
+      const _ffRemain = end - Date.now();
+      if (_ffRemain > 200) {
+        const _ff = await tryNativeFindFastSelect(
+          iframeWin,
+          item,
+          Math.min(1500, Math.max(400, Math.floor(_ffRemain * 0.6)))
+        );
+        iframeWin = _ff.iframeWin || iframeWin;
+        if (_ff.ok) {return { ok: true, iframeWin };}
+      }
+    }
+
     // 8.16.30: 缓冲检查异步工作列表（ShowWorkList）是否刚渲染返回
-    // 8.16.32: 4→6 次（约 240ms）——目标排在虚拟滚动窗口之外时，selectNativeRowByReportDR
-    // 会先驱动原生滚动，scrollview 的翻页是「50ms 防抖 + 异步 populate」，需要多等一两轮
+    // 8.16.32: 4→6 次（约 240ms）——仅在无条码号或快速检索未命中时，才退回虚拟滚动视口翻页缓冲
     for (let p = 0; p < 6; p++) {
       await sleep(40);
       iframeWin = getReportIframeWin() || iframeWin;
       if (iframeWin && selectNativeRowByReportDR(iframeWin, item.reportDR, selOpts)) {
         return { ok: true, iframeWin };
       }
-    }
-
-    // 8.16.30 / 8.16.33: 原生「检验号快速检索」精确定位（原为 10×50ms 的小兜底，现改为
-    // 首选兜底并放宽预算）。理由见 tryNativeFindFastSelect 上方注释：它是「目标永远落在
-    // 第 0 行」的确定性路径，比依赖虚拟滚动翻页可靠得多；对跨组标本还能顺带走通免切组。
-    // 预算取剩余时间的一部分，给后面的全量刷新 / 滚动兜底留余地。
-    const _ffRemain = end - Date.now();
-    if (_ffRemain > 200) {
-      const _ff = await tryNativeFindFastSelect(
-        iframeWin,
-        item,
-        Math.min(1500, Math.max(400, Math.floor(_ffRemain * 0.6)))
-      );
-      iframeWin = _ff.iframeWin || iframeWin;
-      if (_ff.ok) {return { ok: true, iframeWin };}
     }
 
     // 8.16.32: 目标是否已在**完整列表**里（只是可能还没被渲染出来）
