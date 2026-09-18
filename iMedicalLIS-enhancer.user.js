@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.7
+// @version      8.17.8
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19629,6 +19629,18 @@ window.addEventListener('keydown',function(e){
 
         dbg('CA: 提交 capping 登录 attempt=', attempt);
         updateBatchProgress(attempt === 1 ? 'CA 提交登录...' : 'CA 再次提交...', null);
+        // 8.17.8: 点登录前同步校验账密框真的有值——读 .value 是同步属性访问，零开销不加等待。
+        // 极少数情况下赋值未生效/被框架在等待窗口内清空，空密码点登录 = 一次必败认证 + 可能弹
+        // 「切换账号」浮层（夜间无人值守要干等 120s）。setNativeInputValue 同步生效，重设后无需再等；
+        // 若重设后仍为空，保持原有失败路径（原生报错 → 用户提示），不加轮询死等。
+        if (userInput && caUser && userInput.value !== caUser) {
+          dbg('CA: 登录前发现账号框值丢失，重设');
+          setNativeInputValue(userInput, caUser);
+        }
+        if (pwdInput.value !== caPwd) {
+          dbg('CA: 登录前发现密码框值丢失，重设');
+          setNativeInputValue(pwdInput, caPwd);
+        }
         loginBtn.click();
 
         // 轮询成功：Ukey 写入 / 窗口真正关闭 / 审核用户已标记
@@ -26520,8 +26532,8 @@ window.addEventListener('keydown',function(e){
       // 8.14.3: 白天留人工不算红线判级（emoji/音效/level 用过滤后的 alarmRedEntries）
       const alarmRedEntries = Object.entries(aaAlarmRedCats(redCats));
       const hasRed = alarmRedEntries.length > 0;
-      // 日志总是落（off/blocked 不推也要有记录），明细截断口径与实时轮一致
-      try {autoAuditLogAdd({normal: passN, abnormal: abnPassN, skipped: skips.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX), audited: auds.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX)});} catch (e) {}
+      // 日志总是落（off/blocked 不推也要有记录），明细截断口径与实时轮一致；8.17.8: auditedDRs 取截断前的全量
+      try {autoAuditLogAdd({normal: passN, abnormal: abnPassN, skipped: skips.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX), audited: auds.slice(0, AUTO_AUDIT_LOG_DETAIL_MAX), auditedDRs: auds.map(x => String((x && (x.d || x.reportDR)) || '')).filter(Boolean)});} catch (e) {}
       // 推送模式快照语义（8.8.29 固化的策略在此生效）：all=有动作即推；blocked=只有未成功才推；off=不推
       // 8.13.0: 三档化——blocked_abn 已删，触发条件只剩 all/blocked 两分支
       const shouldPush = m === 'all' ? true
@@ -26862,6 +26874,9 @@ window.addEventListener('keydown',function(e){
         nAbnormal = 0;
       const skipped = []; // {name, labno, reason}
       const audited = []; // 8.5.61: 本轮审核成功的样本明细 {n,l,d,t}（供记录查看器检索）
+      // 8.17.8: 本轮机器人审掉的全部 ReportDR——明细 audited 有 50 条上限，徽章集合不能跟着漏，
+      // 故单独按全量收集（纯 DR 字符串，体积可忽略），随日志落盘后供 rebuildAutoAuditedTodaySet 使用
+      const auditedDRs = [];
       // 8.8.24: 推送标题统计「机器|正常|异常 → 例数」——独立于 audited 的 50 条明细上限，保证计数完整
       const _passByMn = {};
       // 8.5.76/8.5.82/8.6.2: 三类红线预过滤——8.8.33 起扫描收敛为 _aaScanRedLines 单次遍历，
@@ -26931,6 +26946,7 @@ window.addEventListener('keydown',function(e){
               // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq；8.8.24: 补机器名 mn
               audited.push(entry);
             }
+            if (entry.d) {auditedDRs.push(entry.d);} // 8.17.8: 全量 DR 无上限（🤖 徽章数据源）
             aaRecordEvent('正常', entry); // 8.8.25: 增量持久化，防整页刷新丢推送
           });
           (q.failed || []).forEach(it => autoAuditSkipOnce(skipped, it, it.reason || '批量审核失败'));
@@ -26987,6 +27003,7 @@ window.addEventListener('keydown',function(e){
               // 8.8.17: 补 labno/acceptDT，供推送按标本列出异常值（与留人工呈现一致）；8.8.22: 补流水号 seq；8.8.24: 补机器名 mn
               audited.push(entry);
             }
+            if (entry.d) {auditedDRs.push(entry.d);} // 8.17.8: 全量 DR 无上限（🤖 徽章数据源）
             aaRecordEvent('异常', entry); // 8.8.25: 增量持久化
             // 8.15.20: 自动审核放行轻微异常标本补齐留痕（消除追溯黑洞）
             if (live) {
@@ -27033,7 +27050,7 @@ window.addEventListener('keydown',function(e){
       // 8.5.65: 仅当本轮实际有审核动作（正常/异常/跳过任一 > 0）才弹小结 toast；
       // 全 0 的空转轮次（数据未就绪/无待审标本）静默，避免开启后几秒弹出无意义弹窗
       if (nNormal > 0 || nAbnormal > 0 || skipped.length > 0) {
-        try {autoAuditLogAdd({ normal: nNormal, abnormal: nAbnormal, skipped, audited });} catch (e) {dbg('审核日志写入异常:', e);}
+        try {autoAuditLogAdd({ normal: nNormal, abnormal: nAbnormal, skipped, audited, auditedDRs });} catch (e) {dbg('审核日志写入异常:', e);}
         _autoAuditMute = false; // 小结 toast 不被静默
         const remain = autoAuditRemainText();
         showToast(
@@ -27257,7 +27274,10 @@ window.addEventListener('keydown',function(e){
         abnormal: entry.abnormal || 0,
         skipped: entry.skipped || [],
         // 8.5.61: 本轮审核成功的样本明细（姓名/检验号/报告DR/类型），供「查看记录」检索
-        audited: (entry.audited || []).slice(0, AUTO_AUDIT_LOG_DETAIL_MAX)
+        audited: (entry.audited || []).slice(0, AUTO_AUDIT_LOG_DETAIL_MAX),
+        // 8.17.8: 本轮审掉的全量 ReportDR（去重、不设上限）——🤖 徽章集合的数据源。
+        // 明细 audited 的 50 条上限只服务记录查看器的展示体积，徽章漏标会让用户误以为标本没审掉
+        auditedDRs: Array.from(new Set((entry.auditedDRs || []).filter(Boolean)))
       });
       if (log.length > AUTO_AUDIT_LOG_MAX) {log = log.slice(log.length - AUTO_AUDIT_LOG_MAX);}
       trimAutoAuditLogItems(log);
@@ -27302,6 +27322,12 @@ window.addEventListener('keydown',function(e){
         (e.audited || []).forEach(a => {
           if (!a || !a.d) {return;}
           lastVerdict.set(String(a.d), true);
+        });
+        // 8.17.8: 全量成功 DR（明细 audited 截到 50 条，超出的只在这里有）——同为「成功」结论，
+        // 与明细 audited 并集后仍服从「最后一条结论为准」与人工留痕过滤
+        (e.auditedDRs || []).forEach(d => {
+          const dd = String(d || '');
+          if (dd) {lastVerdict.set(dd, true);}
         });
         (e.skipped || []).forEach(k => {
           const d = String((k && (k.reportDR || k.d)) || '');

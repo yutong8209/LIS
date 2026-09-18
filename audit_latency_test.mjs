@@ -148,6 +148,14 @@ ok(/setNativeInputValue\(pwdInput, caPwd\);[\s\S]*?await sleep\(50\);/.test(logi
 ok(!/await sleep\(200\);\s*\n\s*markCALoginSucceeded\(iframeWin\);\s*\n\s*await sleep\(300\);/.test(loginImpl), '8.17.7: 消除 500ms post-login 硬盲等');
 ok(/if \(findVisibleCAWindow\(iframeWin\)\) \{\s*\n\s*for \(let _w = 0; _w < 4; _w\+\+\) \{\s*\n\s*if \(!findVisibleCAWindow\(iframeWin\)\) \{break;\}\s*\n\s*await sleep\(20\);/.test(loginImpl), '8.17.7: Ukey 检测到后微轮询等待原生关窗（最多 80ms，已关则 0ms）');
 
+// 8.17.8: 点登录前同步校验账密框真的有值（防御空密码必败认证 + 夜间干等切换账号浮层 120s）
+const iDef = loginImpl.indexOf('if (pwdInput.value !== caPwd)');
+const iClick = loginImpl.indexOf('loginBtn.click();');
+ok(iDef > 0 && iClick > iDef, '8.17.8: 密码框校验在 loginBtn.click() 之前（缺失即同步重设）');
+ok(/if \(userInput && caUser && userInput\.value !== caUser\)/.test(loginImpl), '8.17.8: 账号框同样校验（仅在我们本来就打算赋值时）');
+const defSeg = iDef > 0 && iClick > iDef ? loginImpl.slice(iDef, iClick) : '';
+ok(!!defSeg && !/await sleep/.test(defSeg), '8.17.8: 防御分支纯同步、不引入任何新等待（不能把 8.17.7 省下的时间赔回去）');
+
 // 成功轮询：先校验再等待 + 总窗口不缩水
 const caPoll = (() => {
   const i = loginImpl.indexOf('let sawPwdError = false;');

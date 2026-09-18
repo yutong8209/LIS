@@ -195,6 +195,18 @@ ok(/const HUMAN_AUDIT_MAX = \d+;/.test(src), '人工审核留痕有单日上限'
 ok(/if \(keys\.length >= HUMAN_AUDIT_MAX\) \{delete m\.d\[keys\[0\]\];\}/.test(src), '超上限时按最早一条淘汰');
 ok(/m\.day !== today/.test(src), '跨天自动丢弃（留痕只服务当日口径）');
 
+// A9.5 8.17.8: 🤖 徽章集合的全量数据源——明细 audited 有 50 条上限（服务记录查看器展示），
+// 超上限的「机器人审掉」标本只能靠 auditedDRs 进徽章集合，漏配任何一段都会大批量漏标
+ok(/const auditedDRs = \[\];/.test(tickSrc), 'autoAuditTick 声明 auditedDRs 全量收集数组');
+const drPushes = (tickSrc.match(/auditedDRs\.push\(/g) || []).length;
+ok(drPushes === 2, '正常 + 异常两条成功路径都全量收集 DR（实际 ' + drPushes + ' 处）');
+ok(/autoAuditLogAdd\(\{ normal: nNormal, abnormal: nAbnormal, skipped, audited, auditedDRs \}\)/.test(src), 'tick 直记路径把 auditedDRs 传给日志');
+const settleSrc = sliceNamedFn('aaSettleAccum');
+ok(/auditedDRs: auds\.map/.test(settleSrc), 'aaSettleAccum 结算路径也带全量 DR（补报/续跑/跨组结算不漏）');
+const logAddSrc = sliceNamedFn('autoAuditLogAdd');
+ok(/auditedDRs: Array\.from\(new Set\(/.test(logAddSrc), 'autoAuditLogAdd 落盘全量 DR（去重、不设上限）');
+ok(/\(e\.auditedDRs \|\| \[\]\)\.forEach/.test(rebuildSrc), 'rebuildAutoAuditedTodaySet 读 auditedDRs（只看明细 audited 会漏标）');
+
 // A10. 版本号必须已递增（pre-commit 钩子会拦，这里提前给出可读报错）
 // 版本号断言用「不低于」——每次 bump 都改测试是负担，写成下限即可
 function verAtLeast(v, min) {
@@ -359,6 +371,23 @@ function findWSSpecimenByReportDR(dr) {return __rows[String(dr)] || null;}
   );
   M.humanAuditMark('N1');
   ok(M.aaHandledReason('N1') === '', 'B15 人工审核留痕命中 → 原因文案为空 = 已处理（折叠）');
+
+  // B16. 8.17.8: 明细 50 条上限不再拖累徽章——auditedDRs 全量 DR 照样进集合，且服从「最后结论为准」
+  reset([{day: TODAY, time: '09:00:00', audited: [], auditedDRs: ['X1', 'X2'], skipped: []}]);
+  ok(M.autoAuditedTodayHas('X1') === true && M.autoAuditedTodayHas('X2') === true, 'B16 超出明细上限的轮次：auditedDRs 里的标本照样带 🤖 徽章');
+  reset([
+    {day: TODAY, time: '09:00:00', audited: [], auditedDRs: ['Y1'], skipped: []},
+    {day: TODAY, time: '09:00:30', audited: [], skipped: [{reportDR: 'Y1', reason: '审核未确认成功（留人工/下轮重试）'}]}
+  ]);
+  ok(M.autoAuditedTodayHas('Y1') === false, 'B16 auditedDRs 也服从「最后一条结论为准」（后轮留人工 → 徽章消失）');
+  reset([
+    {day: TODAY, time: '09:00:00', audited: [{d: 'Z1', t: 'normal'}], skipped: []},
+    {day: TODAY, time: '09:00:30', audited: [], auditedDRs: ['Z1'], skipped: []}
+  ]);
+  ok(M.autoAuditedTodayHas('Z1') === true, 'B16 auditedDRs 与明细 audited 混用时结论一致（成功）');
+  reset([{day: TODAY, time: '09:00:00', audited: [], auditedDRs: ['Y2'], skipped: []}]);
+  M.humanAuditMark('Y2');
+  ok(M.autoAuditedTodayHas('Y2') === false, 'B16 auditedDRs 命中的标本被人工补审后徽章照常消失（人工留痕优先）');
 
   reset([{day: TODAY, time: '09:00:00', audited: [], skipped: [{reportDR: 'N2', reason: '结果不完整'}]}]);
   M.__setRows({N2: {ReportDR: 'N2', Status: '3'}});
