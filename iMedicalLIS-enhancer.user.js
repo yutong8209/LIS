@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.34
+// @version      8.16.35
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -12693,6 +12693,13 @@ window.addEventListener('keydown',function(e){
     const statuses = accept4 ? ['3', '4'] : ['3'];
     const latestWin = getReportIframeWin() || iframeWin;
     if (latestWin) {
+      // 8.16.35: 原生 DeleteReportArr 包含该标本（原生 ReportSave 审核成功后 deleteRow 的显式记录）
+      try {
+        const me = latestWin.me;
+        if (me && Array.isArray(me.DeleteReportArr) && me.DeleteReportArr.some(id => String(id) === String(reportDR))) {
+          return true;
+        }
+      } catch (e) {}
       const found = findNativeRowByReportDR(latestWin, reportDR);
       if (found && isExpectedNativeStatus(found.row, statuses)) {return true;}
       try {
@@ -18828,8 +18835,23 @@ window.addEventListener('keydown',function(e){
           options.onTick(elapsed);
         } catch (e) {}
       }
-      // 每隔约 1s 做一次跨路径快速成功校验；8.10.13: 若已捕获到 sawSaveSuccess 保存信号则不受 400ms 限制立即验出早退
-      if (typeof options.quickVerify === 'function' && ((elapsed > 400 && now - lastQuickVerifyAt >= 1000) || sawSaveSuccess)) {
+      // 8.16.35: 循环首部立即校验，若已有明确成功证据无需盲等首个 sleep
+      if (targetReportDR && expectedStatuses && expectedStatuses.length) {
+        const found = findNativeRowByReportDR(iframeWin, targetReportDR);
+        if (found) {
+          sawTargetRow = true;
+          missingSince = 0;
+          if (isExpectedNativeStatus(found.row, expectedStatuses)) {
+            dbg('原生操作成功（状态=' + getNativeStatusValues(found.row).join('/') + '）');
+            return true;
+          }
+        } else if (me && Array.isArray(me.DeleteReportArr) && me.DeleteReportArr.some(id => String(id) === String(targetReportDR))) {
+          dbg('原生操作成功（DeleteReportArr 明确记录）');
+          return true;
+        }
+      }
+      // 每隔约 1s 做一次跨路径快速成功校验；8.10.13: 若已捕获到 sawSaveSuccess 保存信号则不受 400ms 限制立即验出早退；8.16.35: 启动第 0 轮立即验出早退
+      if (typeof options.quickVerify === 'function' && ((elapsed > 400 && now - lastQuickVerifyAt >= 1000) || sawSaveSuccess || elapsed === 0)) {
         lastQuickVerifyAt = now;
         try {
           if (options.quickVerify()) {
@@ -18839,7 +18861,7 @@ window.addEventListener('keydown',function(e){
         } catch (e) {}
       }
 
-      await sleep(now < fastEnd ? (turbo ? 30 : 50) : turbo ? 60 : 140);
+      await sleep(now < fastEnd ? (turbo ? 20 : 40) : turbo ? 50 : 120);
       iframeWin = getReportIframeWin() || iframeWin;
       // 8.10.0: iframe 重建后同步重取 doc/jq/me
       doc = iframeWin ? iframeWin.document : document;
@@ -19041,7 +19063,7 @@ window.addEventListener('keydown',function(e){
   async function waitReportDetailReady(iframeWin, reportDR, timeoutMs = 5000, options = {}) {
     if (!iframeWin || !reportDR) {return false;}
     const fastBatch = !!options.fastBatch;
-    const pollMs = fastBatch ? 50 : 150;
+    const pollMs = fastBatch ? 20 : 100;
     const end = Date.now() + timeoutMs;
     if (isReportDetailLoaded(iframeWin, reportDR)) {return true;}
     while (Date.now() < end) {
@@ -19659,6 +19681,19 @@ window.addEventListener('keydown',function(e){
       dbg('已点击审核按钮, targetReportDR=' + targetReportDR);
     }
     handleNativeMessageConfirm(iframeWin);
+
+    // 8.16.35: 原生 ReportSave 为同步执行 (async: false)，调用返回后若在内存中已确认成功，
+    // 且无错误确认窗拦截，立即判定成功早退，彻底消除 waitNativeActionResult 首轮盲等与 missingStableMs
+    if (auditTriggered && targetReportDR && !isNativeConfirmVisible(iframeWin)) {
+      const _me = iframeWin.me;
+      const deletedAsSuccess = !!(_me && Array.isArray(_me.DeleteReportArr) && _me.DeleteReportArr.some(id => String(id) === String(targetReportDR)));
+      const status3AsSuccess = verifyAuditSucceededByReportDR(iframeWin, targetReportDR, { accept4: !preStatus4 });
+      const saveSuccess = !!(_me && _me.IsSaveSuccess === true && String(_me.curReportDR || '') === String(targetReportDR));
+      if (deletedAsSuccess || status3AsSuccess || saveSuccess) {
+        dbg('ReportSave 同步返回已确认审核成功:', targetReportDR, { deletedAsSuccess, status3AsSuccess, saveSuccess });
+        return true;
+      }
+    }
 
     let caDetected = false;
     let authLoginDetected = false;
@@ -23164,8 +23199,37 @@ window.addEventListener('keydown',function(e){
         const jq = iframeWin.jQuery || iframeWin.$;
         if (jq && jq('#txt_FindFast').length) {jq('#txt_FindFast').val(labno);}
       } catch (e) {}
-      iframeWin.FindFast(labno);
-      dbg('批审: 已用检验号快速检索定位:', labno, 'DR=' + item.reportDR);
+      // 8.16.35: 内存快速检索旁路优化
+      // 若目标标本已经在本地内存全量数据 (me.GridSourceData) 中，且当前机台下拉框有值会导致
+      // 原生 FindFast 绕过本地缓存触发慢速网络查询（ShowWorkList 约 300~800ms）：
+      // 临时暂存并清空机台下拉值，让原生 FindFast 走 0ms 纯本地收敛路径（G1），调用后立即恢复原机台值。
+      let restoredMachineVal = null;
+      const inLocalGrid = Array.isArray(iframeWin.me && iframeWin.me.GridSourceData) &&
+        iframeWin.me.GridSourceData.some(r => r && (String(r.ReportDR || '') === String(item.reportDR || '') || (labno && String(r.Labno || '') === labno)));
+      if (inLocalGrid) {
+        try {
+          const jq = iframeWin.jQuery || iframeWin.$;
+          if (jq && jq('#cmb_WorkGroupMachine').length && jq.fn && jq.fn.combogrid) {
+            const curMach = jq('#cmb_WorkGroupMachine').combogrid('getValue');
+            if (curMach) {
+              restoredMachineVal = curMach;
+              jq('#cmb_WorkGroupMachine').combogrid('setValue', '');
+            }
+          }
+        } catch (e) {}
+      }
+
+      try {
+        iframeWin.FindFast(labno);
+        dbg('批审: 已用检验号快速检索定位:', labno, 'DR=' + item.reportDR, inLocalGrid ? '(本地缓存零网络)' : '(服务端查询)');
+      } finally {
+        if (restoredMachineVal !== null) {
+          try {
+            const jq = iframeWin.jQuery || iframeWin.$;
+            jq('#cmb_WorkGroupMachine').combogrid('setValue', restoredMachineVal);
+          } catch (e) {}
+        }
+      }
     } catch (e) {
       dbg('批审: 检验号快速检索调用失败:', labno, e.message);
       return {ok: false, iframeWin};
@@ -23174,11 +23238,11 @@ window.addEventListener('keydown',function(e){
     const end = Date.now() + Math.max(200, budgetMs);
     let win = iframeWin;
     while (Date.now() < end) {
-      await sleep(60);
       win = getReportIframeWin() || win;
       if (win && selectNativeRowByReportDR(win, item.reportDR, {force: true})) {
         return {ok: true, iframeWin: win};
       }
+      await sleep(25);
     }
     dbg('批审: 检验号快速检索未定位到标本:', labno, 'DR=' + item.reportDR);
     return {ok: false, iframeWin: win};
@@ -23272,16 +23336,48 @@ window.addEventListener('keydown',function(e){
     if (!next || !iframeWin || !iframeWin.me) {return false;}
     if (String(next.mdr || '') !== String(currentItem.mdr || '')) {return false;}
     const target = String(next.reportDR || '');
-    // 8.10.13: 原生 selectRow 往往伴随微小异步延迟，给予最多 3 次（约 50ms）微轮询吸附
-    for (let i = 0; i < 3; i++) {
-      try {
-        const me = iframeWin.me;
-        const sel = me && me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
-        if (sel && String(sel.ReportDR || '') === target) {return true;}
-        if (me && String(me.curReportDR || '') === target) {return true;}
-      } catch (e) {}
-      if (i < 2) {await sleep(25);}
+
+    // 1. 先快速检查 LIS 原生是否已自动跳到下一条
+    try {
+      const me = iframeWin.me;
+      const sel = me && me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
+      if (sel && String(sel.ReportDR || '') === target) {return true;}
+      if (me && String(me.curReportDR || '') === target) {return true;}
+    } catch (e) {}
+
+    // 2. 8.16.35: 流水线预选——若原生未自动选中下一条，且下一条在本地内存全量数据中：
+    // 立即通过 tryNativeFindFastSelect 预选下一条标本，提前触发原生 ShowLabReportInfo 详情加载，
+    // 与批审队列的推进、记账、心跳重叠并行，消除下一标本开始时的选行等待
+    const nextLabno = String(next.labno || '');
+    if (nextLabno && typeof iframeWin.FindFast === 'function' && typeof tryNativeFindFastSelect === 'function') {
+      const me = iframeWin.me;
+      const inLocal = Array.isArray(me && me.GridSourceData) &&
+        me.GridSourceData.some(r => r && (String(r.ReportDR || '') === target || String(r.Labno || '') === nextLabno));
+      if (inLocal) {
+        try {
+          const preSel = await tryNativeFindFastSelect(iframeWin, next, 300);
+          if (preSel && preSel.ok) {
+            dbg('批审流水线: 预选下一标本成功:', nextLabno, 'DR=' + target);
+            return true;
+          }
+        } catch (e) {}
+      }
     }
+
+    // 3. 只有当原生网格为全量多行时，才等待微小异步跳行延迟（最多 2 次 25ms）；单行网格直接退出
+    try {
+      const me = iframeWin.me;
+      const rows = me && me.selectedGrid ? me.selectedGrid.datagrid('getRows') : null;
+      if (rows && rows.length > 1) {
+        for (let i = 0; i < 2; i++) {
+          await sleep(25);
+          const sel2 = me.selectedGrid.datagrid('getSelected');
+          if (sel2 && String(sel2.ReportDR || '') === target) {return true;}
+          if (String(me.curReportDR || '') === target) {return true;}
+        }
+      }
+    } catch (e) {}
+
     return false;
   }
 
