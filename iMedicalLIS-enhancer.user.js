@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.2
+// @version      8.17.3
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -27624,17 +27624,22 @@ window.addEventListener('keydown',function(e){
     //   机器人**审掉**的标本在记录里是另一条 audited 条目（t='normal'/'abnormal'），
     //   那条不受折叠影响；加了反而会把「机器人先失败、后来人工补审」的 skip 条目钉在列表里
     //   ——这正是 8.17.1 现场反馈「没有折叠」的第二个原因。
-    const isAAHandledByHuman = dr => {
+    // 8.17.3: 返回值改成「原因文案」（'' = 已判定为已处理 → 折叠）。悬停在那条「未通过」的原因上
+    //   就能看到它为什么还留着，不必再靠读代码推断（现场连续两轮「怎么还在」都只能猜，太费劲）。
+    const aaHandledReason = dr => {
       const d = String(dr || '');
-      if (!d) {return false;}
-      if (humanAuditedToday(d)) {return true;}
+      if (!d) {return '这条日志没记录 ReportDR（8.17.1 之前写入的旧记录），无法判断是否已处理 → 保守保留';}
+      if (humanAuditedToday(d)) {return '';}
       try {
         const row = findWSSpecimenByReportDR(d);
-        if (!row) {return false;}
+        if (!row) {return '工作台当前数据里找不到该标本（可能已超出加载范围/日期范围）→ 保守起见仍保留';}
         const st = String(row.Status || row.ReportStatus || '');
-        return st === '3' || st === '4';
-      } catch (e) {return false;}
+        if (st === '3' || st === '4') {return '';}
+        return '该标本当前状态 = ' + (st || '空') + (row.StatusDesc ? '（' + row.StatusDesc + '）' : '') +
+          '，还没审核 → 仍算待办，所以留着';
+      } catch (e) {return '判定出错：' + ((e && e.message) || e);}
     };
+    const isAAHandledByHuman = dr => aaHandledReason(dr) === '';
 
     // 8.5.75: 渲染时把每行样本对象挂到映射，展开时直接取日志持久化的完整结果，不依赖当前工作台缓存
     const _aalSamples = {};
@@ -27741,12 +27746,15 @@ window.addEventListener('keydown',function(e){
             <span class="aal-abn-chip-count">⚠ ${abn.length} 项异常</span>
             <div class="aal-abn-summary">${abnChips}</div>
           </div>`;
-      } else if (s.t === 'skip' && s.reason) {
+      } else if (s.t === 'skip') {
+        // 8.17.3: 悬停显示「为什么这条没被折叠」（自诊断，不占版面）
+        const _why = aaHandledReason(s.d);
+        const _whyTip = _why ? '未折叠原因：' + _why : '已判定为已处理';
         subHTML = `
           <div class="aal-card-sub">
-            <div class="aal-skip-box">
+            <div class="aal-skip-box" title="${escAttr(_whyTip)}">
               <span>🛑</span>
-              <span>${esc(s.reason)}</span>
+              <span>${esc(s.reason || '未通过')}</span>
             </div>
           </div>`;
       }

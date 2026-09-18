@@ -101,10 +101,18 @@ function sliceArrow(srcText, anchor) {
   const i = srcText.indexOf(anchor);
   if (i < 0) {throw new Error('切片失败：找不到箭头函数锚点 ' + anchor);}
   const arrow = srcText.indexOf('=>', i);
-  const open = srcText.indexOf('{', arrow);
-  const body = braceFrom(srcText, open);
-  if (!body) {throw new Error('切片失败：' + anchor + ' 花括号未配平');}
-  return anchor + ' ' + body + ';'; // anchor 不带结尾 `{`，否则会拼出 `{{`
+  let j = arrow + 2;
+  while (/\s/.test(srcText[j])) {j++;}
+  // ⚠️ 箭头函数有两种体：花括号块（`dr => {…}`）与表达式体（`dr => f(dr) === ''`）。
+  // 只按花括号切的话，表达式体会一路找到文件后面某个 `{`，切出乱七八糟的一大段。
+  if (srcText[j] === '{') {
+    const body = braceFrom(srcText, j);
+    if (!body) {throw new Error('切片失败：' + anchor + ' 花括号未配平');}
+    return anchor + ' ' + body + ';'; // anchor 不带结尾 `{`，否则会拼出 `{{`
+  }
+  const semi = srcText.indexOf(';', j);
+  if (semi < 0) {throw new Error('切片失败：' + anchor + ' 找不到语句结尾');}
+  return anchor + ' ' + srcText.slice(j, semi + 1);
 }
 
 /* ============ A. 静态不变量 ============ */
@@ -162,9 +170,14 @@ ok(/let showHandled = false;/.test(viewerSrc), '开关默认关闭 = 默认折�
 ok(/s\.handled \? handledBadge : badge\(s\)/.test(viewerSrc), '折叠态用中性灰徽章，不再挂「未通过」');
 ok(/s\.handled \? 'handled' : s\.t === 'abnormal'/.test(viewerSrc), '折叠态卡片走 .handled 灰调（不再染成橙色待办色）');
 ok(/都已被人工审核处理完/.test(viewerSrc), '全被折叠时不显示「暂无记录」（否则用户以为日志丢了）');
-ok(/if \(humanAuditedToday\(d\)\) \{return true;\}/.test(viewerSrc), '判据①：人工审核留痕');
-ok(/return st === '3' \|\| st === '4';/.test(viewerSrc), "判据②：当前已审核(3)/复审(4) → 视为已处理（放宽到 4，覆盖复审标本）");
+ok(/if \(humanAuditedToday\(d\)\) \{return '';\}/.test(viewerSrc), '判据①：人工审核留痕');
+ok(/if \(st === '3' \|\| st === '4'\) \{return '';\}/.test(viewerSrc), "判据②：当前已审核(3)/复审(4) → 视为已处理（放宽到 4，覆盖复审标本）");
 ok(!/autoAuditedRawTodayHas/.test(viewerSrc), '折叠判定里没有「机器人今天审过就不折叠」这条（它会挡住该折叠的条目）');
+// 8.17.3: 自诊断——未折叠的「未通过」卡片必须带「为什么没折叠」的悬停提示
+ok(/const aaHandledReason = dr =>/.test(viewerSrc), 'aaHandledReason 存在（返回原因文案，空串=已处理）');
+ok(/const isAAHandledByHuman = dr => aaHandledReason\(dr\) === '';/.test(viewerSrc), 'isAAHandledByHuman 委托 aaHandledReason（单一事实来源，两处判据不会分叉）');
+ok(/const _why = aaHandledReason\(s\.d\);/.test(viewerSrc), '未通过卡片会取「为什么没折叠」的原因文案');
+ok(/title="\$\{escAttr\(_whyTip\)\}"/.test(viewerSrc), '原因文案写进 skip box 的 title（悬停可见，不占版面）');
 
 // A7. 全部视图徽章仍按原口径（本次只改集合内容，不改渲染条件）
 const iBadge = src.indexOf('autoAuditedTodayHas(r.ReportDR)');
@@ -184,7 +197,7 @@ ok(/m\.day !== today/.test(src), '跨天自动丢弃（留痕只服务当日口�
 
 // A10. 版本号必须已递增（pre-commit 钩子会拦，这里提前给出可读报错）
 const ver = (src.match(/^\/\/ @version\s+(\S+)/m) || [])[1] || '';
-ok(ver === '8.17.2', '版本号已 bump 到 8.17.2（实际 ' + ver + '）');
+ok(ver === '8.17.3', '版本号已 bump 到 8.17.3（实际 ' + ver + '）');
 
 /* ============ B. 逻辑仿真：真实切片 ============ */
 section('B. 逻辑仿真（真实切片）');
@@ -199,8 +212,10 @@ try {
   if (regionStart < 0 || regionEnd <= regionStart) {throw new Error('切片失败：自动审核日志区锚点变了');}
   const region = src.slice(regionStart, regionEnd);
 
-  // isAAHandledByHuman 是查看器里的 const 箭头函数（无参数括号）——单独切出来接真函数跑
-  const handledFn = sliceArrow(src, 'const isAAHandledByHuman = dr =>');
+  // 查看器里的两个 const 箭头函数（无参数括号）——单独切出来接真函数跑。
+  // ⚠️ 顺序不能反：isAAHandledByHuman 现在委托 aaHandledReason，两个都要切。
+  const handledFn =
+    sliceArrow(src, 'const aaHandledReason = dr =>') + '\n' + sliceArrow(src, 'const isAAHandledByHuman = dr =>');
 
   const stub = `
 const __store = {};
@@ -223,7 +238,7 @@ function findWSSpecimenByReportDR(dr) {return __rows[String(dr)] || null;}
     '\n' +
     handledFn +
     '\n' +
-    'export { rebuildAutoAuditedTodaySet, autoAuditedTodayHas, humanAuditMark, humanAuditedToday, isAAHandledByHuman, __setLog, __setRows, __clear };\n';
+    'export { rebuildAutoAuditedTodaySet, autoAuditedTodayHas, humanAuditMark, humanAuditedToday, isAAHandledByHuman, aaHandledReason, __setLog, __setRows, __clear };\n';
   const tmpPath = path.join(HERE, '.cache', 'auto_audit_log_hygiene_engine.mjs');
   fs.mkdirSync(path.dirname(tmpPath), {recursive: true});
   fs.writeFileSync(tmpPath, modSrc, 'utf8');
@@ -324,6 +339,25 @@ function findWSSpecimenByReportDR(dr) {return __rows[String(dr)] || null;}
   M.humanAuditMark(undefined);
   M.humanAuditMark('');
   ok(true, 'B14 humanAuditMark 收到空 DR 不抛异常（自动审核队列项字段缺失时不会打断批审）');
+
+  // B15. 8.17.3 自诊断：原因文案（悬停在「未通过」上就能看到为什么没折叠）
+  reset([{day: TODAY, time: '09:00:00', audited: [], skipped: [{reportDR: 'N1', reason: '结果不完整'}]}]);
+  M.__setRows({N1: {ReportDR: 'N1', Status: '2', StatusDesc: '初审'}});
+  const whyPending = M.aaHandledReason('N1');
+  ok(
+    typeof whyPending === 'string' && whyPending.length > 0 && whyPending.includes('2') && whyPending.includes('初审'),
+    'B15 未审核的标本 → 原因文案里带当前状态与状态名（悬停一眼看出「还没审核」）'
+  );
+  M.humanAuditMark('N1');
+  ok(M.aaHandledReason('N1') === '', 'B15 人工审核留痕命中 → 原因文案为空 = 已处理（折叠）');
+
+  reset([{day: TODAY, time: '09:00:00', audited: [], skipped: [{reportDR: 'N2', reason: '结果不完整'}]}]);
+  M.__setRows({N2: {ReportDR: 'N2', Status: '3'}});
+  ok(M.aaHandledReason('N2') === '', 'B15 已审核(3) → 原因文案为空 = 已处理');
+  M.__setRows({});
+  ok(/找不到/.test(M.aaHandledReason('N2')), 'B15 查不到活体行 → 原因文案说明「找不到，保守保留」');
+  ok(/ReportDR/.test(M.aaHandledReason('')), 'B15 空 DR → 原因文案说明「旧记录无 ReportDR」');
+  ok(M.isAAHandledByHuman('N2') === false, 'B15 有原因文案 ⇔ isAAHandledByHuman 为假（两者永远一致）');
 } catch (e) {
   ok(false, '逻辑仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
 }
