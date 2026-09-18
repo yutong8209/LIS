@@ -17,9 +17,24 @@ LOG="$CACHE/nginx_sync.log"
 STATE="$CACHE/nginx_sync_state"
 LOCK="$CACHE/nginx_sync.lock"
 PENDING="$CACHE/nginx_sync_pending"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 mkdir -p "$CACHE"
 
 log() { echo "[$(date '+%F %T')] $*" >>"$LOG"; }
+
+# 8.17.1: 增量判定——若当前 commit 与版本已成功同步过（且工作区无未提交改动），直接跳过
+if [ "${1:-}" != "--force" ] && [ -f "$STATE" ]; then
+  cached_state="$(cat "$STATE" 2>/dev/null || echo '')"
+  current_commit="$(git -C "$DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  current_ver="$(grep -m1 '^// @version' "$DIR/iMedicalLIS-enhancer.user.js" | sed 's/.*@version[[:space:]]*//')"
+  cached_commit="$(echo "$cached_state" | cut -d'|' -f1)"
+  cached_ver="$(echo "$cached_state" | cut -d'|' -f2)"
+  if [ -n "$cached_commit" ] && [ "$current_commit" = "$cached_commit" ] && [ "$current_ver" = "$cached_ver" ]; then
+    if git -C "$DIR" diff --quiet HEAD -- iMedicalLIS-enhancer.user.js vendor/ 2>/dev/null; then
+      exit 0
+    fi
+  fi
+fi
 
 # 清理可能被 IDE / Agent 终端注入的代理环境变量，强制局域网请求直连
 unset http_proxy https_proxy all_proxy ALL_PROXY HTTP_PROXY HTTPS_PROXY

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.yutong.lis-nginx-sync</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/yutong/脚本/hooks/sync-to-nginx.sh</string>
+    </array>
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/yutong/脚本/.git/refs/heads/main</string>
+        <string>/Users/yutong/脚本/.git/refs/heads</string>
+        <string>/Users/yutong/脚本/.git/HEAD</string>
+        <string>/Users/yutong/脚本/iMedicalLIS-enhancer.user.js</string>
+    </array>
+    <key>ThrottleInterval</key>
+    <integer>2</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/yutong/脚本/.cache/launchd_sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/yutong/脚本/.cache/launchd_sync.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/yutong</string>
+    </dict>
+</dict>
+</plist>
