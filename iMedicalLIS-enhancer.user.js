@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.1
+// @version      8.17.2
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -13285,6 +13285,17 @@ window.addEventListener('keydown',function(e){
     if (result) {closeNativeAuditSuccessMessage(iframeWin);}
     return result;
   }
+  // 8.17.2: 「这次原生审核是不是自动审核机器人发起的」——**不能用 `_autoAuditRunning` 判断**：
+  // 自动审核一轮可能持续几十秒到几分钟（整批 `await executeBatchAudit` 期间它一直是 true），
+  // 用户在轮次进行中插入的手动审核会被误判成机器人 → 人工审核留痕打不上 → 手工审掉的标本
+  // 继续留在「自动审核记录」里、也不折叠（8.17.1 现场反馈就是这个）。
+  // 改为由机器人**显式包裹自己发起的那次审核**；批量队列那条路径由 `queue._autoMode` 判定
+  // （批审主循环直接调 clickNativeAuditButton，压根不过 executeNativeAudit）。
+  let _robotAuditDepth = 0;
+  function robotAuditBegin() {_robotAuditDepth++;}
+  function robotAuditEnd() {_robotAuditDepth = Math.max(0, _robotAuditDepth - 1);}
+  function isRobotAuditCtx() {return _robotAuditDepth > 0;}
+
   // 8.5.82: 包装层——任何路径（提前 return / 异常）都复位 preStatus4 共享标记。
   // 原实现只有最后一条路径复位，复检标本审核成功的两条 early-return 会泄漏 true，
   // 把下一条标本的静态 status-4 成功匹配误拒（触发多余重试/误报）
@@ -13296,11 +13307,11 @@ window.addEventListener('keydown',function(e){
     } finally {
       _auditingPreStatus4 = false; // 8.5.53: 审核结束重置
       _auditingCrossGroup = false; // 8.16.25: 同上（不留残标记影响后续同组标本）
-      // 8.17.1: 人工审核留痕——所有人工审核入口（详情面板 / F4 / 回车 / 批审 / 扫描）都经过这里，
-      // 不在自动审核轮次内即视为人工。留痕用于把「机器人没审掉、后来人工补审」的标本从 🤖 徽章
-      // 与「自动审核记录」的待办里摘掉（自动审核队列在轮次外续跑的情况由 continueAuditQueue 回撤）。
+      // 8.17.1/8.17.2: 人工审核留痕——走 executeNativeAudit 的入口（详情面板 / 详情面板回车 /
+      // 卡片回车 / F4 定位审核）都记在这里；批审队列那条路径由 continueAuditQueue 记（它直接调
+      // clickNativeAuditButton）。判定用 isRobotAuditCtx()（机器人显式包裹），**不用 `_autoAuditRunning`**。
       try {
-        if (_ok && !_autoAuditRunning) {humanAuditMark(specimen && (specimen.ReportDR || specimen.reportDR));}
+        if (_ok && !isRobotAuditCtx()) {humanAuditMark(specimen && (specimen.ReportDR || specimen.reportDR));}
       } catch (e) {}
     }
   }
@@ -24380,7 +24391,9 @@ window.addEventListener('keydown',function(e){
             closeNativeAuditSuccessMessage(iframeWin);
             queue.done.push(item);
             markSpecimenAuditedInMem(item.reportDR); // 8.9.4
-            if (queue._autoMode) {humanAuditUnmark(item.reportDR);} // 8.17.1: 自动队列审掉的不算人工
+            // 8.17.2: 批审主循环直接调 clickNativeAuditButton（不过 executeNativeAudit），
+            // 所以人工 F4 / 批审的留痕必须在这里打——只有自动审核队列才不算人工。
+            if (!queue._autoMode) {humanAuditMark(item.reportDR);}
             _aaRecordQueueItem('正常', item);
             successCount++;
             batchCAReady = true;
@@ -24415,7 +24428,7 @@ window.addEventListener('keydown',function(e){
               auditResult = true;
               queue.done.push(item);
               markSpecimenAuditedInMem(item.reportDR); // 8.9.4
-              if (queue._autoMode) {humanAuditUnmark(item.reportDR);} // 8.17.1: 同上（自动队列不算人工）
+              if (!queue._autoMode) {humanAuditMark(item.reportDR);} // 8.17.2: 同上（人工批审留痕）
               _aaRecordQueueItem('正常', item);
               successCount++;
               batchCAReady = true;
@@ -24507,7 +24520,7 @@ window.addEventListener('keydown',function(e){
               failCount = Math.max(0, failCount - 1);
               queue.done.push(it);
               markSpecimenAuditedInMem(it.reportDR); // 8.9.4
-              if (queue._autoMode) {humanAuditUnmark(it.reportDR);} // 8.17.1: 自动队列审掉的不算人工
+              if (!queue._autoMode) {humanAuditMark(it.reportDR);} // 8.17.2: 同上（人工补审轮留痕）
               _aaRecordQueueItem('正常', it);
               batchCAReady = true;
               if (it.wg) {queue.caReadyByWg[it.wg] = true;}
@@ -26846,6 +26859,9 @@ window.addEventListener('keydown',function(e){
         // 8.5.70: 审核前采集项目组合+异常项目（审核成功后缓存会被删除，故提前采）
         const _preSI = auditRecordSpecInfo(r.ReportDR, r);
         try {
+          // 8.17.2: 显式标记「这次审核由自动审核机器人发起」——留痕判定不能用 _autoAuditRunning
+          // （一轮可能持续几分钟，用户在这期间手动审的会被误判成机器人，见 isRobotAuditCtx 注释）
+          robotAuditBegin();
           const ok = await auditAbnormalSpecimen(r, { quiet: true });
           if (ok) {
             nAbnormal++;
@@ -26878,6 +26894,8 @@ window.addEventListener('keydown',function(e){
           const entry = { reportDR: String(r.ReportDR || ''), name: r.PatName, labno: r.Labno, seq: r.EpisodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || '', reason: '审核异常: ' + ((e && e.message) || e) };
           skipped.push(entry);
           aaRecordEvent('留人工', entry);
+        } finally {
+          robotAuditEnd(); // 8.17.2: 与上面的 robotAuditBegin 成对
         }
         // 8.11.9: 候选列表改为循环开头按 wsData 实时取（见上方 _aaAbnormalDone 说明），
         // 此处不再重建——原重建是跳条缺陷的成因。
@@ -27149,7 +27167,6 @@ window.addEventListener('keydown',function(e){
   // 8.5.66: 今日已自动审核的标本 ReportDR 集合（全部视图 🤖 徽章标注，点击行查看结果）
   let _autoAuditedDay = ''; // 已缓存集合对应的日期
   let _autoAuditedTodayDRs = new Set();
-  let _autoAuditedRawTodayDRs = new Set(); // 8.17.1: 今日「曾出现在成功明细里」的原始集合（不做最终态收敛），供记录查看器判断「这条是不是机器人干的」
   function autoAuditedTodayDayStr() {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -27163,7 +27180,6 @@ window.addEventListener('keydown',function(e){
   function rebuildAutoAuditedTodaySet() {
     _autoAuditedDay = autoAuditedTodayDayStr();
     const s = new Set();
-    const raw = new Set();
     const lastVerdict = new Map(); // reportDR -> true(机器人审掉) / false(留人工/跳过)
     try {
       const log = JSON.parse(localStorage.getItem(K.autoAuditLog) || '[]');
@@ -27171,9 +27187,7 @@ window.addEventListener('keydown',function(e){
         if (String(e.day || '') !== _autoAuditedDay) {return;}
         (e.audited || []).forEach(a => {
           if (!a || !a.d) {return;}
-          const d = String(a.d);
-          raw.add(d);
-          lastVerdict.set(d, true);
+          lastVerdict.set(String(a.d), true);
         });
         (e.skipped || []).forEach(k => {
           const d = String((k && (k.reportDR || k.d)) || '');
@@ -27185,19 +27199,11 @@ window.addEventListener('keydown',function(e){
       if (okAudited && !humanAuditedToday(d)) {s.add(d);}
     });
     _autoAuditedTodayDRs = s;
-    _autoAuditedRawTodayDRs = raw;
   }
   function autoAuditedTodayHas(reportDR) {
     if (_autoAuditedDay !== autoAuditedTodayDayStr()) {rebuildAutoAuditedTodaySet();} // 跨天自动重建
     return _autoAuditedTodayDRs.has(String(reportDR || ''));
   }
-  // 8.17.1: 今日「机器人上报过成功」的原始集合——记录查看器用它区分「机器人干的」与「人工补的」。
-  // 与徽章集合的差别：不做最终态收敛、也不减人工留痕（这里问的是"日志里到底有没有机器人的成功记录"）。
-  function autoAuditedRawTodayHas(reportDR) {
-    if (_autoAuditedDay !== autoAuditedTodayDayStr()) {rebuildAutoAuditedTodaySet();}
-    return _autoAuditedRawTodayDRs.has(String(reportDR || ''));
-  }
-
   // ---- 8.17.1: 当日人工审核留痕 ----
   // 为什么需要：徽章与「自动审核记录」此前都只看机器人自己的日志，而日志里那条「机器人上报成功」
   // 一旦落下就永远是成功，无法反映「其实没审掉、后来人工补的」。人工审核动作全部经过
@@ -27221,22 +27227,6 @@ window.addEventListener('keydown',function(e){
       _humanAuditedTodayDRs.add(d);
       // 人工审核改变了徽章口径 → 立刻让 🤖 徽章集合失效重算
       if (_autoAuditedTodayDRs.has(d)) {rebuildAutoAuditedTodaySet();}
-    } catch (e) {}
-  }
-  // 8.17.1: 撤销留痕——自动审核队列在轮次之外续跑（runAuditQueueResume）时 _autoAuditRunning 为 false，
-  // 会被误当人工审核；由 continueAuditQueue 在 queue._autoMode 下回撤（否则那批机器人审掉的标本会丢徽章）。
-  function humanAuditUnmark(reportDR) {
-    const d = String(reportDR || '');
-    if (!d) {return;}
-    try {
-      const today = autoAuditedTodayDayStr();
-      let m = null;
-      try {m = JSON.parse(localStorage.getItem(K.humanAuditLog) || 'null');} catch (e) {m = null;}
-      if (!m || m.day !== today || !m.d || !m.d[d]) {return;}
-      delete m.d[d];
-      localStorage.setItem(K.humanAuditLog, JSON.stringify(m));
-      _humanAuditedTodayDRs.delete(d);
-      rebuildAutoAuditedTodaySet();
     } catch (e) {}
   }
   function humanAuditedToday(reportDR) {
@@ -27625,19 +27615,24 @@ window.addEventListener('keydown',function(e){
     // 8.17.1: 已人工处理的条目——中性灰徽章。它当初是「未通过（留人工）」，人工补审后不该继续挂着
     // 「未通过」这个待办口径，否则每次翻记录都以为还欠着一条。
     const handledBadge = '<span class="aal-badge handled"><span class="aal-badge-ic">✅</span>已人工审核</span>';
-    // 8.17.1: 「未通过」条目是否已被人工补齐——两条判据任一成立即视为已处理：
-    //   ① 人工审核留痕里有它（8.17.1 起所有人工审核入口都打点，最准）；
-    //   ② 它当前已审核（Status=3）且机器人今天并没有成功审掉它（=人工审的；覆盖升级前的历史数据
-    //      以及别的标签页/别的机器审掉的情况）。
+    // 8.17.1/8.17.2: 「未通过」条目是否已被处理掉——两条判据任一成立即视为已处理：
+    //   ① 人工审核留痕里有它（8.17.1 起人工审核入口都打点，最准）；
+    //   ② 它当前已审核(3)/复审(4)——覆盖升级前的历史数据、别的标签页/别的机器审掉的、
+    //      以及留痕因任何原因没打上的情况。
     // 查不到活体行（标本已出当前工作台范围）时只看留痕——宁可多留一条也不误折叠。
+    // ⚠️ 不要在这里加「机器人今天审过它就不折叠」：本函数只作用于 t==='skip' 的条目，
+    //   机器人**审掉**的标本在记录里是另一条 audited 条目（t='normal'/'abnormal'），
+    //   那条不受折叠影响；加了反而会把「机器人先失败、后来人工补审」的 skip 条目钉在列表里
+    //   ——这正是 8.17.1 现场反馈「没有折叠」的第二个原因。
     const isAAHandledByHuman = dr => {
       const d = String(dr || '');
       if (!d) {return false;}
       if (humanAuditedToday(d)) {return true;}
-      if (autoAuditedRawTodayHas(d)) {return false;} // 机器人今天审过 → 不算人工处理
       try {
         const row = findWSSpecimenByReportDR(d);
-        return !!row && String(row.Status || row.ReportStatus || '') === '3';
+        if (!row) {return false;}
+        const st = String(row.Status || row.ReportStatus || '');
+        return st === '3' || st === '4';
       } catch (e) {return false;}
     };
 

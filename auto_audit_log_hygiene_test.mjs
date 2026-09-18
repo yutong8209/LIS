@@ -1,15 +1,24 @@
 /**
- * 8.17.1 回归测试：自动审核「记录 / 徽章」的口径收敛
+ * 8.17.1 / 8.17.2 回归测试：自动审核「记录 / 徽章」的口径收敛
  *
- * 用户反馈（原话）：「我今天自动审核失败的标本 我后来手工审核掉了 但是还在自动审核记录里面有显示
+ * 用户反馈（原话 ①）：「我今天自动审核失败的标本 我后来手工审核掉了 但是还在自动审核记录里面有显示
  * 而且全部的标签里面 该标本依然有一个自动审核的徽章 这个不太合理」
+ * 用户反馈（原话 ②，8.17.1 之后）：「开了自动审核情况下，刚才一个无法通过自动审核的标本我手动审掉了
+ * 还是在自动审核记录的下拉窗口里面 而且也没有折叠 和自动审核的标本列在一起」
  *
- * 两个症状，两条修复：
+ * 症状 → 修复：
  *   (a) 记录查看器 —— 未通过（留人工）的条目一旦被人工补审，默认折叠不显示（不再是待办）
  *   (b) 全部视图 🤖 徽章 —— 以「该标本在今日日志里的最后一条结论」为准，且人工审核过的一律不标
+ *   (c) 8.17.1 折叠没生效的两个根因（8.17.2 修）：
+ *       c1 批审主循环**直接调 clickNativeAuditButton**、压根不过 executeNativeAudit
+ *          → 人工 F4 / 批审的留痕从来没打上；
+ *       c2 折叠判定里加了「机器人今天审过它就不折叠」→ 恰好把「机器人先失败、后来人工补审」
+ *          这条 skip 条目钉死在列表里。
+ *       另外把「是不是机器人」的判定从 `_autoAuditRunning` 换成显式包裹的 isRobotAuditCtx()
+ *       ——一轮自动审核可能持续几分钟，用户在这期间手动审的会被误判成机器人。
  *
  * 本测试分两部分：
- *   A. 静态不变量 —— 两条规则各自落在哪一行、有没有漏掉一条链路（这类改动「少掐一处不报错，
+ *   A. 静态不变量 —— 每条规则各自落在哪一行、有没有漏掉一条链路（这类改动「少掐一处不报错，
  *                    只会静默重复显示」，只有静态断言拦得住）
  *   B. 逻辑仿真   —— 把真实的 rebuildAutoAuditedTodaySet / humanAuditMark / isAAHandledByHuman
  *                    切片出来跑日志场景矩阵
@@ -109,26 +118,38 @@ const rebuildSrc = sliceNamedFn('rebuildAutoAuditedTodaySet');
 ok(/lastVerdict/.test(rebuildSrc), 'rebuildAutoAuditedTodaySet 用 lastVerdict 记录同一标本的最后一条结论');
 ok(/\(e\.skipped \|\| \[\]\)\.forEach/.test(rebuildSrc), '重建时也扫 skipped（否则「先成功后留人工」收敛不掉）');
 ok(/lastVerdict\.set\(d, false\)/.test(rebuildSrc), 'skipped 命中 → 该标本最后结论记为「非成功」');
-ok(/lastVerdict\.set\(d, true\)/.test(rebuildSrc), 'audited 命中 → 该标本最后结论记为「成功」');
+ok(/lastVerdict\.set\(String\(a\.d\), true\)/.test(rebuildSrc), 'audited 命中 → 该标本最后结论记为「成功」');
 ok(!/if \(a && a\.d\) \{s\.add\(String\(a\.d\)\);\}/.test(rebuildSrc), '旧的「出现即入集合」写法已删除（否则新逻辑形同虚设）');
 ok(/okAudited && !humanAuditedToday\(d\)/.test(rebuildSrc), '入集合前再减掉「人工审核过」的标本');
 
-// A3. 原始集合：记录查看器要能区分「机器人干的」与「人工补的」
-ok(/function autoAuditedRawTodayHas\(/.test(src), 'autoAuditedRawTodayHas 存在（只看成功记录、不做最终态收敛）');
-ok(/_autoAuditedRawTodayDRs = raw;/.test(rebuildSrc), '重建时一并产出原始集合');
+// A3. 「是不是机器人」的判定必须是显式包裹，不能用轮次标志
+ok(!/autoAuditedRawTodayHas/.test(src), '已删除「机器人今天审过就不折叠」的原始集合（它会把该折叠的钉在列表里）');
+ok(!/function humanAuditUnmark\(/.test(src), '已删除 humanAuditUnmark（改为「不是自动队列才打点」，不再需要回撤）');
+const ctxSrc = src.slice(src.indexOf('  let _robotAuditDepth = 0;'), src.indexOf('  let _robotAuditDepth = 0;') + 300);
+ok(/function robotAuditBegin\(/.test(ctxSrc) && /function robotAuditEnd\(/.test(ctxSrc) && /function isRobotAuditCtx\(/.test(ctxSrc),
+  'robotAuditBegin / robotAuditEnd / isRobotAuditCtx 三个助手都在位');
+ok(countOf(/robotAuditBegin\(\)/g) === 2, 'robotAuditBegin 调用点 = 1（定义 + 1 调用；实际 ' + countOf(/robotAuditBegin\(\)/g) + '）');
+ok(countOf(/robotAuditEnd\(\)/g) === 2, 'robotAuditEnd 调用点 = 1（定义 + 1 调用；实际 ' + countOf(/robotAuditEnd\(\)/g) + '）');
+const tickSrc = sliceNamedFn('autoAuditTick');
+ok(/robotAuditBegin\(\);\s*\n\s*const ok = await auditAbnormalSpecimen\(r, \{ quiet: true \}\);/.test(tickSrc),
+  '机器人异常逐条审核被 robotAuditBegin/End 显式包裹（这里就是「用户手动审的被误判成机器人」的来源）');
+ok(/\} finally \{\s*\n\s*robotAuditEnd\(\);/.test(tickSrc), 'robotAuditEnd 在 finally 里（异常路径也要复位）');
 
-// A4. 人工审核留痕的写入点：executeNativeAudit 是所有人工审核入口的唯一咽喉
+// A4. 人工审核留痕的写入点①：走 executeNativeAudit 的入口（详情面板 / 回车 / F4 定位审核）
 const execSrc = sliceNamedFn('executeNativeAudit');
-ok(/if \(_ok && !_autoAuditRunning\) \{humanAuditMark\(/.test(execSrc), 'executeNativeAudit 成功后、非自动审核轮次内 → humanAuditMark');
+ok(/if \(_ok && !isRobotAuditCtx\(\)\) \{humanAuditMark\(/.test(execSrc), 'executeNativeAudit 成功后、非机器人上下文 → humanAuditMark');
+// 注释里可以提 _autoAuditRunning（说明为什么不用它），但**代码里不许出现**
+ok(!/_autoAuditRunning/.test(execSrc.replace(/^\s*\/\/.*$/gm, '')), '⚠️ 代码里不能再出现 _autoAuditRunning（一轮可能持续几分钟，会误判人工为机器人）');
 ok(/specimen && \(specimen\.ReportDR \|\| specimen\.reportDR\)/.test(execSrc), '取 DR 兼容大小写两套字段名');
 
-// A5. 自动审核队列不算人工：continueAuditQueue 三处成功点都要回撤
-const unmarkSites = countOf(/if \(queue\._autoMode\) \{humanAuditUnmark\(/g);
-ok(unmarkSites === 3, 'continueAuditQueue 三处批审成功点都做 humanAuditUnmark（实际 ' + unmarkSites + ' 处；漏一处 → 轮次外续跑时机器人审掉的标本丢徽章）');
-ok(countOf(/markSpecimenAuditedInMem\(/g) === 4, 'markSpecimenAuditedInMem 调用点仍是 4 处（1 定义 + 3 调用），说明回撤点没漏配');
+// A5. 人工审核留痕的写入点②：批审队列三处成功点（主循环直接调 clickNativeAuditButton，不过 executeNativeAudit）
+const markSites = countOf(/if \(!queue\._autoMode\) \{humanAuditMark\(/g);
+ok(markSites === 3, 'continueAuditQueue 三处批审成功点都按 !queue._autoMode 打人工留痕（实际 ' + markSites + ' 处；漏一处 → 人工 F4/批审审掉的标本不会折叠）');
+ok(countOf(/markSpecimenAuditedInMem\(/g) === 4, 'markSpecimenAuditedInMem 调用点仍是 4 处（1 定义 + 3 调用），说明打点没漏配');
 const continueSrc = sliceNamedFn('continueAuditQueue');
-const unmarkInContinue = (continueSrc.match(/if \(queue\._autoMode\) \{humanAuditUnmark\(/g) || []).length;
-ok(unmarkInContinue === 3, '这 3 处回撤全部位于 continueAuditQueue 内（实际 ' + unmarkInContinue + ' 处）');
+const markInContinue = (continueSrc.match(/if \(!queue\._autoMode\) \{humanAuditMark\(/g) || []).length;
+ok(markInContinue === 3, '这 3 处打点全部位于 continueAuditQueue 内（实际 ' + markInContinue + ' 处）');
+ok(!/clickNativeAuditButton/.test(continueSrc) === false, '批审主循环确实直接调 clickNativeAuditButton（这是打点必须放在这里的理由）');
 
 // A6. 记录查看器：只有「未通过」条目会被折叠，机器人审掉的条目绝不受影响
 const viewerSrc = sliceNamedFn('openAutoAuditLogViewer');
@@ -142,7 +163,8 @@ ok(/s\.handled \? handledBadge : badge\(s\)/.test(viewerSrc), '折叠态用中�
 ok(/s\.handled \? 'handled' : s\.t === 'abnormal'/.test(viewerSrc), '折叠态卡片走 .handled 灰调（不再染成橙色待办色）');
 ok(/都已被人工审核处理完/.test(viewerSrc), '全被折叠时不显示「暂无记录」（否则用户以为日志丢了）');
 ok(/if \(humanAuditedToday\(d\)\) \{return true;\}/.test(viewerSrc), '判据①：人工审核留痕');
-ok(/if \(autoAuditedRawTodayHas\(d\)\) \{return false;\}/.test(viewerSrc), '判据②：机器人今天审过 → 不算人工处理（不会被误折叠）');
+ok(/return st === '3' \|\| st === '4';/.test(viewerSrc), "判据②：当前已审核(3)/复审(4) → 视为已处理（放宽到 4，覆盖复审标本）");
+ok(!/autoAuditedRawTodayHas/.test(viewerSrc), '折叠判定里没有「机器人今天审过就不折叠」这条（它会挡住该折叠的条目）');
 
 // A7. 全部视图徽章仍按原口径（本次只改集合内容，不改渲染条件）
 const iBadge = src.indexOf('autoAuditedTodayHas(r.ReportDR)');
@@ -162,7 +184,7 @@ ok(/m\.day !== today/.test(src), '跨天自动丢弃（留痕只服务当日口�
 
 // A10. 版本号必须已递增（pre-commit 钩子会拦，这里提前给出可读报错）
 const ver = (src.match(/^\/\/ @version\s+(\S+)/m) || [])[1] || '';
-ok(ver === '8.17.1', '版本号已 bump 到 8.17.1（实际 ' + ver + '）');
+ok(ver === '8.17.2', '版本号已 bump 到 8.17.2（实际 ' + ver + '）');
 
 /* ============ B. 逻辑仿真：真实切片 ============ */
 section('B. 逻辑仿真（真实切片）');
@@ -201,7 +223,7 @@ function findWSSpecimenByReportDR(dr) {return __rows[String(dr)] || null;}
     '\n' +
     handledFn +
     '\n' +
-    'export { rebuildAutoAuditedTodaySet, autoAuditedTodayHas, autoAuditedRawTodayHas, humanAuditMark, humanAuditUnmark, humanAuditedToday, isAAHandledByHuman, __setLog, __setRows, __clear };\n';
+    'export { rebuildAutoAuditedTodaySet, autoAuditedTodayHas, humanAuditMark, humanAuditedToday, isAAHandledByHuman, __setLog, __setRows, __clear };\n';
   const tmpPath = path.join(HERE, '.cache', 'auto_audit_log_hygiene_engine.mjs');
   fs.mkdirSync(path.dirname(tmpPath), {recursive: true});
   fs.writeFileSync(tmpPath, modSrc, 'utf8');
@@ -219,7 +241,6 @@ function findWSSpecimenByReportDR(dr) {return __rows[String(dr)] || null;}
   // B1. 只有成功记录 → 徽章
   reset([{day: TODAY, time: '09:00:00', audited: [{d: 'A', t: 'normal'}], skipped: []}]);
   ok(M.autoAuditedTodayHas('A') === true, 'B1 机器人审掉的标本 → 带 🤖 徽章');
-  ok(M.autoAuditedRawTodayHas('A') === true, 'B1 原始集合也命中（记录查看器认得它是机器人干的）');
 
   // B2. 先成功后留人工（同一条标本，多轮日志）→ 以最后结论为准，徽章消失
   reset([
@@ -227,7 +248,6 @@ function findWSSpecimenByReportDR(dr) {return __rows[String(dr)] || null;}
     {day: TODAY, time: '09:00:30', audited: [], skipped: [{reportDR: 'B', reason: '审核未确认成功（留人工/下轮重试）'}]}
   ]);
   ok(M.autoAuditedTodayHas('B') === false, 'B2 最后一轮是「留人工」→ 不再带 🤖 徽章（旧版会误标）');
-  ok(M.autoAuditedRawTodayHas('B') === true, 'B2 原始集合仍记得机器人报过成功（查看器据此不误折叠）');
 
   // B3. 先留人工、后被机器人补审成功 → 最后结论是成功，徽章在
   reset([
@@ -240,40 +260,45 @@ function findWSSpecimenByReportDR(dr) {return __rows[String(dr)] || null;}
   reset([{day: TODAY, time: '09:00:00', audited: [{d: 'D', t: 'normal'}], skipped: []}]);
   ok(M.autoAuditedTodayHas('D') === true, 'B4 打留痕之前：带徽章');
   M.humanAuditMark('D');
-  ok(M.autoAuditedTodayHas('D') === false, 'B4 人工审核过 → 徽章消失（这是用户报的那条）');
-  ok(M.autoAuditedRawTodayHas('D') === true, 'B4 原始集合不变（机器人确实报过成功，不该被抹掉）');
+  ok(M.autoAuditedTodayHas('D') === false, 'B4 人工审核过 → 徽章消失（用户报的第 ① 条）');
 
-  // B5. 回撤留痕（自动队列在轮次外续跑被误当人工）→ 徽章恢复
-  M.humanAuditUnmark('D');
-  ok(M.autoAuditedTodayHas('D') === true, 'B5 humanAuditUnmark 后徽章恢复（自动队列不算人工）');
-
-  // B6. 跨天日志不参与
+  // B5. 跨天日志不参与
   reset([{day: YEST, time: '23:59:00', audited: [{d: 'E', t: 'normal'}], skipped: []}]);
-  ok(M.autoAuditedTodayHas('E') === false && M.autoAuditedRawTodayHas('E') === false, 'B6 昨天的记录不算今天（跨天口径不变）');
+  ok(M.autoAuditedTodayHas('E') === false, 'B5 昨天的记录不算今天（跨天口径不变）');
 
-  // B7. 老日志里没有 reportDR 的跳过条目不能误伤别人
+  // B6. 老日志里没有 reportDR 的跳过条目不能误伤别人
   reset([
     {day: TODAY, time: '09:00:00', audited: [{d: 'F', t: 'normal'}], skipped: []},
     {day: TODAY, time: '09:00:30', audited: [], skipped: [{name: '张三', labno: '001', reason: '结果不完整'}]}
   ]);
-  ok(M.autoAuditedTodayHas('F') === true, 'B7 无 reportDR 的历史跳过条目不会误伤其他标本的徽章');
+  ok(M.autoAuditedTodayHas('F') === true, 'B6 无 reportDR 的历史跳过条目不会误伤其他标本的徽章');
 
-  // B8. isAAHandledByHuman：判据①留痕
+  // B7. isAAHandledByHuman：判据①留痕
   reset([{day: TODAY, time: '09:00:00', audited: [], skipped: [{reportDR: 'G', reason: '含负值结果，需人工审核'}]}]);
   M.__setRows({G: {ReportDR: 'G', Status: '2'}});
-  ok(M.isAAHandledByHuman('G') === false, 'B8 留痕里没有、状态还是初审(2) → 不折叠（还欠着）');
+  ok(M.isAAHandledByHuman('G') === false, 'B7 留痕里没有、状态还是初审(2) → 不折叠（还欠着）');
   M.humanAuditMark('G');
-  ok(M.isAAHandledByHuman('G') === true, 'B8 留痕命中 → 折叠（判据①）');
+  ok(M.isAAHandledByHuman('G') === true, 'B7 留痕命中 → 折叠（判据①：人工 F4/批审/详情面板都会打点）');
 
-  // B9. isAAHandledByHuman：判据②状态=3 且机器人没审过（覆盖升级前的历史数据）
+  // B8. 判据②：状态已审核(3)
   reset([{day: TODAY, time: '09:00:00', audited: [], skipped: [{reportDR: 'H', reason: '审核未确认成功（留人工/下轮重试）'}]}]);
   M.__setRows({H: {ReportDR: 'H', Status: '3'}});
-  ok(M.isAAHandledByHuman('H') === true, 'B9 留痕为空但标本已审核(3) 且机器人没审过 → 判定人工补审，折叠');
+  ok(M.isAAHandledByHuman('H') === true, 'B8 留痕为空但标本已审核(3) → 判定已处理，折叠');
 
-  // B10. 机器人今天审过的标本，绝不因 Status=3 被误折叠
-  reset([{day: TODAY, time: '09:00:00', audited: [{d: 'I', t: 'normal'}], skipped: []}]);
+  // B9. 判据②放宽到复审(4)
+  reset([{day: TODAY, time: '09:00:00', audited: [], skipped: [{reportDR: 'H4', reason: '结果不完整'}]}]);
+  M.__setRows({H4: {ReportDR: 'H4', Status: '4'}});
+  ok(M.isAAHandledByHuman('H4') === true, 'B9 复审(4) 也算已处理（8.17.2 放宽，覆盖复检标本）');
+
+  // B10. 8.17.2 关键：机器人先报成功、又留人工（最后结论=留人工）的标本，人工补审后**必须折叠**
+  //      ——8.17.1 就是因为「机器人今天审过它」这条判据把它钉在列表里，现场反馈「没有折叠」。
+  reset([
+    {day: TODAY, time: '09:00:00', audited: [{d: 'I', t: 'normal'}], skipped: []},
+    {day: TODAY, time: '09:00:30', audited: [], skipped: [{reportDR: 'I', reason: '审核未确认成功（留人工/下轮重试）'}]}
+  ]);
   M.__setRows({I: {ReportDR: 'I', Status: '3'}});
-  ok(M.isAAHandledByHuman('I') === false, 'B10 机器人审掉的标本（Status=3）不会被误折叠');
+  ok(M.autoAuditedTodayHas('I') === false, 'B10 徽章按最后结论已消失');
+  ok(M.isAAHandledByHuman('I') === true, 'B10 skip 条目照样折叠（机器人审掉的那条是另一条 audited 条目，不受影响）');
 
   // B11. 查不到活体行时只看留痕（保守：宁可多留一条，也不误折叠）
   reset([{day: TODAY, time: '09:00:00', audited: [], skipped: [{reportDR: 'J', reason: '结果不完整'}]}]);
@@ -285,14 +310,20 @@ function findWSSpecimenByReportDR(dr) {return __rows[String(dr)] || null;}
   // B12. 空值防御
   reset([]);
   ok(M.isAAHandledByHuman('') === false && M.isAAHandledByHuman(null) === false && M.isAAHandledByHuman(undefined) === false, 'B12 空 DR 一律不折叠（不会因为日志缺字段而整片消失）');
-  ok(M.autoAuditedTodayHas('') === false && M.autoAuditedRawTodayHas('') === false, 'B12 空 DR 不命中徽章集合');
+  ok(M.autoAuditedTodayHas('') === false, 'B12 空 DR 不命中徽章集合');
 
-  // B13. 留痕单日上限淘汰最早一条（防 localStorage 无界增长）
+  // B13. 留痕写入幂等 / 可读回
   reset([]);
   M.humanAuditMark('K1');
   M.humanAuditMark('K2');
   ok(M.humanAuditedToday('K1') === true && M.humanAuditedToday('K2') === true, 'B13 留痕可写入并可读回');
   ok(M.humanAuditMark('K1') === undefined && M.humanAuditedToday('K1') === true, 'B13 重复写入同一条不报错、不丢数据');
+
+  // B14. 空 DR 的留痕打点不炸（humanAuditMark(undefined) 必须静默返回）
+  reset([]);
+  M.humanAuditMark(undefined);
+  M.humanAuditMark('');
+  ok(true, 'B14 humanAuditMark 收到空 DR 不抛异常（自动审核队列项字段缺失时不会打断批审）');
 } catch (e) {
   ok(false, '逻辑仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
 }

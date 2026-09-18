@@ -201,9 +201,10 @@ group('G1. 队列条目固化「原生查询上下文」+ 无活体行时重建�
 group('G2. 补审被中止：未尝试的尾部必须保留为「未完成」并去重', async () => {
   const salvageSrc = sliceBetween('const stillFail = [];', 'failCount = _mergedFail.length;');
 
-  function runSalvage({need, okFor, abortAfter}) {
+  function runSalvage({need, okFor, abortAfter, autoMode}) {
     let calls = 0;
     const queue = {failed: [], done: [], skipped: [], caReadyByWg: {}};
+    if (autoMode) {queue._autoMode = true;} // 8.17.2: 自动审核队列（不该打人工留痕）
     const events = [];
     const fn = new Function(
       'queue',
@@ -218,6 +219,7 @@ group('G2. 补审被中止：未尝试的尾部必须保留为「未完成」并
       'batchCAReady',
       '_aaRecordQueueItem',
       'markSpecimenAuditedInMem',
+      'humanAuditMark', // 8.17.2: 批审成功点会打「人工审核留痕」
       'aaStateEventAdd',
       'dbg',
       'iframeWin',
@@ -248,6 +250,7 @@ group('G2. 补审被中止：未尝试的尾部必须保留为「未完成」并
       false,
       (kind, it) => events.push({kind, dr: it.reportDR}),
       () => {},
+      dr => events.push({kind: 'humanMark', dr}), // humanAuditMark（8.17.2）
       (k, m) => events.push({kind: k, msg: m}),
       () => {},
       {},
@@ -270,6 +273,14 @@ group('G2. 补审被中止：未尝试的尾部必须保留为「未完成」并
   ok(r.successCount === 1 && r.failCount === 2, '计数如实：1 成功 / 2 失败（旧版报 1 成功 / 1 失败 = 误报）');
   ok(new Set(failDRs).size === failDRs.length, 'failed 按 reportDR 去重');
   ok(r.events.some(e => /未完成/.test(String(e.msg || ''))), '补审中止记入事件时间线（可回溯未完成）');
+  // 8.17.2: 人工审核留痕——非自动队列补审成功要打点，失败的/自动队列的不打
+  ok(
+    r.events.some(e => e.kind === 'humanMark' && e.dr === 'F1'),
+    '人工（非自动队列）补审成功 → 打人工留痕（现场：人工 F4/批审审掉的标本要在自动审核记录里折叠）'
+  );
+  ok(!r.events.some(e => e.kind === 'humanMark' && e.dr === 'F2'), '补审仍失败的标本不打留痕');
+  const rAuto = await runSalvage({need: [{reportDR: 'M1'}], okFor: ['M1'], abortAfter: 9, autoMode: true});
+  ok(!rAuto.events.some(e => e.kind === 'humanMark'), '自动审核队列（queue._autoMode）审掉的不打人工留痕（否则机器人审掉的会丢 🤖 徽章）');
 
   const r2 = await runSalvage({need: [{reportDR: 'A'}, {reportDR: 'B'}], okFor: ['A', 'B'], abortAfter: 99});
   ok(r2.queue.failed.length === 0, '全部成功时 failed 为空（不留幽灵条目）');
