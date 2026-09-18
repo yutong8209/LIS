@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.3
+// @version      8.17.4
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -1343,6 +1343,10 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 .ab-ack-btn.on:hover{background:#fef2f2;border-color:#fecaca;color:#b91c1c}
 .ab-card-name{font-size:13px;font-weight:700;color:var(--lis-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
 .ab-card-no{font-family:ui-monospace,monospace;font-size:11px;color:var(--lis-text-muted);white-space:nowrap}
+/* 8.17.4: 待审卡片上的「📄 病历」直达按钮（与详情面板同一入口；Shift+点击=原生 32 位 IE） */
+.ab-emr-btn{flex:0 0 auto;font-size:10.5px;font-weight:600;line-height:1.35;padding:1px 7px;border-radius:4px;border:1px solid var(--lis-border-strong);background:#fff;color:var(--lis-text-secondary);cursor:pointer;white-space:nowrap;transition:all .15s}
+.ab-emr-btn:hover{border-color:var(--lis-teal-500);color:var(--lis-teal-600);background:#f0fdfa}
+.ab-card-right-acts{display:flex;align-items:center;gap:6px;flex:0 0 auto}
 .ab-card-test{font-size:11px;color:var(--lis-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
 .ab-card-items{display:flex;flex-wrap:wrap;gap:2px 3px;margin-top:1px}
 .ab-card-item{padding:0 5px;border-radius:4px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid transparent;line-height:1.55}
@@ -11833,6 +11837,11 @@ window.addEventListener('keydown',function(e){
         e.preventDefault();
         e.stopImmediatePropagation();
         advanceAbnormalFocusAfterSkip(wsAbnormalIndex);
+      } else if (e.key === 'm' || e.key === 'M') {
+        // 8.17.4: M = 直达电子病历（与详情面板同一个键；Shift+M = 直接唤起原生 32 位 IE）
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        openEMRForWSRow(getAbnormalFocusSpecimen(curData), e.shiftKey);
       } else if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -12374,6 +12383,28 @@ window.addEventListener('keydown',function(e){
     return m && m.ok ? 'mild' : 'beyond';
   }
 
+  // 8.17.4: 工作台标本 → 电子病历直达。与详情面板「📄 病历」按钮走同一个 openEnhancedEMR，
+  // 所以取数口径（Labno/PatName/RegNo/EpisodeNo）与那里完全一致，不会出现「卡片能开、面板开不了」。
+  // shiftKey=true → directNativeIE：直接唤起原生 32 位 IE（病历文书正文的 ActiveX 只有它渲染得了）。
+  function openEMRForWSRow(r, shiftKey) {
+    if (!r) {showToast('没有定位到标本，无法查看病历', 'info'); return;}
+    const labno = r.Labno || '';
+    if (!labno) {showToast('该标本没有检验号，无法查看病历', 'warning'); return;}
+    openEnhancedEMR(labno, {
+      labNo: labno,
+      patName: r.PatName || '',
+      regNo: r.RegNo || '',
+      episodeNo: r.EpisodeNo || '',
+      directNativeIE: !!shiftKey
+    });
+  }
+
+  // 8.17.4: 待审卡片右上角的病历按钮（data-emr 存 ReportDR，点击时再取活体行，避免卡片重渲染后数据过期）
+  function wsEmrBtnHTML(r) {
+    return '<button type="button" class="ab-emr-btn" data-emr="' + escAttr(r.ReportDR || '') +
+      '" title="查看该患者的电子病历 / HIS 信息（Shift+点击：直接唤起原生 32 位 IE，文书正文只有它渲染得了）· 快捷键 M">📄 病历</button>';
+  }
+
   // --- 待审视图（融合正常 + 异常，单队列审核）---
   function renderAuditView(data, body) {
     if (_abnormalFocusDR) {
@@ -12428,7 +12459,7 @@ window.addEventListener('keydown',function(e){
         </div>`;
 
     h += `<div class="ws-abnormal-hint">
-            <span><kbd>Enter</kbd> 审核 <kbd>Space</kbd> 跳过 <kbd>↑↓</kbd> 移动 <kbd>F4</kbd> 批审 <kbd>1-5</kbd> 切分类</span>
+            <span><kbd>Enter</kbd> 审核 <kbd>Space</kbd> 跳过 <kbd>↑↓</kbd> 移动 <kbd>F4</kbd> 批审 <kbd>M</kbd> 病历 <kbd>1-5</kbd> 切分类</span>
             <span>按仪器分组</span>
         </div>`;
     h += '<div class="ws-abnormal-list">';
@@ -12456,8 +12487,9 @@ window.addEventListener('keydown',function(e){
         h += '</div>';
         h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
         h += '</div>';
-        h += `<div style="display:flex;align-items:center;font-size:11px;color:var(--lis-text-secondary)">`;
+        h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--lis-text-secondary)">';
         h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || '', wsSearchQuery)}</span>`;
+        h += `<span class="ab-card-right-acts">${wsEmrBtnHTML(r)}</span>`; // 8.17.4
         h += '</div>';
         h += '</div>';
         return;
@@ -12496,9 +12528,9 @@ window.addEventListener('keydown',function(e){
       h += '</div>';
       h += `<span class="ab-card-no">${highlightText(r.Labno || '', wsSearchQuery)}</span>`;
       h += '</div>';
-      h += `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--lis-text-secondary)">`;
+      h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--lis-text-secondary)">';
       h += `<span class="ab-card-test">${highlightText(r.TestSetDesc || r._mn || '', wsSearchQuery)}</span>`;
-      h += `<span class="ab-card-time" style="font-size:10.5px;color:var(--lis-text-muted)">${esc(r.AcceptDT || '')}</span>`;
+      h += `<span class="ab-card-right-acts">${wsEmrBtnHTML(r)}<span class="ab-card-time" style="font-size:10.5px;color:var(--lis-text-muted)">${esc(r.AcceptDT || '')}</span></span>`; // 8.17.4
       h += '</div>';
       h += '<div class="ab-card-items">';
       const displayItems = getAbnormalDisplayItems(r, hasInfectionWarning);
@@ -12625,6 +12657,14 @@ window.addEventListener('keydown',function(e){
           on ? 'success' : 'info'
         );
         renderWSTable(); // 重渲染卡片，按钮状态立即跟上
+        return;
+      }
+      // 8.17.4: 卡片上的「📄 病历」——必须先拦下，否则会被当成选中卡片
+      const emrBtn = e.target.closest ? e.target.closest('.ab-emr-btn') : null;
+      if (emrBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        openEMRForWSRow(findWSSpecimenByReportDR(emrBtn.dataset.emr), e.shiftKey);
         return;
       }
       const card = e.target.closest('.ws-abnormal-card');
@@ -14573,7 +14613,7 @@ window.addEventListener('keydown',function(e){
             </div>
             <div id="lis-detail-footer">
                 <div id="lis-detail-left-actions"></div>
-                <span class="detail-footer-hint">↑↓ 切换 | Enter 审核 | Esc 关闭</span>
+                <span class="detail-footer-hint">↑↓ 切换 | Enter 审核 | M 病历 | H 历史 | Esc 关闭</span>
                 <div class="detail-footer-actions">
                     <button class="btn-emr" id="lis-detail-emr-btn" title="查看该患者的电子病历/HIS信息（Shift+点击：直接唤起原生 32 位 IE）">📄 病历</button>
                     <button class="btn-audit" id="lis-detail-audit" title="Enter 或点击：审核当前详情标本，成功后自动跳下一条">✅ 审核</button>
@@ -14773,6 +14813,13 @@ window.addEventListener('keydown',function(e){
       if (shouldIgnoreAbnormalKeyEvent(e)) {return;}
       // 历史浮层打开时：详情键全部让位（避免 Enter 误审），Esc 由历史层处理
       if (histIsOpen()) {return;}
+      // 8.17.4: M = 直达电子病历（与工作台待审视图同键，Shift+M = 原生 32 位 IE）
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (currentDetailSpecimen) {openEMRForWSRow(currentDetailSpecimen, e.shiftKey);}
+        return;
+      }
       if (e.key === 'H' || e.key === 'h') {
         e.preventDefault();
         e.stopImmediatePropagation();

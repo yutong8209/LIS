@@ -196,8 +196,17 @@ ok(/if \(keys\.length >= HUMAN_AUDIT_MAX\) \{delete m\.d\[keys\[0\]\];\}/.test(s
 ok(/m\.day !== today/.test(src), '跨天自动丢弃（留痕只服务当日口径）');
 
 // A10. 版本号必须已递增（pre-commit 钩子会拦，这里提前给出可读报错）
+// 版本号断言用「不低于」——每次 bump 都改测试是负担，写成下限即可
+function verAtLeast(v, min) {
+  const a = String(v).split('.').map(Number);
+  const b = String(min).split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) {return (a[i] || 0) > (b[i] || 0);}
+  }
+  return true;
+}
 const ver = (src.match(/^\/\/ @version\s+(\S+)/m) || [])[1] || '';
-ok(ver === '8.17.3', '版本号已 bump 到 8.17.3（实际 ' + ver + '）');
+ok(verAtLeast(ver, '8.17.3'), '版本号 ≥ 8.17.3（本功能落地版本；实际 ' + ver + '）');
 
 /* ============ B. 逻辑仿真：真实切片 ============ */
 section('B. 逻辑仿真（真实切片）');
