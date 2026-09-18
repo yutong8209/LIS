@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.6
+// @version      8.17.7
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19450,6 +19450,20 @@ window.addEventListener('keydown',function(e){
     dbg('CA: 认证成功（Ukey 已写入 / 窗口已关闭）');
   }
 
+  // 8.17.7: 后台空闲期预热 CA 默认账号与密钥派生，避免批审时首次认证卡顿
+  function warmupCAAuthInBackground() {
+    try {
+      const run = () => {
+        caDefaultAccount().catch(() => {});
+      };
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(run, { timeout: 3000 });
+      } else {
+        setTimeout(run, 1200);
+      }
+    } catch (e) {}
+  }
+
   async function handleCALogin(iframeWin, options = {}) {
     // 单飞：并发调用共用一次结果
     if (_caLoginInFlight) {
@@ -19544,12 +19558,15 @@ window.addEventListener('keydown',function(e){
 
       try {
         // 8.17.6: 表单本来就在 capping 页 → 不必点切换、也就不必等那固定 280ms
-        //（原实现无条件 sleep(280)，这是每轮 CA 认证里最大的一笔纯等待）
+        // 8.17.7: 若未就绪，切换后改为微轮询（7×40ms=280ms 窗口不变，就绪即刻继续）
         if (isCappingFormVisible(caDoc)) {
           dbg('CA: capping 表单已就绪，跳过切换等待（-280ms）');
         } else {
           ensureCappingFormVisible(caDoc);
-          await sleep(280);
+          for (let _k = 0; _k < 7; _k++) {
+            if (isCappingFormVisible(caDoc)) {break;}
+            await sleep(40);
+          }
         }
         caDoc = getCAIframeDoc(iframeWin) || caDoc;
 
@@ -19591,7 +19608,8 @@ window.addEventListener('keydown',function(e){
         }
         if (userInput && caUser) {setNativeInputValue(userInput, caUser);}
         setNativeInputValue(pwdInput, caPwd);
-        await sleep(200);
+        // 8.17.7: 输入后等待从 200ms 压缩至 50ms（DOM 事件同步触发，50ms 足够 EasyUI 同步状态）
+        await sleep(50);
 
         let loginBtn =
           caDoc.getElementById('bt_login') || caDoc.querySelector('#bt_login, a[id*="login"], button[id*="login"]');
@@ -19622,11 +19640,16 @@ window.addEventListener('keydown',function(e){
         //   （12s / 18s）**原样保持**——不能靠缩窗口换速度，原生 CA 慢时会被误判失败。
         for (let i = 0; i < (fast ? 120 : 180); i++) {
           if (anyCAUkeyPresent(iframeWin) || isCASessionReady(iframeWin)) {
-            // 给原生 FuncStr(ReportSave) 一点时间跑完，再强制关残留窗
-            await sleep(200);
+            // 8.17.7: 原为 200ms+300ms=500ms 硬盲等。优化为：
+            // 若原生窗口仍开着，微轮询等待原生 FuncStr 关窗（最多 80ms），超时再强制关窗；
+            // 窗口自然关闭后立即退出（0ms）；后续 ReportSave 落盘由各调用方（continueAuditQueue 等）接管。
+            if (findVisibleCAWindow(iframeWin)) {
+              for (let _w = 0; _w < 4; _w++) {
+                if (!findVisibleCAWindow(iframeWin)) {break;}
+                await sleep(20);
+              }
+            }
             markCALoginSucceeded(iframeWin);
-            // 再等一瞬，让可能触发的 ReportSave 落盘
-            await sleep(300);
             return true;
           }
           if (!findVisibleCAWindow(iframeWin)) {
@@ -29184,6 +29207,7 @@ window.addEventListener('keydown',function(e){
     if (_isMain) {
       initAuthPersistence();
       migratePwdStorage();
+      warmupCAAuthInBackground();
     }
     initAuthFill();
 

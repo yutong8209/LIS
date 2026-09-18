@@ -111,7 +111,7 @@ const countOf = re => (src.match(re) || []).length;
 section('A. 静态不变量');
 
 const ver = (src.match(/^\/\/ @version\s+(\S+)/m) || [])[1] || '';
-ok(verAtLeast(ver, '8.17.6'), '版本号 ≥ 8.17.6（本次性能改动落地版本；实际 ' + ver + '）');
+ok(verAtLeast(ver, '8.17.7'), '版本号 ≥ 8.17.7（本次 CA 认证极速优化版本；实际 ' + ver + '）');
 
 // ---------- A. CA：密钥缓存 ----------
 ok(/const _cryptoKeyCache = new Map\(\)/.test(src), '密钥缓存是 Map（keyId → CryptoKey）');
@@ -122,8 +122,10 @@ ok(/_cryptoKeyCache\.set\(kid, key\)/.test(keyFn), '派生后写进缓存');
 ok(/iterations: 100000/.test(keyFn), 'PBKDF2 仍是 10 万轮（只缓存、不降强度）');
 // 缓存键必须包含 keyId —— 否则不同账号会共用同一把密钥（安全问题）
 ok(/const kid = keyId === undefined \? uid\(\) : String\(keyId\)/.test(keyFn), '缓存键仍按 keyId 区分（不会退化成同 origin 共用一把密钥）');
+ok(/function warmupCAAuthInBackground\(/.test(src), '8.17.7: 存在后台空闲期预热 CA 密钥函数');
+ok(/warmupCAAuthInBackground\(\)/.test(src), '8.17.7: 工作台初始化时调用了后台预热');
 
-// ---------- A. CA：固定等待 ----------
+// ---------- A. CA：固定等待与延迟压缩 ----------
 ok(/function isCappingFormVisible\(/.test(src), 'isCappingFormVisible 判定函数存在');
 // ⚠️ 切片失败要记为失败项而不是让测试崩掉——跑旧版做反向验证时旧版压根没这个函数
 try {
@@ -134,7 +136,17 @@ try {
 }
 const loginImpl = sliceNamedFn('handleCALoginImpl');
 ok(/if \(isCappingFormVisible\(caDoc\)\) \{/.test(loginImpl), '表单已可见时走「跳过」分支');
-ok(/else \{\s*\n\s*ensureCappingFormVisible\(caDoc\);\s*\n\s*await sleep\(280\);/.test(loginImpl), '280ms 只在**真的需要点切换**时才等（原来无条件等）');
+
+const capPollMatch = (loginImpl.match(/for \(let _k = 0; _k < (\d+); _k\+\+\) \{\s*\n\s*if \(isCappingFormVisible\(caDoc\)\) \{break;\}\s*\n\s*await sleep\((\d+)\);/) || []).slice(1).map(Number);
+if (capPollMatch.length === 2) {
+  ok(capPollMatch[0] * capPollMatch[1] >= 280, '8.17.7: 表单切换微轮询先验后等，且总窗口不缩水（' + capPollMatch[0] + '×' + capPollMatch[1] + 'ms ≥ 280ms）');
+} else {
+  ok(/else \{\s*\n\s*ensureCappingFormVisible\(caDoc\);\s*\n\s*await sleep\(280\);/.test(loginImpl), '280ms 只在**真的需要点切换**时才等（原来无条件等）');
+}
+
+ok(/setNativeInputValue\(pwdInput, caPwd\);[\s\S]*?await sleep\(50\);/.test(loginImpl), '8.17.7: 密码填入到点击缩短至 50ms（原 200ms）');
+ok(!/await sleep\(200\);\s*\n\s*markCALoginSucceeded\(iframeWin\);\s*\n\s*await sleep\(300\);/.test(loginImpl), '8.17.7: 消除 500ms post-login 硬盲等');
+ok(/if \(findVisibleCAWindow\(iframeWin\)\) \{\s*\n\s*for \(let _w = 0; _w < 4; _w\+\+\) \{\s*\n\s*if \(!findVisibleCAWindow\(iframeWin\)\) \{break;\}\s*\n\s*await sleep\(20\);/.test(loginImpl), '8.17.7: Ukey 检测到后微轮询等待原生关窗（最多 80ms，已关则 0ms）');
 
 // 成功轮询：先校验再等待 + 总窗口不缩水
 const caPoll = (() => {
