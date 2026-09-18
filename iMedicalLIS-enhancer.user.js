@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.0
+// @version      8.17.1
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -120,7 +120,8 @@
     autoAuditPushLast: 'LIS_AA_PushLastTs', // 8.10.2: 上一条轮次推送发出时刻（前沿即发 + 最短间隔节奏，跨刷新存续）
     mildLog: 'LIS_MildAuditLog', // 8.12.0: F4 轻微异常放行留痕（本地环形 500，不推送不进自动审核日志）
     mildRules: 'LIS_MildRuleOverrides', // 8.15.9: 轻微放行范围的人工覆盖（详情面板 ⚙ 可调；删掉即恢复默认）
-    aaAck: 'LIS_AA_Ack' // 8.16.11: 待审里「已知晓」的标本（危急/无法自动审核）——不再进自动审核推送
+    aaAck: 'LIS_AA_Ack', // 8.16.11: 待审里「已知晓」的标本（危急/无法自动审核）——不再进自动审核推送
+    humanAuditLog: 'LIS_HumanAuditLog' // 8.17.1: 当日人工审核留痕——把「机器人没审掉、后来人工审掉」的标本从徽章/待办里摘掉
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -1066,6 +1067,15 @@
 .aal-summary-item.normal{color:#059669}
 .aal-summary-item.abnormal{color:#2563eb}
 .aal-summary-item.skip{color:#d97706}
+.aal-summary-item.handled{color:#64748b}
+/* 8.17.1: 「已人工处理」——自动审核没审掉、后来被人工审核掉的标本。
+   默认从记录里折叠掉（它们不再是待办）；开关打开时降权显示，保留可追溯性。 */
+#lis-auto-audit-log-box .aal-handled-toggle{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border:1px solid var(--lis-border-strong);background:#fff;color:var(--lis-text-secondary);border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s}
+#lis-auto-audit-log-box .aal-handled-toggle:hover{border-color:var(--lis-teal-500);color:var(--lis-teal-600)}
+#lis-auto-audit-log-box .aal-handled-toggle.on{background:#f0fdfa;border-color:var(--lis-teal-500);color:var(--lis-teal-600)}
+#lis-auto-audit-log-box .aal-card.handled{opacity:.62;background:var(--lis-bg);border-left-color:#94a3b8}
+#lis-auto-audit-log-box .aal-badge.handled{background:#64748b}
+#lis-auto-audit-log-box .aal-card.handled .aal-skip-box{background:var(--lis-surface-subtle);border-color:var(--lis-border);color:var(--lis-slate-500)}
 .aal-date-divider{font-size:11px;font-weight:700;color:var(--lis-slate-500);padding:7px 4px 4px;margin-top:5px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.3px}
 .aal-date-divider::after{content:'';flex:1;height:1px;background:var(--lis-border)}
 /* 8.9.1: 运行状态时间线（暂停/恢复/开启/关闭/到期） */
@@ -13279,11 +13289,19 @@ window.addEventListener('keydown',function(e){
   // 原实现只有最后一条路径复位，复检标本审核成功的两条 early-return 会泄漏 true，
   // 把下一条标本的静态 status-4 成功匹配误拒（触发多余重试/误报）
   async function executeNativeAudit(iframeWin, specimen, options = {}) {
+    let _ok = false;
     try {
-      return await _executeNativeAuditImpl(iframeWin, specimen, options);
+      _ok = await _executeNativeAuditImpl(iframeWin, specimen, options);
+      return _ok;
     } finally {
       _auditingPreStatus4 = false; // 8.5.53: 审核结束重置
       _auditingCrossGroup = false; // 8.16.25: 同上（不留残标记影响后续同组标本）
+      // 8.17.1: 人工审核留痕——所有人工审核入口（详情面板 / F4 / 回车 / 批审 / 扫描）都经过这里，
+      // 不在自动审核轮次内即视为人工。留痕用于把「机器人没审掉、后来人工补审」的标本从 🤖 徽章
+      // 与「自动审核记录」的待办里摘掉（自动审核队列在轮次外续跑的情况由 continueAuditQueue 回撤）。
+      try {
+        if (_ok && !_autoAuditRunning) {humanAuditMark(specimen && (specimen.ReportDR || specimen.reportDR));}
+      } catch (e) {}
     }
   }
 
@@ -24362,6 +24380,7 @@ window.addEventListener('keydown',function(e){
             closeNativeAuditSuccessMessage(iframeWin);
             queue.done.push(item);
             markSpecimenAuditedInMem(item.reportDR); // 8.9.4
+            if (queue._autoMode) {humanAuditUnmark(item.reportDR);} // 8.17.1: 自动队列审掉的不算人工
             _aaRecordQueueItem('正常', item);
             successCount++;
             batchCAReady = true;
@@ -24396,6 +24415,7 @@ window.addEventListener('keydown',function(e){
               auditResult = true;
               queue.done.push(item);
               markSpecimenAuditedInMem(item.reportDR); // 8.9.4
+              if (queue._autoMode) {humanAuditUnmark(item.reportDR);} // 8.17.1: 同上（自动队列不算人工）
               _aaRecordQueueItem('正常', item);
               successCount++;
               batchCAReady = true;
@@ -24487,6 +24507,7 @@ window.addEventListener('keydown',function(e){
               failCount = Math.max(0, failCount - 1);
               queue.done.push(it);
               markSpecimenAuditedInMem(it.reportDR); // 8.9.4
+              if (queue._autoMode) {humanAuditUnmark(it.reportDR);} // 8.17.1: 自动队列审掉的不算人工
               _aaRecordQueueItem('正常', it);
               batchCAReady = true;
               if (it.wg) {queue.caReadyByWg[it.wg] = true;}
@@ -26846,12 +26867,15 @@ window.addEventListener('keydown',function(e){
             }
           }
           else {
-            const entry = { name: r.PatName, labno: r.Labno, seq: r.EpisodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || '', reason: '审核未确认成功（留人工/下轮重试）' };
+            // 8.17.1: 补 reportDR——此前这条只带 labno，累积器按 id 去重时会把它与同一标本的「正常」
+            // 事件当成两条不同标本（成功那条 id=reportDR），结算后同一条标本既算通过又算留人工；
+            // 记录查看器也因为没有 DR 而无法定位/无法判断是否已被人工补审。
+            const entry = { reportDR: String(r.ReportDR || ''), name: r.PatName, labno: r.Labno, seq: r.EpisodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || '', reason: '审核未确认成功（留人工/下轮重试）' };
             skipped.push(entry);
             aaRecordEvent('留人工', entry);
           }
         } catch (e) {
-          const entry = { name: r.PatName, labno: r.Labno, seq: r.EpisodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || '', reason: '审核异常: ' + ((e && e.message) || e) };
+          const entry = { reportDR: String(r.ReportDR || ''), name: r.PatName, labno: r.Labno, seq: r.EpisodeNo || '', mn: r._mn || r.MachineName || '', acceptDT: r.AcceptDT || '', reason: '审核异常: ' + ((e && e.message) || e) };
           skipped.push(entry);
           aaRecordEvent('留人工', entry);
         }
@@ -27125,27 +27149,109 @@ window.addEventListener('keydown',function(e){
   // 8.5.66: 今日已自动审核的标本 ReportDR 集合（全部视图 🤖 徽章标注，点击行查看结果）
   let _autoAuditedDay = ''; // 已缓存集合对应的日期
   let _autoAuditedTodayDRs = new Set();
+  let _autoAuditedRawTodayDRs = new Set(); // 8.17.1: 今日「曾出现在成功明细里」的原始集合（不做最终态收敛），供记录查看器判断「这条是不是机器人干的」
   function autoAuditedTodayDayStr() {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
+  // 8.17.1: 重建今日集合——两条规则一起用，解决「机器人没审掉的标本仍带 🤖 徽章 / 仍算待办」：
+  //   ① 最终态收敛：日志是按轮次追加的，同一条标本可能先被记为「正常通过」、后续轮次又因数据未刷新
+  //      被记为「已审核，跳过 / 审核未确认成功」。以**最后一条结论**为准——最后一笔是「留人工」就不算
+  //      机器人审掉的（徽章会误导成"已经处理完了"）。
+  //   ② 人工审核留痕：机器人上报成功但 LIS 其实没审掉（乐观判定）、或别的标签页重复记账时，标本会留在
+  //      待审里被人工补审——人工审核过的标本一律不再标 🤖（徽章语义是"这条是机器人审掉的"）。
   function rebuildAutoAuditedTodaySet() {
     _autoAuditedDay = autoAuditedTodayDayStr();
     const s = new Set();
+    const raw = new Set();
+    const lastVerdict = new Map(); // reportDR -> true(机器人审掉) / false(留人工/跳过)
     try {
       const log = JSON.parse(localStorage.getItem(K.autoAuditLog) || '[]');
       log.forEach(e => {
         if (String(e.day || '') !== _autoAuditedDay) {return;}
         (e.audited || []).forEach(a => {
-          if (a && a.d) {s.add(String(a.d));}
+          if (!a || !a.d) {return;}
+          const d = String(a.d);
+          raw.add(d);
+          lastVerdict.set(d, true);
+        });
+        (e.skipped || []).forEach(k => {
+          const d = String((k && (k.reportDR || k.d)) || '');
+          if (d) {lastVerdict.set(d, false);}
         });
       });
     } catch (err) {}
+    lastVerdict.forEach((okAudited, d) => {
+      if (okAudited && !humanAuditedToday(d)) {s.add(d);}
+    });
     _autoAuditedTodayDRs = s;
+    _autoAuditedRawTodayDRs = raw;
   }
   function autoAuditedTodayHas(reportDR) {
     if (_autoAuditedDay !== autoAuditedTodayDayStr()) {rebuildAutoAuditedTodaySet();} // 跨天自动重建
     return _autoAuditedTodayDRs.has(String(reportDR || ''));
+  }
+  // 8.17.1: 今日「机器人上报过成功」的原始集合——记录查看器用它区分「机器人干的」与「人工补的」。
+  // 与徽章集合的差别：不做最终态收敛、也不减人工留痕（这里问的是"日志里到底有没有机器人的成功记录"）。
+  function autoAuditedRawTodayHas(reportDR) {
+    if (_autoAuditedDay !== autoAuditedTodayDayStr()) {rebuildAutoAuditedTodaySet();}
+    return _autoAuditedRawTodayDRs.has(String(reportDR || ''));
+  }
+
+  // ---- 8.17.1: 当日人工审核留痕 ----
+  // 为什么需要：徽章与「自动审核记录」此前都只看机器人自己的日志，而日志里那条「机器人上报成功」
+  // 一旦落下就永远是成功，无法反映「其实没审掉、后来人工补的」。人工审核动作全部经过
+  // executeNativeAudit（详情面板 / F4 / 回车 / 批审 / 扫描），在那里按「是否处于机器人轮次」打点。
+  const HUMAN_AUDIT_MAX = 3000; // 单日上限，防 localStorage 无界增长
+  let _humanAuditedTodayDRs = new Set();
+  let _humanAuditedDay = '';
+  function humanAuditMark(reportDR) {
+    const d = String(reportDR || '');
+    if (!d) {return;}
+    try {
+      const today = autoAuditedTodayDayStr();
+      let m = null;
+      try {m = JSON.parse(localStorage.getItem(K.humanAuditLog) || 'null');} catch (e) {m = null;}
+      if (!m || m.day !== today || !m.d) {m = {day: today, d: {}};}
+      if (m.d[d]) {return;} // 同一天同一条只留一条，别反复写盘
+      const keys = Object.keys(m.d);
+      if (keys.length >= HUMAN_AUDIT_MAX) {delete m.d[keys[0]];}
+      m.d[d] = Date.now();
+      localStorage.setItem(K.humanAuditLog, JSON.stringify(m));
+      _humanAuditedTodayDRs.add(d);
+      // 人工审核改变了徽章口径 → 立刻让 🤖 徽章集合失效重算
+      if (_autoAuditedTodayDRs.has(d)) {rebuildAutoAuditedTodaySet();}
+    } catch (e) {}
+  }
+  // 8.17.1: 撤销留痕——自动审核队列在轮次之外续跑（runAuditQueueResume）时 _autoAuditRunning 为 false，
+  // 会被误当人工审核；由 continueAuditQueue 在 queue._autoMode 下回撤（否则那批机器人审掉的标本会丢徽章）。
+  function humanAuditUnmark(reportDR) {
+    const d = String(reportDR || '');
+    if (!d) {return;}
+    try {
+      const today = autoAuditedTodayDayStr();
+      let m = null;
+      try {m = JSON.parse(localStorage.getItem(K.humanAuditLog) || 'null');} catch (e) {m = null;}
+      if (!m || m.day !== today || !m.d || !m.d[d]) {return;}
+      delete m.d[d];
+      localStorage.setItem(K.humanAuditLog, JSON.stringify(m));
+      _humanAuditedTodayDRs.delete(d);
+      rebuildAutoAuditedTodaySet();
+    } catch (e) {}
+  }
+  function humanAuditedToday(reportDR) {
+    const d = String(reportDR || '');
+    if (!d) {return false;}
+    const today = autoAuditedTodayDayStr();
+    if (_humanAuditedDay !== today) {
+      _humanAuditedDay = today;
+      _humanAuditedTodayDRs = new Set();
+      try {
+        const m = JSON.parse(localStorage.getItem(K.humanAuditLog) || 'null');
+        if (m && m.day === today && m.d) {Object.keys(m.d).forEach(k => _humanAuditedTodayDRs.add(String(k)));}
+      } catch (e) {}
+    }
+    return _humanAuditedTodayDRs.has(d);
   }
   // 8.5.61: autoAuditLogToday 已由 openAutoAuditLogViewer（日期范围+搜索）取代
 
@@ -27489,6 +27595,7 @@ window.addEventListener('keydown',function(e){
               <button class="aal-range" data-range="7d">近7天</button>
               <button class="aal-range" data-range="all">全部</button>
             </div>
+            <button class="aal-handled-toggle" id="lis-aal-handled" title="自动审核没审掉、后来被你人工审核掉的标本默认折叠不显示（它们已经不是待办了）——点此可临时查看">✅ 已人工处理</button>
             <input id="lis-aal-search" placeholder="🔍 搜索姓名 / 检验号 / 组合项目 / 异常指标 / 原因…">
           </div>
           <div id="lis-aal-summary"></div>
@@ -27502,6 +27609,8 @@ window.addEventListener('keydown',function(e){
 
     let range = 'today';
     let q = '';
+    // 8.17.1: 是否显示「已人工处理」的未通过条目（默认折叠——它们已不是待办）
+    let showHandled = false;
     const fmtDay = d =>
       d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     // 8.16.8: 徽章文案直接说结论（原来「异常 / 跳过」歧义：异常到底是过了还是没过？）
@@ -27513,6 +27622,24 @@ window.addEventListener('keydown',function(e){
         : s.t === 'skip'
           ? '<span class="aal-badge skip"><span class="aal-badge-ic">⏭</span>未通过</span>'
           : '<span class="aal-badge normal"><span class="aal-badge-ic">✓</span>正常通过</span>';
+    // 8.17.1: 已人工处理的条目——中性灰徽章。它当初是「未通过（留人工）」，人工补审后不该继续挂着
+    // 「未通过」这个待办口径，否则每次翻记录都以为还欠着一条。
+    const handledBadge = '<span class="aal-badge handled"><span class="aal-badge-ic">✅</span>已人工审核</span>';
+    // 8.17.1: 「未通过」条目是否已被人工补齐——两条判据任一成立即视为已处理：
+    //   ① 人工审核留痕里有它（8.17.1 起所有人工审核入口都打点，最准）；
+    //   ② 它当前已审核（Status=3）且机器人今天并没有成功审掉它（=人工审的；覆盖升级前的历史数据
+    //      以及别的标签页/别的机器审掉的情况）。
+    // 查不到活体行（标本已出当前工作台范围）时只看留痕——宁可多留一条也不误折叠。
+    const isAAHandledByHuman = dr => {
+      const d = String(dr || '');
+      if (!d) {return false;}
+      if (humanAuditedToday(d)) {return true;}
+      if (autoAuditedRawTodayHas(d)) {return false;} // 机器人今天审过 → 不算人工处理
+      try {
+        const row = findWSSpecimenByReportDR(d);
+        return !!row && String(row.Status || row.ReportStatus || '') === '3';
+      } catch (e) {return false;}
+    };
 
     // 8.5.75: 渲染时把每行样本对象挂到映射，展开时直接取日志持久化的完整结果，不依赖当前工作台缓存
     const _aalSamples = {};
@@ -27636,13 +27763,14 @@ window.addEventListener('keydown',function(e){
       const canExpand = !!(s.d || (s.items && s.items.length));
 
       // 8.16.8: 卡片按审核结论三色分层（左侧色条 + 淡底 + 实心徽章，见 .aal-card.st-*）
-      const stateCls = s.t === 'abnormal' ? 'st-abnormal' : s.t === 'skip' ? 'st-skip' : 'st-normal';
+      // 8.17.1: 已人工处理的条目改走中性灰调（s.handled 仅在「显示已人工处理」打开时才会带上）
+      const stateCls = s.handled ? 'handled' : s.t === 'abnormal' ? 'st-abnormal' : s.t === 'skip' ? 'st-skip' : 'st-normal';
 
       return `
         <div class="aal-card ${stateCls}" data-rdr="${escAttr(s.d || '')}" data-toggle-exp="${_rid}">
           <div class="aal-card-main">
             <div class="aal-card-left">
-              ${badge(s)}
+              ${s.handled ? handledBadge : badge(s)}
               <span class="aal-pat-name" title="${escAttr(s.n || '未知姓名')}">${esc(s.n || '未知姓名')}</span>
               <span class="aal-labno">${esc(s.l || '—')}</span>
               ${profileHTML}
@@ -27681,6 +27809,7 @@ window.addEventListener('keydown',function(e){
       let normalCount = 0;
       let abnormalCount = 0;
       let skipCount = 0;
+      let handledCount = 0; // 8.17.1: 已人工处理（默认折叠，不计入待办）
 
       const dayMap = new Map();
       entries.forEach(e => {
@@ -27694,6 +27823,12 @@ window.addEventListener('keydown',function(e){
             const searchable = [s.n, s.l, s.test, s.reason, abnStr].join(' ').toLowerCase();
             if (!searchable.includes(ql)) {return;}
           }
+          // 8.17.1: 未通过但已被人工补审掉的条目 → 默认折叠（不再是待办）；打开开关时灰调显示
+          if (s.t === 'skip' && isAAHandledByHuman(s.d)) {
+            s.handled = true;
+            handledCount++;
+            if (!showHandled) {return;}
+          }
           totalCount++;
           if (s.t === 'normal') {normalCount++;}
           else if (s.t === 'abnormal') {abnormalCount++;}
@@ -27705,14 +27840,17 @@ window.addEventListener('keydown',function(e){
       });
 
       // 概要统计条
+      // 8.17.1: 已人工处理的条目单独成项——它们默认已从「当前共 N 个标本」里摘掉，
+      // 有折叠时显式说明，避免用户以为记录丢了。
       if (sumBox) {
-        if (totalCount > 0) {
+        if (totalCount > 0 || handledCount > 0) {
           sumBox.innerHTML = `
             <div class="aal-summary-bar">
               <span>当前共 <b>${totalCount}</b> 个标本</span>
               <span class="aal-summary-item normal">✓ 正常通过 <b>${normalCount}</b></span>
               <span class="aal-summary-item abnormal">⚡ 轻度异常通过 <b>${abnormalCount}</b></span>
               <span class="aal-summary-item skip">⏭ 未通过 <b>${skipCount}</b></span>
+              ${handledCount > 0 ? `<span class="aal-summary-item handled" title="自动审核没审掉、后来被你人工审核掉的标本（已不计入上面的待办数）">✅ 已人工处理 <b>${handledCount}</b>${showHandled ? '（已显示）' : '（已折叠）'}</span>` : ''}
             </div>`;
         } else {
           sumBox.innerHTML = '';
@@ -27790,9 +27928,13 @@ window.addEventListener('keydown',function(e){
       applyFolds(); // 8.9.8: 按当前折叠偏好应用显隐（render 每次重建 DOM 后都要重新套用）
 
       if (!totalCount) {
-        list.innerHTML = `<div style="text-align:center;color:#94a3b8;padding:48px 14px;font-size:13px">
-          ${ql ? '未找到匹配的标本记录（' + esc(q) + '）' : '所选范围内暂无自动审核记录'}
-        </div>`;
+        // 8.17.1: 记录都在、只是全被人工处理掉了——不能说「暂无记录」，否则用户以为日志丢了
+        const _emptyTxt = ql
+          ? '未找到匹配的标本记录（' + esc(q) + '）'
+          : handledCount > 0
+            ? `所选范围内的 ${handledCount} 条记录都已被人工审核处理完（已折叠，点上方「✅ 已人工处理」可查看）`
+            : '所选范围内暂无自动审核记录';
+        list.innerHTML = `<div style="text-align:center;color:#94a3b8;padding:48px 14px;font-size:13px">${_emptyTxt}</div>`;
         return;
       }
 
@@ -27828,6 +27970,19 @@ window.addEventListener('keydown',function(e){
     );
     const searchInput = document.getElementById('lis-aal-search');
     searchInput.addEventListener('input', () => {q = searchInput.value; render();});
+
+    // 8.17.1: 「已人工处理」开关——默认折叠，打开后灰调显示（保留可追溯性）
+    const handledBtn = document.getElementById('lis-aal-handled');
+    if (handledBtn) {
+      handledBtn.addEventListener('click', () => {
+        showHandled = !showHandled;
+        handledBtn.classList.toggle('on', showHandled);
+        handledBtn.title = showHandled
+          ? '正在显示已被人工审核掉的条目——点此折叠'
+          : '自动审核没审掉、后来被你人工审核掉的标本默认折叠不显示（它们已经不是待办了）——点此可临时查看';
+        render();
+      });
+    }
 
     // 8.9.8: 可折叠区块（运行状态 / 标本记录）——点击头部整行切换。
     // 8.9.11: 每次打开弹窗都重置为默认——运行状态收起、标本记录展开，不再跨会话持久化。
