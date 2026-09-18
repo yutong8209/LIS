@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.5
+// @version      8.17.6
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -256,29 +256,39 @@
   // 注意：crypto.subtle 仅在 secure context（HTTPS 或 localhost）下可用。
   // 非安全上下文（如 http://10.x.x.x）会自动回退到 base64。
   const _cryptoAvailable = !!(typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.importKey);
-  let _cryptoKey = null;
-  let _cryptoKeyUid = null;
+  // 8.17.6: 密钥缓存由「单槽」改为 Map（keyId → CryptoKey）。
+  // 原来只缓存最后一把（`_cryptoKey` / `_cryptoKeyUid` 各一个槽位），而
+  //   · `caAccountsAll()` 会按「ca:用户名」**逐个账号**派生密钥去解密（PBKDF2 10 万轮，
+  //      单次实测约 50~200ms，且同步阻塞主线程）；
+  //   · 旧单密码兜底 `loadCAPwdAsync()` 用的是 uid() 这把密钥。
+  // 于是 N 个账号就要 N 次派生、且与 uid() 那把互相踢缓存 —— 每轮 CA 认证（**每个工作组各一次**）
+  // 都重来一遍；更糟的是 `updateCaUserBadge()`（工作台每次重绘、含 30s 自动刷新）都会走
+  // `caDefaultAccount() → caAccountsAll()`，等于**每 30 秒在后台烧掉 N 次 PBKDF2**。
+  // 这就是现场「CA 认证有时候要耽误好几秒」以及偶发卡顿的主因之一。
+  // 改成 Map 后：每个 keyId 只在本次页面会话里派生一次，之后 O(1) 命中。
+  const _cryptoKeyCache = new Map();
   // 8.5.82: keyId 参数——多账号存储（K.caAccounts）按「ca:用户名」派生密钥，
   // 否则密钥绑「当前登录 uid」：换登录用户后所有已存 CA 账号密码静默解密失败。
   // 不传 keyId 时保持原语义（uid()），K.pwd 等单值存储行为不变
   async function getCryptoKey(keyId) {
     if (!_cryptoAvailable) {return null;}
     const kid = keyId === undefined ? uid() : String(keyId);
-    if (_cryptoKey && _cryptoKeyUid === kid) {return _cryptoKey;}
+    const cached = _cryptoKeyCache.get(kid);
+    if (cached) {return cached;}
     try {
       const enc = new TextEncoder();
       // key material 加入 keyId 使每个用户/每条账号记录的密钥不同，避免同 origin 共享密钥
       const seed = enc.encode('lis-enhancer-v8-salt-' + kid);
       const km = await crypto.subtle.importKey('raw', seed, 'PBKDF2', false, ['deriveKey']);
-      _cryptoKey = await crypto.subtle.deriveKey(
+      const key = await crypto.subtle.deriveKey(
         { name: 'PBKDF2', salt: enc.encode(location.origin), iterations: 100000, hash: 'SHA-256' },
         km,
         { name: 'AES-GCM', length: 256 },
         false,
         ['encrypt', 'decrypt']
       );
-      _cryptoKeyUid = kid;
-      return _cryptoKey;
+      _cryptoKeyCache.set(kid, key);
+      return key;
     } catch (e) {
       return null;
     }
@@ -13302,8 +13312,8 @@ window.addEventListener('keydown',function(e){
     if (!preStatus4 && verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
     // 延迟二次校验：原生状态回写可能有延迟，做短轮询早退；深层兜底由外层 confirmAuditEventuallyLive 处理
     if (!result && !abortCheck()) {
-      for (let _dv = 0; _dv < 4 && !abortCheck(); _dv++) {
-        await sleep(120);
+      // 8.17.6: 先校验再等待（原实现首轮盲等 120ms）；轮数 4→5 保证总窗口仍是 4×120ms
+      for (let _dv = 0; _dv < 5 && !abortCheck(); _dv++) {
         iframeWin = getReportIframeWin() || iframeWin;
         if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
             softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 })) {
@@ -13311,6 +13321,7 @@ window.addEventListener('keydown',function(e){
           closeNativeAuditSuccessMessage(iframeWin);
           return true;
         }
+        await sleep(120);
       }
     }
     // 最终返回前也关闭可能残留的原生弹窗
@@ -13383,8 +13394,8 @@ window.addEventListener('keydown',function(e){
   async function confirmAuditEventuallyLive(iframeWin, reportDR, specimen) {
     // 8.5.53: 复检标本（审核前 status 4）verify 只认状态变 3
     const pre4 = String(specimen.Status || specimen.ReportStatus || '') === '4';
-    for (let _dv = 0; _dv < 6; _dv++) {
-      await sleep(150);
+    // 8.17.6: 先校验再等待（原实现首轮盲等 150ms）；轮数 6→7 保证总窗口仍是 6×150ms
+    for (let _dv = 0; _dv < 7; _dv++) {
       iframeWin = getReportIframeWin() || iframeWin;
       handleNativeMessageConfirm(iframeWin);
       if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !pre4 }) ||
@@ -13392,6 +13403,7 @@ window.addEventListener('keydown',function(e){
         dbg('审核延迟确认成功（原生状态）:', specimen.PatName);
         return true;
       }
+      await sleep(150);
     }
     // 刷新 wsData 后再检查状态（审核期间轮询已停止）。
     // 分类进行中 force:false 会被跳过（8.5.4），重试等分类完成，
@@ -19341,6 +19353,34 @@ window.addEventListener('keydown',function(e){
     } catch (e) {}
   }
 
+  // 8.17.6: 「capping 表单已经可见」判定——与 ensureCappingFormVisible 的三个提前返回同口径。
+  // 用于跳过「只有真的点了切换才需要」的固定 280ms 等待（表单本来就在 capping 页时那是纯浪费）。
+  function isCappingFormVisible(caDoc) {
+    if (!caDoc) {return false;}
+    try {
+      const pwd = caDoc.getElementById('txt_Password');
+      const divCap = caDoc.getElementById('Div_Caping');
+      if (divCap) {
+        const st = (divCap.style && divCap.style.display) || '';
+        if (st && st !== 'none') {return true;}
+        try {
+          if (caDoc.defaultView && caDoc.defaultView.getComputedStyle) {
+            const cs = caDoc.defaultView.getComputedStyle(divCap);
+            if (cs && cs.display !== 'none' && cs.visibility !== 'hidden') {return true;}
+          }
+        } catch (e) {}
+      }
+      if (pwd) {
+        const r = pwd.getBoundingClientRect ? pwd.getBoundingClientRect() : null;
+        if (r && r.width > 0 && r.height > 0) {return true;}
+        if (pwd.offsetParent !== null) {return true;}
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // 只在二维码界面时切到 capping；已在 capping 时禁止再点（点了会切回二维码）
   function ensureCappingFormVisible(caDoc) {
     if (!caDoc) {return false;}
@@ -19503,8 +19543,14 @@ window.addEventListener('keydown',function(e){
       if (!caDoc) {caDoc = doc;}
 
       try {
-        ensureCappingFormVisible(caDoc);
-        await sleep(280);
+        // 8.17.6: 表单本来就在 capping 页 → 不必点切换、也就不必等那固定 280ms
+        //（原实现无条件 sleep(280)，这是每轮 CA 认证里最大的一笔纯等待）
+        if (isCappingFormVisible(caDoc)) {
+          dbg('CA: capping 表单已就绪，跳过切换等待（-280ms）');
+        } else {
+          ensureCappingFormVisible(caDoc);
+          await sleep(280);
+        }
         caDoc = getCAIframeDoc(iframeWin) || caDoc;
 
         let userInput = caDoc.getElementById('txt_UserCode') || caDoc.querySelector('input[id*="UserCode"]');
@@ -19571,8 +19617,10 @@ window.addEventListener('keydown',function(e){
         // CapingLogin 成功后会：写 Ukey → eval(FuncStr=ReportSave) → window.close
         // ReportSave 可能较慢，故成功以 Ukey 为准，不必等窗关
         let sawPwdError = false;
-        for (let i = 0; i < (fast ? 80 : 120); i++) {
-          await sleep(150);
+        // 8.17.6: ① 先校验再等待（原来首轮盲等 150ms 才看第一眼，而 capping 快时 Ukey 早就写好了）；
+        //   ② 间隔 150→100ms 让成功早退更快；③ 轮数 80/120→120/180 把总等待窗口
+        //   （12s / 18s）**原样保持**——不能靠缩窗口换速度，原生 CA 慢时会被误判失败。
+        for (let i = 0; i < (fast ? 120 : 180); i++) {
           if (anyCAUkeyPresent(iframeWin) || isCASessionReady(iframeWin)) {
             // 给原生 FuncStr(ReportSave) 一点时间跑完，再强制关残留窗
             await sleep(200);
@@ -19608,6 +19656,7 @@ window.addEventListener('keydown',function(e){
             }
           } catch (e) {}
           if (Date.now() > deadline) {break;}
+          await sleep(100);
         }
 
         if (sawPwdError) {
@@ -23675,27 +23724,27 @@ window.addEventListener('keydown',function(e){
         preStatus4: _salvagePre4,
         targetReportDR: item.reportDR
       });
-      if (!result) {
-        await sleep(300);
+      // 8.17.6: 三处「先盲等再校验」改成「先校验再等」——原生其实已审成功时，
+      // 原实现要多等 300 / 800 / 1800ms 才发现。退避总时长不变，只是把校验提前到每段之前。
+      const _verifySalvage = () => {
         iframeWin = getReportIframeWin() || iframeWin;
         handleNativeMessageConfirm(iframeWin);
-        result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
-                softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
+        return verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
+               softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
+      };
+      if (!result) {result = _verifySalvage();}
+      if (!result) {
+        await sleep(300);
+        result = _verifySalvage();
       }
       if (!result) {
         await sleep(500);
-        iframeWin = getReportIframeWin() || iframeWin;
-        handleNativeMessageConfirm(iframeWin);
-        result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
-                softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
+        result = _verifySalvage();
       }
       // 最终延迟校验
       if (!result) {
         await sleep(1000);
-        iframeWin = getReportIframeWin() || iframeWin;
-        handleNativeMessageConfirm(iframeWin);
-        result = verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
-                 softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
+        result = _verifySalvage();
       }
       if (result) {closeNativeAuditSuccessMessage(iframeWin);}
       return { ok: !!result, iframeWin };
@@ -24450,8 +24499,10 @@ window.addEventListener('keydown',function(e){
             // 延迟校验：原生状态回写可能有 1~2s 延迟
             // 8.5.35: 改 250ms 轮询早退（成功即返回），不再固定白等 1.5s 只验一次
             let delayedOK = false;
-            for (let _dv = 0; _dv < 6; _dv++) {
-              await sleep(250);
+            // 8.17.6: 先校验再等待——原来每轮先盲等 250ms 才看第一眼，原生只是回写慢一点时
+            // 白等 250ms。总窗口 6×250=1500ms → 13×120≈1560ms，**不缩水**（窗口缩了会把
+            // 已审成功的标本误判成失败 → 假留人工，那是医疗安全问题）。
+            for (let _dv = 0; _dv < 13; _dv++) {
               iframeWin = getReportIframeWin() || iframeWin;
               handleNativeMessageConfirm(iframeWin);
               if (
@@ -24461,6 +24512,7 @@ window.addEventListener('keydown',function(e){
                 delayedOK = true;
                 break;
               }
+              await sleep(120);
             }
             if (delayedOK) {
               dbg('批审延迟校验成功:', item.reportDR);
