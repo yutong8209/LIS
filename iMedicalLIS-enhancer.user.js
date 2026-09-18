@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.36
-// @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
+// @version      8.17.0
+// @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
 // @match        http://192.168.31.111:9111/iMedicalLIS/*
@@ -74,6 +74,26 @@
   WG_EXPORT.forEach(w => {
     WG_MAP[w.dr] = w;
   });
+
+  // 8.17.0: 审核工作台工作组全集 = 自检组(临检/生化/免疫) + 外送(dr=5，组内仅一台仪器「外送标本」)。
+  // 外送在工作台里是**纯追踪**性质：只显示「待排 / 采集」两种状态，标本一旦录入结果
+  // （不完整 / 待审 / 已审 / 取消）即从工作台所有视图与统计中消失——外送由第三方出报告，
+  // 本科室不审核，留在审核队列里只会干扰批审与推送。
+  // 实现三处兜底（改任何一处都要同步看另两处）：
+  //   ① applyResults 入库过滤：非待排/采集的外送行根本不进 wsData；
+  //   ② getWSAuditBucket：外送非待排/采集一律返回 'audited'（各分类视图不显示）；
+  //   ③ classifyAllSpecimens：外送行不参与结果分类（省请求，且不产生分类缓存）。
+  // 质控导出另有一份硬编码工作组列表（qeGetAllMachines），不受此常量影响。
+  const WS_WG = WG.concat(WG_EXPORT_ONLY);
+  const WS_EXTERNAL_WG_SET = new Set(WG_EXPORT_ONLY.map(w => String(w.dr)));
+  function isExternalWSWorkGroup(dr) {
+    return WS_EXTERNAL_WG_SET.has(String(dr || ''));
+  }
+  // 外送行是否「仍在追踪范围」：待排(0) / 采集(9)。其余状态（有结果、已审、取消）一律丢弃
+  function isExternalTrackableRow(r) {
+    const st = String((r && (r.Status || r.ReportStatus)) || '');
+    return st === '0' || st === '9';
+  }
 
   const REFRESH = 30000;
   const K = {
@@ -8664,8 +8684,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const selected = getWSSelectedMachineSet(wsActiveWG);
       if (selected.size > 0) {return selected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));}
     } else {
-      // 全部工作组模式：只要有任何组勾选了仪器，就只显示被勾选的
-      const anySelected = WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
+      // 全部工作组模式：只要有任何组勾选了仪器，就只显示被勾选的（含外送组）
+      const anySelected = WS_WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
       if (anySelected) {
         const wgSelected = getWSSelectedMachineSet(row._wg || '');
         return wgSelected.size > 0 && wgSelected.has(String(row._mdr || prWorkGroupMachineDR(row) || ''));
@@ -8698,8 +8718,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const sel = new Set((scope.byWG && scope.byWG[scope.wg]) || []);
       return sel.size > 0 ? sel.has(mdr) : true;
     }
-    // 全部工作组模式
-    const anySelected = WG.some(w => ((scope.byWG && scope.byWG[w.dr]) || []).length > 0);
+    // 全部工作组模式（含外送组）
+    const anySelected = WS_WG.some(w => ((scope.byWG && scope.byWG[w.dr]) || []).length > 0);
     if (anySelected) {
       const wgSel = new Set((scope.byWG && scope.byWG[row._wg || '']) || []);
       return wgSel.size > 0 && wgSel.has(mdr);
@@ -8846,6 +8866,11 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     wsActiveMachine = state.mdr;
     wsSelectedMachinesByWG = normalizeWSMachineFilterState(state.multiMdr || {});
     wsActiveDate = state.date || ''; // 8.7.0: 恢复查看日期
+    // 8.17.0: 恢复出的「外送组 + 待审/不完整」组合是死路（外送恒为空）——归一到「待排」，
+    // 避免重开工作台停在一个永远空白的分类上（与工作组标签点击时的归一逻辑一致）
+    if (isExternalWSWorkGroup(wsActiveWG) && (wsCategory === 'audit' || wsCategory === 'incomplete')) {
+      wsCategory = 'pending';
+    }
     if (wsActiveWG && wsActiveMachine && !getWSSelectedMachineSet(wsActiveWG).size) {
       setWSSelectedMachineSet(wsActiveWG, new Set([String(wsActiveMachine)]));
       wsActiveMachine = '';
@@ -9326,6 +9351,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           allData = allData.filter(r => !_wsLocalRemoved.has(String(r.ReportDR)));
           if (allData.length !== _removedCnt) {dbg('[WS] 剔除刷新期间已本地审核的标本:', _removedCnt - allData.length, '条');}
         }
+        // 8.17.0: 外送组入库过滤——只保留「待排/采集」，其余状态（已录入结果/已审/取消）直接丢弃。
+        // 放在入库这一层而不是各视图里过滤：这样计数、分类、自动审核「在跑」判定、菜单栏推送
+        // 全都天然看不到外送已出结果的标本，不必逐处打补丁。
+        if (allData.some(r => isExternalWSWorkGroup(r._wg))) {
+          const _extBefore = allData.length;
+          allData = allData.filter(r => !isExternalWSWorkGroup(r._wg) || isExternalTrackableRow(r));
+          const _extDrop = _extBefore - allData.length;
+          if (_extDrop > 0) {dbg('[WS] 外送组剔除已出结果标本:', _extDrop, '条（外送只追踪待排/采集）');}
+        }
         wsData = allData;
         // 8.5.82: 全量阶段存在失败仪器/组 → partial 置位（自动审核闸门暂停，防漏审）且不刷新 lastFullSuccessAt
         const _machinesUnhealthy = !partial && failedMachineNames.length > 0;
@@ -9375,7 +9409,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       }
 
       // 8.10.10: 全工作组统一并行拉取，一次性原子渲染——彻底消除分阶段 partial 渲染造成的界面闪烁与跳动
-      const wgResults = await Promise.all(WG.map(w => loadOneWG(w)));
+      // 8.17.0: WS_WG = 自检组 + 外送（外送仅一台仪器，多 3 个请求：机器列表 + 工作列表 + 待排/采集）
+      const wgResults = await Promise.all(WS_WG.map(w => loadOneWG(w)));
       if (seq !== _wsLoadSeq) {return;}
       if (!isWSVisible()) {return;}
       if (!applyResults(wgResults, false)) {
@@ -9964,6 +9999,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   function getWSAuditBucket(r) {
     const status = String(r.Status || r.ReportStatus || '');
+    // 8.17.0: 外送组（dr=5，仅一台「外送标本」仪器）——只追踪待排/采集，不做审核。
+    // 外送报告由第三方出具，本科室不审核：标本一旦录入结果即从工作台消失（返回 'audited'
+    // 与已审同等隐藏，各分类视图均不显示；正常入库路径已在 applyResults 直接丢弃这些行，
+    // 这里是兜底——详情/历史/导出等非工作台来源也可能把外送行喂进来）。
+    if (isExternalWSWorkGroup(r._wg)) {
+      if (status === '0') {return 'pending';}
+      if (status === '9') {return 'collected';}
+      return 'audited';
+    }
     if (status === '5') {
       // 8.10.0: 已取消标本一律不可审——此前只挡 3/0/9，取消标本若 IsComplete='1'
       // 且分类 NORMAL 会混入待审视图/批审队列，存在误审已取消报告的风险
@@ -10171,9 +10215,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (wsActiveWG) {
       machineFilterKey = [...wsMachineFilterSetForActiveWG()].sort().join(',');
     } else {
-      // 全部工作组：汇总所有组的选中仪器
+      // 全部工作组：汇总所有组的选中仪器（含外送）
       const allSel = [];
-      WG.forEach(w => {
+      WS_WG.forEach(w => {
         const s = getWSSelectedMachineSet(w.dr);
         if (s.size) {allSel.push(w.dr + ':' + [...s].sort().join(','));}
       });
@@ -10203,7 +10247,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       });
     }
     // 工作组 + 仪器过滤
-    if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
+    if (wsActiveWG || wsActiveMachine || WS_WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
     {d = d.filter(rowPassWSMachineFilter);}
     // 分类过滤
     if (wsCategory === 'audit') {
@@ -10310,7 +10354,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       machineFilterKey = [...wsMachineFilterSetForActiveWG()].sort().join(',');
     } else {
       const allSel = [];
-      WG.forEach(w => {
+      WS_WG.forEach(w => {
         const s = getWSSelectedMachineSet(w.dr);
         if (s.size) {allSel.push(w.dr + ':' + [...s].sort().join(','));}
       });
@@ -10321,9 +10365,9 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       wsData.length + '|' + wsActiveWG + '|' + machineFilterKey;
     if (_countsCache && _countsCacheKey === ck) {return _countsCache;}
 
-    // 工作组计数
+    // 工作组计数（含外送：其 total = 待排 + 采集，见 getWSAuditBucket 的外送分支）
     const wgCounts = {};
-    WG.forEach(w => {
+    WS_WG.forEach(w => {
       wgCounts[w.dr] = { total: 0, normalReady: 0, abnormalReady: 0, incomplete: 0 };
     });
     // 分类计数（基于当前过滤）
@@ -10335,7 +10379,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // 此前 renderWSCategoryBar 对全量 wsData 又单独跑一遍 getWSAuditBucket
     let fTotal = 0, fNormal = 0, fAbnormal = 0, fIncomplete = 0, fPending = 0, fCollected = 0;
     let fMild = 0; // 8.12.0: 当前过滤范围内可被 F4 一并批审的轻微异常条数
-    const _machFilterActive = !!(wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0));
+    const _machFilterActive = !!(wsActiveWG || wsActiveMachine || WS_WG.some(w => getWSSelectedMachineSet(w.dr).size > 0));
     // 全部仪器汇总
     const machCounts = {};
     machCounts['_all'] = { total: 0, normalReady: 0, abnormalReady: 0, incomplete: 0 };
@@ -10509,7 +10553,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         const c = wgCounts[wg] || { total: 0 };
         if (tEl) {tEl.textContent = c.total;}
       } else {
-        const totalAll = WG.reduce((s, w) => s + (wgCounts[w.dr]?.total || 0), 0);
+        // 8.17.0: 「全部」标签合计 = 自检组 + 外送（外送计入其待排/采集数）
+        const totalAll = WS_WG.reduce((s, w) => s + (wgCounts[w.dr]?.total || 0), 0);
         if (tEl) {tEl.textContent = totalAll;}
       }
     });
@@ -10665,8 +10710,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   function buildWSTabsDOM(tabs, wgCounts, mc) {
     let wgHTML = '';
-    WG.forEach(w => {
-      wgHTML += `<button class="ws-wg-tab" data-wg="${w.dr}"><span class="ws-tab-name">${w.name}</span><span class="mach-cnt ws-cnt-total"></span></button>`;
+    // 8.17.0: 工作组标签含外送——外送只统计「待排 + 采集」，悬停有说明
+    WS_WG.forEach(w => {
+      const _tip = isExternalWSWorkGroup(w.dr)
+        ? ' title="外送标本：只追踪「待排 / 采集」；录入结果后自动从工作台消失（第三方出报告，本科室不审核）"'
+        : '';
+      wgHTML += `<button class="ws-wg-tab" data-wg="${w.dr}"${_tip}><span class="ws-tab-name">${w.name}</span><span class="mach-cnt ws-cnt-total"></span></button>`;
     });
     wgHTML += '<button class="ws-wg-tab" data-wg=""><span class="ws-tab-name">全部</span><span class="mach-cnt ws-cnt-total"></span></button>';
 
@@ -10698,8 +10747,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
                 <span class="ws-tab-name">全部仪器</span>
                 <span class="mach-cnt ws-cnt-mach"></span>
             </button>`;
-      // 全部工作组下：按工作组折叠为下拉菜单，支持跨组快速勾选仪器
-      WG.forEach(w => {
+      // 全部工作组下：按工作组折叠为下拉菜单，支持跨组快速勾选仪器（含外送组）
+      WS_WG.forEach(w => {
         const wgMachines = sortWSMachines(wsMachines.filter(m => m._wg === w.dr));
         if (!wgMachines.length) {return;}
         const selSet = getWSSelectedMachineSet(w.dr);
@@ -10829,9 +10878,14 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         wsActiveWG = b.dataset.wg;
         wsActiveMachine = '';
         if (wsActiveWG) {
-          WG.forEach(w => {
+          WS_WG.forEach(w => {
             if (String(w.dr) !== String(wsActiveWG)) {delete wsSelectedMachinesByWG[String(w.dr)];}
           });
+        }
+        // 8.17.0: 切到外送组时，若当前停在「待审/不完整」（外送恒为空，看着像坏了）→ 自动落到「待排」，
+        // 让用户一眼看到外送还有哪些没做。外送组只有待排/采集两种状态，其余分类视图对它永远是空的。
+        if (isExternalWSWorkGroup(wsActiveWG) && (wsCategory === 'audit' || wsCategory === 'incomplete')) {
+          wsCategory = 'pending';
         }
         wsAbnormalIndex = -1;
         wsChecked.clear();
@@ -10848,7 +10902,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       b.addEventListener('click', () => {
         invalidateCaches();
         if (wsActiveWG) {setWSSelectedMachineSet(wsActiveWG, new Set());}
-        else {WG.forEach(w => setWSSelectedMachineSet(w.dr, new Set()));}
+        else {WS_WG.forEach(w => setWSSelectedMachineSet(w.dr, new Set()));}
         wsActiveMachine = '';
         wsAbnormalIndex = -1;
         wsChecked.clear();
@@ -10895,15 +10949,15 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     if (allBtn) {
       const isOn = wsActiveWG
         ? getWSSelectedMachineSet(wsActiveWG).size === 0
-        : !WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
+        : !WS_WG.some(w => getWSSelectedMachineSet(w.dr).size > 0);
       allBtn.classList.toggle('on', isOn);
       const el = allBtn.querySelector('.ws-cnt-mach');
       if (el) {el.textContent = (mc['_all'] || { total: 0 }).total;}
     }
 
-    // 全部工作组下更新工作组下拉按钮文字与高亮态
+    // 全部工作组下更新工作组下拉按钮文字与高亮态（含外送组）
     if (!wsActiveWG) {
-      WG.forEach(w => {
+      WS_WG.forEach(w => {
         const btn = tabs.querySelector(`.ws-mach-wg-btn[data-wg="${w.dr}"]`);
         if (btn) {
           const selCount = getWSSelectedMachineSet(w.dr).size;
@@ -11066,7 +11120,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
       const anyMulti = Object.values(wsSelectedMachinesByWG || {}).some(s => s && s.length);
       return anyMulti ? '多工作组(自定义)' : '全部仪器';
     }
-    const wgName = wsActiveWG ? (WG.find(w => String(w.dr) === String(wsActiveWG)) || {}).name || wsActiveWG : '';
+    const wgName = wsActiveWG ? (WG_MAP[wsActiveWG] || {}).name || wsActiveWG : '';
     const sel = wsActiveWG ? [...wsMachineFilterSetForActiveWG()] : wsActiveMachine ? [wsActiveMachine] : [];
     if (!sel.length) {return wgName ? `${wgName}(全部仪器)` : '全部仪器';}
     if (sel.length === 1) {
@@ -11270,7 +11324,7 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         return false;
       }
       let currentFiltered = wsData;
-      if (wsActiveWG || wsActiveMachine || WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
+      if (wsActiveWG || wsActiveMachine || WS_WG.some(w => getWSSelectedMachineSet(w.dr).size > 0))
       {currentFiltered = currentFiltered.filter(rowPassWSMachineFilter);}
 
       let sourceData;
@@ -11960,9 +12014,9 @@ window.addEventListener('keydown',function(e){
         machineName = names.length <= 2 ? names.join('、') : `已选${selectedMachines.size}台仪器`;
       }
     } else {
-      // 全部工作组：汇总各组选中的仪器
+      // 全部工作组：汇总各组选中的仪器（含外送组）
       const allSel = [];
-      WG.forEach(w => {
+      WS_WG.forEach(w => {
         const s = getWSSelectedMachineSet(w.dr);
         if (s.size) {allSel.push({ wg: w.name, n: s.size });}
       });
@@ -20766,6 +20820,9 @@ window.addEventListener('keydown',function(e){
       const toClassify = wsData.filter(r => {
         const status = String(r.Status || r.ReportStatus || '');
         if (status === '3') {return false;}
+        // 8.17.0: 外送组不参与结果分类——外送只追踪待排/采集，不做审核，
+        // 拉明细纯属浪费请求（也会污染分类缓存与「分类完成」判定）
+        if (isExternalWSWorkGroup(r._wg)) {return false;}
         const complete = String(r.IsComplete || '');
         const isManual = isManualEntrySpecimen(r);
         if (complete !== '1' && !isManual) {return false;}
@@ -27245,10 +27302,10 @@ window.addEventListener('keydown',function(e){
         parts.push(sel.size === 0 ? '仪器：<b>全选</b>' : '仪器：' + [...sel].map(machineName).join('、'));
       } else {
         parts.push('工作组：<b>全部</b>');
-        const anySel = WG.some(w => selOf(w.dr).size > 0);
+        const anySel = WS_WG.some(w => selOf(w.dr).size > 0);
         if (anySel) {
           const groups = [];
-          WG.forEach(w => {
+          WS_WG.forEach(w => {
             const sel = selOf(w.dr);
             if (sel.size > 0) {
               groups.push('<b>' + esc((WG_MAP[w.dr] || {}).name || w.dr) + '</b>：' + [...sel].map(machineName).join('、'));
@@ -28915,8 +28972,8 @@ window.addEventListener('keydown',function(e){
     safeInit('injectToolbar', injectToolbar);
     safeInit('initReportEnhance', initReportEnhance);
     safeInit('initEMREnhance', initEMREnhance);
-    // 预热仪器缓存：提前加载所有工作组的仪器列表，打开工作台时秒返
-    WG.forEach(w => {
+    // 预热仪器缓存：提前加载所有工作组的仪器列表（含外送，仅 1 台），打开工作台时秒返
+    WS_WG.forEach(w => {
       loadMachines(w.dr).catch(() => {});
     });
     // 工作台内点刷新触发的整页重载后，自动重新打开工作台
