@@ -82,6 +82,7 @@ pip3 install -r ~/脚本/requirements.txt
 
 1. **Bump `@version`** — 任何对 `.user.js` 的修改都必须递增版本号（`8.0.8` → `8.0.9`），不管改动大小。**pre-commit 钩子会自动拦下没递增的提交**（换 vendor 文件同理，须同步更新脚本内 `VENDOR_SHA256`）
 2. **Commit**：中文说明，写清改了什么、为什么。**commit 后 post-commit 钩子会自动把 userscript + vendor scp 到科室 nginx 并 curl 回验版本**——失败自动留给下次提交重试，日志在 `.cache/nginx_sync.log`，跳过一次用 `LIS_NO_SYNC=1 git commit ...`，手动补跑 `bash hooks/sync-to-nginx.sh`
+   - ⚠️ **agent 发起的提交里，这条自动同步必然失败**：agent 的执行环境访问不了内网 LAN（连路由器 `192.168.31.1` 都不通，`No route to host`），日志会写「网关机不可达（不在科室网段或未开机）」——**这不是医院网络的问题，别去查网络、也别反复重试**。提交后必须明确告知用户，请他在自己的 Terminal 里补跑 `bash ~/脚本/hooks/sync-to-nginx.sh`（或双击 `同步脚本到nginx.command`）；同理 nginx 上的版本回验、LIS 抓包等内网动作都只能由用户执行。详见 `.workbuddy-ai/memory/MEMORY.md`。
 3. **Push**：`git push` 到 `origin/main`（不要只改本地，必须推送）
 4. **验证**：`curl -s http://localhost:8765/iMedicalLIS-enhancer.user.js | head -4` 确认 serve 返回的是新版本号；如果不是，重启 serve.py。nginx 同步结果看 `.cache/nginx_sync.log` / `.cache/nginx_sync_state`
 5. **手测**：至少 `HANDTEST.md` §1 批审 + §2 F4
