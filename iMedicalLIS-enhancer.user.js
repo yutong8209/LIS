@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.16.35
+// @version      8.16.36
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器 + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -18529,6 +18529,35 @@ window.addEventListener('keydown',function(e){
     return false;
   }
 
+  // 8.16.36: 原生错误/警告/不完整提示弹窗探测——阻断假成功判定，确保审核被原生弹窗驳回时绝不误报成功
+  function isNativeErrorAlertVisible(iframeWin) {
+    const repWin = getReportIframeWin();
+    const wins = [iframeWin, repWin, window];
+    const visited = new Set();
+    for (const win of wins) {
+      if (!win || visited.has(win)) {continue;}
+      visited.add(win);
+      try {
+        const doc = win.document;
+        if (!doc) {continue;}
+        const allWins = doc.querySelectorAll('.messager-window:not([style*="display: none"])');
+        for (const w of allWins) {
+          if (w.offsetParent !== null) {
+            const body = w.querySelector('.messager-body, .panel-body');
+            if (body) {
+              const text = (body.textContent || '').trim();
+              if (isIgnorableNativeStatException(text)) {continue;}
+              const kind = classifyNativeMessage(text);
+              if (kind === 'failure' || kind === 'incomplete') {return true;}
+            }
+            if (w.querySelector('.messager-error, .messager-warning')) {return true;}
+          }
+        }
+      } catch (e) {}
+    }
+    return false;
+  }
+
   // 8.16.27 / 8.16.29: 自动确认原生审核提示弹窗（#win_MessageConfirm 及 messager 确认窗）
   // 现场根因：当标本存在异常/轻微异常项目时，原生 VerifyReportResult 会返回 MaintinArr，
   // 触发 DealInfoArr 打开 #win_MessageConfirm（"结果超出参考范围，确定要审核该报告吗？"），
@@ -19683,8 +19712,8 @@ window.addEventListener('keydown',function(e){
     handleNativeMessageConfirm(iframeWin);
 
     // 8.16.35: 原生 ReportSave 为同步执行 (async: false)，调用返回后若在内存中已确认成功，
-    // 且无错误确认窗拦截，立即判定成功早退，彻底消除 waitNativeActionResult 首轮盲等与 missingStableMs
-    if (auditTriggered && targetReportDR && !isNativeConfirmVisible(iframeWin)) {
+    // 8.16.36: 且无错误确认窗拦截与无原生错误弹窗阻断，立即判定成功早退，彻底消除 waitNativeActionResult 首轮盲等与 missingStableMs
+    if (auditTriggered && targetReportDR && !isNativeConfirmVisible(iframeWin) && !isNativeErrorAlertVisible(iframeWin)) {
       const _me = iframeWin.me;
       const deletedAsSuccess = !!(_me && Array.isArray(_me.DeleteReportArr) && _me.DeleteReportArr.some(id => String(id) === String(targetReportDR)));
       const status3AsSuccess = verifyAuditSucceededByReportDR(iframeWin, targetReportDR, { accept4: !preStatus4 });
@@ -23205,7 +23234,7 @@ window.addEventListener('keydown',function(e){
       // 临时暂存并清空机台下拉值，让原生 FindFast 走 0ms 纯本地收敛路径（G1），调用后立即恢复原机台值。
       let restoredMachineVal = null;
       const inLocalGrid = Array.isArray(iframeWin.me && iframeWin.me.GridSourceData) &&
-        iframeWin.me.GridSourceData.some(r => r && (String(r.ReportDR || '') === String(item.reportDR || '') || (labno && String(r.Labno || '') === labno)));
+        iframeWin.me.GridSourceData.some(r => r && (String(r.ReportDR || '') === String(item.reportDR || '') || (labno && String(r.Labno || '').toLowerCase() === labno.toLowerCase())));
       if (inLocalGrid) {
         try {
           const jq = iframeWin.jQuery || iframeWin.$;
@@ -23333,16 +23362,16 @@ window.addEventListener('keydown',function(e){
 
   async function prepareNextBatchItemAfterAudit(iframeWin, queue, currentItem) {
     const next = peekNextBatchItem(queue);
-    if (!next || !iframeWin || !iframeWin.me) {return false;}
-    if (String(next.mdr || '') !== String(currentItem.mdr || '')) {return false;}
+    if (!next || !iframeWin || !iframeWin.me) {return '';}
+    if (String(next.mdr || '') !== String(currentItem.mdr || '')) {return '';}
     const target = String(next.reportDR || '');
 
     // 1. 先快速检查 LIS 原生是否已自动跳到下一条
     try {
       const me = iframeWin.me;
       const sel = me && me.selectedGrid ? me.selectedGrid.datagrid('getSelected') : null;
-      if (sel && String(sel.ReportDR || '') === target) {return true;}
-      if (me && String(me.curReportDR || '') === target) {return true;}
+      if (sel && String(sel.ReportDR || '') === target) {return target;}
+      if (me && String(me.curReportDR || '') === target) {return target;}
     } catch (e) {}
 
     // 2. 8.16.35: 流水线预选——若原生未自动选中下一条，且下一条在本地内存全量数据中：
@@ -23352,13 +23381,13 @@ window.addEventListener('keydown',function(e){
     if (nextLabno && typeof iframeWin.FindFast === 'function' && typeof tryNativeFindFastSelect === 'function') {
       const me = iframeWin.me;
       const inLocal = Array.isArray(me && me.GridSourceData) &&
-        me.GridSourceData.some(r => r && (String(r.ReportDR || '') === target || String(r.Labno || '') === nextLabno));
+        me.GridSourceData.some(r => r && (String(r.ReportDR || '') === target || (nextLabno && String(r.Labno || '').toLowerCase() === nextLabno.toLowerCase())));
       if (inLocal) {
         try {
           const preSel = await tryNativeFindFastSelect(iframeWin, next, 300);
           if (preSel && preSel.ok) {
             dbg('批审流水线: 预选下一标本成功:', nextLabno, 'DR=' + target);
-            return true;
+            return target;
           }
         } catch (e) {}
       }
@@ -23372,13 +23401,13 @@ window.addEventListener('keydown',function(e){
         for (let i = 0; i < 2; i++) {
           await sleep(25);
           const sel2 = me.selectedGrid.datagrid('getSelected');
-          if (sel2 && String(sel2.ReportDR || '') === target) {return true;}
-          if (String(me.curReportDR || '') === target) {return true;}
+          if (sel2 && String(sel2.ReportDR || '') === target) {return target;}
+          if (String(me.curReportDR || '') === target) {return target;}
         }
       }
     } catch (e) {}
 
-    return false;
+    return '';
   }
 
   // opts.tech：技术性缺数据（明细未获取/详情为空）→ 记入 skipped 时打 _tech 标记，
@@ -23731,7 +23760,7 @@ window.addEventListener('keydown',function(e){
       let _salvageUnfinished = 0; // 8.16.31: 补审轮被中止时「未尝试」的条数——终态必须如实说明，不得误报全成功
       let batchLastMdr = '';
       let batchListFresh = false;
-      let batchSkipSelect = false;
+      let batchPreselectedDR = '';
       queue.caReadyByWg = queue.caReadyByWg || {};
 
       // 批审前对齐原生 ReportSave 的审核用户 + CA Ukey，避免每条重弹/空等
@@ -23858,6 +23887,8 @@ window.addEventListener('keydown',function(e){
 
         const item = currentQueueItem(queue);
         if (!item) {break;}
+        const isPreselectedItem = !!(batchPreselectedDR && batchPreselectedDR === String(item.reportDR));
+        batchPreselectedDR = '';
 
         // 8.7.0: 该标本登记日非今天 → 原生列表需要按其日期刷新（waitAndSelectNativeRow 内自动处理），
         // 并记录标记，队列结束后把原生日期框恢复回今天
@@ -24037,8 +24068,7 @@ window.addEventListener('keydown',function(e){
           }
           me.IsSaveSuccess = false; // 8.16.29: 逐条开始前复位保存成功标记
 
-          let selectedOk = batchSkipSelect;
-          batchSkipSelect = false;
+          let selectedOk = isPreselectedItem;
           let detailReady = false;
           if (selectedOk) {
             // LIS 自动跳到下一标本后正在异步加载详情，给短轮询（最长 300ms，就绪即退），避免立即丢弃选行重新触发点击
@@ -24281,9 +24311,12 @@ window.addEventListener('keydown',function(e){
             queue.caReadyByWg[itemWg] = true;
             // 8.5.54: 复检标本批审成功 → 记录「曾复审」
             if (_itemPre4) {recheckDoneAdd(item.reportDR);}
-            if (await prepareNextBatchItemAfterAudit(iframeWin, queue, item)) {
-              batchSkipSelect = true;
-              dbg('批审: LIS 已自动跳到下一标本，跳过下次选行');
+            const preselectedDR = await prepareNextBatchItemAfterAudit(iframeWin, queue, item);
+            if (preselectedDR) {
+              batchPreselectedDR = String(preselectedDR);
+              dbg('批审: 已预选下一标本，DR=' + batchPreselectedDR);
+            } else {
+              batchPreselectedDR = '';
             }
           } else {
             // 延迟校验：原生状态回写可能有 1~2s 延迟
