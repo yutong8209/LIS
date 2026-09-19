@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.18.1
+// @version      8.18.2
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -19395,7 +19395,22 @@ window.addEventListener('keydown',function(e){
         }
       }
 
-      // 8.5.82: ignoreMessages 只是「不据弹窗判结果」，失败/不完整弹窗仍要代为关闭（防遮罩残留连锁超时）
+      // 8.18.2: ⚠️ fail-closed 兜底——「必填项目未存数据」弹窗**绝不能走 ignoreMessages 的忽略路径**。
+      // ignoreMessages 的语义只是「不据弹窗判成功/失败」（防假失败横幅），但 incomplete 是
+      // **原生明确拒绝了这次审核**，必须立刻终止并交调用方记「留人工」。
+      // 为什么需要这道兜底：`handleNativeMessageConfirm` 只在「脚本审核中 + 目标匹配」时才代点取消并
+      // 返回 'incomplete'，**条件不满足时它只返回 false、把弹窗原样留着**；而下面的
+      // `closeNativeFailureDialogs` 会把弹窗关掉 → 下一轮 `isNativeConfirmVisible` 已看不到它 →
+      // 「目标行已稳定移出列表」就可能把这次**被原生拒绝**的审核误判成成功 → 漏审。
+      // 8.18.0 曾把这段删成「只 closeNativeFailureDialogs」，属于回退，这里恢复并收紧。
+      // 放在行状态/行消失判定**之前**，保证只要弹窗出现过就绝不会判成功。
+      if (isNativeConfirmVisible(iframeWin) || isNativeErrorAlertVisible(iframeWin)) {
+        if (readNativeMessageResult(doc, jq) === 'incomplete') {
+          dbg('waitNativeActionResult 检测到原生缺项弹窗（未被 handleNativeMessageConfirm 拦下）→ 返回 incomplete');
+          return 'incomplete';
+        }
+      }
+      // 8.5.82: ignoreMessages 只是「不据弹窗判结果」，失败弹窗仍要代为关闭（防遮罩残留连锁超时）
       if (ignoreMessages) {closeNativeFailureDialogs(doc, jq);}
       const msg = ignoreMessages ? '' : readNativeMessageResult(doc, jq);
       if (msg === 'success') {

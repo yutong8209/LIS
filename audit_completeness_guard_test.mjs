@@ -390,6 +390,41 @@ ok(/runAuditLeakCheck\(\{ force: true \}\)/.test(src), 'E5 批审收尾强制扫
 ok(/runAuditLeakCheck\(\)\.catch/.test(src), 'E5 工作台分类完成后顺带扫（带节流，失败静默）');
 ok(/AUDIT_LEAK_THROTTLE_MS = 3 \* 60 \* 1000/.test(src), 'E5 节流 3 分钟（克制请求量，别拖慢 LIS）');
 
+// E6. 8.18.2：所有「能审掉标本」的入口都必须要求分类为 NORMAL（明细有空项 → UNCERTAIN → 拦）
+//     这是全链路的核心防线：`buildClassificationFromItems` 把 hasEmptyResults/hasMissingMandatory
+//     映射成 overallStatus='UNCERTAIN'，而每个入口都要求 NORMAL 才放行。
+try {
+  const build = sliceNamedFn('buildClassificationFromItems');
+  ok(
+    /hasUncertain \|\| !hasComplete \|\| hasEmptyResults \|\| hasMissingMandatory/.test(build),
+    'E6 明细有空项/缺必填 → overallStatus 落 UNCERTAIN（核心映射）'
+  );
+  const cls = sliceNamedFn('isAutoAuditableClassified');
+  ok(/result\.status === 'NORMAL'/.test(cls), 'E6 isAutoAuditableClassified 只放行 NORMAL（主循环/补审轮用）');
+  const val = sliceNamedFn('validateAuditClassification');
+  ok(/live\.status === 'UNCERTAIN'/.test(val), 'E6 validateAuditClassification 拦 UNCERTAIN（回车/自动审核/详情用）');
+  ok(/live\.status !== 'NORMAL'/.test(val), 'E6 非 abnormal 上下文同样要求 NORMAL');
+} catch (e) {
+  ok(false, 'E6 切片失败：' + e.message);
+}
+
+// E7. 8.18.2：incomplete 弹窗必须 fail-closed——绝不能被 ignoreMessages 忽略后误判成功
+try {
+  const wait = sliceNamedFn('waitNativeActionResult');
+  // ⚠️ 锚点用 8.18.2 兜底分支独有的文案；不能用 `=== 'incomplete'`（那是 handleNativeMessageConfirm
+  // 那处先出现，会切错片段导致假失败）
+  const guardIdx = wait.indexOf('未被 handleNativeMessageConfirm 拦下');
+  ok(guardIdx > 0, 'E7 存在 incomplete 的 fail-closed 兜底分支');
+  ok(/return 'incomplete'/.test(wait), 'E7 检测到 incomplete 直接返回（不继续等，避免「行消失=成功」误判）');
+  const guard = wait.slice(Math.max(0, guardIdx - 900), guardIdx + 300);
+  ok(/isNativeConfirmVisible\(iframeWin\) \|\| isNativeErrorAlertVisible\(iframeWin\)/.test(guard),
+    'E7 兜底用「弹窗可见」判断，不依赖 _confirmAllowed（那会让弹窗无人处理）');
+  const closeIdx = wait.indexOf('if (ignoreMessages) {closeNativeFailureDialogs(doc, jq);}');
+  ok(closeIdx > 0 && guardIdx < closeIdx, 'E7 兜底排在 ignoreMessages 关弹窗**之前**（否则弹窗被关掉就检测不到）');
+} catch (e) {
+  ok(false, 'E7 切片失败：' + e.message);
+}
+
 /* ============ 汇总 ============ */
 console.log('\n────────────────────────────');
 console.log(`通过 ${pass} 项，失败 ${fail} 项`);

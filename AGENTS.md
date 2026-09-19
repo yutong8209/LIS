@@ -117,7 +117,16 @@ pip3 install -r ~/脚本/requirements.txt
   - **铁律：只告警、绝不干预审核**——不接任何闸门；查询失败返回 `null`（不下结论，绝不返回空数组假装「没问题」）。
   - 触发：批审收尾延迟 5s 强扫（`force`）+ 工作台分类完成后扫（**3 分钟节流**）+ 控制台 `lisScanAuditLeak()`。去重键 `LIS_AuditLeakSeen`。
   - ⚠️ `P5` 是否被服务端认，**本地无法验证**（Mac 连不到 LIS），首次现场必须按 `HANDTEST.md` §29.3 确认；即使不生效也只影响流量、不影响正确性（本地复核兜底）。
-  - 回归：`audit_completeness_guard_test.mjs` E 组（89 断言；8.18.0 反向验证应 9 项失败）。
+  - 回归：`audit_completeness_guard_test.mjs` E 组（97 断言；8.18.0 反向验证应 ≥11 项失败）。
+- **弹窗 fail-closed 兜底（8.18.2）**：`waitNativeActionResult` 里补回「检测到 incomplete 弹窗 → 立即返回 `'incomplete'`」，**必须排在 `if (ignoreMessages) closeNativeFailureDialogs(...)` 之前**。
+  - 为什么必须有：等待循环默认 `ignoreMessages:true`（语义只是「不据弹窗判成功/失败」，防假失败横幅），而 `handleNativeMessageConfirm` **只在「脚本审核中 + 目标匹配」时才代点取消并返回 `'incomplete'`；条件不满足时只返回 false、把弹窗原样留着**。8.18.0 把这里的 incomplete 检查删成「只关弹窗」→ 弹窗被 `closeNativeFailureDialogs` 关掉后，`isNativeConfirmVisible` 已看不到它 → 「目标行已稳定移出列表」就把**被原生拒绝的审核**误判成成功 → 漏审。**这是回退，已恢复。**
+  - 兜底判据用「弹窗可见」（`isNativeConfirmVisible || isNativeErrorAlertVisible`）而**不是** `_confirmAllowed`——后者会让弹窗无人处理。
+- **全链路核心防线是 `overallStatus`（改动前务必确认这条还成立）**：`buildClassificationFromItems` 里
+  `else if (hasUncertain || !hasComplete || hasEmptyResults || hasMissingMandatory) overallStatus = 'UNCERTAIN'`。
+  于是「明细有空项/缺必填」→ 分类落 `UNCERTAIN` → **所有审核入口都要求 `NORMAL`** 才放行：
+  `isAutoAuditableClassified`（F4 主循环 / 补审轮）、`validateAuditClassification`（回车 / 自动审核 / 详情面板）。
+  批审主循环每条还会 `fetchAndClassifySpecimen` **重取最新明细**（`_needFresh` + fail-closed `_freshOk`），
+  所以「批审期间 `stopWSRefresh()` 导致快照过期」这条老问题已被逐条复核覆盖。⚠️ 别把 `NORMAL` 这道要求改松。
 - **CA 密钥缓存必须是 Map，不能退回单槽（8.17.6）**：`getCryptoKey(keyId)` 按「ca:用户名」派生密钥（PBKDF2 **10 万轮，同步阻塞主线程，单次约 50~200ms**）。原来只缓存最后一把（`_cryptoKey`/`_cryptoKeyUid`），而 `caAccountsAll()` 会**逐个账号**解密 → 槽位互踢，N 个账号就是 N 次派生，每轮 CA 认证（每个工作组各一次）都重来；更糟的是 `updateCaUserBadge()`（工作台每次重绘、含 30s 自动刷新）也会走 `caDefaultAccount() → caAccountsAll()` → **每 30 秒在后台烧掉 N 次 PBKDF2**。现为 `const _cryptoKeyCache = new Map()`，每个 keyId 每会话只派生一次。⚠️ 别改成「一把全局密钥」——缓存键必须含 keyId，否则不同账号共用同一把密钥（安全问题）。回归：`node audit_latency_test.mjs`。
 - **延迟优化优先「先校验再等」，但窗口不许缩水（8.17.6 / 8.17.7）**：本项目多处「轮询确认」原来写成 `for (…){ await sleep(N); 校验; }` —— 原生其实已经成功时白等一个 N。改成先校验、把 sleep 放到循环末尾即可省下一次盲等。**但必须保持总窗口（轮数×间隔）≥ 原值**：窗口缩了会把「已审成功但回写慢」的标本误判成失败 → 假留人工，属于医疗安全问题。8.17.6 的四处改动（批审主循环 6×250→13×120、executeNativeAudit 4×120→5×120、confirmAuditEventuallyLive 6×150→7×150、补审 300/500/1000 前各加一次校验）与 8.17.7 的 CA 表单微轮询（7×40ms=280ms 保持窗口）都按这个规矩做。
 - **CA 认证全流程极速优化（8.17.7）**：在 8.17.6 Map 缓存基础上，彻底清空 `submitOnce` 中的死等待：①**消灭 post-login 500ms 硬盲等**（原来 `sleep(200)+sleep(300)`，现检测到 Ukey 时若原生已关窗直接 0ms 返回，若未关微轮询最多 80ms 自然关窗，后续 `ReportSave` 确认交由调用方已有重试链路接管，立省 420~500ms）；②**输入密码到点击登录从 200ms 压到 50ms**（DOM 同步分发，50ms 足够 EasyUI 同步，立省 150ms）；③**工作台启动时后台空闲预热**（`warmupCAAuthInBackground` 利用 `requestIdleCallback` 提前跑完 PBKDF2 派生放入 Map，用户首次点批审时 0ms 命中）。单次 CA 认证体感提速 550ms+。回归：`node audit_latency_test.mjs`（47 断言）。8.17.8 补一道**零开销**防御：点登录前同步校验账密框 `.value`、与预期不符即同步重设（读 `.value` 是同步属性访问，不引入任何等待），防「赋值未生效 → 空密码必败认证 → 夜间无人值守干等切换账号浮层 120s」。

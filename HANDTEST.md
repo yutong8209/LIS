@@ -1258,11 +1258,26 @@ curl http://192.168.31.111:9111/notify_status -H "Origin: http://192.168.31.111:
 | **绝不干预审核（关键，安全）** | 开启监测前后，批审/自动审核的**放行行为完全不变**——它只发告警，不接任何闸门 |
 | **红线拦截不变（关键，安全）** | 危急值 / 负值 / 梅毒丙肝艾滋阳性 / 心肌标志物 的拦截行为**完全未变** |
 
-### 29.4 回归
+### 29.4 弹窗 fail-closed 兜底（8.18.2）
+
+> 背景：`handleNativeMessageConfirm` 只在「脚本审核中 + 目标匹配」时才代点【取消】并返回 `'incomplete'`；
+> **条件不满足时它只返回 false、把弹窗原样留着**。而等待循环默认 `ignoreMessages:true`（不据弹窗判结果），
+> 8.18.0 又把那里的 incomplete 检查删成「只关弹窗」→ 弹窗被关掉后，「目标行已稳定移出列表」就可能把
+> **被原生拒绝的审核**误判成成功 → 漏审。8.18.2 补回 fail-closed 兜底。
+
+| 步骤 | 期望 |
+|------|------|
+| **被原生拒绝的审核绝不记成功（关键）** | 构造一条「明细缺项但 `IsComplete='1'`」的标本走批审 → 它应记为**留人工/跳过**，`queue.done` 里**不能有它** |
+| **弹窗出现即终止等待** | 日志（`dbg`）里能看到「检测到原生缺项弹窗（未被 handleNativeMessageConfirm 拦下）→ 返回 incomplete」 |
+| **不误报成功** | 该标本**不会**被 `markSpecimenAuditedInMem` 隐藏，工作台刷新后仍在 |
+| **不引入假失败** | 正常标本（无缺项弹窗）批审手感与之前一致，成功条数不变 |
+| **红线拦截不变（关键，安全）** | 危急值 / 负值 / 梅毒丙肝艾滋阳性 / 心肌标志物 的拦截行为**完全未变** |
+
+### 29.5 回归
 
 ```bash
-node audit_completeness_guard_test.mjs    # 89 断言
+node audit_completeness_guard_test.mjs    # 97 断言
 ```
 
-反向验证：`LIS_SRC=/tmp/old8180.user.js node audit_completeness_guard_test.mjs` → 必须 **9 项失败**
-（8.18.0 既没有监测模块，补审轮也还是 `!!result`）。
+反向验证：`LIS_SRC=/tmp/old8180.user.js node audit_completeness_guard_test.mjs` → 必须 **≥11 项失败**
+（8.18.0 既没有监测模块、没有 fail-closed 兜底，补审轮也还是 `!!result`）。
