@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.8
+// @version      8.17.9
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -8788,6 +8788,28 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return false;
   }
 
+  // 8.17.9: 结果完整度判定——**所有「能不能审」的完整度闸门都必须走这里**，返回 {ok, missing, reason}。
+  // 为什么单独抽出来：此前完整度判定散在四处（getWSAuditBucket / continueAuditQueue 逐条复核 /
+  // auditAbnormalSpecimen / 详情面板），而且**只返回布尔**——拦下之后现场只看到「结果不完整」四个字，
+  // 不知道缺几项、也不知道是哪一种不完整，没法判断该不该人工补审（现场「缺了三个项目竟然审掉了」
+  // 这条反馈里，最缺的就是这个可诊断性）。
+  // LIS 字段口径（用 cache/ 里真实 QryWorkList 响应核过：IsComplete='1' 81 条 / '0' 32 条 / '2' 27 条）：
+  //   IsComplete='1' → 完整（NoResRows 为空）
+  //   IsComplete='2' → 部分结果，NoResRows = **还缺几项**
+  //   IsComplete='0' → 无结果，   NoResRows = **该组合项目的项目总数**
+  // 手工录入仪器（H900/手工杂项）LIS 不置 IsComplete=1，走项级判定（8.10.23）。
+  function specimenCompleteness(row, cached = null) {
+    if (!row) {return {ok: false, missing: 0, reason: '标本已不在工作台数据中（可能已审核/已取消/超出查询范围）'};}
+    if (isSpecimenActuallyComplete(row, cached)) {return {ok: true, missing: 0, reason: ''};}
+    const ic = String(row.IsComplete === undefined || row.IsComplete === null ? '' : row.IsComplete);
+    const n = parseInt(String(row.NoResRows || ''), 10);
+    const missing = Number.isFinite(n) && n > 0 ? n : 0;
+    if (isManualEntrySpecimen(row)) {return {ok: false, missing, reason: '手工录入项目未录全'};}
+    if (ic === '2') {return {ok: false, missing, reason: '结果不完整（缺 ' + (missing || '若干') + ' 项）'};}
+    if (ic === '0') {return {ok: false, missing, reason: '无结果（应做 ' + (missing || '若干') + ' 项）'};}
+    return {ok: false, missing, reason: '完整度未知（IsComplete=' + (ic || '空') + '）'};
+  }
+
   // 8.10.2: 自动审核仪器黑名单——「手工杂项」与手工录入仪器（H900等）永不自动审核。
   // 理由：这类仪器下的标本靠人填写，LIS 不置 IsComplete=1 的居多，
   // 即使录入完整也绝不该由无人值守机器人代签。与勾选范围无关：即使快照是「全部工作组全部仪器」也一律排除。
@@ -15157,6 +15179,18 @@ window.addEventListener('keydown',function(e){
       const reportDR = specimen.ReportDR;
       // 详情里人工点审：按当前标本实时分类桶选上下文（不能依赖 detailSource——
       // 详情内自动跳转后 source 仍是旧标本的，会误拦正常标本为「已分类为正常」）
+      // 8.17.9: 详情面板「审核」按钮 / 面板内回车此前**完全没有完整度检查**（只有 collected/pending
+      // 早退和分类校验）。这里**不硬拦**——从详情面板手动点审核是「确需人工审核」的有意通道
+      // （见 HANDTEST §22：星号占位标本挪到不完整后仍可从详情手动审），硬拦会把这条通道锁死。
+      // 但要**明确提示 + 留痕**：现场「缺了三个项目竟然审掉了」就是缺这一句提醒。
+      try {
+        const _cmpD = specimenCompleteness(specimen, wsClassifiedCache[specimen.ReportDR]);
+        if (!_cmpD.ok) {
+          showToast('⚠️ 该标本' + _cmpD.reason + '，仍按人工判断审核', 'warning');
+          dbg('详情面板审核：完整度提示', specimen.Labno || reportDR, _cmpD.reason);
+        }
+      } catch (e) {}
+
       const classCtx = specimen && getWSAuditBucket(specimen) === 'normal' ? 'normal' : 'abnormal';
       const classCheck = validateAuditClassification(reportDR, classCtx);
       if (!classCheck.ok) {
@@ -23744,6 +23778,18 @@ window.addEventListener('keydown',function(e){
     }
     if (!ready) {return { ok: false, iframeWin, reason: 'detail' };}
 
+    // 8.17.9: 补审轮**同样**要过完整度闸门——此前补审拿到选行就直奔审核，
+    // 主循环里被完整度拦下的标本会在补审轮被原样放行（补审的语义是「救回未确认的」，
+    // 不是「绕过完整度」）。不通过就带着原因返回，由调用方留在 failed 里交人工。
+    {
+      const _rowS = resolveQueueItemRow(item) || findWSSpecimenByReportDR(item.reportDR) || queueItemNativeRow(item);
+      const _cmpS = specimenCompleteness(_rowS, wsClassifiedCache[item.reportDR]);
+      if (!_cmpS.ok) {
+        dbg('补审轮完整度闸门拦下:', item.labno || item.reportDR, _cmpS.reason);
+        return {ok: false, iframeWin, reason: '完整度复核：' + _cmpS.reason};
+      }
+    }
+
     const caReady = isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin);
     _auditingPreStatus4 = _salvagePre4; // 8.5.56: 让内部 verify/soft 兜底按复检语义判定
     _auditingCrossGroup = _salvageCrossGroup; // 8.16.25: 跨组时关闭「行消失=成功」
@@ -23806,6 +23852,72 @@ window.addEventListener('keydown',function(e){
     queue._autoMode = !!(options && options.auto);
     await continueAuditQueue(queue);
     return queue; // 8.5.58: 返回 queue 供自动审核统计 done/failed/skipped
+  }
+
+  // 8.17.9: 审核后自检——把这一批「成功审掉」的标本用**最新工作列表**复核一遍完整度。
+  // 返回不完整的条目数组（空数组 = 全部复核通过）。
+  // 设计取舍：
+  //   · 按仪器分组，每台只读一次工作列表（批量末尾一次，几十毫秒级），不逐条打接口；
+  //   · **读不到列表 / 标本已不在列表里 → 不下结论、不误报**（可能已出查询范围或已归档）；
+  //   · 只对「脚本刚审掉」的条目下结论，不做全量扫描。
+  async function verifyAuditedCompleteness(queue) {
+    const done = (queue && queue.done) || [];
+    if (!done.length) {return [];}
+    let qStart = today();
+    let qEnd = today();
+    try {
+      const rng = getWSQueryRange();
+      if (rng && rng.length === 2) {qStart = rng[0]; qEnd = rng[1];}
+    } catch (e) {}
+    const byMachine = new Map();
+    done.forEach(it => {
+      if (!it) {return;}
+      const mdr = String(it.mdr || (it.row && it.row._mdr) || '');
+      if (!mdr) {return;}
+      const wg = String(it.wg || (it.row && it.row._wg) || '');
+      const k = wg + '|' + mdr;
+      if (!byMachine.has(k)) {byMachine.set(k, {mdr, wg, items: []});}
+      byMachine.get(k).items.push(it);
+    });
+    const bad = [];
+    for (const grp of byMachine.values()) {
+      let rows = [];
+      try {
+        rows = await loadWL(grp.mdr, buildSS(grp.wg || wgDR()), qStart, qEnd);
+      } catch (e) {
+        dbg('审核后自检：工作列表读取失败，跳过该仪器', grp.mdr, e && e.message);
+        continue;
+      }
+      const byDR = new Map();
+      (rows || []).forEach(r => {if (r && r.ReportDR) {byDR.set(String(r.ReportDR), r);}});
+      grp.items.forEach(it => {
+        const r = byDR.get(String(it.reportDR || ''));
+        if (!r) {return;} // 已不在列表 → 不误报
+        const cmp = specimenCompleteness(r, null);
+        if (!cmp.ok) {
+          bad.push({dr: String(it.reportDR || ''), labno: it.labno || '', patName: it.name || '', reason: cmp.reason});
+        }
+      });
+    }
+    if (bad.length) {
+      const list = bad.slice(0, 5).map(b => (b.patName || '') + ' ' + (b.labno || '')).join('、');
+      const more = bad.length > 5 ? ' 等 ' + bad.length + ' 条' : '';
+      showToast('🚨 审核后自检：' + bad.length + ' 条刚审掉的标本结果不完整（' + list + more + '）——请立即在 LIS 核对！', 'error');
+      dbg('审核后自检发现不完整:', JSON.stringify(bad));
+      try {aaStateEventAdd('pause', '审核后自检：' + bad.length + ' 条已审标本结果不完整（' + list + more + '）');} catch (e) {}
+      try {
+        pushAutoAuditNotify({
+          title: '🚨 审核后自检：已审标本结果不完整',
+          body: bad.length + ' 条：' + list + more,
+          level: 'critical',
+          group: 'LIS危急告警',
+          sound: 'alarm'
+        });
+      } catch (e) {}
+    } else {
+      dbg('审核后自检通过:', done.length, '条');
+    }
+    return bad;
   }
 
   async function continueAuditQueue(queue) {
@@ -24123,12 +24235,21 @@ window.addEventListener('keydown',function(e){
           saveAuditQueueNow(queue);
           continue;
         }
-        if (liveRow && !isSpecimenActuallyComplete(liveRow)) {
-          queue.skipped.push({ ...item, reason: '结果不完整' });
-          _aaRecordQueueItem('留人工', item, '结果不完整');
+        // 8.17.9: 完整度复核改为 **fail-closed + 带原因**。
+        // 原来写的是 `if (liveRow && !isSpecimenActuallyComplete(liveRow))` —— liveRow 为空时
+        // **整条判定被静默跳过**（无活体行 = 跨整页刷新续跑 / 切组 / 批审中途工作台刷新把行挤掉），
+        // 等于「查不到就不查」。而漏结果审核恰恰最容易从这个洞钻过去。
+        // 现在：行在 → 按行判完整度并写明缺几项；行不在 → 也不放行（交给下面的分类重取路径
+        // 重取数据；重取也拿不到就按技术性缺数据 requeue/留人工）。
+        const _cmpEarly = specimenCompleteness(liveRow, wsClassifiedCache[item.reportDR]);
+        if (!_cmpEarly.ok && liveRow) {
+          const _reason = '审核前复核：' + _cmpEarly.reason;
+          queue.skipped.push({ ...item, reason: _reason });
+          _aaRecordQueueItem('留人工', item, _reason);
           skipCount++;
           queue.current++;
           saveAuditQueueNow(queue);
+          dbg('批审逐条复核拦下:', item.labno || item.reportDR, _reason);
           continue;
         }
         let liveClassified = getLiveClassification(item.reportDR);
@@ -24189,6 +24310,34 @@ window.addEventListener('keydown',function(e){
           queue.current++;
           saveAuditQueueNow(queue);
           continue;
+        }
+
+        // 8.17.9: **审核前最终闸门**——放在「最新分类已拿到」之后、真正点审核之前。
+        // 这是「漏结果审核」的最后一道拦网：无论前面哪一步放行过，这里再按**当前最新可用行**判一次完整度。
+        // fail-closed 语义：连行都拿不到（无法复核完整度）→ 按技术性缺数据 requeue（≤3 次）后进补审，
+        // **绝不凭旧数据放行**；行在但不完整 → 留人工，原因写明缺几项。
+        {
+          const _rowNow = liveRow || findWSSpecimenByReportDR(item.reportDR) || queueItemNativeRow(item);
+          const _cmp = specimenCompleteness(_rowNow, wsClassifiedCache[item.reportDR]);
+          if (!_cmp.ok) {
+            const _reason = '审核前复核：' + _cmp.reason;
+            if (!_rowNow) {
+              if (requeueAuditItem(queue, item, _reason, {tech: true})) {
+                dbg('批审最终闸门：' + _reason + '，放回队尾重试:', item.reportDR);
+              } else {
+                _aaRecordQueueItem('留人工', item, _reason);
+                skipCount++;
+              }
+            } else {
+              queue.skipped.push({ ...item, reason: _reason });
+              _aaRecordQueueItem('留人工', item, _reason);
+              skipCount++;
+            }
+            queue.current++;
+            saveAuditQueueNow(queue);
+            dbg('批审最终闸门拦下:', item.labno || item.reportDR, _reason);
+            continue;
+          }
         }
 
         // 8.5.10: 跨组标本判定与快速切组优化（选不到时才回退切组）
@@ -24652,7 +24801,9 @@ window.addEventListener('keydown',function(e){
               if (it.wg) {queue.caReadyByWg[it.wg] = true;}
             } else {
               stillFail.push(it);
-              _aaRecordQueueItem('留人工', it, '补审仍未确认');
+              // 8.17.9: 用审核函数返回的真实原因（例如「完整度复核：结果不完整（缺 3 项）」），
+              // 原来一律记「补审仍未确认」，现场看不出到底为什么没审掉
+              _aaRecordQueueItem('留人工', it, (r && r.reason) || '补审仍未确认');
             }
           }
           // 8.16.31: 未尝试的尾部并入「未完成」——保留 + 按 reportDR 去重，绝不静默丢弃。
@@ -24683,6 +24834,16 @@ window.addEventListener('keydown',function(e){
             skipCount = queue.skipped.length;
           }
         }
+      }
+
+      // 8.17.9: **审核后自检**——审完立刻用最新工作列表复核这一批刚审掉的标本是否仍完整。
+      // 为什么必须做：现场是「昨天审的标本今天才发现缺 3 项」。审核动作本身（原生 ReportSave）
+      // 或仪器补传/重传，都可能在审核后让报告变成不完整，而脚本此前审完就再也不看它了。
+      // 代价：每台仪器一次工作列表读（批量末尾一次），换来「当场发现」而不是「隔天发现」。
+      try {
+        await verifyAuditedCompleteness(queue);
+      } catch (e) {
+        dbg('审核后自检异常:', e && e.message);
       }
 
       const fill = document.getElementById('lis-prog-fill');
