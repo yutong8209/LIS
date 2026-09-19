@@ -223,6 +223,38 @@ const finalGateSrc = (() => {
 })();
 ok(!!finalGateSrc && !/short|expectedItem/.test(finalGateSrc), '审核前最终闸门的拦下条件里也没有 short/expectedItem');
 
+// A10. 原生缺项/未存数据弹窗主动取消与拦截（8.17.12）
+const clsMsgFn = sliceNamedFn('classifyNativeMessage');
+ok(/等必填项目|必填项目|未存数据|您还有项目/.test(clsMsgFn), 'classifyNativeMessage 识别原生缺项文案（等必填项目/未存数据/您还有项目等）');
+ok(/return 'incomplete'/.test(clsMsgFn), 'classifyNativeMessage 对缺项弹窗返回 incomplete');
+ok(/indexOf\('是否'\)[\s\S]*indexOf\('确定要'\)[\s\S]*indexOf\('？'\)/.test(clsMsgFn),
+  'classifyNativeMessage 判定 success 时严格排除疑问/确认句（？/是否/确定要）');
+
+const autoConfFn = sliceNamedFn('isAutoConfirmableNativeText');
+ok(!/是否确定.*审核/.test(autoConfFn), 'isAutoConfirmableNativeText 彻底删除 (是否确定 + 审核) 模糊规则（原 bug 根源）');
+ok(/classifyNativeMessage\(t\) === 'incomplete'/.test(autoConfFn), 'isAutoConfirmableNativeText 硬拦 incomplete 文本');
+ok(/必填|未存数据|未存|未检|缺|项目|您还有/.test(autoConfFn), 'isAutoConfirmableNativeText 显式拒绝项目/缺项/未存关键词');
+
+const closeSuccFn = sliceNamedFn('closeNativeAuditSuccessMessage');
+ok(!/text\.indexOf\('审核'\) !== -1/.test(closeSuccFn), 'closeNativeAuditSuccessMessage 彻底删除 text.indexOf("审核") 匹配（杜绝将"是否确定审核"误当成功）');
+ok(/kind === 'incomplete'/.test(closeSuccFn), 'closeNativeAuditSuccessMessage 对 incomplete 弹窗特殊处理');
+ok(/bText === '取消' \|\| bText === 'No' \|\| bText === '否'/.test(closeSuccFn), 'closeNativeAuditSuccessMessage 对 incomplete 弹窗主动按【取消】阻止审核');
+
+const handleConfFn = sliceNamedFn('handleNativeMessageConfirm');
+ok(/classifyNativeMessage\(infoText\) === 'incomplete'/.test(handleConfFn) || /classifyNativeMessage\(text\) === 'incomplete'/.test(handleConfFn),
+  'handleNativeMessageConfirm 识别并拦截 incomplete');
+ok(/return 'incomplete'/.test(handleConfFn), 'handleNativeMessageConfirm 拦截到 incomplete 时返回 incomplete');
+
+const mainLoopIncomplete = (() => {
+  const fnStartIdx = idxOf('async function continueAuditQueue');
+  const i = src.indexOf("auditResult === 'incomplete'", fnStartIdx);
+  return i < 0 ? '' : src.slice(i, i + 800);
+})();
+ok(!!mainLoopIncomplete, '批审主循环显式捕获 auditResult === "incomplete"');
+ok(/_aaRecordQueueItem\('留人工'/.test(mainLoopIncomplete), '批审拦截到 incomplete 立即记为留人工');
+ok(/showToast\(.*原生弹窗拦截.*error/.test(mainLoopIncomplete), '批审拦截到 incomplete 弹出红色告警 toast');
+ok(/pushAutoAuditNotify\([\s\S]*LIS危急告警/.test(mainLoopIncomplete), '批审拦截到 incomplete 发送手机告警');
+
 /* ============ B. 逻辑仿真：真实 specimenCompleteness ============ */
 section('B. 逻辑仿真（真实切片）');
 
@@ -455,6 +487,80 @@ function __setRaw(k, v) {__store[k] = v;}
   ok(Object.keys(E.expectedItemsLoad()).length === 0, 'D7 存储是 null → 也当空处理');
 } catch (e) {
   ok(false, '应有项数仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
+}
+
+/* ============ E. 逻辑仿真：原生缺项弹窗识别与防护（8.17.12） ============ */
+section('E. 逻辑仿真：原生缺项弹窗识别与防护（8.17.12）');
+
+try {
+  const stubE = `
+let _dbgLogs = [];
+function dbg(...args) { _dbgLogs.push(args.join(' ')); }
+`;
+  const modSrcE =
+    stubE + '\n' +
+    sliceNamedFn('classifyNativeMessage') + '\n' +
+    sliceNamedFn('isAutoConfirmableNativeText') + '\n' +
+    'export { classifyNativeMessage, isAutoConfirmableNativeText };\n';
+  const tmpPathE = path.join(HERE, '.cache', 'native_dialog_guard_engine.mjs');
+  fs.mkdirSync(path.dirname(tmpPathE), {recursive: true});
+  fs.writeFileSync(tmpPathE, modSrcE, 'utf8');
+  const D = await import('file://' + tmpPathE);
+
+  // E1. 现场真实验证：性激素/肌钙蛋白等缺项未存数据弹窗（事故截图原样）
+  const realIncidentPrompt = '您还有项目： 肌钙蛋白I*/等必填项目未存数据，是否确定审核？';
+  ok(D.classifyNativeMessage(realIncidentPrompt) === 'incomplete',
+    'E1 真实事故弹窗（肌钙蛋白I等必填项目未存数据）被判定为 incomplete');
+  ok(D.isAutoConfirmableNativeText(realIncidentPrompt) === false,
+    'E1 真实事故弹窗绝对不被 isAutoConfirmableNativeText 自动确认（返回 false）');
+
+  // E2. 性激素各类项目变体
+  const lhPrompt = '您还有项目： 促黄体生成素*/等必填项目未存数据，是否确定审核？';
+  const progPrompt = '您还有项目： 孕酮*/等必填项目未存数据，是否确定审核？';
+  const testPrompt = '您还有项目： 睾酮*/等必填项目未存数据，是否确定审核？';
+  ok(D.classifyNativeMessage(lhPrompt) === 'incomplete', 'E2 促黄体生成素缺项判定为 incomplete');
+  ok(D.classifyNativeMessage(progPrompt) === 'incomplete', 'E2 孕酮缺项判定为 incomplete');
+  ok(D.classifyNativeMessage(testPrompt) === 'incomplete', 'E2 睾酮缺项判定为 incomplete');
+  ok(!D.isAutoConfirmableNativeText(lhPrompt) && !D.isAutoConfirmableNativeText(progPrompt) && !D.isAutoConfirmableNativeText(testPrompt),
+    'E2 所有性激素缺项变体均不可自动确认');
+
+  // E3. 常见原生缺项文案变体
+  const variants = [
+    '您还有项目未录入，是否继续审核？',
+    '该标本存在未检项目，是否确认审核？',
+    '有必填项未存数据',
+    '项目未出全，是否审核？',
+    '缺少检验结果',
+    '结果不完整，确定要审核该报告吗？',
+    '结果为空，无法审核',
+    '无结果',
+    '未检验完成'
+  ];
+  for (const v of variants) {
+    ok(D.classifyNativeMessage(v) === 'incomplete', `E3 变体「${v.slice(0, 10)}...」识别为 incomplete`);
+    ok(D.isAutoConfirmableNativeText(v) === false, `E3 变体「${v.slice(0, 10)}...」不可自动确认`);
+  }
+
+  // E4. 疑问句、确认句、带问号的绝不当 success
+  ok(D.classifyNativeMessage('审核成功？') !== 'success', 'E4 带问号的审核成功不当 success');
+  ok(D.classifyNativeMessage('保存成功，是否确定审核？') !== 'success', 'E4 疑问句不当 success');
+  ok(D.classifyNativeMessage('操作成功，确定要保存吗？') !== 'success', 'E4 确认提示不当 success');
+
+  // E5. 真正的成功提示识别为 success
+  ok(D.classifyNativeMessage('审核成功') === 'success', 'E5 真正的审核成功返回 success');
+  ok(D.classifyNativeMessage('保存成功') === 'success', 'E5 保存成功返回 success');
+  ok(D.classifyNativeMessage('报告保存并审核成功') === 'success', 'E5 报告保存并审核成功返回 success');
+
+  // E6. 允许确认的超范围提示（非危急、非缺项）
+  const normalAbnormal = '结果超出参考范围，确定要审核该报告吗？';
+  ok(D.isAutoConfirmableNativeText(normalAbnormal) === true, 'E6 纯参考范围超标允许自动确认（既有规则保留）');
+  const normalAbnormalNoCrit = '结果超出参考范围（无危急值），确定要审核该报告吗？';
+  ok(D.isAutoConfirmableNativeText(normalAbnormalNoCrit) === true, 'E6 纯超范围且明确注明无危急值允许自动确认');
+  const normalCrit = '结果超出参考范围且含危急值，确定要审核该报告吗？';
+  ok(D.isAutoConfirmableNativeText(normalCrit) === false, 'E6 含危急值绝对不自动确认');
+
+} catch (e) {
+  ok(false, '原生缺项弹窗仿真切片/执行失败：' + e.message);
 }
 
 /* ============ 汇总 ============ */

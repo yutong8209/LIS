@@ -539,7 +539,8 @@ group('G5. 原生确认窗只允许「已知安全文案 + 脚本审核中 + 目
   );
 
   const c3 = buildCase({text: '结果不完整，确定要审核该报告吗？', targetDR: 'DR1', nativeDR: 'DR1', scriptOwns: true});
-  ok(c3.fired === false && c3.clicks === 0, '「结果不完整」不自动确认');
+  ok((c3.fired === false || c3.fired === 'incomplete') && c3.clicks === 0, '「结果不完整」不自动确认');
+  ok(c3.fired === 'incomplete', '「结果不完整」主动返回 incomplete 阻断信号');
 
   const c4 = buildCase({text: '系统将在 10 秒后自动注销，是否继续？', targetDR: 'DR1', nativeDR: 'DR1', scriptOwns: true});
   ok(c4.fired === false && c4.clicks === 0, '未知文案不自动确认（旧版照点）');
