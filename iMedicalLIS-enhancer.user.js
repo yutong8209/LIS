@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.18.0
+// @version      8.18.1
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -121,7 +121,8 @@
     mildLog: 'LIS_MildAuditLog', // 8.12.0: F4 轻微异常放行留痕（本地环形 500，不推送不进自动审核日志）
     mildRules: 'LIS_MildRuleOverrides', // 8.15.9: 轻微放行范围的人工覆盖（详情面板 ⚙ 可调；删掉即恢复默认）
     aaAck: 'LIS_AA_Ack', // 8.16.11: 待审里「已知晓」的标本（危急/无法自动审核）——不再进自动审核推送
-    humanAuditLog: 'LIS_HumanAuditLog' // 8.17.1: 当日人工审核留痕——把「机器人没审掉、后来人工审掉」的标本从徽章/待办里摘掉
+    humanAuditLog: 'LIS_HumanAuditLog', // 8.17.1: 当日人工审核留痕——把「机器人没审掉、后来人工审掉」的标本从徽章/待办里摘掉
+    auditLeakSeen: 'LIS_AuditLeakSeen' // 8.18.1: 漏结果审核监测的已告警去重（key = reportDR|完整度）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -9628,6 +9629,176 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     const data = await fetchJ(CSP + '?' + p.toString());
     return data && data.rows ? data.rows : Array.isArray(data) ? data : [];
   }
+
+  // ==================== 8.18.1: 漏结果审核实时监测 ====================
+  // 起因（用户提出）：LIS 右下角有「☆结果空 / ☆不完整 / ★完整」三个快速切换按钮。既然 LIS 自己就能
+  // 列出「结果空 / 不完整」的标本，那么**只要这些列表里出现「已经是审核状态」的标本，就是漏结果审核**——
+  // 可以实时预警，而不是等事后人工翻列表才发现。
+  //
+  // 为什么用 LIS 自己的口径（而不是脚本的分类缓存）：
+  //   ① 不依赖明细接口（脚本的 hasEmptyResults 要先拿到 GetReportInfoAll，拿不到就漏判）；
+  //   ② LIS 的 IsComplete 是**审核那一刻**由原生算好写库的
+  //      （cache/js/iMedicalLIS/lis/js/jsLisReportResultM.js:1434，ReportSave 时算 IsCompleteFlag）；
+  //      所以「已审核 + 结果空/不完整」基本不可能是脚本侧误判，而是**审核时就被放行了**；
+  //   ③ 过滤参数是原生自己在用的（同文件 4873 行 SearchByResultType → 服务端 P5=^<type>），
+  //      语义可靠，不用自己发明查询。
+  //
+  // ⚠️ 铁律：**只告警、绝不干预审核**——不接进任何闸门、不改任何放行判定；查询失败一律静默
+  //    （返回 null 表示"没查到、不下结论"，绝不返回空数组假装"没问题"）。
+  // ⚠️ 请求量克制：一次扫描 = 2 个 QryWorkList（^0 + ^2），默认节流 3 分钟（批审收尾可强制绕过）。
+  const AUDIT_LEAK_THROTTLE_MS = 3 * 60 * 1000;
+  let _auditLeakScanAt = 0;
+  let _auditLeakRunning = false;
+
+  // 按完整度拉工作列表：type '0'=结果空 / '1'=完整 / '2'=不完整（与原生 SearchByResultType 同口径）。
+  // P0='' → **全部状态**（含 Status='3' 已审核，这是能抓到漏审的关键）；P5='^<type>' → 完整度过滤。
+  // P10='' → 全部仪器。⚠️ 服务端若不认 P5（不过滤），返回的就是全部标本——调用方必须本地再筛一次，
+  //   本函数只负责"尽量少拉"，正确性由 scanAuditedIncompleteLeak 的本地复核保证。
+  async function loadWLByCompleteness(type, ss, dateStart, dateEnd) {
+    const p = new URLSearchParams();
+    p.set('ClassName', 'LIS.WS.BLL.DHCRPVisitNumberReportForCSP');
+    p.set('QueryName', 'QryWorkList');
+    p.set('FunModul', 'MTHD');
+    p.set('P0', '');
+    p.set('P1', dateStart || today());
+    p.set('P2', dateEnd || dateStart || today());
+    p.set('P5', '^' + type);
+    p.set('P10', '');
+    p.set('P11', 'N^^^^');
+    p.set('P14', ss);
+    const data = await fetchJ(CSP + '?' + p.toString());
+    return data && data.rows ? data.rows : Array.isArray(data) ? data : [];
+  }
+
+  // 扫描「已审核但结果空/不完整」的标本。
+  // 返回：命中行数组（可能为空数组=确实没问题）；**null = 查询失败/拿不到数据（不下结论）**。
+  async function scanAuditedIncompleteLeak(opts = {}) {
+    const end = opts.dateEnd || today();
+    // 默认含昨天：跨午夜批审会把昨晚的标本审掉，只查今天会漏
+    const start = opts.dateStart || addDays(end, -1);
+    const ss = ssDR() || buildSS(resolveLoginWGReliable() || '');
+    if (!ss) {return null;}
+    const hits = [];
+    let gotData = false;
+    for (const type of ['0', '2']) {
+      let rows;
+      try {
+        rows = await loadWLByCompleteness(type, ss, start, end);
+      } catch (e) {
+        dbg('漏审监测：完整度 ' + type + ' 查询失败', e && e.message);
+        continue;
+      }
+      gotData = true;
+      rows.forEach(r => {
+        if (!r) {return;}
+        const ic = String(r.IsComplete === undefined || r.IsComplete === null ? '' : r.IsComplete);
+        const st = String(r.Status || r.ReportStatus || '');
+        // 本地复核（口径与原生前端过滤一致：只认 IsComplete '0'/'2'，只认 Status '3' 已审核）：
+        // 服务端若忽略 P5，这里兜住；若生效，这里只是确认一遍，无副作用。
+        // ⚠️ 不认 Status='4'（复查）——那是**待复审**不是已审核（见 getWSAuditBucket 的 8.5.50 口径）。
+        if ((ic === '0' || ic === '2') && st === '3') {
+          hits.push({
+            dr: String(r.ReportDR || ''),
+            labno: String(r.Labno || ''),
+            pat: String(r.PatName || ''),
+            set: String(r.TestSetDesc || ''),
+            ic,
+            st,
+            authAt: ((r.AuthDate || '') + ' ' + (r.AuthTime || '')).trim(),
+            authUser: String(r.AuthUser || '')
+          });
+        }
+      });
+    }
+    if (!gotData) {return null;} // 两次都没拿到 → 绝不当成"没问题"
+    return hits;
+  }
+
+  function auditLeakSeenLoad() {
+    try {
+      const o = JSON.parse(localStorage.getItem(K.auditLeakSeen) || '{}');
+      return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function auditLeakSeenSave(o) {
+    try {
+      const keys = Object.keys(o);
+      if (keys.length > 3000) {
+        keys
+          .sort()
+          .slice(0, keys.length - 2000)
+          .forEach(k => delete o[k]);
+      }
+      localStorage.setItem(K.auditLeakSeen, JSON.stringify(o));
+    } catch (e) {}
+  }
+
+  // 主入口。opts.force=true 绕过节流（批审收尾 / 手动）；opts.silent=true 不弹 toast（仅返回结果）
+  async function runAuditLeakCheck(opts = {}) {
+    if (_auditLeakRunning) {return null;}
+    const now = Date.now();
+    if (!opts.force && now - _auditLeakScanAt < AUDIT_LEAK_THROTTLE_MS) {return null;}
+    _auditLeakScanAt = now;
+    _auditLeakRunning = true;
+    try {
+      const hits = await scanAuditedIncompleteLeak(opts);
+      if (!hits) {return null;} // 拿不到数据 → 不下结论
+      if (!hits.length) {return hits;}
+      const seen = auditLeakSeenLoad();
+      const fresh = [];
+      hits.forEach(h => {
+        const key = h.dr + '|' + h.ic;
+        if (seen[key]) {return;}
+        seen[key] = now;
+        fresh.push(h);
+      });
+      if (!fresh.length) {return hits;}
+      auditLeakSeenSave(seen);
+      dbg('漏结果审核告警:', fresh);
+      if (!opts.silent) {
+        const n = fresh.length;
+        const list = fresh
+          .slice(0, 3)
+          .map(h => (h.labno || h.dr) + (h.pat ? '(' + h.pat + ')' : ''))
+          .join('、');
+        const more = n > 3 ? ' 等 ' + n + ' 条' : '';
+        showToast(
+          '🚨 漏结果审核：' + n + ' 条**已审核**标本结果为空/不完整 → ' + list + more + '（请立即核对）',
+          'error'
+        );
+        try {
+          pushAutoAuditNotify({
+            title: 'LIS危急告警',
+            body: '漏结果审核：' + n + ' 条已审核但结果空/不完整（' + list + more + '）'
+          });
+        } catch (e) {}
+      }
+      return fresh;
+    } catch (e) {
+      dbg('漏审监测异常:', e && e.message);
+      return null;
+    } finally {
+      _auditLeakRunning = false;
+    }
+  }
+
+  // 现场入口：控制台 lisScanAuditLeak() 立即扫一次；lisAuditLeakSeen() 看已告警过的；lisClearAuditLeakSeen() 清去重
+  try {
+    if (typeof unsafeWindow !== 'undefined') {
+      unsafeWindow.lisScanAuditLeak = (opts = {}) => runAuditLeakCheck({ ...opts, force: true });
+      unsafeWindow.lisAuditLeakSeen = auditLeakSeenLoad;
+      unsafeWindow.lisClearAuditLeakSeen = () => {
+        try {
+          localStorage.removeItem(K.auditLeakSeen);
+          return true;
+        } catch (e) {
+          return false;
+        }
+      };
+    }
+  } catch (e) {}
 
   async function loadPendingForMachine(wgmDR, ss) {
     const p = new URLSearchParams();
@@ -21169,6 +21340,8 @@ window.addEventListener('keydown',function(e){
       renderWSCategoryBar();
       renderWSTable();
       scheduleAutoAuditCycle(); // 8.5.58: 分类完成后触发自动审核（新标本已就绪）
+      // 8.18.1: 顺带扫一次漏结果审核（内部 3 分钟节流 → 不是每次刷新都发请求；失败静默）
+      runAuditLeakCheck().catch(() => {});
     } catch (e) {
       dbg('分类异常:', e);
     } finally {
@@ -23908,8 +24081,13 @@ window.addEventListener('keydown',function(e){
         await sleep(1000);
         result = _verifySalvage();
       }
+      // 8.18.1: ⚠️ 必须是 `result === true`——审核返回值是**三态**（true=成功 / false=失败 /
+      // 'incomplete'=被原生「必填项目未存数据」弹窗拦截），而**字符串是 truthy**：
+      // 写 `!!result` 会把「被拦下、原生审核其实已取消」误记成补审成功 → 调用方 successCount++、
+      // queue.done.push、markSpecimenAuditedInMem（**工作台把该标本隐藏**）→ 漏审且现场看不见。
+      // 这个洞是 8.18.0 删掉原来的 `if (result === 'incomplete') return {ok:false}` 时引入的。
       if (result) {closeNativeAuditSuccessMessage(iframeWin);}
-      return { ok: !!result, iframeWin };
+      return { ok: result === true, iframeWin };
     } finally {
       _auditingPreStatus4 = false; // 8.5.56: 复位，避免影响后续判定
       _auditingCrossGroup = false; // 8.16.25: 同上
@@ -24898,6 +25076,11 @@ window.addEventListener('keydown',function(e){
       // 8.8.2: batchUsedCustomDate 保留兼容；_wsDateboxCustom 覆盖预热/其它路径切走的日期
       if (batchUsedCustomDate || _wsDateboxCustom) {restoreNativeDateboxToday();}
       if (resumeWSRefresh && isWSVisible()) {startWSRefresh();}
+      // 8.18.1: 批审收尾 → 延迟扫一次「已审核但结果空/不完整」（漏结果审核实时监测）。
+      // 延迟 5s 是等 LIS 落库（刚审完立刻查可能还是旧状态 → 漏报）；force 绕过节流。
+      setTimeout(() => {
+        runAuditLeakCheck({ force: true }).catch(() => {});
+      }, 5000);
       setTimeout(() => {
         const p = document.getElementById('lis-audit-progress');
         if (p) {p.remove();}

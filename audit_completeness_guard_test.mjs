@@ -1,5 +1,8 @@
 /**
  * 8.18.0 回归测试：门禁隔离 + 自动化绝缘 + 手工审核保留
+ * 8.18.1 追加：E 组——① 补审轮三态返回值（`'incomplete'` 是字符串，truthy，绝不能用 `!!`，
+ *   否则「被原生弹窗拦下」会被记成「补审成功」→ 漏审且工作台把该标本隐藏）；
+ *   ② 漏结果审核实时监测（用 LIS 自己的完整度口径反查「已审核但结果空/不完整」的标本）。
  *
  * 核心设计（用户要求）：
  *   ① 门禁隔离：有必填项未存数据或空结果的标本，绝不进入「待审」标签，100% 锁在「不完整」（incomplete）！
@@ -328,6 +331,64 @@ let _lastConfirmClickAt = 0;
 } catch (e) {
   ok(false, '弹窗逻辑仿真执行失败: ' + e.message);
 }
+
+/* ============ E. 8.18.1：补审轮三态返回值 + 漏结果审核实时监测 ============ */
+section('E. 补审轮三态返回值 + 漏审实时监测（8.18.1）');
+
+// E1. 补审轮必须用 `result === true`——'incomplete' 是字符串（truthy），用 !! 会把「被拦下」记成「成功」
+try {
+  const salvage = sliceNamedFn('auditOneQueueItemOnce');
+  ok(/return \{ ok: result === true, iframeWin \}/.test(salvage), 'E1 补审轮返回 `ok: result === true`（三态判定，不用 !!）');
+  ok(!/ok: !!result/.test(src), "E1 全脚本已无 `ok: !!result`（!!'incomplete' 会把被拦下误记成补审成功）");
+} catch (e) {
+  ok(false, 'E1 切片失败：' + e.message);
+}
+
+// E2. 监测查询用原生同款口径：P5=^<type>、P0 全部状态、走 QryWorkList
+try {
+  const q = sliceNamedFn('loadWLByCompleteness');
+  ok(/p\.set\('P5', '\^' \+ type\)/.test(q), "E2 完整度过滤走 P5='^<type>'（与原生 SearchByResultType 同口径）");
+  ok(/p\.set\('P0', ''\)/.test(q), 'E2 P0 为空 = 查全部状态（含已审核，这是能抓到漏审的关键）');
+  ok(/QueryName', 'QryWorkList'/.test(q), 'E2 用 QryWorkList 接口（与原生 ShowWorkList 同一个）');
+} catch (e) {
+  ok(false, 'E2 切片失败：' + e.message);
+}
+
+// E3. 本地复核 + fail-silent：拿不到数据返回 null（绝不返回空数组假装「没问题」）
+try {
+  const scan = sliceNamedFn('scanAuditedIncompleteLeak');
+  ok(/ic === '0' \|\| ic === '2'/.test(scan), "E3 只认 IsComplete '0'（结果空）/'2'（不完整）");
+  ok(/&& st === '3'/.test(scan), "E3 只认 Status '3' 已审核（不认 '4' 复查——那是待复审）");
+  ok(/if \(!gotData\) \{return null;\}/.test(scan), 'E3 两次查询都失败 → 返回 null（不下结论，不误报「没问题」）');
+  ok(/for \(const type of \['0', '2'\]\)/.test(scan), 'E3 同时扫「结果空」与「不完整」两类');
+} catch (e) {
+  ok(false, 'E3 切片失败：' + e.message);
+}
+
+// E4. 只告警、绝不干预审核（不得接进任何闸门 / 放行判定）
+try {
+  // ⚠️ 必须先剥行注释——我的注释里会引用闸门函数名（如「见 getWSAuditBucket 的 8.5.50 口径」），
+  // 不剥的话断言会命中注释造成假失败。
+  const both = (sliceNamedFn('scanAuditedIncompleteLeak') + sliceNamedFn('runAuditLeakCheck')).replace(
+    /^\s*\/\/.*$/gm,
+    ''
+  );
+  ok(
+    !/requeueAuditItem|isSpecimenActuallyComplete|getWSAuditBucket/.test(both),
+    'E4 监测模块不触碰任何审核闸门/放行判定（纯告警，不改审核行为）'
+  );
+  ok(!/return 'incomplete'/.test(both), 'E4 监测模块不返回闸门用的 incomplete 值');
+  ok(/pushAutoAuditNotify/.test(both), 'E4 命中时推送到手机（LIS危急告警）');
+} catch (e) {
+  ok(false, 'E4 切片失败：' + e.message);
+}
+
+// E5. 去重、节流与触发点
+ok(/auditLeakSeen: 'LIS_AuditLeakSeen'/.test(src), 'E5 已告警去重键 LIS_AuditLeakSeen（同一标本不反复轰炸）');
+ok(/unsafeWindow\.lisScanAuditLeak = /.test(src), 'E5 现场入口 lisScanAuditLeak()（控制台可手动扫）');
+ok(/runAuditLeakCheck\(\{ force: true \}\)/.test(src), 'E5 批审收尾强制扫一次（force 绕过节流，延迟等落库）');
+ok(/runAuditLeakCheck\(\)\.catch/.test(src), 'E5 工作台分类完成后顺带扫（带节流，失败静默）');
+ok(/AUDIT_LEAK_THROTTLE_MS = 3 \* 60 \* 1000/.test(src), 'E5 节流 3 分钟（克制请求量，别拖慢 LIS）');
 
 /* ============ 汇总 ============ */
 console.log('\n────────────────────────────');
