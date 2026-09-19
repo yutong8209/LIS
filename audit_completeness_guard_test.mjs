@@ -209,6 +209,20 @@ ok(/审核时 LIS 记录 IsComplete=/.test(src), '告警文案直接给出定性
 ok(/unsafeWindow\.lisAuditTrace = auditTraceRead/.test(src), '留痕有现场诊断入口（控制台 lisAuditTrace()）');
 ok(/AUDIT_TRACE_MAX = \d+/.test(src) && /log\.length > AUDIT_TRACE_MAX/.test(src), '留痕是环形缓冲（有上限，不会撑爆 localStorage）');
 
+// A9. 「应有项数」观察模式（8.17.11）——**只记不拦**
+ok(/expectedItems: 'LIS_ExpectedItems'/.test(src), "K.expectedItems = 'LIS_ExpectedItems'（独立键）");
+ok(/expectedItemsLearn\(allData\)/.test(src), '入库（applyResults）时顺手学习「组合项目 → 应有项数」');
+ok(/const _snapA = auditTraceSnapshot/.test(src) && /exp: Number\(e\.exp\) \|\| 0/.test(src), '留痕里带 exp/act/short/seen（审核那一刻的项数对不上与否）');
+ok(/unsafeWindow\.lisExpectedItems = /.test(src), '有现场查看入口（控制台 lisExpectedItems()）');
+// ⚠️ 关键：观察模式**不许**影响闸门——否则「减项开单」的组合项目会被误拦
+ok(!/expectedItem/.test(cmpFn), '完整度闸门 specimenCompleteness **不依赖**应有项数启发式（观察模式不参与判定）');
+ok(!/short/.test(earlyGuard), '主循环逐条复核的拦下条件里没有 short（不拿启发式拦人）');
+const finalGateSrc = (() => {
+  const i = idxOf('审核前最终闸门');
+  return i < 0 ? '' : src.slice(i, i + 1600);
+})();
+ok(!!finalGateSrc && !/short|expectedItem/.test(finalGateSrc), '审核前最终闸门的拦下条件里也没有 short/expectedItem');
+
 /* ============ B. 逻辑仿真：真实 specimenCompleteness ============ */
 section('B. 逻辑仿真（真实切片）');
 
@@ -352,6 +366,95 @@ function isManualEntrySpecimen(row) {return /H900|手工/.test(String((row && (r
   ok(snap.ic === '' && typeof snap.verdict === 'string' && snap.verdict.length > 0, 'C7 拿不到行时快照不炸且 verdict 说明原因');
 } catch (e) {
   ok(false, '留痕仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
+}
+
+/* ============ D. 逻辑仿真：真实 expectedItemsLearn / expectedItemsCheck ============ */
+section('D. 逻辑仿真（应有项数 · 观察模式）');
+
+try {
+  const stub = `
+const __store = {};
+const localStorage = {
+  getItem: k => (Object.prototype.hasOwnProperty.call(__store, k) ? __store[k] : null),
+  setItem: (k, v) => {__store[k] = String(v);},
+  removeItem: k => {delete __store[k];}
+};
+const K = { expectedItems: 'LIS_ExpectedItems' };
+let wsClassifiedCache = {};
+function __setCache(c) {wsClassifiedCache = c || {};}
+function __setRaw(k, v) {__store[k] = v;}
+`;
+  const modSrc =
+    stub + '\n' +
+    sliceNamedFn('expectedItemsLoad') + '\n' +
+    sliceNamedFn('expectedItemsLearn') + '\n' +
+    sliceNamedFn('expectedItemsCheck') + '\n' +
+    'export { expectedItemsLoad, expectedItemsLearn, expectedItemsCheck, __setCache, __setRaw };\n';
+  const tmpPath = path.join(HERE, '.cache', 'expected_items_engine.mjs');
+  fs.mkdirSync(path.dirname(tmpPath), {recursive: true});
+  fs.writeFileSync(tmpPath, modSrc, 'utf8');
+  const E = await import('file://' + tmpPath);
+
+  // D1. 学习来源：IsComplete='0' 时 NoResRows = 该组合项目总项数
+  E.expectedItemsLearn([
+    {TestSetDesc: '血常规', IsComplete: '0', NoResRows: '24'},
+    {TestSetDesc: '短疗巡诊肿标一体检', IsComplete: '0', NoResRows: '3'}
+  ]);
+  let map = E.expectedItemsLoad();
+  ok(map['血常规'] && map['血常规'].n === 24, "D1 从 IsComplete='0' 学到「血常规 = 24 项」（这正是 LIS 自己给的数）");
+  ok(map['短疗巡诊肿标一体检'].n === 3, 'D1 另一个组合项目也学到');
+  ok(map['血常规'].k === 1, 'D1 记观测次数（用于判断这条学习结果可不可信）');
+
+  // D2. 只认「无结果」行；完整行 / 缺 NoResRows / 非正整数 都不学
+  E.expectedItemsLearn([
+    {TestSetDesc: '血常规', IsComplete: '1', NoResRows: ''},
+    {TestSetDesc: '血常规', IsComplete: '2', NoResRows: '4'},
+    {TestSetDesc: 'X', IsComplete: '0', NoResRows: ''},
+    {TestSetDesc: 'Y', IsComplete: '0', NoResRows: 'abc'},
+    {TestSetDesc: 'Z', IsComplete: '0', NoResRows: '0'},
+    {TestSetDesc: '', IsComplete: '0', NoResRows: '9'}
+  ]);
+  map = E.expectedItemsLoad();
+  ok(map['血常规'].n === 24 && map['血常规'].k === 1, "D2 IsComplete≠'0' 的行不参与学习（k 仍是 1）");
+  ok(!map['X'] && !map['Y'] && !map['Z'], 'D2 缺 NoResRows / 非数字 / 0 → 不学（不产生垃圾条目）');
+  ok(Object.keys(map).every(k => k !== ''), 'D2 组合项目为空 → 不学');
+
+  // D3. 取历史最大值 + 累计观测次数
+  E.expectedItemsLearn([{TestSetDesc: '血常规', IsComplete: '0', NoResRows: '26'}]);
+  E.expectedItemsLearn([{TestSetDesc: '血常规', IsComplete: '0', NoResRows: '20'}]);
+  map = E.expectedItemsLoad();
+  ok(map['血常规'].n === 26, 'D3 取历史最大值（26 > 24，20 不覆盖）');
+  ok(map['血常规'].k === 3, 'D3 观测次数累计（实际 ' + map['血常规'].k + '）');
+
+  // D4. 检查：应有 24、实测 21 → 差 3（正是「缺了三个项目」的形态）
+  E.__setCache({DRX: {items: new Array(21).fill({})}});
+  let c = E.expectedItemsCheck({ReportDR: 'DRX', TestSetDesc: '血常规', IsComplete: '1'});
+  ok(c.exp === 26 && c.act === 21 && c.short === 5, 'D4 应有/实测/差几项 都算出来（exp=' + c.exp + ' act=' + c.act + ' short=' + c.short + '）');
+
+  // D5. 实测 >= 应有 → 不算差项（不误报）
+  E.__setCache({DRY: {items: new Array(26).fill({})}});
+  c = E.expectedItemsCheck({ReportDR: 'DRY', TestSetDesc: '血常规'});
+  ok(c.short === 0, 'D5 项数对得上 → short=0（不误报）');
+  E.__setCache({DRZ: {items: new Array(30).fill({})}});
+  c = E.expectedItemsCheck({ReportDR: 'DRZ', TestSetDesc: '血常规'});
+  ok(c.short === 0, 'D5 项数多于应有（如加项开单）→ 也不报');
+
+  // D6. 没学到过的组合项目 / 没分类缓存 / 空行 → 一律全 0（宁可漏报不误报）
+  E.__setCache({DR1: {items: new Array(2).fill({})}});
+  ok(E.expectedItemsCheck({ReportDR: 'DR1', TestSetDesc: '没见过的项目'}).short === 0, 'D6 没学到过的组合项目 → 不判（全 0）');
+  ok(E.expectedItemsCheck({ReportDR: 'NOCACHE', TestSetDesc: '血常规'}).short === 0, 'D6 没有分类缓存（拿不到实测项数）→ 不判');
+  ok(E.expectedItemsCheck(null).short === 0, 'D6 空行 → 不判');
+  ok(E.expectedItemsCheck({ReportDR: 'DR1', TestSetDesc: ''}).short === 0, 'D6 组合项目为空 → 不判');
+
+  // D7. 损坏的存储不炸
+  E.__setRaw('LIS_ExpectedItems', 'not-json');
+  ok(Object.keys(E.expectedItemsLoad()).length === 0, 'D7 存储损坏 → 当空处理，不抛异常');
+  E.__setRaw('LIS_ExpectedItems', '[1,2,3]');
+  ok(Object.keys(E.expectedItemsLoad()).length === 0, 'D7 存储是数组（异常形态）→ 也当空处理');
+  E.__setRaw('LIS_ExpectedItems', 'null');
+  ok(Object.keys(E.expectedItemsLoad()).length === 0, 'D7 存储是 null → 也当空处理');
+} catch (e) {
+  ok(false, '应有项数仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
 }
 
 /* ============ 汇总 ============ */

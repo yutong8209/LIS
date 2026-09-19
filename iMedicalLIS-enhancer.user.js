@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.10
+// @version      8.17.11
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -122,7 +122,8 @@
     mildRules: 'LIS_MildRuleOverrides', // 8.15.9: 轻微放行范围的人工覆盖（详情面板 ⚙ 可调；删掉即恢复默认）
     aaAck: 'LIS_AA_Ack', // 8.16.11: 待审里「已知晓」的标本（危急/无法自动审核）——不再进自动审核推送
     humanAuditLog: 'LIS_HumanAuditLog', // 8.17.1: 当日人工审核留痕——把「机器人没审掉、后来人工审掉」的标本从徽章/待办里摘掉
-    auditTrace: 'LIS_AuditTrace' // 8.17.10: 审核留痕（环形 800）——每次审核记下「审核那一刻看到的完整度快照 + 走的哪条路径」
+    auditTrace: 'LIS_AuditTrace', // 8.17.10: 审核留痕（环形 800）——每次审核记下「审核那一刻看到的完整度快照 + 走的哪条路径」
+    expectedItems: 'LIS_ExpectedItems' // 8.17.11: 组合项目 → 应有项数（从 LIS 自己的 IsComplete='0' 行学出来，观察模式用）
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -8811,6 +8812,78 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return {ok: false, missing, reason: '完整度未知（IsComplete=' + (ic || '空') + '）'};
   }
 
+  // 8.17.11: 「组合项目 → 应有项数」——**观察模式**（只记不拦）。
+  // 为什么需要：8.17.9 那类「LIS 自己把 IsComplete 说成 1、实际缺 3 项」的情况，脚本侧唯一能查的信号
+  // 就是「这个组合项目该有几项，现在只有几项」。而 LIS 恰好会告诉我们这个数：
+  //   IsComplete='0'（无结果）时，NoResRows = **该组合项目的项目总数**（已用 cache/ 真实响应核过：
+  //   血常规 24 / 血细胞分析+网织红 31 / 短疗巡诊肿标一体检 3 …）。
+  // 所以：从这类行里学出应有项数（取历史最大值 + 记观测次数），审核时把「应有/实测/差几项」一起写进
+  // 审核留痕。**先只记录、只提示，不拦截**——「减项开单」的组合项目会造成误拦，等攒够现场数据
+  // （留痕里能看到它到底能不能抓到真问题、会不会误报）再决定是否升级成硬拦。
+  function expectedItemsLoad() {
+    try {
+      const o = JSON.parse(localStorage.getItem(K.expectedItems) || '{}');
+      return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  // 从一批工作列表行里学「组合项目 → 应有项数」（只认 IsComplete='0' 且 NoResRows 为正整数）
+  function expectedItemsLearn(rows) {
+    try {
+      if (!Array.isArray(rows) || !rows.length) {return;}
+      const map = expectedItemsLoad();
+      let changed = false;
+      rows.forEach(r => {
+        if (!r) {return;}
+        if (String(r.IsComplete === undefined || r.IsComplete === null ? '' : r.IsComplete) !== '0') {return;}
+        const desc = String(r.TestSetDesc || '').trim();
+        if (!desc) {return;}
+        const n = parseInt(String(r.NoResRows || ''), 10);
+        if (!Number.isFinite(n) || n <= 0) {return;}
+        const cur = map[desc] && typeof map[desc] === 'object' ? map[desc] : {n: 0, k: 0};
+        const nextN = Math.max(Number(cur.n) || 0, n);
+        const nextK = (Number(cur.k) || 0) + 1;
+        if (nextN !== cur.n || nextK !== cur.k) {
+          map[desc] = {n: nextN, k: nextK};
+          changed = true;
+        }
+      });
+      if (changed) {localStorage.setItem(K.expectedItems, JSON.stringify(map));}
+    } catch (e) {}
+  }
+  // 观察模式判定：{exp 应有, act 实测, short 差几项, seen 观测次数}；拿不到实测或没学到过 → 全 0
+  function expectedItemsCheck(row) {
+    const out = {exp: 0, act: 0, short: 0, seen: 0};
+    try {
+      if (!row) {return out;}
+      const desc = String(row.TestSetDesc || '').trim();
+      if (!desc) {return out;}
+      const e = expectedItemsLoad()[desc];
+      if (!e) {return out;}
+      out.exp = Number(e.n) > 0 ? Number(e.n) : 0;
+      out.seen = Number(e.k) || 0;
+      const c = wsClassifiedCache[row.ReportDR];
+      out.act = c && Array.isArray(c.items) ? c.items.length : 0;
+      if (out.exp > 0 && out.act > 0 && out.act < out.exp) {out.short = out.exp - out.act;}
+    } catch (e) {}
+    return out;
+  }
+  try {
+    if (typeof unsafeWindow !== 'undefined') {
+      unsafeWindow.lisExpectedItems = () => {
+        try {
+          const m = expectedItemsLoad();
+          const rows = Object.keys(m).map(k => ({组合项目: k, 应有项数: m[k].n, 观测次数: m[k].k}));
+          if (console.table) {console.table(rows);} else {console.log(rows);}
+          return rows;
+        } catch (e) {
+          return [];
+        }
+      };
+    }
+  } catch (e) {}
+
   // 8.17.10: 审核留痕——每次「脚本真的把标本审掉了」都记一条：**审核那一刻**看到的完整度快照 + 走的哪条路径。
   // 为什么必须记：8.17.9 现场那条（检验号 26091800246）的结果补全后就永远看不出当时的状态了——
   // Mac 上没有 LIS 数据、脚本当时也没留痕，只能靠回忆。有了这条留痕，下次同类问题能直接回答
@@ -8839,7 +8912,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
         path: String(e.path || ''),
         ic: e.ic === undefined || e.ic === null ? '' : String(e.ic),
         nrr: e.nrr === undefined || e.nrr === null ? '' : String(e.nrr),
-        verdict: String(e.verdict || '')
+        verdict: String(e.verdict || ''),
+        // 8.17.11: 观察模式字段（应有项数 / 实测项数 / 差几项 / 观测次数）
+        exp: Number(e.exp) || 0,
+        act: Number(e.act) || 0,
+        short: Number(e.short) || 0,
+        seen: Number(e.seen) || 0
       });
       if (log.length > AUDIT_TRACE_MAX) {log = log.slice(log.length - AUDIT_TRACE_MAX);}
       try {localStorage.setItem(K.auditTrace, JSON.stringify(log));} catch (err) {}
@@ -8853,7 +8931,12 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     try {
       verdict = specimenCompleteness(row, row ? wsClassifiedCache[row.ReportDR] : null).reason || '';
     } catch (e) {}
-    return {ic, nrr, verdict};
+    // 8.17.11: 观察模式——把「应有/实测/差几项」也记进留痕。
+    // 这样下次再出现「事后才发现缺项」时，留痕能直接回答：审核那一刻项数对得上吗？
+    // 对得上 → LIS 侧把完整度判错了；对不上 → 应有项数核对本来就能抓到（该升级成硬拦）。
+    let expItems = {exp: 0, act: 0, short: 0, seen: 0};
+    try {expItems = expectedItemsCheck(row);} catch (e) {}
+    return {ic, nrr, verdict, exp: expItems.exp, act: expItems.act, short: expItems.short, seen: expItems.seen};
   }
   // 8.17.10: 现场诊断入口——F12 控制台执行 lisAuditTrace()（全部）或 lisAuditTrace('26091800246')（按检验号）
   function auditTraceRead(filter) {
@@ -9480,6 +9563,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           const _extDrop = _extBefore - allData.length;
           if (_extDrop > 0) {dbg('[WS] 外送组剔除已出结果标本:', _extDrop, '条（外送只追踪待排/采集）');}
         }
+        // 8.17.11: 顺手学「组合项目 → 应有项数」（观察模式的数据源；只认 IsComplete='0' 且 NoResRows 为正的行）
+        try {expectedItemsLearn(allData);} catch (e) {}
         wsData = allData;
         // 8.5.82: 全量阶段存在失败仪器/组 → partial 置位（自动审核闸门暂停，防漏审）且不刷新 lastFullSuccessAt
         const _machinesUnhealthy = !partial && failedMachineNames.length > 0;
@@ -23924,6 +24009,9 @@ window.addEventListener('keydown',function(e){
           item._preAuditIc = _snapS.ic;
           item._preAuditNrr = _snapS.nrr;
           item._preAuditVerdict = _snapS.verdict;
+          item._preAuditShort = _snapS.short;
+          item._preAuditExp = _snapS.exp;
+          item._preAuditAct = _snapS.act;
           auditTraceAdd({
             dr: item.reportDR,
             labno: item.labno,
@@ -24010,7 +24098,11 @@ window.addEventListener('keydown',function(e){
             reason: cmp.reason,
             // 8.17.10: 审核那一刻的快照 —— 用来直接定性是谁的问题
             preIc: it._preAuditIc === undefined || it._preAuditIc === null ? '' : String(it._preAuditIc),
-            preVerdict: String(it._preAuditVerdict || '')
+            preVerdict: String(it._preAuditVerdict || ''),
+            // 8.17.11: 观察模式——审核那一刻项数是否就已经对不上（能对上说明「应有项数核对」抓不到这类）
+            preShort: Number(it._preAuditShort) || 0,
+            preExp: Number(it._preAuditExp) || 0,
+            preAct: Number(it._preAuditAct) || 0
           });
         }
       });
@@ -24803,6 +24895,9 @@ window.addEventListener('keydown',function(e){
               item._preAuditIc = _snapA.ic;
               item._preAuditNrr = _snapA.nrr;
               item._preAuditVerdict = _snapA.verdict;
+              item._preAuditShort = _snapA.short;
+              item._preAuditExp = _snapA.exp;
+              item._preAuditAct = _snapA.act;
               auditTraceAdd({
                 dr: item.reportDR,
                 labno: item.labno,
