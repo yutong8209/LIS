@@ -145,7 +145,8 @@ ok(/\} finally \{\s*\n\s*robotAuditEnd\(\);/.test(tickSrc), 'robotAuditEnd 在 f
 
 // A4. 人工审核留痕的写入点①：走 executeNativeAudit 的入口（详情面板 / 回车 / F4 定位审核）
 const execSrc = sliceNamedFn('executeNativeAudit');
-ok(/if \(_ok && !isRobotAuditCtx\(\)\) \{humanAuditMark\(/.test(execSrc), 'executeNativeAudit 成功后、非机器人上下文 → humanAuditMark');
+// ⚠️ 断言要容忍换行：8.17.10 在这个 if 里又加了「审核留痕」，humanAuditMark 挪到了下一行
+ok(/if \(_ok && !isRobotAuditCtx\(\)\) \{\s*\n?\s*humanAuditMark\(/.test(execSrc), 'executeNativeAudit 成功后、非机器人上下文 → humanAuditMark');
 // 注释里可以提 _autoAuditRunning（说明为什么不用它），但**代码里不许出现**
 ok(!/_autoAuditRunning/.test(execSrc.replace(/^\s*\/\/.*$/gm, '')), '⚠️ 代码里不能再出现 _autoAuditRunning（一轮可能持续几分钟，会误判人工为机器人）');
 ok(/specimen && \(specimen\.ReportDR \|\| specimen\.reportDR\)/.test(execSrc), '取 DR 兼容大小写两套字段名');

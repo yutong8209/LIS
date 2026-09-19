@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.9
+// @version      8.17.10
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -121,7 +121,8 @@
     mildLog: 'LIS_MildAuditLog', // 8.12.0: F4 轻微异常放行留痕（本地环形 500，不推送不进自动审核日志）
     mildRules: 'LIS_MildRuleOverrides', // 8.15.9: 轻微放行范围的人工覆盖（详情面板 ⚙ 可调；删掉即恢复默认）
     aaAck: 'LIS_AA_Ack', // 8.16.11: 待审里「已知晓」的标本（危急/无法自动审核）——不再进自动审核推送
-    humanAuditLog: 'LIS_HumanAuditLog' // 8.17.1: 当日人工审核留痕——把「机器人没审掉、后来人工审掉」的标本从徽章/待办里摘掉
+    humanAuditLog: 'LIS_HumanAuditLog', // 8.17.1: 当日人工审核留痕——把「机器人没审掉、后来人工审掉」的标本从徽章/待办里摘掉
+    auditTrace: 'LIS_AuditTrace' // 8.17.10: 审核留痕（环形 800）——每次审核记下「审核那一刻看到的完整度快照 + 走的哪条路径」
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -8810,6 +8811,80 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     return {ok: false, missing, reason: '完整度未知（IsComplete=' + (ic || '空') + '）'};
   }
 
+  // 8.17.10: 审核留痕——每次「脚本真的把标本审掉了」都记一条：**审核那一刻**看到的完整度快照 + 走的哪条路径。
+  // 为什么必须记：8.17.9 现场那条（检验号 26091800246）的结果补全后就永远看不出当时的状态了——
+  // Mac 上没有 LIS 数据、脚本当时也没留痕，只能靠回忆。有了这条留痕，下次同类问题能直接回答
+  // 「审核那一刻 LIS 说它完整吗」：
+  //   ic='1'（LIS 说完整）+ 事后不完整  → **LIS 侧把完整度判错了**（脚本无信号可查，需要「应有项数」对照）
+  //   ic='2'/'0' 或 verdict 非空       → **闸门被绕过 / 用的是过期数据**（脚本侧的问题）
+  const AUDIT_TRACE_MAX = 800;
+  function auditTraceAdd(entry) {
+    try {
+      const e = entry || {};
+      const dr = String(e.dr || '');
+      if (!dr) {return;}
+      const now = new Date();
+      const day =
+        now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+      let log = [];
+      try {log = JSON.parse(localStorage.getItem(K.auditTrace) || '[]');} catch (err) {log = [];}
+      if (!Array.isArray(log)) {log = [];}
+      log.push({
+        day,
+        t: now.toTimeString().slice(0, 8),
+        dr,
+        labno: String(e.labno || ''),
+        pat: String(e.pat || ''),
+        mn: String(e.mn || ''),
+        path: String(e.path || ''),
+        ic: e.ic === undefined || e.ic === null ? '' : String(e.ic),
+        nrr: e.nrr === undefined || e.nrr === null ? '' : String(e.nrr),
+        verdict: String(e.verdict || '')
+      });
+      if (log.length > AUDIT_TRACE_MAX) {log = log.slice(log.length - AUDIT_TRACE_MAX);}
+      try {localStorage.setItem(K.auditTrace, JSON.stringify(log));} catch (err) {}
+    } catch (e) {}
+  }
+  // 8.17.10: 审核那一刻的完整度快照（写进留痕、也挂到队列条目上供「审核后自检」定性）
+  function auditTraceSnapshot(row) {
+    const ic = row ? String(row.IsComplete === undefined || row.IsComplete === null ? '' : row.IsComplete) : '';
+    const nrr = row ? String(row.NoResRows || '') : '';
+    let verdict = '';
+    try {
+      verdict = specimenCompleteness(row, row ? wsClassifiedCache[row.ReportDR] : null).reason || '';
+    } catch (e) {}
+    return {ic, nrr, verdict};
+  }
+  // 8.17.10: 现场诊断入口——F12 控制台执行 lisAuditTrace()（全部）或 lisAuditTrace('26091800246')（按检验号）
+  function auditTraceRead(filter) {
+    let rows = [];
+    try {
+      const log = JSON.parse(localStorage.getItem(K.auditTrace) || '[]');
+      const f = String(filter || '');
+      rows = Array.isArray(log)
+        ? log.filter(
+            r =>
+              !f ||
+              String(r.labno || '').includes(f) ||
+              String(r.dr || '') === f ||
+              String(r.pat || '').includes(f)
+          )
+        : [];
+    } catch (e) {}
+    try {
+      if (console.table) {console.table(rows);} else {console.log(rows);}
+    } catch (e) {}
+    return rows;
+  }
+  try {
+    if (typeof unsafeWindow !== 'undefined') {
+      unsafeWindow.lisAuditTrace = auditTraceRead;
+      unsafeWindow.lisAuditTraceRaw = () => {
+        try {return JSON.parse(localStorage.getItem(K.auditTrace) || '[]');} catch (e) {return [];}
+      };
+    }
+  } catch (e) {}
+
   // 8.10.2: 自动审核仪器黑名单——「手工杂项」与手工录入仪器（H900等）永不自动审核。
   // 理由：这类仪器下的标本靠人填写，LIS 不置 IsComplete=1 的居多，
   // 即使录入完整也绝不该由无人值守机器人代签。与勾选范围无关：即使快照是「全部工作组全部仪器」也一律排除。
@@ -13376,7 +13451,21 @@ window.addEventListener('keydown',function(e){
       // 卡片回车 / F4 定位审核）都记在这里；批审队列那条路径由 continueAuditQueue 记（它直接调
       // clickNativeAuditButton）。判定用 isRobotAuditCtx()（机器人显式包裹），**不用 `_autoAuditRunning`**。
       try {
-        if (_ok && !isRobotAuditCtx()) {humanAuditMark(specimen && (specimen.ReportDR || specimen.reportDR));}
+        if (_ok && !isRobotAuditCtx()) {
+          humanAuditMark(specimen && (specimen.ReportDR || specimen.reportDR));
+          // 8.17.10: 审核留痕（详情面板 / 面板内回车 / 卡片回车都走这里）
+          const _snapN = auditTraceSnapshot(specimen);
+          auditTraceAdd({
+            dr: specimen && (specimen.ReportDR || specimen.reportDR),
+            labno: specimen && specimen.Labno,
+            pat: specimen && specimen.PatName,
+            mn: specimen && (specimen._mn || specimen.MachineName),
+            path: '详情面板/回车',
+            ic: _snapN.ic,
+            nrr: _snapN.nrr,
+            verdict: _snapN.verdict
+          });
+        }
       } catch (e) {}
     }
   }
@@ -23828,6 +23917,25 @@ window.addEventListener('keydown',function(e){
         result = _verifySalvage();
       }
       if (result) {closeNativeAuditSuccessMessage(iframeWin);}
+      // 8.17.10: 审核留痕（补审轮也走同一条）
+      if (result) {
+        try {
+          const _snapS = auditTraceSnapshot(resolveQueueItemRow(item) || findWSSpecimenByReportDR(item.reportDR));
+          item._preAuditIc = _snapS.ic;
+          item._preAuditNrr = _snapS.nrr;
+          item._preAuditVerdict = _snapS.verdict;
+          auditTraceAdd({
+            dr: item.reportDR,
+            labno: item.labno,
+            pat: item.name,
+            mn: item.mn,
+            path: '补审轮',
+            ic: _snapS.ic,
+            nrr: _snapS.nrr,
+            verdict: _snapS.verdict
+          });
+        } catch (e) {}
+      }
       return { ok: !!result, iframeWin };
     } finally {
       _auditingPreStatus4 = false; // 8.5.56: 复位，避免影响后续判定
@@ -23895,20 +24003,42 @@ window.addEventListener('keydown',function(e){
         if (!r) {return;} // 已不在列表 → 不误报
         const cmp = specimenCompleteness(r, null);
         if (!cmp.ok) {
-          bad.push({dr: String(it.reportDR || ''), labno: it.labno || '', patName: it.name || '', reason: cmp.reason});
+          bad.push({
+            dr: String(it.reportDR || ''),
+            labno: it.labno || '',
+            patName: it.name || '',
+            reason: cmp.reason,
+            // 8.17.10: 审核那一刻的快照 —— 用来直接定性是谁的问题
+            preIc: it._preAuditIc === undefined || it._preAuditIc === null ? '' : String(it._preAuditIc),
+            preVerdict: String(it._preAuditVerdict || '')
+          });
         }
       });
     }
     if (bad.length) {
       const list = bad.slice(0, 5).map(b => (b.patName || '') + ' ' + (b.labno || '')).join('、');
       const more = bad.length > 5 ? ' 等 ' + bad.length + ' 条' : '';
-      showToast('🚨 审核后自检：' + bad.length + ' 条刚审掉的标本结果不完整（' + list + more + '）——请立即在 LIS 核对！', 'error');
+      // 8.17.10: 每条附上「审核那一刻」的快照定性，省掉事后靠回忆：
+      //   审核时 LIS 说完整 → LIS 侧把完整度判错了；审核时就不完整 → 脚本闸门被绕过
+      const _diag = bad
+        .slice(0, 3)
+        .map(
+          b =>
+            (b.patName || '') + ' ' + (b.labno || '') + '：审核时 LIS 记录 IsComplete=' + (b.preIc || '空') +
+            (b.preVerdict ? '（脚本当时判定：' + b.preVerdict + '）' : '（脚本当时判定：完整）')
+        )
+        .join('；');
+      showToast(
+        '🚨 审核后自检：' + bad.length + ' 条刚审掉的标本结果不完整（' + list + more +
+          '）——请立即在 LIS 核对！（控制台 lisAuditTrace() 可查审核留痕）',
+        'error'
+      );
       dbg('审核后自检发现不完整:', JSON.stringify(bad));
       try {aaStateEventAdd('pause', '审核后自检：' + bad.length + ' 条已审标本结果不完整（' + list + more + '）');} catch (e) {}
       try {
         pushAutoAuditNotify({
           title: '🚨 审核后自检：已审标本结果不完整',
-          body: bad.length + ' 条：' + list + more,
+          body: bad.length + ' 条：' + list + more + (_diag ? '\n' + _diag : ''),
           level: 'critical',
           group: 'LIS危急告警',
           sound: 'alarm'
@@ -24666,6 +24796,24 @@ window.addEventListener('keydown',function(e){
             // 8.17.2: 批审主循环直接调 clickNativeAuditButton（不过 executeNativeAudit），
             // 所以人工 F4 / 批审的留痕必须在这里打——只有自动审核队列才不算人工。
             if (!queue._autoMode) {humanAuditMark(item.reportDR);}
+            // 8.17.10: 审核留痕——记下「审核那一刻」的完整度快照（并挂到队列条目上，
+            // 供批量收尾的「审核后自检」直接定性：是 LIS 说完整、还是闸门被绕过）
+            try {
+              const _snapA = auditTraceSnapshot(liveRow || findWSSpecimenByReportDR(item.reportDR));
+              item._preAuditIc = _snapA.ic;
+              item._preAuditNrr = _snapA.nrr;
+              item._preAuditVerdict = _snapA.verdict;
+              auditTraceAdd({
+                dr: item.reportDR,
+                labno: item.labno,
+                pat: item.name,
+                mn: item.mn,
+                path: queue._autoMode ? '机器人批审' : '人工批审(F4)',
+                ic: _snapA.ic,
+                nrr: _snapA.nrr,
+                verdict: _snapA.verdict
+              });
+            } catch (e) {}
             _aaRecordQueueItem('正常', item);
             successCount++;
             batchCAReady = true;

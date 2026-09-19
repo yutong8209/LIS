@@ -19,6 +19,12 @@
  *   ④ 补审轮补上同一道闸门；⑤ 详情面板补「提示 + 留痕」（**不硬拦**，保留有意的人工通道）；
  *   ⑥ 新增**审核后自检**：批量收尾用最新工作列表复核刚审掉的标本，发现不完整立刻红色告警 + 推送。
  *
+ * 8.17.10 追加：**审核留痕**（`LIS_AuditTrace`）——每次审核记下「审核那一刻的完整度快照 + 走的哪条路径」。
+ *   起因：8.17.9 现场那条标本（检验号 26091800246）结果补全后就永远看不出当时状态了，只能靠回忆。
+ *   有了留痕，下次同类问题能直接定性：
+ *     ic='1'（LIS 说完整）+ 事后不完整 → **LIS 侧把完整度判错了**（脚本无信号可查）
+ *     ic='2'/'0' 或 verdict 非空      → **闸门被绕过 / 用了过期数据**（脚本侧问题）
+ *
  * 用法：node audit_completeness_guard_test.mjs
  *      LIS_SRC=/tmp/old.user.js node audit_completeness_guard_test.mjs   # 反向验证：旧版必须失败
  */
@@ -170,7 +176,7 @@ ok(/queue\.done/.test(vfy), '自检对象 = 本批成功审掉的标本（queue.
 ok(/loadWL\(/.test(vfy), '自检用最新工作列表读（loadWL = 服务端最新数据，不是内存快照）');
 ok(/if \(!r\) \{return;\}/.test(vfy), '标本已不在列表 → 不下结论（不误报）');
 ok(/catch \(e\) \{\s*\n\s*dbg\('审核后自检：工作列表读取失败/.test(vfy), '读不到列表 → 跳过该仪器（不误报）');
-ok(/showToast\('🚨 审核后自检/.test(vfy), '发现不完整 → 红色告警 toast');
+ok(/showToast\(\s*\n?\s*'🚨 审核后自检/.test(vfy), '发现不完整 → 红色告警 toast');
 ok(/pushAutoAuditNotify\(/.test(vfy), '发现不完整 → 手机推送（critical 档）');
 ok(/aaStateEventAdd\('pause'/.test(vfy), '发现不完整 → 记入状态时间线（可回溯）');
 const vfyCall = idxOf('await verifyAuditedCompleteness(queue)');
@@ -180,6 +186,28 @@ ok(vfyCall > 0 && progMark > 0 && vfyCall < progMark, '自检在批量收尾、�
 // A7. 三条自动路径都要有闸门（漏一条就是漏一类标本）
 ok(countOf(/specimenCompleteness\(/g) >= 5, 'specimenCompleteness 至少 5 处调用（定义 + 主循环复核 + 最终闸门 + 补审轮 + 详情提示 + 自检；实际 ' + countOf(/specimenCompleteness\(/g) + '）');
 ok(countOf(/isSpecimenActuallyComplete\(/g) >= 8, 'isSpecimenActuallyComplete 调用点没被减少（实际 ' + countOf(/isSpecimenActuallyComplete\(/g) + '）');
+
+// A8. 审核留痕（8.17.10）
+ok(/auditTrace: 'LIS_AuditTrace'/.test(src), "K.auditTrace = 'LIS_AuditTrace'（独立键，不污染自动审核日志）");
+const traceAddSites = countOf(/auditTraceAdd\(\{/g);
+ok(traceAddSites === 3, '三条自动路径都留痕：人工批审(F4) / 补审轮 / 详情面板·回车（实际 ' + traceAddSites + ' 处）');
+ok(/path: queue\._autoMode \? '机器人批审' : '人工批审\(F4\)'/.test(src), '留痕区分机器人批审与人工 F4（否则分不清谁审的）');
+ok(/const _snapA = auditTraceSnapshot\(liveRow \|\| findWSSpecimenByReportDR\(item\.reportDR\)\)/.test(src),
+  '批审留痕用的是「审核那一刻」的最新可用行（不是队列构建时的快照）');
+ok(/item\._preAuditIc = _snapA\.ic/.test(src) && /item\._preAuditVerdict = _snapA\.verdict/.test(src),
+  '快照同时挂到队列条目上（供审核后自检直接定性）');
+let snapFn = '';
+try {
+  snapFn = sliceNamedFn('auditTraceSnapshot');
+  ok(/specimenCompleteness\(row,/.test(snapFn), 'auditTraceSnapshot 复用 specimenCompleteness（单一事实来源，快照口径与闸门一致）');
+  ok(/String\(row\.IsComplete/.test(snapFn) && /String\(row\.NoResRows/.test(snapFn), '快照同时记 IsComplete 与 NoResRows（缺项数也要留）');
+} catch (e) {
+  ok(false, '切片失败：auditTraceSnapshot 不存在（旧版无此实现）：' + e.message);
+}
+ok(/preIc: it\._preAuditIc/.test(src) && /preVerdict: String\(it\._preAuditVerdict/.test(src), '审核后自检把审核时快照带进告警数据');
+ok(/审核时 LIS 记录 IsComplete=/.test(src), '告警文案直接给出定性依据（审核时 LIS 说完整 or 脚本当时就不完整）');
+ok(/unsafeWindow\.lisAuditTrace = auditTraceRead/.test(src), '留痕有现场诊断入口（控制台 lisAuditTrace()）');
+ok(/AUDIT_TRACE_MAX = \d+/.test(src) && /log\.length > AUDIT_TRACE_MAX/.test(src), '留痕是环形缓冲（有上限，不会撑爆 localStorage）');
 
 /* ============ B. 逻辑仿真：真实 specimenCompleteness ============ */
 section('B. 逻辑仿真（真实切片）');
@@ -252,6 +280,78 @@ function isManualEntrySpecimen(row) {
   ok(v.ok === true, 'B9 IsComplete=1 且 NoResRows=0 → 放行（0 值不当成缺项）');
 } catch (e) {
   ok(false, '逻辑仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
+}
+
+/* ============ C. 逻辑仿真：真实 auditTraceAdd / auditTraceRead ============ */
+section('C. 逻辑仿真（审核留痕）');
+
+try {
+  const stub = `
+const __store = {};
+const localStorage = {
+  getItem: k => (Object.prototype.hasOwnProperty.call(__store, k) ? __store[k] : null),
+  setItem: (k, v) => {__store[k] = String(v);},
+  removeItem: k => {delete __store[k];}
+};
+const K = { auditTrace: 'LIS_AuditTrace' };
+let wsClassifiedCache = {};
+const __tabled = [];
+const console = {table: rows => __tabled.push(rows), log: () => {}};
+function isManualEntrySpecimen(row) {return /H900|手工/.test(String((row && (row._mn || row.MachineName)) || ''));}
+`;
+  const modSrc =
+    stub + '\n' +
+    sliceNamedFn('isSpecimenActuallyComplete') + '\n' +
+    sliceNamedFn('specimenCompleteness') + '\n' +
+    (src.match(/^\s*const AUDIT_TRACE_MAX = \d+;$/m) || [''])[0] + '\n' +
+    sliceNamedFn('auditTraceAdd') + '\n' +
+    sliceNamedFn('auditTraceSnapshot') + '\n' +
+    sliceNamedFn('auditTraceRead') + '\n' +
+    'export { auditTraceAdd, auditTraceSnapshot, auditTraceRead, __tabled };\n';
+  const tmpPath = path.join(HERE, '.cache', 'audit_trace_engine.mjs');
+  fs.mkdirSync(path.dirname(tmpPath), {recursive: true});
+  fs.writeFileSync(tmpPath, modSrc, 'utf8');
+  const T = await import('file://' + tmpPath);
+
+  // C1. 写入与读回
+  T.auditTraceAdd({dr: 'DR1', labno: '26091800246', pat: '张三', mn: 'DXI800', path: '人工批审(F4)', ic: '1', nrr: '', verdict: ''});
+  let rows = T.auditTraceRead('26091800246');
+  ok(rows.length === 1, 'C1 写入后能按检验号查到（现场诊断入口可用）');
+  ok(rows[0].labno === '26091800246' && rows[0].ic === '1' && rows[0].path === '人工批审(F4)', 'C1 快照字段完整（检验号 / 审核时 IsComplete / 走的路径）');
+  ok(!!rows[0].day && !!rows[0].t, 'C1 带日期与时间（能对到具体哪一次审核）');
+
+  // C2. 无 dr 不写（避免脏数据）
+  T.auditTraceAdd({labno: 'X'});
+  ok(T.auditTraceRead('X').length === 0, 'C2 没有 ReportDR 的调用不写入（不留脏记录）');
+
+  // C3. 按 DR / 姓名也能查
+  ok(T.auditTraceRead('DR1').length === 1, 'C3 可按 ReportDR 查');
+  ok(T.auditTraceRead('张三').length === 1, 'C3 可按姓名查');
+  ok(T.auditTraceRead().length >= 1, 'C3 不传筛选 = 返回全部（控制台 lisAuditTrace() 的用法）');
+
+  // C4. 环形上限：写 900 条后只留最近 800
+  for (let i = 0; i < 900; i++) {
+    T.auditTraceAdd({dr: 'BULK' + i, labno: 'L' + i, path: '人工批审(F4)', ic: '1'});
+  }
+  const all = T.auditTraceRead();
+  ok(all.length === 800, 'C4 环形上限 800（写 900 条后剩 800，实际 ' + all.length + '）');
+  ok(all[all.length - 1].labno === 'L899', 'C4 保留的是**最近**的（末尾是最新一条）');
+  ok(T.auditTraceRead('26091800246').length === 0, 'C4 最老的记录被正确淘汰');
+
+  // C5. 快照：完整行 → ic=1 且 verdict 为空
+  let snap = T.auditTraceSnapshot({ReportDR: 'S1', IsComplete: '1', NoResRows: ''});
+  ok(snap.ic === '1' && snap.verdict === '', 'C5 完整标本的快照：ic=1、verdict 空（=脚本当时认为完整）');
+
+  // C6. 快照：缺 3 项的行 → verdict 说明缺几项（这就是「定性证据」）
+  snap = T.auditTraceSnapshot({ReportDR: 'S2', IsComplete: '2', NoResRows: '3'});
+  ok(snap.ic === '2' && snap.nrr === '3' && /缺 3 项/.test(snap.verdict),
+    'C6 不完整标本的快照带缺项数（事后据此判定「闸门被绕过」而不是「LIS 判错」）');
+
+  // C7. 快照对 null 行不炸（跨整页刷新续跑时行可能取不到）
+  snap = T.auditTraceSnapshot(null);
+  ok(snap.ic === '' && typeof snap.verdict === 'string' && snap.verdict.length > 0, 'C7 拿不到行时快照不炸且 verdict 说明原因');
+} catch (e) {
+  ok(false, '留痕仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
 }
 
 /* ============ 汇总 ============ */
