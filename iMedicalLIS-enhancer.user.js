@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iMedicalLIS 增强助手
 // @namespace    lis-enhancer-local
-// @version      8.17.12
+// @version      8.18.0
 // @description  报告审核增强 — 全新现代双栏分屏一体化审核工作台（Master-Detail 实时检视联动/手不离键零弹窗） + 全部工作组下按科室下拉多选仪器（含外送组，只追踪待排/采集） + 批量审核 + 审核工作台（待审/不完整/待排/采集/全部）+ 病人结果筛选导出 + 质控录入辅助与导出 + 患者历史浮层 + 轻微放行范围全科室多机同步 + 热键（纯本地运行，无任何上传）
 // @author       LIS-Enhancer
 // @match        http://10.0.29.100/iMedicalLIS/*
@@ -121,9 +121,7 @@
     mildLog: 'LIS_MildAuditLog', // 8.12.0: F4 轻微异常放行留痕（本地环形 500，不推送不进自动审核日志）
     mildRules: 'LIS_MildRuleOverrides', // 8.15.9: 轻微放行范围的人工覆盖（详情面板 ⚙ 可调；删掉即恢复默认）
     aaAck: 'LIS_AA_Ack', // 8.16.11: 待审里「已知晓」的标本（危急/无法自动审核）——不再进自动审核推送
-    humanAuditLog: 'LIS_HumanAuditLog', // 8.17.1: 当日人工审核留痕——把「机器人没审掉、后来人工审掉」的标本从徽章/待办里摘掉
-    auditTrace: 'LIS_AuditTrace', // 8.17.10: 审核留痕（环形 800）——每次审核记下「审核那一刻看到的完整度快照 + 走的哪条路径」
-    expectedItems: 'LIS_ExpectedItems' // 8.17.11: 组合项目 → 应有项数（从 LIS 自己的 IsComplete='0' 行学出来，观察模式用）
+    humanAuditLog: 'LIS_HumanAuditLog' // 8.17.1: 当日人工审核留痕——把「机器人没审掉、后来人工审掉」的标本从徽章/待办里摘掉
   };
   const CLASSIFY_STALE_MS = 5 * 60 * 1000; // 自动审核只使用较新分类，避免结果明细变化后继续放行
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
@@ -8781,192 +8779,18 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
 
   function isSpecimenActuallyComplete(row, cached = null) {
     if (!row) {return false;}
+    const c = cached || wsClassifiedCache[row.ReportDR];
+    // 8.18.0: 真实明细防线——只要真实明细中有必填项未存数据或有空项，绝对不完整（哪怕 LIS 列表谎报 IsComplete='1'）
+    if (c && c.items && c.items.length > 0) {
+      if (c.hasMissingMandatory || c.hasEmptyResults) {return false;}
+    }
     const complete = String(row.IsComplete || '');
     if (complete === '1') {return true;}
     if (isManualEntrySpecimen(row)) {
-      const c = cached || wsClassifiedCache[row.ReportDR];
       if (c && c.isManualComplete) {return true;}
     }
     return false;
   }
-
-  // 8.17.9: 结果完整度判定——**所有「能不能审」的完整度闸门都必须走这里**，返回 {ok, missing, reason}。
-  // 为什么单独抽出来：此前完整度判定散在四处（getWSAuditBucket / continueAuditQueue 逐条复核 /
-  // auditAbnormalSpecimen / 详情面板），而且**只返回布尔**——拦下之后现场只看到「结果不完整」四个字，
-  // 不知道缺几项、也不知道是哪一种不完整，没法判断该不该人工补审（现场「缺了三个项目竟然审掉了」
-  // 这条反馈里，最缺的就是这个可诊断性）。
-  // LIS 字段口径（用 cache/ 里真实 QryWorkList 响应核过：IsComplete='1' 81 条 / '0' 32 条 / '2' 27 条）：
-  //   IsComplete='1' → 完整（NoResRows 为空）
-  //   IsComplete='2' → 部分结果，NoResRows = **还缺几项**
-  //   IsComplete='0' → 无结果，   NoResRows = **该组合项目的项目总数**
-  // 手工录入仪器（H900/手工杂项）LIS 不置 IsComplete=1，走项级判定（8.10.23）。
-  function specimenCompleteness(row, cached = null) {
-    if (!row) {return {ok: false, missing: 0, reason: '标本已不在工作台数据中（可能已审核/已取消/超出查询范围）'};}
-    if (isSpecimenActuallyComplete(row, cached)) {return {ok: true, missing: 0, reason: ''};}
-    const ic = String(row.IsComplete === undefined || row.IsComplete === null ? '' : row.IsComplete);
-    const n = parseInt(String(row.NoResRows || ''), 10);
-    const missing = Number.isFinite(n) && n > 0 ? n : 0;
-    if (isManualEntrySpecimen(row)) {return {ok: false, missing, reason: '手工录入项目未录全'};}
-    if (ic === '2') {return {ok: false, missing, reason: '结果不完整（缺 ' + (missing || '若干') + ' 项）'};}
-    if (ic === '0') {return {ok: false, missing, reason: '无结果（应做 ' + (missing || '若干') + ' 项）'};}
-    return {ok: false, missing, reason: '完整度未知（IsComplete=' + (ic || '空') + '）'};
-  }
-
-  // 8.17.11: 「组合项目 → 应有项数」——**观察模式**（只记不拦）。
-  // 为什么需要：8.17.9 那类「LIS 自己把 IsComplete 说成 1、实际缺 3 项」的情况，脚本侧唯一能查的信号
-  // 就是「这个组合项目该有几项，现在只有几项」。而 LIS 恰好会告诉我们这个数：
-  //   IsComplete='0'（无结果）时，NoResRows = **该组合项目的项目总数**（已用 cache/ 真实响应核过：
-  //   血常规 24 / 血细胞分析+网织红 31 / 短疗巡诊肿标一体检 3 …）。
-  // 所以：从这类行里学出应有项数（取历史最大值 + 记观测次数），审核时把「应有/实测/差几项」一起写进
-  // 审核留痕。**先只记录、只提示，不拦截**——「减项开单」的组合项目会造成误拦，等攒够现场数据
-  // （留痕里能看到它到底能不能抓到真问题、会不会误报）再决定是否升级成硬拦。
-  function expectedItemsLoad() {
-    try {
-      const o = JSON.parse(localStorage.getItem(K.expectedItems) || '{}');
-      return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
-    } catch (e) {
-      return {};
-    }
-  }
-  // 从一批工作列表行里学「组合项目 → 应有项数」（只认 IsComplete='0' 且 NoResRows 为正整数）
-  function expectedItemsLearn(rows) {
-    try {
-      if (!Array.isArray(rows) || !rows.length) {return;}
-      const map = expectedItemsLoad();
-      let changed = false;
-      rows.forEach(r => {
-        if (!r) {return;}
-        if (String(r.IsComplete === undefined || r.IsComplete === null ? '' : r.IsComplete) !== '0') {return;}
-        const desc = String(r.TestSetDesc || '').trim();
-        if (!desc) {return;}
-        const n = parseInt(String(r.NoResRows || ''), 10);
-        if (!Number.isFinite(n) || n <= 0) {return;}
-        const cur = map[desc] && typeof map[desc] === 'object' ? map[desc] : {n: 0, k: 0};
-        const nextN = Math.max(Number(cur.n) || 0, n);
-        const nextK = (Number(cur.k) || 0) + 1;
-        if (nextN !== cur.n || nextK !== cur.k) {
-          map[desc] = {n: nextN, k: nextK};
-          changed = true;
-        }
-      });
-      if (changed) {localStorage.setItem(K.expectedItems, JSON.stringify(map));}
-    } catch (e) {}
-  }
-  // 观察模式判定：{exp 应有, act 实测, short 差几项, seen 观测次数}；拿不到实测或没学到过 → 全 0
-  function expectedItemsCheck(row) {
-    const out = {exp: 0, act: 0, short: 0, seen: 0};
-    try {
-      if (!row) {return out;}
-      const desc = String(row.TestSetDesc || '').trim();
-      if (!desc) {return out;}
-      const e = expectedItemsLoad()[desc];
-      if (!e) {return out;}
-      out.exp = Number(e.n) > 0 ? Number(e.n) : 0;
-      out.seen = Number(e.k) || 0;
-      const c = wsClassifiedCache[row.ReportDR];
-      out.act = c && Array.isArray(c.items) ? c.items.length : 0;
-      if (out.exp > 0 && out.act > 0 && out.act < out.exp) {out.short = out.exp - out.act;}
-    } catch (e) {}
-    return out;
-  }
-  try {
-    if (typeof unsafeWindow !== 'undefined') {
-      unsafeWindow.lisExpectedItems = () => {
-        try {
-          const m = expectedItemsLoad();
-          const rows = Object.keys(m).map(k => ({组合项目: k, 应有项数: m[k].n, 观测次数: m[k].k}));
-          if (console.table) {console.table(rows);} else {console.log(rows);}
-          return rows;
-        } catch (e) {
-          return [];
-        }
-      };
-    }
-  } catch (e) {}
-
-  // 8.17.10: 审核留痕——每次「脚本真的把标本审掉了」都记一条：**审核那一刻**看到的完整度快照 + 走的哪条路径。
-  // 为什么必须记：8.17.9 现场那条（检验号 26091800246）的结果补全后就永远看不出当时的状态了——
-  // Mac 上没有 LIS 数据、脚本当时也没留痕，只能靠回忆。有了这条留痕，下次同类问题能直接回答
-  // 「审核那一刻 LIS 说它完整吗」：
-  //   ic='1'（LIS 说完整）+ 事后不完整  → **LIS 侧把完整度判错了**（脚本无信号可查，需要「应有项数」对照）
-  //   ic='2'/'0' 或 verdict 非空       → **闸门被绕过 / 用的是过期数据**（脚本侧的问题）
-  const AUDIT_TRACE_MAX = 800;
-  function auditTraceAdd(entry) {
-    try {
-      const e = entry || {};
-      const dr = String(e.dr || '');
-      if (!dr) {return;}
-      const now = new Date();
-      const day =
-        now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-      let log = [];
-      try {log = JSON.parse(localStorage.getItem(K.auditTrace) || '[]');} catch (err) {log = [];}
-      if (!Array.isArray(log)) {log = [];}
-      log.push({
-        day,
-        t: now.toTimeString().slice(0, 8),
-        dr,
-        labno: String(e.labno || ''),
-        pat: String(e.pat || ''),
-        mn: String(e.mn || ''),
-        path: String(e.path || ''),
-        ic: e.ic === undefined || e.ic === null ? '' : String(e.ic),
-        nrr: e.nrr === undefined || e.nrr === null ? '' : String(e.nrr),
-        verdict: String(e.verdict || ''),
-        // 8.17.11: 观察模式字段（应有项数 / 实测项数 / 差几项 / 观测次数）
-        exp: Number(e.exp) || 0,
-        act: Number(e.act) || 0,
-        short: Number(e.short) || 0,
-        seen: Number(e.seen) || 0
-      });
-      if (log.length > AUDIT_TRACE_MAX) {log = log.slice(log.length - AUDIT_TRACE_MAX);}
-      try {localStorage.setItem(K.auditTrace, JSON.stringify(log));} catch (err) {}
-    } catch (e) {}
-  }
-  // 8.17.10: 审核那一刻的完整度快照（写进留痕、也挂到队列条目上供「审核后自检」定性）
-  function auditTraceSnapshot(row) {
-    const ic = row ? String(row.IsComplete === undefined || row.IsComplete === null ? '' : row.IsComplete) : '';
-    const nrr = row ? String(row.NoResRows || '') : '';
-    let verdict = '';
-    try {
-      verdict = specimenCompleteness(row, row ? wsClassifiedCache[row.ReportDR] : null).reason || '';
-    } catch (e) {}
-    // 8.17.11: 观察模式——把「应有/实测/差几项」也记进留痕。
-    // 这样下次再出现「事后才发现缺项」时，留痕能直接回答：审核那一刻项数对得上吗？
-    // 对得上 → LIS 侧把完整度判错了；对不上 → 应有项数核对本来就能抓到（该升级成硬拦）。
-    let expItems = {exp: 0, act: 0, short: 0, seen: 0};
-    try {expItems = expectedItemsCheck(row);} catch (e) {}
-    return {ic, nrr, verdict, exp: expItems.exp, act: expItems.act, short: expItems.short, seen: expItems.seen};
-  }
-  // 8.17.10: 现场诊断入口——F12 控制台执行 lisAuditTrace()（全部）或 lisAuditTrace('26091800246')（按检验号）
-  function auditTraceRead(filter) {
-    let rows = [];
-    try {
-      const log = JSON.parse(localStorage.getItem(K.auditTrace) || '[]');
-      const f = String(filter || '');
-      rows = Array.isArray(log)
-        ? log.filter(
-            r =>
-              !f ||
-              String(r.labno || '').includes(f) ||
-              String(r.dr || '') === f ||
-              String(r.pat || '').includes(f)
-          )
-        : [];
-    } catch (e) {}
-    try {
-      if (console.table) {console.table(rows);} else {console.log(rows);}
-    } catch (e) {}
-    return rows;
-  }
-  try {
-    if (typeof unsafeWindow !== 'undefined') {
-      unsafeWindow.lisAuditTrace = auditTraceRead;
-      unsafeWindow.lisAuditTraceRaw = () => {
-        try {return JSON.parse(localStorage.getItem(K.auditTrace) || '[]');} catch (e) {return [];}
-      };
-    }
-  } catch (e) {}
 
   // 8.10.2: 自动审核仪器黑名单——「手工杂项」与手工录入仪器（H900等）永不自动审核。
   // 理由：这类仪器下的标本靠人填写，LIS 不置 IsComplete=1 的居多，
@@ -9563,8 +9387,6 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
           const _extDrop = _extBefore - allData.length;
           if (_extDrop > 0) {dbg('[WS] 外送组剔除已出结果标本:', _extDrop, '条（外送只追踪待排/采集）');}
         }
-        // 8.17.11: 顺手学「组合项目 → 应有项数」（观察模式的数据源；只认 IsComplete='0' 且 NoResRows 为正的行）
-        try {expectedItemsLearn(allData);} catch (e) {}
         wsData = allData;
         // 8.5.82: 全量阶段存在失败仪器/组 → partial 置位（自动审核闸门暂停，防漏审）且不刷新 lastFullSuccessAt
         const _machinesUnhealthy = !partial && failedMachineNames.length > 0;
@@ -10231,11 +10053,13 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     }
     if (status === '0') {return 'pending';}
     if (status === '9') {return 'collected';} // 8.5.31: 病房采集中、未送到科室
-    // 8.10.23: 结果完整性判定——自动化仪器以 IsComplete==='1' 为硬门槛；
+    // 8.10.23 / 8.18.0: 结果完整性判定——以真实明细无缺项且自动化仪器 IsComplete==='1' 为硬门槛；
     // 手工录入仪器（H900/手工杂项等）在所有项目录入完整后放行
     if (!isSpecimenActuallyComplete(r)) {return 'incomplete';}
     const cached = wsClassifiedCache[r.ReportDR];
     if (!cached) {return 'incomplete';} // 分类未完成时不进入正常可审，避免误批审
+    // 8.18.0: 核心卡口——明细中有必填项缺失或有空项目，100% 死锁在「不完整」标签，直到确认项目全了才进入待审！
+    if (cached.hasMissingMandatory || cached.hasEmptyResults) {return 'incomplete';}
     if (isClassificationStale(r)) {return 'incomplete';}
     if (cached.status === 'NORMAL') {return 'normal';}
     if (cached.status === 'CRITICAL' || cached.status === 'ZERO') {return 'abnormal';}
@@ -10246,9 +10070,8 @@ tr.ws-ignored .ws-ignore-btn{opacity:1;text-decoration:none}
     // 留在待审更利于被发现，不该因占位符而下沉。
     if (cached.items && cached.items.some(it => isAsteriskPlaceholderResult(it.result))) {return 'incomplete';}
     if (cached.status === 'ABNORMAL') {return 'abnormal';}
-    // 8.10.25: 若标本实际结果已经录入完整（手工录入无空项 或 IsComplete=1），即使含有待定项目（UNCERTAIN，如特殊符号/操作符/未配置参考范围）
-    // 也应放行进入待审（需人工确认审核），绝不能作为不完整锁死在未录入列表中
-    if (isSpecimenActuallyComplete(r, cached)) {return 'abnormal';}
+    // 8.10.25 / 8.18.0: 仅在所有项目完整无空项时，才允许放行 UNCERTAIN 待定项目进待审人工审核
+    if (isSpecimenActuallyComplete(r, cached) && !cached.hasEmptyResults && !cached.hasMissingMandatory) {return 'abnormal';}
     return 'incomplete';
   }
 
@@ -13048,8 +12871,7 @@ window.addEventListener('keydown',function(e){
     // 先做几次快速校验，避免「其实已成功却干等满超时」
     for (let i = 0; i < (batchMode ? 6 : 2); i++) {
       if (options.abortCheck && options.abortCheck()) {return false;}
-      const _hc = handleNativeMessageConfirm(iframeWin);
-      if (_hc === 'incomplete') {return 'incomplete';}
+      handleNativeMessageConfirm(iframeWin);
       if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
           softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 })) {return true;}
       await sleep(batchMode ? 80 : 200);
@@ -13075,7 +12897,6 @@ window.addEventListener('keydown',function(e){
         else if (!batchMode) {tick(`确认结果中：${label}（${Math.round(elapsed / 1000)}s）`);}
       }
     });
-    if (confirmed === 'incomplete') {return 'incomplete';}
     if (confirmed && confirmed !== 'incomplete') {return true;}
     await sleep(batchMode ? 80 : 800);
     if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
@@ -13480,11 +13301,6 @@ window.addEventListener('keydown',function(e){
         {ft.textContent = `${phase || '审核中'}：${name}${elapsed ? ' ' + Math.round(elapsed / 1000) + 's' : ''}`;}
       }
     });
-    if (result === 'incomplete') {
-      dbg('单审被原生不完整弹窗拦截:', name);
-      showToast(`⚠️ 原生弹窗拦截：${name} 必填项目未存数据，已自动按【取消】阻止审核！`, 'error', 6000);
-      return false;
-    }
     if (!result && !abortCheck()) {
       iframeWin = getReportIframeWin() || iframeWin;
       // 8.5.53: 复检标本（preStatus4）静态 4 不可信，跳过这里直接走长确认
@@ -13497,11 +13313,6 @@ window.addEventListener('keydown',function(e){
         preStatus4, // 8.5.53
         abortCheck
       });
-      if (result === 'incomplete') {
-        dbg('单审 confirmAuditEventually 拦截到不完整弹窗:', name);
-        showToast(`⚠️ 原生弹窗拦截：${name} 必填项目未存数据，已自动按【取消】阻止审核！`, 'error', 6000);
-        return false;
-      }
     }
     if (!preStatus4 && verifyAuditSucceededByReportDR(iframeWin, reportDR)) {return true;}
     // 延迟二次校验：原生状态回写可能有延迟，做短轮询早退；深层兜底由外层 confirmAuditEventuallyLive 处理
@@ -13509,11 +13320,6 @@ window.addEventListener('keydown',function(e){
       // 8.17.6: 先校验再等待（原实现首轮盲等 120ms）；轮数 4→5 保证总窗口仍是 4×120ms
       for (let _dv = 0; _dv < 5 && !abortCheck(); _dv++) {
         iframeWin = getReportIframeWin() || iframeWin;
-        const _dConf = handleNativeMessageConfirm(iframeWin);
-        if (_dConf === 'incomplete') {
-          dbg('单审延迟校验拦截到不完整弹窗:', name);
-          return false;
-        }
         if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !preStatus4 }) ||
             softAuditSuccessHint(iframeWin, reportDR, { accept4: !preStatus4 })) {
           dbg('延迟二次校验：标本已审核成功（原生状态）');
@@ -13524,7 +13330,7 @@ window.addEventListener('keydown',function(e){
       }
     }
     // 最终返回前也关闭可能残留的原生弹窗
-    if (result === true) {closeNativeAuditSuccessMessage(iframeWin);}
+    if (result) {closeNativeAuditSuccessMessage(iframeWin);}
     return result;
   }
   // 8.17.2: 「这次原生审核是不是自动审核机器人发起的」——**不能用 `_autoAuditRunning` 判断**：
@@ -13553,26 +13359,12 @@ window.addEventListener('keydown',function(e){
       // 卡片回车 / F4 定位审核）都记在这里；批审队列那条路径由 continueAuditQueue 记（它直接调
       // clickNativeAuditButton）。判定用 isRobotAuditCtx()（机器人显式包裹），**不用 `_autoAuditRunning`**。
       try {
-        if (_ok && !isRobotAuditCtx()) {
-          humanAuditMark(specimen && (specimen.ReportDR || specimen.reportDR));
-          // 8.17.10: 审核留痕（详情面板 / 面板内回车 / 卡片回车都走这里）
-          const _snapN = auditTraceSnapshot(specimen);
-          auditTraceAdd({
-            dr: specimen && (specimen.ReportDR || specimen.reportDR),
-            labno: specimen && specimen.Labno,
-            pat: specimen && specimen.PatName,
-            mn: specimen && (specimen._mn || specimen.MachineName),
-            path: '详情面板/回车',
-            ic: _snapN.ic,
-            nrr: _snapN.nrr,
-            verdict: _snapN.verdict
-          });
-        }
+        if (_ok && !isRobotAuditCtx()) {humanAuditMark(specimen && (specimen.ReportDR || specimen.reportDR));}
       } catch (e) {}
     }
   }
 
-  // 8.17.12: 关闭原生 LIS 审核成功后的弹窗（严格只关成功提示，绝不误触确认窗/不完整弹窗）
+  // 8.18.0: 关闭原生 LIS 审核成功后的弹窗（严格只关成功提示，绝不误触确认窗/不完整弹窗）
   function closeNativeAuditSuccessMessage(iframeWin) {
     try {
       const win = iframeWin || getReportIframeWin();
@@ -13588,7 +13380,7 @@ window.addEventListener('keydown',function(e){
         const text = (body.textContent || '').trim();
         const kind = classifyNativeMessage(text);
         if (kind === 'incomplete') {
-          // 8.17.12: 绝不可按确定！若残存必填项目未存数据弹窗，主动按【取消】阻止审核
+          // 8.18.0: 绝不可按确定！若残存必填项目未存数据弹窗，主动按【取消】阻止审核
           const btns = w.querySelectorAll('a.l-btn, button');
           for (const b of btns) {
             const bText = (b.textContent || b.value || '').trim();
@@ -13625,11 +13417,7 @@ window.addEventListener('keydown',function(e){
     // 8.17.6: 先校验再等待（原实现首轮盲等 150ms）；轮数 6→7 保证总窗口仍是 6×150ms
     for (let _dv = 0; _dv < 7; _dv++) {
       iframeWin = getReportIframeWin() || iframeWin;
-      const _cLRes = handleNativeMessageConfirm(iframeWin);
-      if (_cLRes === 'incomplete') {
-        dbg('confirmAuditEventuallyLive: 拦截到原生不完整弹窗，终止确认并返回 incomplete');
-        return 'incomplete';
-      }
+      handleNativeMessageConfirm(iframeWin);
       if (verifyAuditSucceededByReportDR(iframeWin, reportDR, { accept4: !pre4 }) ||
           softAuditSuccessHint(iframeWin, reportDR, { accept4: !pre4 })) {
         dbg('审核延迟确认成功（原生状态）:', specimen.PatName);
@@ -15389,32 +15177,27 @@ window.addEventListener('keydown',function(e){
       const reportDR = specimen.ReportDR;
       // 详情里人工点审：按当前标本实时分类桶选上下文（不能依赖 detailSource——
       // 详情内自动跳转后 source 仍是旧标本的，会误拦正常标本为「已分类为正常」）
-      // 8.17.9: 详情面板「审核」按钮 / 面板内回车此前**完全没有完整度检查**（只有 collected/pending
-      // 早退和分类校验）。这里**不硬拦**——从详情面板手动点审核是「确需人工审核」的有意通道
-      // （见 HANDTEST §22：星号占位标本挪到不完整后仍可从详情手动审），硬拦会把这条通道锁死。
-      // 但要**明确提示 + 留痕**：现场「缺了三个项目竟然审掉了」就是缺这一句提醒。
-      try {
-        const _cmpD = specimenCompleteness(specimen, wsClassifiedCache[specimen.ReportDR]);
-        if (!_cmpD.ok) {
-          showToast('⚠️ 该标本' + _cmpD.reason + '，仍按人工判断审核', 'warning');
-          dbg('详情面板审核：完整度提示', specimen.Labno || reportDR, _cmpD.reason);
-        }
-      } catch (e) {}
-
       const classCtx = specimen && getWSAuditBucket(specimen) === 'normal' ? 'normal' : 'abnormal';
       const classCheck = validateAuditClassification(reportDR, classCtx);
       if (!classCheck.ok) {
-        showToast(classCheck.msg || '当前标本不可审核', classCtx === 'abnormal' ? 'warning' : 'error');
-        return;
+        // 8.18.0: 详情面板中如果是 UNCERTAIN / 结果待定，检验人员已在肉眼检视，允许其触发原生审核并在原生弹窗中确认
+        const live = getLiveClassification(reportDR);
+        if (live && live.status === 'UNCERTAIN') {
+          dbg('详情面板审核：待定/不完整标本人工确认审核');
+        } else {
+          showToast(classCheck.msg || '当前标本不可审核', classCtx === 'abnormal' ? 'warning' : 'error');
+          return;
+        }
       }
       if (detailPanel && detailPanel.dataset.rdr === String(reportDR) && detailPanel.dataset.hasCritical === '1') {
         showToast(`🚨 ${specimen.PatName || specimen.Labno || ''} 有危急值，必须在原始LIS中审核`, 'error');
         return;
       }
 
+      // 8.18.0: 详情面板手动审核——对不完整标本仅提示不硬拦（HANDTEST §22 有意人工通道）
       if (!isSpecimenActuallyComplete(specimen)) {
-        showToast(`跳过: ${specimen.PatName} 结果不完整`, 'warning');
-        return;
+        dbg('详情面板审核：标本结果可能未录全，仅提示不硬拦，由检验人员在弹窗中人工确认');
+        showToast(`⚠️ [${specimen.PatName || specimen.Labno || ''}] 结果可能未录全，请核对弹窗提示`, 'warning');
       }
 
       const status = String(specimen.Status || specimen.ReportStatus || '');
@@ -18703,7 +18486,7 @@ window.addEventListener('keydown',function(e){
   function classifyNativeMessage(text) {
     const t = (text || '').trim();
     if (!t) {return '';}
-    // 8.17.12: 原生未存数据/不完整/漏项提示（涵盖所有原生弹窗文案变体，如"您还有项目：...等必填项目未存数据，是否确定审核？"）
+    // 8.18.0: 原生未存数据/不完整/漏项提示
     if (
       t.indexOf('必填项目') !== -1 ||
       t.indexOf('等必填项目') !== -1 ||
@@ -18732,7 +18515,7 @@ window.addEventListener('keydown',function(e){
     if (t.indexOf('未成功') !== -1 || t.indexOf('不成功') !== -1 || t.indexOf('没有成功') !== -1) {
       return 'failure'; // 8.5.82: 「审核未成功/保存不成功」含「成功」且不含「失败/错误」，原先会被误判 success
     }
-    // 8.17.12: 必须是确定性的成功提示，排除任何疑问句、确认提示、危急值及异常提示
+    // 8.18.0: 必须是确定性的成功提示，排除疑问句、确认提示及异常提示
     if (
       t.indexOf('成功') !== -1 &&
       t.indexOf('失败') === -1 &&
@@ -18881,7 +18664,7 @@ window.addEventListener('keydown',function(e){
     return closed;
   }
 
-  // 8.16.29 / 8.17.12: 判定原生审核确认提示弹窗当前是否可见处于待确认状态（严格排除不完整/错误弹窗）
+  // 8.16.29: 判定原生审核确认提示弹窗当前是否可见处于待确认状态
   function isNativeConfirmVisible(iframeWin) {
     const repWin = getReportIframeWin();
     const wins = [iframeWin, repWin, window];
@@ -18909,11 +18692,7 @@ window.addEventListener('keydown',function(e){
                 modal.parentElement.classList.contains('window') &&
                 modal.parentElement.style.display !== 'none');
           }
-          if (isVisible) {
-            const infoDiv = doc.getElementById('div_showInfo');
-            const infoText = (infoDiv ? infoDiv.textContent || '' : '').trim();
-            if (classifyNativeMessage(infoText) !== 'incomplete') {return true;}
-          }
+          if (isVisible) {return true;}
         }
         const allWins = doc.querySelectorAll(
           '.messager-window:not([style*="display: none"])'
@@ -18923,10 +18702,10 @@ window.addEventListener('keydown',function(e){
             const body = w.querySelector('.messager-body, .panel-body');
             if (body) {
               const text = (body.textContent || '').trim();
-              if (classifyNativeMessage(text) === 'incomplete') {continue;}
               if (
-                text.indexOf('超出参考范围') !== -1 ||
-                (text.indexOf('确定要保存') !== -1)
+                (text.indexOf('确定要') !== -1 && (text.indexOf('审核') !== -1 || text.indexOf('保存') !== -1)) ||
+                (text.indexOf('是否确定') !== -1 && text.indexOf('审核') !== -1) ||
+                text.indexOf('超出参考范围') !== -1
               ) {
                 return true;
               }
@@ -18967,7 +18746,7 @@ window.addEventListener('keydown',function(e){
     return false;
   }
 
-  // 8.16.27 / 8.16.29 / 8.17.12: 自动确认原生审核提示弹窗（#win_MessageConfirm 及 messager 确认窗）
+  // 8.16.27 / 8.16.29: 自动确认原生审核提示弹窗（#win_MessageConfirm 及 messager 确认窗）
   // 现场根因：当标本存在异常/轻微异常项目时，原生 VerifyReportResult 会返回 MaintinArr，
   // 触发 DealInfoArr 打开 #win_MessageConfirm（"结果超出参考范围，确定要审核该报告吗？"），
   // 并等待用户点击 #btn_Confirm 才会真正调用 LabResultSave。未确认前审核永久挂起直至超时漏审。
@@ -18975,7 +18754,6 @@ window.addEventListener('keydown',function(e){
   // 第二个标本的确认弹窗绝不会被误拦；同时提供 isNativeConfirmVisible 阻断假成功判定。
   let _lastConfirmText = '';
   let _lastConfirmClickAt = 0;
-  let _lastNativeAuditBlockedReason = '';
   // 8.16.31: 当前脚本审核目标（DR）+ 时间戳。原生确认窗只在「脚本正在审这条标本」时才允许自动点击，
   // 避免用户手动操作原生页时被脚本代按「确定」，也避免把上一条标本的弹窗误确认到下一条。
   let _auditingTargetDR = '';
@@ -18991,34 +18769,33 @@ window.addEventListener('keydown',function(e){
       _auditingTargetAt = 0;
     }
   }
-  // 8.16.31 / 8.17.12: 原生确认窗「可自动确认」判定——严格收窄。
-  // 8.17.12 核心铁律：
-  // 1. 任何含项目缺失、未存数据、未录入、未出全、缺项、疑问的弹窗，一律返回 false！
-  // 2. 彻底删除 (是否确定 + 审核) 的模糊放行规则，绝不给「必填项目未存数据，是否确定审核？」任何代按确定的机会！
-  // 3. 仅允许已知无害的「超出参考范围」确认提示。
+  // 8.16.31: 原生确认窗「可自动确认」判定——只认已知的审核/超范围确认文案。
+  // 未知文案、结果不完整（含「结果为空/未录入/必填项目」）、危急提示一律不自动确认（留人工）。
+  // 注意：这里只做**收窄**，不新增任何医学规则；危急的否定语境（无危急/非危急）沿用既有口径。
+  // 8.16.31 / 8.18.0: 原生确认窗「可自动确认」判定——只认已知的超范围/保存确认文案。
+  // 未知文案、结果不完整（含「结果为空/未录入/必填项目/未存」）、危急提示一律不自动确认（留人工）。
   function isAutoConfirmableNativeText(text) {
     const t = String(text || '').trim();
     if (!t) {return false;}
     if (classifyNativeMessage(t) === 'incomplete') {return false;}
     if (t.indexOf('危急') !== -1 && t.indexOf('无危急') === -1 && t.indexOf('非危急') === -1) {return false;}
+    // 8.18.0: 严禁自动确认含未存/缺项/必填的弹窗
     if (
       t.indexOf('必填') !== -1 ||
-      t.indexOf('未存数据') !== -1 ||
       t.indexOf('未存') !== -1 ||
       t.indexOf('未检') !== -1 ||
-      t.indexOf('未出全') !== -1 ||
       t.indexOf('缺') !== -1 ||
-      t.indexOf('项目') !== -1 ||
+      t.indexOf('您还有') !== -1 ||
       t.indexOf('没有结果') !== -1 ||
       t.indexOf('无结果') !== -1 ||
-      t.indexOf('未录入') !== -1 ||
-      t.indexOf('您还有') !== -1
+      t.indexOf('未录入') !== -1
     ) {
       return false;
     }
+    // 8.18.0: 彻底删除模糊规则，绝不因原生提问误点确定！只认明确的超出参考范围确认或确定要保存
     return (
-      t.indexOf('超出参考范围') !== -1 ||
-      (t.indexOf('确定要保存') !== -1)
+      (t.indexOf('确定要') !== -1 && (t.indexOf('审核') !== -1 || t.indexOf('保存') !== -1)) ||
+      t.indexOf('超出参考范围') !== -1
     );
   }
   function handleNativeMessageConfirm(iframeWin) {
@@ -19026,13 +18803,16 @@ window.addEventListener('keydown',function(e){
     const repWin = getReportIframeWin();
     const wins = [iframeWin, repWin, window];
     const visited = new Set();
-    // 8.16.31: 自动确认准入条件（此前完全没有）——必须「脚本正在审核」+「审核目标新鲜」。
-    // 之前只要弹窗可见就点 #btn_Confirm：用户手动在原生页操作时会被代按确定，
-    // 且完全不校验文案（未知提示 / 结果不完整 / 危急提示一律照点）。
+    // 8.16.31 / 8.18.0: 自动确认准入条件——必须「脚本正在审核」+「审核目标新鲜」。
     const _confirmTarget = String(_auditingTargetDR || '');
     const _scriptAuditing = isScriptOwnedNativeSelection();
     const _confirmTargetFresh = !!_confirmTarget && now - _auditingTargetAt < NATIVE_CONFIRM_TARGET_TTL;
     const _confirmAllowed = _scriptAuditing && _confirmTargetFresh;
+    // 8.18.0: 判定是否处于自动化流程（F4 批量审核队列 或 自动审核机器人）
+    const _isAutomated =
+      (typeof _auditInProgress !== 'undefined' && !!_auditInProgress) ||
+      (typeof isRobotAuditCtx === 'function' && isRobotAuditCtx()) ||
+      (typeof _queueLockToken !== 'undefined' && !!_queueLockToken);
     // 弹窗所属窗口的「当前标本」必须与审核目标一致（任一权威来源都不允许冲突）
     const confirmTargetMatches = win => {
       const drs = [getNativeWorkListSelectedDR(win), String((win && win.me && win.me.curReportDR) || '')].filter(Boolean);
@@ -19065,24 +18845,33 @@ window.addEventListener('keydown',function(e){
                 modal.parentElement.style.display !== 'none');
           }
           if (isVisible) {
+            const btn = doc.getElementById('btn_Confirm');
             const infoDiv = doc.getElementById('div_showInfo');
             const infoText = (infoDiv ? infoDiv.textContent || '' : '').trim();
+            // 8.18.0: 不完整/未存数据拦截处理
             if (classifyNativeMessage(infoText) === 'incomplete') {
-              const cancelBtn = doc.getElementById('btn_Cancel') || doc.querySelector('#win_MessageConfirm a.l-btn');
-              if (cancelBtn) {
-                try { jq && jq(cancelBtn).click ? jq(cancelBtn).click() : cancelBtn.click(); } catch (e) {}
+              if (_confirmAllowed && confirmTargetMatches(win)) {
+                // 脚本审核中拦截到不完整弹窗：主动按【取消】阻止审核，并返回 'incomplete'
+                const cancelBtn = doc.getElementById('A3') || modal.querySelector('a.l-btn[data-options*="cancel"], .panel-tool-close');
+                _lastConfirmText = infoText;
+                _lastConfirmClickAt = now;
+                if (cancelBtn) {
+                  dbg('handleNativeMessageConfirm 自动化流程拦截到不完整弹窗(#win_MessageConfirm)，主动点击【取消】:', infoText.slice(0, 80));
+                  try { jq && jq(cancelBtn).click ? jq(cancelBtn).click() : cancelBtn.click(); } catch (e) { try { cancelBtn.click(); } catch (e2) {} }
+                } else {
+                  try { jq && jq(modal).window ? jq(modal).window('close') : (modal.style.display = 'none'); } catch (e) {}
+                }
+                return 'incomplete';
               }
-              _lastNativeAuditBlockedReason = infoText;
-              dbg('检测到 #win_MessageConfirm 结果不完整，已驳回审核');
-              return 'incomplete';
+              // 人工手动操作时：绝不自动代按确定或取消，原样呈现给检验人员人工决定
+              return false;
             }
-            const btn = doc.getElementById('btn_Confirm');
+
             if (btn) {
               if (infoText && infoText === _lastConfirmText && now - _lastConfirmClickAt < 400) {
                 return false;
               }
-              // 8.16.31: 四道闸——① 脚本审核中 ② 目标新鲜 ③ 文案在允许清单内 ④ 窗口标本==审核目标。
-              // 任一不满足 → 不点（保守留人工，由单条超时兜底），绝不扩大医学规则。
+              // 四道闸——① 脚本审核中 ② 目标新鲜 ③ 文案在允许清单内 ④ 窗口标本==审核目标。
               if (!_confirmAllowed || !isAutoConfirmableNativeText(infoText) || !confirmTargetMatches(win)) {
                 dbg(
                   '原生确认窗未自动确认（保守留人工）: 文案=',
@@ -19117,7 +18906,7 @@ window.addEventListener('keydown',function(e){
           }
         }
 
-        // 2. EasyUI 模态 confirm 对话框 (.messager-window 中的确定/取消)
+        // 2. EasyUI 模态 confirm 对话框 (.messager-window 中的确定)
         const allWins = doc.querySelectorAll(
           '.messager-window:not([style*="display: none"]), .window:not([style*="display: none"])'
         );
@@ -19127,45 +18916,40 @@ window.addEventListener('keydown',function(e){
           if (!body) {continue;}
           const text = (body.textContent || '').trim();
 
-          // 8.17.12: 原生未存数据/结果不完整确认弹窗（如"您还有项目：...等必填项目未存数据，是否确定审核？"）
-          // 核心防御：主动寻找并点击【取消】按钮，确保原生 LIS 的 VerifyReportResult 被取消（r=false），
-          // 并立即返回 'incomplete' 阻止外层任何成功误判！
-          const kind = classifyNativeMessage(text);
-          if (kind === 'incomplete') {
-            const btns = w.querySelectorAll('a.l-btn, button');
-            let clickedCancel = false;
-            for (const b of btns) {
-              const bText = (b.textContent || b.value || '').trim();
-              if (bText === '取消' || bText === 'No' || bText === '否' || bText === '关闭') {
-                dbg('检测到原生项目缺失/未存数据弹窗，主动点击【取消】阻止审核:', text.slice(0, 80));
-                _lastConfirmText = text;
-                _lastConfirmClickAt = now;
-                _lastNativeAuditBlockedReason = text;
-                try {
-                  jq && jq(b).click ? jq(b).click() : b.click();
-                } catch (e) {
-                  try { b.click(); } catch (e2) {}
+          // 8.18.0: 核心安全防线——不完整/必填项目未存数据处理
+          if (classifyNativeMessage(text) === 'incomplete') {
+            if (_confirmAllowed && confirmTargetMatches(win)) {
+              // 脚本审核中拦截到未存必填项目弹窗：主动按【取消】阻止审核并返回 'incomplete'
+              const btns = w.querySelectorAll('a.l-btn, button');
+              let clicked = false;
+              for (const b of btns) {
+                const bText = (b.textContent || b.value || '').trim();
+                if (bText === '取消' || bText === 'No' || bText === '否' || bText === '关闭') {
+                  dbg('handleNativeMessageConfirm 自动化流程拦截到不完整弹窗(.messager-window)，主动点击【取消】:', text.slice(0, 80));
+                  _lastConfirmText = text;
+                  _lastConfirmClickAt = now;
+                  try { jq && jq(b).click ? jq(b).click() : b.click(); } catch (e) { try { b.click(); } catch (e2) {} }
+                  clicked = true;
+                  break;
                 }
-                clickedCancel = true;
-                break;
               }
-            }
-            if (!clickedCancel) {
-              try {
+              if (!clicked) {
                 const closeBtn = w.querySelector('.panel-tool-close');
                 if (closeBtn) {
-                  closeBtn.click();
-                  clickedCancel = true;
-                  dbg('已点击原生不完整弹窗右上角关闭按钮');
+                  dbg('handleNativeMessageConfirm 主动点击关闭按钮拦截不完整弹窗');
+                  _lastConfirmText = text;
+                  _lastConfirmClickAt = now;
+                  try { closeBtn.click(); } catch (e) {}
+                  clicked = true;
                 }
-              } catch (e) {}
+              }
+              return 'incomplete';
             }
-            _lastNativeAuditBlockedReason = text;
-            return 'incomplete';
+            // 人工手动操作：绝不代点，留给用户在弹窗上决定
+            return false;
           }
 
-          // 8.16.31: 统一走同一套收窄判定——不完整 / 危急 / 未知文案一律不自动确认，
-          // 并且同样要求「脚本审核中 + 目标匹配」（此前这里没有目标绑定）
+          // 统一走收窄判定——不完整 / 危急 / 未知文案一律不自动确认
           if (!_confirmAllowed || !confirmTargetMatches(win) || !isAutoConfirmableNativeText(text)) {continue;}
           if (text && text === _lastConfirmText && now - _lastConfirmClickAt < 400) {
             return false;
@@ -19370,11 +19154,7 @@ window.addEventListener('keydown',function(e){
       jq = iframeWin ? iframeWin.jQuery || iframeWin.$ : window.jQuery;
       me = iframeWin ? iframeWin.me : me;
       closeIgnorableNativeExceptionDialogs(doc, jq);
-      const _hcRes = handleNativeMessageConfirm(iframeWin);
-      if (_hcRes === 'incomplete') {
-        dbg('waitNativeActionResult: handleNativeMessageConfirm 拦截到原生不完整弹窗，立即返回 incomplete');
-        return 'incomplete';
-      }
+      if (handleNativeMessageConfirm(iframeWin) === 'incomplete') {return 'incomplete';}
 
       if (targetReportDR && expectedStatuses && expectedStatuses.length) {
         const found = findNativeRowByReportDR(iframeWin, targetReportDR);
@@ -19386,8 +19166,8 @@ window.addEventListener('keydown',function(e){
             return true;
           }
         } else if (missingAsSuccess && sawTargetRow) {
-          if (isNativeConfirmVisible(iframeWin) || isNativeErrorAlertVisible(iframeWin)) {
-            missingSince = 0; // 8.16.29 / 8.17.12: 仍有确认或错误/不完整弹窗处于待确认状态，绝不可视为已成功移出列表
+          if (isNativeConfirmVisible(iframeWin)) {
+            missingSince = 0; // 8.16.29: 仍有确认弹窗处于待确认状态，绝不可视为已成功移出列表
           } else {
             if (!missingSince) {missingSince = Date.now();}
             // 秒审：IsSaveSuccess 后行消失可更快认定成功
@@ -19403,8 +19183,8 @@ window.addEventListener('keydown',function(e){
       if (me && me.IsSaveSuccess === true) {
         me.IsSaveSuccess = false;
         sawSaveSuccess = true;
-        if (isNativeConfirmVisible(iframeWin) || isNativeErrorAlertVisible(iframeWin)) {
-          // 8.16.29 / 8.17.12: 仍有确认或错误/不完整弹窗等待处理，不可据此提前断定成功
+        if (isNativeConfirmVisible(iframeWin)) {
+          // 8.16.29: 仍有确认弹窗等待点击，不可据此提前断定成功
         } else {
           if (!expectedStatuses || expectedStatuses.length === 0) {return true;}
           const found = targetReportDR ? findNativeRowByReportDR(iframeWin, targetReportDR) : null;
@@ -19444,16 +19224,8 @@ window.addEventListener('keydown',function(e){
         }
       }
 
-      // 8.5.82 / 8.17.12: 严防不完整弹窗被 ignoreMessages 误吞后让行消失误判为成功！
-      // 即使 ignoreMessages=true，若存在 incomplete 弹窗，也必须代为按【取消】并立即返回 'incomplete'
-      if (ignoreMessages) {
-        const failureKind = readNativeMessageResult(doc, jq);
-        if (failureKind === 'incomplete') {
-          dbg('waitNativeActionResult 拦截到原生必填项目未存数据弹窗，立即返回 incomplete');
-          return 'incomplete';
-        }
-        closeNativeFailureDialogs(doc, jq);
-      }
+      // 8.5.82: ignoreMessages 只是「不据弹窗判结果」，失败/不完整弹窗仍要代为关闭（防遮罩残留连锁超时）
+      if (ignoreMessages) {closeNativeFailureDialogs(doc, jq);}
       const msg = ignoreMessages ? '' : readNativeMessageResult(doc, jq);
       if (msg === 'success') {
         if (!expectedStatuses || expectedStatuses.length === 0 || !targetReportDR) {return true;}
@@ -20266,11 +20038,7 @@ window.addEventListener('keydown',function(e){
       jq(btn).click();
       dbg('已点击审核按钮, targetReportDR=' + targetReportDR);
     }
-    const _initConf = handleNativeMessageConfirm(iframeWin);
-    if (_initConf === 'incomplete') {
-      dbg('clickNativeAuditButton: 触发审核后立即拦截到原生未存数据弹窗，已按取消并返回 incomplete');
-      return 'incomplete';
-    }
+    if (handleNativeMessageConfirm(iframeWin) === 'incomplete') {return 'incomplete';}
 
     // 8.16.35: 原生 ReportSave 为同步执行 (async: false)，调用返回后若在内存中已确认成功，
     // 8.16.36: 且无错误确认窗拦截与无原生错误弹窗阻断，立即判定成功早退，彻底消除 waitNativeActionResult 首轮盲等与 missingStableMs
@@ -20298,15 +20066,13 @@ window.addEventListener('keydown',function(e){
       try {
         if (typeof iframeWin.ReportSave === 'function') {
           iframeWin.ReportSave('A', '');
-          const _rConf = handleNativeMessageConfirm(iframeWin);
-          if (_rConf === 'incomplete') return 'incomplete';
+          handleNativeMessageConfirm(iframeWin);
           return true;
         }
       } catch (e) {}
       try {
         jq(btn).click();
-        const _rConf = handleNativeMessageConfirm(iframeWin);
-        if (_rConf === 'incomplete') return 'incomplete';
+        handleNativeMessageConfirm(iframeWin);
         return true;
       } catch (e2) {}
       return false;
@@ -20326,7 +20092,6 @@ window.addEventListener('keydown',function(e){
           turbo: true
         })
       );
-      if (fastResult === 'incomplete') {return 'incomplete';}
       if (fastResult !== false) {return fastResult;}
       if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {
         return true;
@@ -20342,7 +20107,6 @@ window.addEventListener('keydown',function(e){
       allowMissingSuccess,
       waitOpts
     );
-    if (instant === 'incomplete') {return 'incomplete';}
     if (instant !== false) {return instant;}
 
     for (let poll = 0; poll < maxPoll; poll++) {
@@ -20355,7 +20119,6 @@ window.addEventListener('keydown',function(e){
         allowMissingSuccess,
         waitOpts
       );
-      if (early === 'incomplete') {return 'incomplete';}
       if (early !== false) {return early;}
 
       await sleep(pollSleep);
@@ -20394,7 +20157,6 @@ window.addEventListener('keydown',function(e){
             true,
             makeWaitOpts({ missingStableMs: 180, turbo: true })
           );
-          if (afterAuth === 'incomplete') {return 'incomplete';}
           if (afterAuth !== false) {return afterAuth;}
           if (targetReportDR && verifyAuditSucceededByReportDR(iframeWin, targetReportDR)) {return true;}
         }
@@ -20426,11 +20188,7 @@ window.addEventListener('keydown',function(e){
         for (let i = 0; i < (batchMode ? 20 : 30); i++) {
           if (options.abortCheck && options.abortCheck()) {return false;}
           iframeWin = getReportIframeWin() || iframeWin;
-          const _caConf = handleNativeMessageConfirm(iframeWin);
-          if (_caConf === 'incomplete') {
-            dbg('CA 后突发确认拦截到原生不完整弹窗');
-            return 'incomplete';
-          }
+          handleNativeMessageConfirm(iframeWin);
           if (
             verifyAuditSucceededByReportDR(iframeWin, targetReportDR) ||
             softAuditSuccessHint(iframeWin, targetReportDR)
@@ -21450,6 +21208,7 @@ window.addEventListener('keydown',function(e){
       critical: isCriticalResultItem(item),
       panicLow: item.PanicLow || item.CriticalLow || '',
       panicHigh: item.PanicHigh || item.CriticalHigh || '',
+      isMandatory: String((item && (item.IsMandatory || item.IsRqed)) || '') === '1',
       preResult: item
     }));
 
@@ -21462,7 +21221,8 @@ window.addEventListener('keydown',function(e){
     const hasCritical =
       isCriticalSpecimenRow(row) || classifications.some(c => c.status === 'CRITICAL' || c.critical);
     const hasUncertain = classifications.some(c => c.status === 'UNCERTAIN');
-    // 检查是否有结果为空的项目
+    // 8.18.0: 检查是否有结果为空的项目，以及是否有必填项未存数据
+    const hasMissingMandatory = classifications.some(c => c.isMandatory && isEmptyResultValue(c, c.result));
     const hasEmptyResults = classifications.some(c => isEmptyResultValue(c, c.result));
     // 8.10.23: 手工录入标本完整性判断——当且仅当全部项目已录入无空项时判定完整
     const isManualComplete = isManual && classifications.length > 0 && !hasEmptyResults;
@@ -21474,7 +21234,7 @@ window.addEventListener('keydown',function(e){
     if (hasCritical) {overallStatus = 'CRITICAL';}
     else if (zeroInfo.suspect) {overallStatus = 'ZERO';}
     else if (hasAbnormal || infectionWarning) {overallStatus = 'ABNORMAL';}
-    else if (hasUncertain || !hasComplete || hasEmptyResults) {overallStatus = 'UNCERTAIN';}
+    else if (hasUncertain || !hasComplete || hasEmptyResults || hasMissingMandatory) {overallStatus = 'UNCERTAIN';}
 
     return attachClassificationMeta(
       {
@@ -21485,7 +21245,9 @@ window.addEventListener('keydown',function(e){
         reportDR,
         infectionWarning: infectionWarning || undefined,
         isManual,
-        isManualComplete
+        isManualComplete,
+        hasMissingMandatory,
+        hasEmptyResults
       },
       row
     );
@@ -24109,18 +23871,6 @@ window.addEventListener('keydown',function(e){
     }
     if (!ready) {return { ok: false, iframeWin, reason: 'detail' };}
 
-    // 8.17.9: 补审轮**同样**要过完整度闸门——此前补审拿到选行就直奔审核，
-    // 主循环里被完整度拦下的标本会在补审轮被原样放行（补审的语义是「救回未确认的」，
-    // 不是「绕过完整度」）。不通过就带着原因返回，由调用方留在 failed 里交人工。
-    {
-      const _rowS = resolveQueueItemRow(item) || findWSSpecimenByReportDR(item.reportDR) || queueItemNativeRow(item);
-      const _cmpS = specimenCompleteness(_rowS, wsClassifiedCache[item.reportDR]);
-      if (!_cmpS.ok) {
-        dbg('补审轮完整度闸门拦下:', item.labno || item.reportDR, _cmpS.reason);
-        return {ok: false, iframeWin, reason: '完整度复核：' + _cmpS.reason};
-      }
-    }
-
     const caReady = isCASessionReady(iframeWin) || anyCAUkeyPresent(iframeWin);
     _auditingPreStatus4 = _salvagePre4; // 8.5.56: 让内部 verify/soft 兜底按复检语义判定
     _auditingCrossGroup = _salvageCrossGroup; // 8.16.25: 跨组时关闭「行消失=成功」
@@ -24136,16 +23886,11 @@ window.addEventListener('keydown',function(e){
         preStatus4: _salvagePre4,
         targetReportDR: item.reportDR
       });
-      if (result === 'incomplete') {
-        dbg('补审轮被原生不完整弹窗拦截:', item.labno || item.reportDR);
-        return { ok: false, iframeWin, reason: '原生弹窗拦截：必填项目未存数据（已按取消阻止审核）' };
-      }
       // 8.17.6: 三处「先盲等再校验」改成「先校验再等」——原生其实已审成功时，
       // 原实现要多等 300 / 800 / 1800ms 才发现。退避总时长不变，只是把校验提前到每段之前。
       const _verifySalvage = () => {
         iframeWin = getReportIframeWin() || iframeWin;
-        const _sConf = handleNativeMessageConfirm(iframeWin);
-        if (_sConf === 'incomplete') return 'incomplete';
+        handleNativeMessageConfirm(iframeWin);
         return verifyAuditSucceededByReportDR(iframeWin, item.reportDR, { accept4: !_salvagePre4 }) ||
                softAuditSuccessHint(iframeWin, item.reportDR, { accept4: !_salvagePre4 });
       };
@@ -24163,33 +23908,8 @@ window.addEventListener('keydown',function(e){
         await sleep(1000);
         result = _verifySalvage();
       }
-      if (result === 'incomplete') {
-        return { ok: false, iframeWin, reason: '原生弹窗拦截：必填项目未存数据（已按取消阻止审核）' };
-      }
-      if (result === true) {closeNativeAuditSuccessMessage(iframeWin);}
-      // 8.17.10: 审核留痕（补审轮也走同一条）
-      if (result === true) {
-        try {
-          const _snapS = auditTraceSnapshot(resolveQueueItemRow(item) || findWSSpecimenByReportDR(item.reportDR));
-          item._preAuditIc = _snapS.ic;
-          item._preAuditNrr = _snapS.nrr;
-          item._preAuditVerdict = _snapS.verdict;
-          item._preAuditShort = _snapS.short;
-          item._preAuditExp = _snapS.exp;
-          item._preAuditAct = _snapS.act;
-          auditTraceAdd({
-            dr: item.reportDR,
-            labno: item.labno,
-            pat: item.name,
-            mn: item.mn,
-            path: '补审轮',
-            ic: _snapS.ic,
-            nrr: _snapS.nrr,
-            verdict: _snapS.verdict
-          });
-        } catch (e) {}
-      }
-      return { ok: result === true, iframeWin };
+      if (result) {closeNativeAuditSuccessMessage(iframeWin);}
+      return { ok: !!result, iframeWin };
     } finally {
       _auditingPreStatus4 = false; // 8.5.56: 复位，避免影响后续判定
       _auditingCrossGroup = false; // 8.16.25: 同上
@@ -24213,98 +23933,6 @@ window.addEventListener('keydown',function(e){
     queue._autoMode = !!(options && options.auto);
     await continueAuditQueue(queue);
     return queue; // 8.5.58: 返回 queue 供自动审核统计 done/failed/skipped
-  }
-
-  // 8.17.9: 审核后自检——把这一批「成功审掉」的标本用**最新工作列表**复核一遍完整度。
-  // 返回不完整的条目数组（空数组 = 全部复核通过）。
-  // 设计取舍：
-  //   · 按仪器分组，每台只读一次工作列表（批量末尾一次，几十毫秒级），不逐条打接口；
-  //   · **读不到列表 / 标本已不在列表里 → 不下结论、不误报**（可能已出查询范围或已归档）；
-  //   · 只对「脚本刚审掉」的条目下结论，不做全量扫描。
-  async function verifyAuditedCompleteness(queue) {
-    const done = (queue && queue.done) || [];
-    if (!done.length) {return [];}
-    let qStart = today();
-    let qEnd = today();
-    try {
-      const rng = getWSQueryRange();
-      if (rng && rng.length === 2) {qStart = rng[0]; qEnd = rng[1];}
-    } catch (e) {}
-    const byMachine = new Map();
-    done.forEach(it => {
-      if (!it) {return;}
-      const mdr = String(it.mdr || (it.row && it.row._mdr) || '');
-      if (!mdr) {return;}
-      const wg = String(it.wg || (it.row && it.row._wg) || '');
-      const k = wg + '|' + mdr;
-      if (!byMachine.has(k)) {byMachine.set(k, {mdr, wg, items: []});}
-      byMachine.get(k).items.push(it);
-    });
-    const bad = [];
-    for (const grp of byMachine.values()) {
-      let rows = [];
-      try {
-        rows = await loadWL(grp.mdr, buildSS(grp.wg || wgDR()), qStart, qEnd);
-      } catch (e) {
-        dbg('审核后自检：工作列表读取失败，跳过该仪器', grp.mdr, e && e.message);
-        continue;
-      }
-      const byDR = new Map();
-      (rows || []).forEach(r => {if (r && r.ReportDR) {byDR.set(String(r.ReportDR), r);}});
-      grp.items.forEach(it => {
-        const r = byDR.get(String(it.reportDR || ''));
-        if (!r) {return;} // 已不在列表 → 不误报
-        const cmp = specimenCompleteness(r, null);
-        if (!cmp.ok) {
-          bad.push({
-            dr: String(it.reportDR || ''),
-            labno: it.labno || '',
-            patName: it.name || '',
-            reason: cmp.reason,
-            // 8.17.10: 审核那一刻的快照 —— 用来直接定性是谁的问题
-            preIc: it._preAuditIc === undefined || it._preAuditIc === null ? '' : String(it._preAuditIc),
-            preVerdict: String(it._preAuditVerdict || ''),
-            // 8.17.11: 观察模式——审核那一刻项数是否就已经对不上（能对上说明「应有项数核对」抓不到这类）
-            preShort: Number(it._preAuditShort) || 0,
-            preExp: Number(it._preAuditExp) || 0,
-            preAct: Number(it._preAuditAct) || 0
-          });
-        }
-      });
-    }
-    if (bad.length) {
-      const list = bad.slice(0, 5).map(b => (b.patName || '') + ' ' + (b.labno || '')).join('、');
-      const more = bad.length > 5 ? ' 等 ' + bad.length + ' 条' : '';
-      // 8.17.10: 每条附上「审核那一刻」的快照定性，省掉事后靠回忆：
-      //   审核时 LIS 说完整 → LIS 侧把完整度判错了；审核时就不完整 → 脚本闸门被绕过
-      const _diag = bad
-        .slice(0, 3)
-        .map(
-          b =>
-            (b.patName || '') + ' ' + (b.labno || '') + '：审核时 LIS 记录 IsComplete=' + (b.preIc || '空') +
-            (b.preVerdict ? '（脚本当时判定：' + b.preVerdict + '）' : '（脚本当时判定：完整）')
-        )
-        .join('；');
-      showToast(
-        '🚨 审核后自检：' + bad.length + ' 条刚审掉的标本结果不完整（' + list + more +
-          '）——请立即在 LIS 核对！（控制台 lisAuditTrace() 可查审核留痕）',
-        'error'
-      );
-      dbg('审核后自检发现不完整:', JSON.stringify(bad));
-      try {aaStateEventAdd('pause', '审核后自检：' + bad.length + ' 条已审标本结果不完整（' + list + more + '）');} catch (e) {}
-      try {
-        pushAutoAuditNotify({
-          title: '🚨 审核后自检：已审标本结果不完整',
-          body: bad.length + ' 条：' + list + more + (_diag ? '\n' + _diag : ''),
-          level: 'critical',
-          group: 'LIS危急告警',
-          sound: 'alarm'
-        });
-      } catch (e) {}
-    } else {
-      dbg('审核后自检通过:', done.length, '条');
-    }
-    return bad;
   }
 
   async function continueAuditQueue(queue) {
@@ -24622,21 +24250,12 @@ window.addEventListener('keydown',function(e){
           saveAuditQueueNow(queue);
           continue;
         }
-        // 8.17.9: 完整度复核改为 **fail-closed + 带原因**。
-        // 原来写的是 `if (liveRow && !isSpecimenActuallyComplete(liveRow))` —— liveRow 为空时
-        // **整条判定被静默跳过**（无活体行 = 跨整页刷新续跑 / 切组 / 批审中途工作台刷新把行挤掉），
-        // 等于「查不到就不查」。而漏结果审核恰恰最容易从这个洞钻过去。
-        // 现在：行在 → 按行判完整度并写明缺几项；行不在 → 也不放行（交给下面的分类重取路径
-        // 重取数据；重取也拿不到就按技术性缺数据 requeue/留人工）。
-        const _cmpEarly = specimenCompleteness(liveRow, wsClassifiedCache[item.reportDR]);
-        if (!_cmpEarly.ok && liveRow) {
-          const _reason = '审核前复核：' + _cmpEarly.reason;
-          queue.skipped.push({ ...item, reason: _reason });
-          _aaRecordQueueItem('留人工', item, _reason);
+        if (liveRow && !isSpecimenActuallyComplete(liveRow)) {
+          queue.skipped.push({ ...item, reason: '结果不完整' });
+          _aaRecordQueueItem('留人工', item, '结果不完整');
           skipCount++;
           queue.current++;
           saveAuditQueueNow(queue);
-          dbg('批审逐条复核拦下:', item.labno || item.reportDR, _reason);
           continue;
         }
         let liveClassified = getLiveClassification(item.reportDR);
@@ -24697,34 +24316,6 @@ window.addEventListener('keydown',function(e){
           queue.current++;
           saveAuditQueueNow(queue);
           continue;
-        }
-
-        // 8.17.9: **审核前最终闸门**——放在「最新分类已拿到」之后、真正点审核之前。
-        // 这是「漏结果审核」的最后一道拦网：无论前面哪一步放行过，这里再按**当前最新可用行**判一次完整度。
-        // fail-closed 语义：连行都拿不到（无法复核完整度）→ 按技术性缺数据 requeue（≤3 次）后进补审，
-        // **绝不凭旧数据放行**；行在但不完整 → 留人工，原因写明缺几项。
-        {
-          const _rowNow = liveRow || findWSSpecimenByReportDR(item.reportDR) || queueItemNativeRow(item);
-          const _cmp = specimenCompleteness(_rowNow, wsClassifiedCache[item.reportDR]);
-          if (!_cmp.ok) {
-            const _reason = '审核前复核：' + _cmp.reason;
-            if (!_rowNow) {
-              if (requeueAuditItem(queue, item, _reason, {tech: true})) {
-                dbg('批审最终闸门：' + _reason + '，放回队尾重试:', item.reportDR);
-              } else {
-                _aaRecordQueueItem('留人工', item, _reason);
-                skipCount++;
-              }
-            } else {
-              queue.skipped.push({ ...item, reason: _reason });
-              _aaRecordQueueItem('留人工', item, _reason);
-              skipCount++;
-            }
-            queue.current++;
-            saveAuditQueueNow(queue);
-            dbg('批审最终闸门拦下:', item.labno || item.reportDR, _reason);
-            continue;
-          }
         }
 
         // 8.5.10: 跨组标本判定与快速切组优化（选不到时才回退切组）
@@ -24983,24 +24574,6 @@ window.addEventListener('keydown',function(e){
               progressPhase(phase || (batchCAReady ? '秒审' : '审核中'), elapsed);
             }
           });
-          // 8.17.12: 原生弹窗拦截到必填项目未存数据——立即留人工、红字告警并跳至下一条，绝不进入重试或延迟确认！
-          if (auditResult === 'incomplete') {
-            const _reason = '原生弹窗拦截：必填项目未存数据（已按取消阻止审核）';
-            queue.skipped.push({ ...item, reason: _reason });
-            _aaRecordQueueItem('留人工', item, _reason);
-            skipCount++;
-            showToast(`⚠️ 原生弹窗拦截：${item.name || item.labno} 必填项目未存数据，已自动按【取消】阻止审核并留人工！`, 'error', 6000);
-            try {
-              pushAutoAuditNotify({
-                title: '⚠️ 原生弹窗拦截：必填项目未存数据',
-                body: `${item.name || ''} ${item.labno || ''} 必填项目未存数据，脚本已自动点击【取消】阻止审核并留人工！`,
-                level: 'critical',
-                group: 'LIS危急告警',
-                sound: 'alarm'
-              });
-            } catch (e) {}
-            continue;
-          }
           // 首次未确认：短确认即可；首条 CA 后勿再叠 8s「确认结果中」
           if (!auditResult && !itemAbort()) {
             iframeWin = getReportIframeWin() || iframeWin;
@@ -25034,14 +24607,6 @@ window.addEventListener('keydown',function(e){
                 onTick: msg =>
                   updateBatchProgress(`${itemBase} - ${msg}${modeHint}`, ((queue.current + 0.7) / totalCount) * 100)
               });
-              if (auditResult === 'incomplete') {
-                const _reason = '原生弹窗拦截：必填项目未存数据（已按取消阻止审核）';
-                queue.skipped.push({ ...item, reason: _reason });
-                _aaRecordQueueItem('留人工', item, _reason);
-                skipCount++;
-                showToast(`⚠️ 原生弹窗拦截：${item.name || item.labno} 必填项目未存数据，已自动按【取消】阻止审核并留人工！`, 'error', 6000);
-                continue;
-              }
             } else {
               for (let q = 0; q < 5 && !auditResult; q++) {
                 await sleep(40);
@@ -25069,9 +24634,15 @@ window.addEventListener('keydown',function(e){
             }
           }
           if (auditResult === 'incomplete') {
-            const _reason = '原生弹窗拦截：必填项目未存数据（已按取消阻止审核）';
-            queue.skipped.push({ ...item, reason: _reason });
-            _aaRecordQueueItem('留人工', item, _reason);
+            queue.skipped.push({ ...item, reason: '原生弹窗拦截：必填项目未存数据（已按取消阻止审核）' });
+            _aaRecordQueueItem('留人工', item, '原生弹窗拦截：必填项目未存数据（已按取消阻止审核）');
+            showToast(`🚨 [${item.name || item.labno}] 原生弹窗拦截：存在未存必填项目，已阻止自动审核（留人工）`, 'error');
+            try {
+              pushAutoAuditNotify && pushAutoAuditNotify({
+                title: 'LIS危急告警',
+                body: `[${item.name || item.labno}] 原生拦截：必填项目未存数据`
+              });
+            } catch (e) {}
             skipCount++;
           } else if (auditResult === true) {
             closeNativeAuditSuccessMessage(iframeWin);
@@ -25080,27 +24651,6 @@ window.addEventListener('keydown',function(e){
             // 8.17.2: 批审主循环直接调 clickNativeAuditButton（不过 executeNativeAudit），
             // 所以人工 F4 / 批审的留痕必须在这里打——只有自动审核队列才不算人工。
             if (!queue._autoMode) {humanAuditMark(item.reportDR);}
-            // 8.17.10: 审核留痕——记下「审核那一刻」的完整度快照（并挂到队列条目上，
-            // 供批量收尾的「审核后自检」直接定性：是 LIS 说完整、还是闸门被绕过）
-            try {
-              const _snapA = auditTraceSnapshot(liveRow || findWSSpecimenByReportDR(item.reportDR));
-              item._preAuditIc = _snapA.ic;
-              item._preAuditNrr = _snapA.nrr;
-              item._preAuditVerdict = _snapA.verdict;
-              item._preAuditShort = _snapA.short;
-              item._preAuditExp = _snapA.exp;
-              item._preAuditAct = _snapA.act;
-              auditTraceAdd({
-                dr: item.reportDR,
-                labno: item.labno,
-                pat: item.name,
-                mn: item.mn,
-                path: queue._autoMode ? '机器人批审' : '人工批审(F4)',
-                ic: _snapA.ic,
-                nrr: _snapA.nrr,
-                verdict: _snapA.verdict
-              });
-            } catch (e) {}
             _aaRecordQueueItem('正常', item);
             successCount++;
             batchCAReady = true;
@@ -25236,9 +24786,7 @@ window.addEventListener('keydown',function(e){
               if (it.wg) {queue.caReadyByWg[it.wg] = true;}
             } else {
               stillFail.push(it);
-              // 8.17.9: 用审核函数返回的真实原因（例如「完整度复核：结果不完整（缺 3 项）」），
-              // 原来一律记「补审仍未确认」，现场看不出到底为什么没审掉
-              _aaRecordQueueItem('留人工', it, (r && r.reason) || '补审仍未确认');
+              _aaRecordQueueItem('留人工', it, '补审仍未确认');
             }
           }
           // 8.16.31: 未尝试的尾部并入「未完成」——保留 + 按 reportDR 去重，绝不静默丢弃。
@@ -25269,16 +24817,6 @@ window.addEventListener('keydown',function(e){
             skipCount = queue.skipped.length;
           }
         }
-      }
-
-      // 8.17.9: **审核后自检**——审完立刻用最新工作列表复核这一批刚审掉的标本是否仍完整。
-      // 为什么必须做：现场是「昨天审的标本今天才发现缺 3 项」。审核动作本身（原生 ReportSave）
-      // 或仪器补传/重传，都可能在审核后让报告变成不完整，而脚本此前审完就再也不看它了。
-      // 代价：每台仪器一次工作列表读（批量末尾一次），换来「当场发现」而不是「隔天发现」。
-      try {
-        await verifyAuditedCompleteness(queue);
-      } catch (e) {
-        dbg('审核后自检异常:', e && e.message);
       }
 
       const fill = document.getElementById('lis-prog-fill');

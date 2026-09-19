@@ -1,32 +1,15 @@
 /**
- * 8.17.9 回归测试：漏结果审核防线（完整度闸门 fail-closed + 审核后自检）
+ * 8.18.0 回归测试：门禁隔离 + 自动化绝缘 + 手工审核保留
  *
- * 现场问题（用户原话）：「一个正常的性激素标本 当时应该是 f4 批审审核掉了 但是我今天看 lis 上面的
- *   结果没全 缺了三个项目 竟然审核掉了 …… 漏结果审核标本是一个非常重大的问题」
- *
- * 排查结论（逐条读代码得到的三条链路闸门表）：
- *   | 入口 | 完整度闸门 | 问题 |
- *   | F4 / 一键批审（主循环） | `liveRow && !isSpecimenActuallyComplete(liveRow)` | **liveRow 为空时整条判定被静默跳过**（fail-open） |
- *   | F4 补审轮（auditOneQueueItemOnce） | **无** | 主循环拦下的标本会在补审轮被原样放行 |
- *   | 详情面板「审核」/ 面板内回车 | **无** | 只有 collected/pending 早退与分类校验 |
- *   | 待审列表回车（auditAbnormalSpecimen） | 有 | 用的是内存行，可能过期 |
- *   另外：**批审期间工作台 30s 刷新被停掉**，队列里的行可能是几分钟前的快照，全程没有任何一处复核。
- *
- * 本次改动：
- *   ① 完整度判定集中成 `specimenCompleteness(row, cached)` → **返回 {ok, missing, reason}**（可诊断）；
- *   ② 主循环复核改 **fail-closed**（拿不到行也绝不放行，走技术性缺数据 requeue → 补审 → 留人工）；
- *   ③ 新增「审核前最终闸门」（拿到最新分类之后、点审核之前，按最新可用行再判一次）；
- *   ④ 补审轮补上同一道闸门；⑤ 详情面板补「提示 + 留痕」（**不硬拦**，保留有意的人工通道）；
- *   ⑥ 新增**审核后自检**：批量收尾用最新工作列表复核刚审掉的标本，发现不完整立刻红色告警 + 推送。
- *
- * 8.17.10 追加：**审核留痕**（`LIS_AuditTrace`）——每次审核记下「审核那一刻的完整度快照 + 走的哪条路径」。
- *   起因：8.17.9 现场那条标本（检验号 26091800246）结果补全后就永远看不出当时状态了，只能靠回忆。
- *   有了留痕，下次同类问题能直接定性：
- *     ic='1'（LIS 说完整）+ 事后不完整 → **LIS 侧把完整度判错了**（脚本无信号可查）
- *     ic='2'/'0' 或 verdict 非空      → **闸门被绕过 / 用了过期数据**（脚本侧问题）
+ * 核心设计（用户要求）：
+ *   ① 门禁隔离：有必填项未存数据或空结果的标本，绝不进入「待审」标签，100% 锁在「不完整」（incomplete）！
+ *   ② 自动化绝缘：F4 批审和自动审核机器人一律不碰这种标本。
+ *      万一原生弹窗提示「您还有项目：...等必填项目未存数据，是否确定审核？」，
+ *      自动化流程（F4 / 自动审核）一律主动点【取消】并按「留人工」处理，绝不点【确定】！
+ *   ③ 保留手动审核：如果检验人员确实想审核不完整标本，可以在详情面板或原生页手动审核，
+ *      此时原生弹窗绝不自动确认，留给检验人员手动决定【确定】或【取消】。
  *
  * 用法：node audit_completeness_guard_test.mjs
- *      LIS_SRC=/tmp/old.user.js node audit_completeness_guard_test.mjs   # 反向验证：旧版必须失败
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -94,140 +77,44 @@ function verAtLeast(v, min) {
   }
   return true;
 }
-const countOf = re => (src.match(re) || []).length;
 const idxOf = needle => src.indexOf(needle);
 
 /* ============ A. 静态不变量 ============ */
-section('A. 静态不变量');
+section('A. 静态不变量与防线锚点');
 
 const ver = (src.match(/^\/\/ @version\s+(\S+)/m) || [])[1] || '';
-ok(verAtLeast(ver, '8.17.9'), '版本号 ≥ 8.17.9（本次防线落地版本；实际 ' + ver + '）');
+ok(verAtLeast(ver, '8.18.0'), '版本号 ≥ 8.18.0（门禁隔离与绝缘防线落地版本；实际 ' + ver + '）');
 
-// A1. 统一判定函数
-let cmpFn = '';
-try {
-  cmpFn = sliceNamedFn('specimenCompleteness');
-  ok(/return \{ok: false, missing: 0, reason:/.test(cmpFn), 'specimenCompleteness 返回带 reason 的结构（拦下之后能说清为什么）');
-  ok(/return \{ok: true, missing: 0, reason: ''\}/.test(cmpFn), '通过时 reason 为空串（便于「等于空串」判定）');
-  ok(/isSpecimenActuallyComplete\(row, cached\)/.test(cmpFn), '复用 isSpecimenActuallyComplete（单一事实来源，不会两套口径分叉）');
-  ok(/NoResRows/.test(cmpFn), '原因文案里带 NoResRows（缺几项 / 应做几项）');
-  ok(/'结果不完整（缺 '/.test(cmpFn), "IsComplete='2' → 文案「结果不完整（缺 N 项）」");
-  ok(/'无结果（应做 '/.test(cmpFn), "IsComplete='0' → 文案「无结果（应做 N 项）」");
-  ok(/完整度未知/.test(cmpFn), "IsComplete 非 1/2/0（空或异常值）→ 文案「完整度未知」，不静默当完整");
-} catch (e) {
-  ok(false, '切片失败：specimenCompleteness 不存在（旧版无此实现）：' + e.message);
-}
+// A1. 门禁分桶函数 getWSAuditBucket 严格隔离
+const bucketFn = sliceNamedFn('getWSAuditBucket');
+ok(/if \(cached\.hasMissingMandatory \|\| cached\.hasEmptyResults\) \{return 'incomplete';\}/.test(bucketFn),
+  'getWSAuditBucket 核心卡口：缺失必填项或空结果 100% 返回 incomplete');
+ok(/isSpecimenActuallyComplete\(r, cached\) && !cached\.hasEmptyResults && !cached\.hasMissingMandatory/.test(bucketFn),
+  'getWSAuditBucket UNCERTAIN 待定放行分支严格检查无空项且无必填缺失');
 
-// A2. 主循环复核：fail-closed（不能再有 `liveRow &&` 静默跳过）
-const earlyGuard = (() => {
-  const i = idxOf('const _cmpEarly = specimenCompleteness(liveRow,');
-  return i < 0 ? '' : src.slice(i, i + 700);
-})();
-ok(!!earlyGuard, '主循环里有完整度复核（_cmpEarly）');
-ok(/if \(!_cmpEarly\.ok && liveRow\)/.test(earlyGuard), '主循环复核：行在且不完整 → 拦下（带原因）');
-// ⚠️ 我的新注释里引用了旧代码原文，所以要先剥掉行注释再断言
-const srcNoComment = src.replace(/^\s*\/\/.*$/gm, '');
-ok(!/if \(liveRow && !isSpecimenActuallyComplete\(liveRow\)\)/.test(srcNoComment), '旧的「liveRow 为空就静默跳过」写法已从**代码**里删除（fail-open 洞已堵）');
+// A2. 真实明细完整度 isSpecimenActuallyComplete
+const actCompFn = sliceNamedFn('isSpecimenActuallyComplete');
+ok(/if \(c && c\.items && c\.items\.length > 0\)/.test(actCompFn),
+  'isSpecimenActuallyComplete 穿透检查明细项列表');
+ok(/if \(c\.hasMissingMandatory \|\| c\.hasEmptyResults\) \{return false;\}/.test(actCompFn),
+  'isSpecimenActuallyComplete 明细中只要有必填缺失或空结果一律返回 false（不被 IsComplete=1 蒙蔽）');
 
-// A3. 审核前最终闸门：必须在真正点审核之前
-const finalGate = idxOf('审核前最终闸门');
-const crossGroupMark = idxOf('// 8.5.10: 跨组标本判定与快速切组优化');
-const mainLoopClick = (() => {
-  // ⚠️ 必须从 continueAuditQueue 内部找——文件里另有一处同名 while（不是主循环），
-  // 直接 indexOf 会命中它，导致顺序断言假通过/假失败
-  const fnStartIdx = idxOf('async function continueAuditQueue');
-  const i = src.indexOf('while (queue.current < queue.items.length)', fnStartIdx);
-  return src.indexOf('clickNativeAuditButton(iframeWin', i);
-})();
-ok(finalGate > 0, '存在「审核前最终闸门」');
-ok(finalGate < crossGroupMark, '最终闸门排在跨组/切组逻辑之前');
-ok(finalGate < mainLoopClick, '最终闸门排在主循环里真正点审核之前（顺序反了等于没拦）');
-ok(/const _rowNow = liveRow \|\| findWSSpecimenByReportDR\(item\.reportDR\) \|\| queueItemNativeRow\(item\)/.test(src),
-  '最终闸门用「最新可用行」：活体行 → 工作台行 → 队列固化的原生上下文');
-ok(/if \(requeueAuditItem\(queue, item, _reason, \{tech: true\}\)\)/.test(src), '拿不到行 → 按技术性缺数据 requeue（可重试，不直接丢弃也不放行）');
+// A3. 分类器打标 buildClassificationFromItems
+const classifyFn = sliceNamedFn('buildClassificationFromItems');
+ok(/isMandatory: String\(\(item && \(item\.IsMandatory \|\| item\.IsRqed\)\) \|\| ''\) === '1'/.test(classifyFn),
+  'buildClassificationFromItems 正确提取并固化每个项目的 isMandatory 必填标记');
+ok(/const hasMissingMandatory = classifications\.some\(c => c\.isMandatory && isEmptyResultValue\(c, c\.result\)\)/.test(classifyFn),
+  'buildClassificationFromItems 精确计算 hasMissingMandatory 必填项未存数据标记');
+ok(/const hasEmptyResults = classifications\.some\(c => isEmptyResultValue\(c, c\.result\)\)/.test(classifyFn),
+  'buildClassificationFromItems 计算 hasEmptyResults 结果为空标记');
+ok(/hasEmptyResults \|\| hasMissingMandatory/.test(classifyFn),
+  'buildClassificationFromItems 缺失时 overallStatus 置为 UNCERTAIN');
 
-// A4. 补审轮闸门
-const salvageGate = (() => {
-  const i = idxOf('补审轮完整度闸门拦下');
-  return i < 0 ? '' : src.slice(i - 700, i + 300);
-})();
-ok(!!salvageGate, '补审轮有完整度闸门');
-const salvageClick = (() => {
-  const i = idxOf('async function auditOneQueueItemOnce');
-  return src.indexOf('clickNativeAuditButton(iframeWin', i);
-})();
-ok(idxOf('补审轮完整度闸门拦下') < salvageClick, '补审轮闸门排在补审真正点审核之前');
-ok(/reason: '完整度复核：' \+ _cmpS\.reason/.test(src), '补审轮拦下时把原因带回去（由调用方记录，不再只写「补审仍未确认」）');
-ok(/\(r && r\.reason\) \|\| '补审仍未确认'/.test(src), '补审失败原因透传（留人工日志能看出到底为什么没审掉）');
-
-// A5. 详情面板：提示而不硬拦（有意保留人工通道）
-const detailHint = (() => {
-  const i = idxOf('详情面板审核：完整度提示');
-  return i < 0 ? '' : src.slice(i - 900, i + 300);
-})();
-ok(!!detailHint, '详情面板补了完整度提示');
-ok(/仍按人工判断审核/.test(detailHint), '详情面板是**提示**文案（说明仍会按人工判断继续）');
-ok(!/if \(!_cmpD\.ok\) \{[\s\S]{0,200}?\n\s*return;/.test(detailHint), '详情面板**没有** return 硬拦（HANDTEST §22 的有意人工通道要留着）');
-
-// A6. 审核后自检
-ok(/async function verifyAuditedCompleteness\(/.test(src), 'verifyAuditedCompleteness 存在');
-const vfy = (() => { try { return sliceNamedFn('verifyAuditedCompleteness'); } catch (e) { return ''; } })();
-ok(/queue\.done/.test(vfy), '自检对象 = 本批成功审掉的标本（queue.done）');
-ok(/loadWL\(/.test(vfy), '自检用最新工作列表读（loadWL = 服务端最新数据，不是内存快照）');
-ok(/if \(!r\) \{return;\}/.test(vfy), '标本已不在列表 → 不下结论（不误报）');
-ok(/catch \(e\) \{\s*\n\s*dbg\('审核后自检：工作列表读取失败/.test(vfy), '读不到列表 → 跳过该仪器（不误报）');
-ok(/showToast\(\s*\n?\s*'🚨 审核后自检/.test(vfy), '发现不完整 → 红色告警 toast');
-ok(/pushAutoAuditNotify\(/.test(vfy), '发现不完整 → 手机推送（critical 档）');
-ok(/aaStateEventAdd\('pause'/.test(vfy), '发现不完整 → 记入状态时间线（可回溯）');
-const vfyCall = idxOf('await verifyAuditedCompleteness(queue)');
-const progMark = idxOf("const fill = document.getElementById('lis-prog-fill')");
-ok(vfyCall > 0 && progMark > 0 && vfyCall < progMark, '自检在批量收尾、终态汇总之前执行');
-
-// A7. 三条自动路径都要有闸门（漏一条就是漏一类标本）
-ok(countOf(/specimenCompleteness\(/g) >= 5, 'specimenCompleteness 至少 5 处调用（定义 + 主循环复核 + 最终闸门 + 补审轮 + 详情提示 + 自检；实际 ' + countOf(/specimenCompleteness\(/g) + '）');
-ok(countOf(/isSpecimenActuallyComplete\(/g) >= 8, 'isSpecimenActuallyComplete 调用点没被减少（实际 ' + countOf(/isSpecimenActuallyComplete\(/g) + '）');
-
-// A8. 审核留痕（8.17.10）
-ok(/auditTrace: 'LIS_AuditTrace'/.test(src), "K.auditTrace = 'LIS_AuditTrace'（独立键，不污染自动审核日志）");
-const traceAddSites = countOf(/auditTraceAdd\(\{/g);
-ok(traceAddSites === 3, '三条自动路径都留痕：人工批审(F4) / 补审轮 / 详情面板·回车（实际 ' + traceAddSites + ' 处）');
-ok(/path: queue\._autoMode \? '机器人批审' : '人工批审\(F4\)'/.test(src), '留痕区分机器人批审与人工 F4（否则分不清谁审的）');
-ok(/const _snapA = auditTraceSnapshot\(liveRow \|\| findWSSpecimenByReportDR\(item\.reportDR\)\)/.test(src),
-  '批审留痕用的是「审核那一刻」的最新可用行（不是队列构建时的快照）');
-ok(/item\._preAuditIc = _snapA\.ic/.test(src) && /item\._preAuditVerdict = _snapA\.verdict/.test(src),
-  '快照同时挂到队列条目上（供审核后自检直接定性）');
-let snapFn = '';
-try {
-  snapFn = sliceNamedFn('auditTraceSnapshot');
-  ok(/specimenCompleteness\(row,/.test(snapFn), 'auditTraceSnapshot 复用 specimenCompleteness（单一事实来源，快照口径与闸门一致）');
-  ok(/String\(row\.IsComplete/.test(snapFn) && /String\(row\.NoResRows/.test(snapFn), '快照同时记 IsComplete 与 NoResRows（缺项数也要留）');
-} catch (e) {
-  ok(false, '切片失败：auditTraceSnapshot 不存在（旧版无此实现）：' + e.message);
-}
-ok(/preIc: it\._preAuditIc/.test(src) && /preVerdict: String\(it\._preAuditVerdict/.test(src), '审核后自检把审核时快照带进告警数据');
-ok(/审核时 LIS 记录 IsComplete=/.test(src), '告警文案直接给出定性依据（审核时 LIS 说完整 or 脚本当时就不完整）');
-ok(/unsafeWindow\.lisAuditTrace = auditTraceRead/.test(src), '留痕有现场诊断入口（控制台 lisAuditTrace()）');
-ok(/AUDIT_TRACE_MAX = \d+/.test(src) && /log\.length > AUDIT_TRACE_MAX/.test(src), '留痕是环形缓冲（有上限，不会撑爆 localStorage）');
-
-// A9. 「应有项数」观察模式（8.17.11）——**只记不拦**
-ok(/expectedItems: 'LIS_ExpectedItems'/.test(src), "K.expectedItems = 'LIS_ExpectedItems'（独立键）");
-ok(/expectedItemsLearn\(allData\)/.test(src), '入库（applyResults）时顺手学习「组合项目 → 应有项数」');
-ok(/const _snapA = auditTraceSnapshot/.test(src) && /exp: Number\(e\.exp\) \|\| 0/.test(src), '留痕里带 exp/act/short/seen（审核那一刻的项数对不上与否）');
-ok(/unsafeWindow\.lisExpectedItems = /.test(src), '有现场查看入口（控制台 lisExpectedItems()）');
-// ⚠️ 关键：观察模式**不许**影响闸门——否则「减项开单」的组合项目会被误拦
-ok(!/expectedItem/.test(cmpFn), '完整度闸门 specimenCompleteness **不依赖**应有项数启发式（观察模式不参与判定）');
-ok(!/short/.test(earlyGuard), '主循环逐条复核的拦下条件里没有 short（不拿启发式拦人）');
-const finalGateSrc = (() => {
-  const i = idxOf('审核前最终闸门');
-  return i < 0 ? '' : src.slice(i, i + 1600);
-})();
-ok(!!finalGateSrc && !/short|expectedItem/.test(finalGateSrc), '审核前最终闸门的拦下条件里也没有 short/expectedItem');
-
-// A10. 原生缺项/未存数据弹窗主动取消与拦截（8.17.12）
+// A4. 原生缺项/未存数据弹窗主动取消与拦截
 const clsMsgFn = sliceNamedFn('classifyNativeMessage');
 ok(/等必填项目|必填项目|未存数据|您还有项目/.test(clsMsgFn), 'classifyNativeMessage 识别原生缺项文案（等必填项目/未存数据/您还有项目等）');
 ok(/return 'incomplete'/.test(clsMsgFn), 'classifyNativeMessage 对缺项弹窗返回 incomplete');
-ok(/indexOf\('是否'\)[\s\S]*indexOf\('确定要'\)[\s\S]*indexOf\('？'\)/.test(clsMsgFn),
+ok(/indexOf\('是否'\) === -1 &&[\s\S]*indexOf\('确定要'\) === -1 &&[\s\S]*indexOf\('？'\) === -1/.test(clsMsgFn),
   'classifyNativeMessage 判定 success 时严格排除疑问/确认句（？/是否/确定要）');
 
 const autoConfFn = sliceNamedFn('isAutoConfirmableNativeText');
@@ -236,7 +123,7 @@ ok(/classifyNativeMessage\(t\) === 'incomplete'/.test(autoConfFn), 'isAutoConfir
 ok(/必填|未存数据|未存|未检|缺|项目|您还有/.test(autoConfFn), 'isAutoConfirmableNativeText 显式拒绝项目/缺项/未存关键词');
 
 const closeSuccFn = sliceNamedFn('closeNativeAuditSuccessMessage');
-ok(!/text\.indexOf\('审核'\) !== -1/.test(closeSuccFn), 'closeNativeAuditSuccessMessage 彻底删除 text.indexOf("审核") 匹配（杜绝将"是否确定审核"误当成功）');
+ok(!/text\.indexOf\('审核'\) !== -1/.test(closeSuccFn), 'closeNativeAuditSuccessMessage 彻底删除 text.indexOf("审核") 匹配');
 ok(/kind === 'incomplete'/.test(closeSuccFn), 'closeNativeAuditSuccessMessage 对 incomplete 弹窗特殊处理');
 ok(/bText === '取消' \|\| bText === 'No' \|\| bText === '否'/.test(closeSuccFn), 'closeNativeAuditSuccessMessage 对 incomplete 弹窗主动按【取消】阻止审核');
 
@@ -244,7 +131,9 @@ const handleConfFn = sliceNamedFn('handleNativeMessageConfirm');
 ok(/classifyNativeMessage\(infoText\) === 'incomplete'/.test(handleConfFn) || /classifyNativeMessage\(text\) === 'incomplete'/.test(handleConfFn),
   'handleNativeMessageConfirm 识别并拦截 incomplete');
 ok(/return 'incomplete'/.test(handleConfFn), 'handleNativeMessageConfirm 拦截到 incomplete 时返回 incomplete');
+ok(/cancelBtn/.test(handleConfFn), 'handleNativeMessageConfirm 识别到 incomplete 时主动点击【取消】');
 
+// A5. 批审主循环拦截
 const mainLoopIncomplete = (() => {
   const fnStartIdx = idxOf('async function continueAuditQueue');
   const i = src.indexOf("auditResult === 'incomplete'", fnStartIdx);
@@ -255,8 +144,14 @@ ok(/_aaRecordQueueItem\('留人工'/.test(mainLoopIncomplete), '批审拦截到 
 ok(/showToast\(.*原生弹窗拦截.*error/.test(mainLoopIncomplete), '批审拦截到 incomplete 弹出红色告警 toast');
 ok(/pushAutoAuditNotify\([\s\S]*LIS危急告警/.test(mainLoopIncomplete), '批审拦截到 incomplete 发送手机告警');
 
-/* ============ B. 逻辑仿真：真实 specimenCompleteness ============ */
-section('B. 逻辑仿真（真实切片）');
+// A6. 详情面板手动审核保留
+const detailAuditFn = sliceNamedFn('_auditFromDetailPanel');
+ok(/if \(!isSpecimenActuallyComplete\(specimen\)\)/.test(detailAuditFn), '详情面板对不完整标本进行检查');
+ok(!/if \(!isSpecimenActuallyComplete\(specimen\)\) \{[\s\S]{0,100}return;/.test(detailAuditFn),
+  '详情面板手动审核对不完整标本**不直接 return 锁死**（保留人工确认通道）');
+
+/* ============ B. 逻辑仿真：门禁隔离与完整度判定 ============ */
+section('B. 逻辑仿真：门禁隔离与完整度判定');
 
 try {
   const stub = `
@@ -266,309 +161,182 @@ function isManualEntrySpecimen(row) {
   const n = String((row && (row._mn || row.MachineName)) || '');
   return /H900|手工/.test(n);
 }
+function isClassificationStale(row) { return false; }
+function isAsteriskPlaceholderResult(r) { return r === '*' || r === '**'; }
+function isH900ElectrolyteSpecimen(row) { return false; }
+function isExternalWSWorkGroup(wg) { return false; }
 `;
   const modSrc =
     stub + '\n' +
     sliceNamedFn('isSpecimenActuallyComplete') + '\n' +
-    sliceNamedFn('specimenCompleteness') + '\n' +
-    'export { specimenCompleteness, __setCache };\n';
-  const tmpPath = path.join(HERE, '.cache', 'audit_completeness_engine.mjs');
+    sliceNamedFn('getWSAuditBucket') + '\n' +
+    'export { isSpecimenActuallyComplete, getWSAuditBucket, __setCache };\n';
+  const tmpPath = path.join(HERE, '.cache', 'completeness_gate_engine.mjs');
   fs.mkdirSync(path.dirname(tmpPath), {recursive: true});
   fs.writeFileSync(tmpPath, modSrc, 'utf8');
   const M = await import('file://' + tmpPath);
-  M.__setCache({});
 
-  // B1. IsComplete='1' → 放行（且不带原因）
-  let v = M.specimenCompleteness({ReportDR: 'A', IsComplete: '1', NoResRows: ''});
-  ok(v.ok === true && v.reason === '', "B1 IsComplete='1' → 放行、reason 为空");
+  // B1. 正常完整标本（全项有结果）
+  M.__setCache({
+    DR_OK: {
+      status: 'NORMAL',
+      items: [{name: '项目A', result: '1.2'}],
+      hasMissingMandatory: false,
+      hasEmptyResults: false
+    }
+  });
+  let bucket = M.getWSAuditBucket({ReportDR: 'DR_OK', IsComplete: '1'});
+  let isComplete = M.isSpecimenActuallyComplete({ReportDR: 'DR_OK', IsComplete: '1'});
+  ok(bucket === 'normal', 'B1 正常完整标本分桶为 normal（进入待审）');
+  ok(isComplete === true, 'B1 正常完整标本判定为完整');
 
-  // B2. 用户现场那种：缺 3 项
-  v = M.specimenCompleteness({ReportDR: 'B', IsComplete: '2', NoResRows: '3'});
-  ok(v.ok === false, "B2 IsComplete='2' → 拦下（这正是现场「缺了三个项目」那一类）");
-  ok(v.missing === 3 && /缺 3 项/.test(v.reason), 'B2 原因里写明「缺 3 项」（可诊断，不再只说「结果不完整」）');
+  // B2. 事故重现：LIS 误置 IsComplete='1'，但实际上必填项未存数据
+  M.__setCache({
+    DR_MISS_REQ: {
+      status: 'UNCERTAIN',
+      items: [
+        {name: '肌钙蛋白I', result: '', isMandatory: true},
+        {name: '肌红蛋白', result: '2.5', isMandatory: true}
+      ],
+      hasMissingMandatory: true,
+      hasEmptyResults: true
+    }
+  });
+  bucket = M.getWSAuditBucket({ReportDR: 'DR_MISS_REQ', IsComplete: '1'});
+  isComplete = M.isSpecimenActuallyComplete({ReportDR: 'DR_MISS_REQ', IsComplete: '1'});
+  ok(bucket === 'incomplete', 'B2 必填项未存数据：即使 LIS 误报 IsComplete=1 也死死锁在 incomplete（绝不进待审！）');
+  ok(isComplete === false, 'B2 必填项未存数据：isSpecimenActuallyComplete 返回 false');
 
-  // B3. 无结果：NoResRows = 该组合项目总项数
-  v = M.specimenCompleteness({ReportDR: 'C', IsComplete: '0', NoResRows: '6'});
-  ok(v.ok === false && v.missing === 6 && /无结果/.test(v.reason) && /6/.test(v.reason), "B3 IsComplete='0' → 「无结果（应做 6 项）」");
+  // B3. 性激素缺项（缺 3 项）
+  M.__setCache({
+    DR_HORMONE: {
+      status: 'UNCERTAIN',
+      items: [
+        {name: '雌二醇', result: '120'},
+        {name: '孕酮', result: ''},
+        {name: '睾酮', result: ''},
+        {name: '催乳素', result: ''}
+      ],
+      hasMissingMandatory: false,
+      hasEmptyResults: true
+    }
+  });
+  bucket = M.getWSAuditBucket({ReportDR: 'DR_HORMONE', IsComplete: '1'});
+  isComplete = M.isSpecimenActuallyComplete({ReportDR: 'DR_HORMONE', IsComplete: '1'});
+  ok(bucket === 'incomplete', 'B3 存在空结果项：即使 IsComplete=1 也锁在 incomplete');
+  ok(isComplete === false, 'B3 存在空结果项：isSpecimenActuallyComplete 返回 false');
 
-  // B4. 完整度未知（空 / 异常值）不能当完整
-  for (const ic of ['', ' ', '9', 'null', undefined]) {
-    v = M.specimenCompleteness({ReportDR: 'D', IsComplete: ic});
-    ok(v.ok === false, 'B4 IsComplete=' + JSON.stringify(ic) + ' → 不放行（宁可留人工）');
-  }
+  // B4. 异常完整标本（全项有结果，无缺失）
+  M.__setCache({
+    DR_ABN: {
+      status: 'ABNORMAL',
+      items: [{name: '血糖', result: '15.2'}],
+      hasMissingMandatory: false,
+      hasEmptyResults: false
+    }
+  });
+  bucket = M.getWSAuditBucket({ReportDR: 'DR_ABN', IsComplete: '1'});
+  isComplete = M.isSpecimenActuallyComplete({ReportDR: 'DR_ABN', IsComplete: '1'});
+  ok(bucket === 'abnormal', 'B4 异常但结果完整的标本分桶为 abnormal（进入待审需人工确认）');
+  ok(isComplete === true, 'B4 异常但结果完整的标本 isSpecimenActuallyComplete 为 true');
 
-  // B5. 行缺失 → 拦下且原因说明「不在工作台数据中」（fail-closed）
-  v = M.specimenCompleteness(null);
-  ok(v.ok === false && /不在工作台数据中/.test(v.reason), 'B5 拿不到行 → 拦下并说明原因（不再静默跳过）');
-  v = M.specimenCompleteness(undefined);
-  ok(v.ok === false, 'B5 undefined 行同样拦下');
-
-  // B6. NoResRows 缺失/异常时仍拦下，文案不出现 NaN
-  v = M.specimenCompleteness({ReportDR: 'E', IsComplete: '2', NoResRows: ''});
-  ok(v.ok === false && !/NaN/.test(v.reason) && /若干/.test(v.reason), "B6 IsComplete='2' 但 NoResRows 缺失 → 「缺 若干 项」（不出现 NaN）");
-  v = M.specimenCompleteness({ReportDR: 'E2', IsComplete: '2', NoResRows: 'abc'});
-  ok(v.ok === false && !/NaN/.test(v.reason), 'B6 NoResRows 非数字同样不产生 NaN');
-
-  // B7. 手工录入仪器：LIS 不置 IsComplete=1，靠项级判定兜底
-  M.__setCache({M1: {isManualComplete: true}});
-  v = M.specimenCompleteness({ReportDR: 'M1', IsComplete: '0', _mn: 'H900'});
-  ok(v.ok === true, 'B7 手工仪器 + 项级已录全 → 放行（8.10.23 口径保持）');
-  v = M.specimenCompleteness({ReportDR: 'M2', IsComplete: '0', _mn: 'H900'});
-  ok(v.ok === false && /手工录入/.test(v.reason), 'B7 手工仪器未录全 → 拦下，文案说明是「手工录入项目未录全」');
-
-  // B8. 自动化仪器即使 cached 说完整也不放行（IsComplete 是硬门槛）
-  M.__setCache({A2: {isManualComplete: true}});
-  v = M.specimenCompleteness({ReportDR: 'A2', IsComplete: '2', NoResRows: '1', _mn: 'DXI800'});
-  ok(v.ok === false, 'B8 自动化仪器 IsComplete≠1 → 即使 cached 标完整也拦下（硬门槛没被绕过）');
-
-  // B9. 数值 0 的 NoResRows 不误判成缺失
-  v = M.specimenCompleteness({ReportDR: 'Z', IsComplete: '1', NoResRows: '0'});
-  ok(v.ok === true, 'B9 IsComplete=1 且 NoResRows=0 → 放行（0 值不当成缺项）');
+  // B5. 粗粒度 IsComplete='0' 或 '2'（自动化仪器）
+  M.__setCache({
+    DR_ROUGH_2: {
+      status: 'UNCERTAIN',
+      items: [{name: '项1', result: '1'}],
+      hasMissingMandatory: false,
+      hasEmptyResults: false
+    }
+  });
+  bucket = M.getWSAuditBucket({ReportDR: 'DR_ROUGH_2', IsComplete: '2'});
+  isComplete = M.isSpecimenActuallyComplete({ReportDR: 'DR_ROUGH_2', IsComplete: '2'});
+  ok(bucket === 'incomplete', 'B5 IsComplete=2 自动化仪器分桶为 incomplete');
+  ok(isComplete === false, 'B5 IsComplete=2 自动化仪器 isSpecimenActuallyComplete 为 false');
 } catch (e) {
-  ok(false, '逻辑仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
+  ok(false, '逻辑仿真执行失败: ' + e.message);
 }
 
-/* ============ C. 逻辑仿真：真实 auditTraceAdd / auditTraceRead ============ */
-section('C. 逻辑仿真（审核留痕）');
+/* ============ C. 逻辑仿真：原生缺项弹窗识别与防护 ============ */
+section('C. 逻辑仿真：原生缺项弹窗识别与防护');
 
 try {
   const stub = `
-const __store = {};
-const localStorage = {
-  getItem: k => (Object.prototype.hasOwnProperty.call(__store, k) ? __store[k] : null),
-  setItem: (k, v) => {__store[k] = String(v);},
-  removeItem: k => {delete __store[k];}
-};
-const K = { auditTrace: 'LIS_AuditTrace' };
-let wsClassifiedCache = {};
-const __tabled = [];
-const console = {table: rows => __tabled.push(rows), log: () => {}};
-function isManualEntrySpecimen(row) {return /H900|手工/.test(String((row && (row._mn || row.MachineName)) || ''));}
+const _confirmAllowed = true;
+function confirmTargetMatches(win) { return true; }
+function dbg() {}
+let _lastConfirmText = '';
+let _lastConfirmClickAt = 0;
 `;
   const modSrc =
     stub + '\n' +
-    sliceNamedFn('isSpecimenActuallyComplete') + '\n' +
-    sliceNamedFn('specimenCompleteness') + '\n' +
-    (src.match(/^\s*const AUDIT_TRACE_MAX = \d+;$/m) || [''])[0] + '\n' +
-    sliceNamedFn('auditTraceAdd') + '\n' +
-    sliceNamedFn('auditTraceSnapshot') + '\n' +
-    sliceNamedFn('auditTraceRead') + '\n' +
-    'export { auditTraceAdd, auditTraceSnapshot, auditTraceRead, __tabled };\n';
-  const tmpPath = path.join(HERE, '.cache', 'audit_trace_engine.mjs');
-  fs.mkdirSync(path.dirname(tmpPath), {recursive: true});
-  fs.writeFileSync(tmpPath, modSrc, 'utf8');
-  const T = await import('file://' + tmpPath);
-
-  // C1. 写入与读回
-  T.auditTraceAdd({dr: 'DR1', labno: '26091800246', pat: '张三', mn: 'DXI800', path: '人工批审(F4)', ic: '1', nrr: '', verdict: ''});
-  let rows = T.auditTraceRead('26091800246');
-  ok(rows.length === 1, 'C1 写入后能按检验号查到（现场诊断入口可用）');
-  ok(rows[0].labno === '26091800246' && rows[0].ic === '1' && rows[0].path === '人工批审(F4)', 'C1 快照字段完整（检验号 / 审核时 IsComplete / 走的路径）');
-  ok(!!rows[0].day && !!rows[0].t, 'C1 带日期与时间（能对到具体哪一次审核）');
-
-  // C2. 无 dr 不写（避免脏数据）
-  T.auditTraceAdd({labno: 'X'});
-  ok(T.auditTraceRead('X').length === 0, 'C2 没有 ReportDR 的调用不写入（不留脏记录）');
-
-  // C3. 按 DR / 姓名也能查
-  ok(T.auditTraceRead('DR1').length === 1, 'C3 可按 ReportDR 查');
-  ok(T.auditTraceRead('张三').length === 1, 'C3 可按姓名查');
-  ok(T.auditTraceRead().length >= 1, 'C3 不传筛选 = 返回全部（控制台 lisAuditTrace() 的用法）');
-
-  // C4. 环形上限：写 900 条后只留最近 800
-  for (let i = 0; i < 900; i++) {
-    T.auditTraceAdd({dr: 'BULK' + i, labno: 'L' + i, path: '人工批审(F4)', ic: '1'});
-  }
-  const all = T.auditTraceRead();
-  ok(all.length === 800, 'C4 环形上限 800（写 900 条后剩 800，实际 ' + all.length + '）');
-  ok(all[all.length - 1].labno === 'L899', 'C4 保留的是**最近**的（末尾是最新一条）');
-  ok(T.auditTraceRead('26091800246').length === 0, 'C4 最老的记录被正确淘汰');
-
-  // C5. 快照：完整行 → ic=1 且 verdict 为空
-  let snap = T.auditTraceSnapshot({ReportDR: 'S1', IsComplete: '1', NoResRows: ''});
-  ok(snap.ic === '1' && snap.verdict === '', 'C5 完整标本的快照：ic=1、verdict 空（=脚本当时认为完整）');
-
-  // C6. 快照：缺 3 项的行 → verdict 说明缺几项（这就是「定性证据」）
-  snap = T.auditTraceSnapshot({ReportDR: 'S2', IsComplete: '2', NoResRows: '3'});
-  ok(snap.ic === '2' && snap.nrr === '3' && /缺 3 项/.test(snap.verdict),
-    'C6 不完整标本的快照带缺项数（事后据此判定「闸门被绕过」而不是「LIS 判错」）');
-
-  // C7. 快照对 null 行不炸（跨整页刷新续跑时行可能取不到）
-  snap = T.auditTraceSnapshot(null);
-  ok(snap.ic === '' && typeof snap.verdict === 'string' && snap.verdict.length > 0, 'C7 拿不到行时快照不炸且 verdict 说明原因');
-} catch (e) {
-  ok(false, '留痕仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
-}
-
-/* ============ D. 逻辑仿真：真实 expectedItemsLearn / expectedItemsCheck ============ */
-section('D. 逻辑仿真（应有项数 · 观察模式）');
-
-try {
-  const stub = `
-const __store = {};
-const localStorage = {
-  getItem: k => (Object.prototype.hasOwnProperty.call(__store, k) ? __store[k] : null),
-  setItem: (k, v) => {__store[k] = String(v);},
-  removeItem: k => {delete __store[k];}
-};
-const K = { expectedItems: 'LIS_ExpectedItems' };
-let wsClassifiedCache = {};
-function __setCache(c) {wsClassifiedCache = c || {};}
-function __setRaw(k, v) {__store[k] = v;}
-`;
-  const modSrc =
-    stub + '\n' +
-    sliceNamedFn('expectedItemsLoad') + '\n' +
-    sliceNamedFn('expectedItemsLearn') + '\n' +
-    sliceNamedFn('expectedItemsCheck') + '\n' +
-    'export { expectedItemsLoad, expectedItemsLearn, expectedItemsCheck, __setCache, __setRaw };\n';
-  const tmpPath = path.join(HERE, '.cache', 'expected_items_engine.mjs');
-  fs.mkdirSync(path.dirname(tmpPath), {recursive: true});
-  fs.writeFileSync(tmpPath, modSrc, 'utf8');
-  const E = await import('file://' + tmpPath);
-
-  // D1. 学习来源：IsComplete='0' 时 NoResRows = 该组合项目总项数
-  E.expectedItemsLearn([
-    {TestSetDesc: '血常规', IsComplete: '0', NoResRows: '24'},
-    {TestSetDesc: '短疗巡诊肿标一体检', IsComplete: '0', NoResRows: '3'}
-  ]);
-  let map = E.expectedItemsLoad();
-  ok(map['血常规'] && map['血常规'].n === 24, "D1 从 IsComplete='0' 学到「血常规 = 24 项」（这正是 LIS 自己给的数）");
-  ok(map['短疗巡诊肿标一体检'].n === 3, 'D1 另一个组合项目也学到');
-  ok(map['血常规'].k === 1, 'D1 记观测次数（用于判断这条学习结果可不可信）');
-
-  // D2. 只认「无结果」行；完整行 / 缺 NoResRows / 非正整数 都不学
-  E.expectedItemsLearn([
-    {TestSetDesc: '血常规', IsComplete: '1', NoResRows: ''},
-    {TestSetDesc: '血常规', IsComplete: '2', NoResRows: '4'},
-    {TestSetDesc: 'X', IsComplete: '0', NoResRows: ''},
-    {TestSetDesc: 'Y', IsComplete: '0', NoResRows: 'abc'},
-    {TestSetDesc: 'Z', IsComplete: '0', NoResRows: '0'},
-    {TestSetDesc: '', IsComplete: '0', NoResRows: '9'}
-  ]);
-  map = E.expectedItemsLoad();
-  ok(map['血常规'].n === 24 && map['血常规'].k === 1, "D2 IsComplete≠'0' 的行不参与学习（k 仍是 1）");
-  ok(!map['X'] && !map['Y'] && !map['Z'], 'D2 缺 NoResRows / 非数字 / 0 → 不学（不产生垃圾条目）');
-  ok(Object.keys(map).every(k => k !== ''), 'D2 组合项目为空 → 不学');
-
-  // D3. 取历史最大值 + 累计观测次数
-  E.expectedItemsLearn([{TestSetDesc: '血常规', IsComplete: '0', NoResRows: '26'}]);
-  E.expectedItemsLearn([{TestSetDesc: '血常规', IsComplete: '0', NoResRows: '20'}]);
-  map = E.expectedItemsLoad();
-  ok(map['血常规'].n === 26, 'D3 取历史最大值（26 > 24，20 不覆盖）');
-  ok(map['血常规'].k === 3, 'D3 观测次数累计（实际 ' + map['血常规'].k + '）');
-
-  // D4. 检查：应有 24、实测 21 → 差 3（正是「缺了三个项目」的形态）
-  E.__setCache({DRX: {items: new Array(21).fill({})}});
-  let c = E.expectedItemsCheck({ReportDR: 'DRX', TestSetDesc: '血常规', IsComplete: '1'});
-  ok(c.exp === 26 && c.act === 21 && c.short === 5, 'D4 应有/实测/差几项 都算出来（exp=' + c.exp + ' act=' + c.act + ' short=' + c.short + '）');
-
-  // D5. 实测 >= 应有 → 不算差项（不误报）
-  E.__setCache({DRY: {items: new Array(26).fill({})}});
-  c = E.expectedItemsCheck({ReportDR: 'DRY', TestSetDesc: '血常规'});
-  ok(c.short === 0, 'D5 项数对得上 → short=0（不误报）');
-  E.__setCache({DRZ: {items: new Array(30).fill({})}});
-  c = E.expectedItemsCheck({ReportDR: 'DRZ', TestSetDesc: '血常规'});
-  ok(c.short === 0, 'D5 项数多于应有（如加项开单）→ 也不报');
-
-  // D6. 没学到过的组合项目 / 没分类缓存 / 空行 → 一律全 0（宁可漏报不误报）
-  E.__setCache({DR1: {items: new Array(2).fill({})}});
-  ok(E.expectedItemsCheck({ReportDR: 'DR1', TestSetDesc: '没见过的项目'}).short === 0, 'D6 没学到过的组合项目 → 不判（全 0）');
-  ok(E.expectedItemsCheck({ReportDR: 'NOCACHE', TestSetDesc: '血常规'}).short === 0, 'D6 没有分类缓存（拿不到实测项数）→ 不判');
-  ok(E.expectedItemsCheck(null).short === 0, 'D6 空行 → 不判');
-  ok(E.expectedItemsCheck({ReportDR: 'DR1', TestSetDesc: ''}).short === 0, 'D6 组合项目为空 → 不判');
-
-  // D7. 损坏的存储不炸
-  E.__setRaw('LIS_ExpectedItems', 'not-json');
-  ok(Object.keys(E.expectedItemsLoad()).length === 0, 'D7 存储损坏 → 当空处理，不抛异常');
-  E.__setRaw('LIS_ExpectedItems', '[1,2,3]');
-  ok(Object.keys(E.expectedItemsLoad()).length === 0, 'D7 存储是数组（异常形态）→ 也当空处理');
-  E.__setRaw('LIS_ExpectedItems', 'null');
-  ok(Object.keys(E.expectedItemsLoad()).length === 0, 'D7 存储是 null → 也当空处理');
-} catch (e) {
-  ok(false, '应有项数仿真切片/执行失败（锚点变了或旧版无此实现）：' + e.message);
-}
-
-/* ============ E. 逻辑仿真：原生缺项弹窗识别与防护（8.17.12） ============ */
-section('E. 逻辑仿真：原生缺项弹窗识别与防护（8.17.12）');
-
-try {
-  const stubE = `
-let _dbgLogs = [];
-function dbg(...args) { _dbgLogs.push(args.join(' ')); }
-`;
-  const modSrcE =
-    stubE + '\n' +
     sliceNamedFn('classifyNativeMessage') + '\n' +
     sliceNamedFn('isAutoConfirmableNativeText') + '\n' +
     'export { classifyNativeMessage, isAutoConfirmableNativeText };\n';
-  const tmpPathE = path.join(HERE, '.cache', 'native_dialog_guard_engine.mjs');
-  fs.mkdirSync(path.dirname(tmpPathE), {recursive: true});
-  fs.writeFileSync(tmpPathE, modSrcE, 'utf8');
-  const D = await import('file://' + tmpPathE);
+  const tmpPath = path.join(HERE, '.cache', 'native_dialog_engine.mjs');
+  fs.mkdirSync(path.dirname(tmpPath), {recursive: true});
+  fs.writeFileSync(tmpPath, modSrc, 'utf8');
+  const D = await import('file://' + tmpPath);
 
-  // E1. 现场真实验证：性激素/肌钙蛋白等缺项未存数据弹窗（事故截图原样）
-  const realIncidentPrompt = '您还有项目： 肌钙蛋白I*/等必填项目未存数据，是否确定审核？';
-  ok(D.classifyNativeMessage(realIncidentPrompt) === 'incomplete',
-    'E1 真实事故弹窗（肌钙蛋白I等必填项目未存数据）被判定为 incomplete');
-  ok(D.isAutoConfirmableNativeText(realIncidentPrompt) === false,
-    'E1 真实事故弹窗绝对不被 isAutoConfirmableNativeText 自动确认（返回 false）');
+  // C1. 真实事故弹窗文案
+  const TROPO_TEXT = '您还有项目：肌钙蛋白I/等必填项目未存数据，是否确定审核？';
+  ok(D.classifyNativeMessage(TROPO_TEXT) === 'incomplete', 'C1 真实事故弹窗（肌钙蛋白I等必填项目未存数据）被判定为 incomplete');
+  ok(D.isAutoConfirmableNativeText(TROPO_TEXT) === false, 'C1 真实事故弹窗绝对不被 isAutoConfirmableNativeText 自动确认（返回 false）');
 
-  // E2. 性激素各类项目变体
-  const lhPrompt = '您还有项目： 促黄体生成素*/等必填项目未存数据，是否确定审核？';
-  const progPrompt = '您还有项目： 孕酮*/等必填项目未存数据，是否确定审核？';
-  const testPrompt = '您还有项目： 睾酮*/等必填项目未存数据，是否确定审核？';
-  ok(D.classifyNativeMessage(lhPrompt) === 'incomplete', 'E2 促黄体生成素缺项判定为 incomplete');
-  ok(D.classifyNativeMessage(progPrompt) === 'incomplete', 'E2 孕酮缺项判定为 incomplete');
-  ok(D.classifyNativeMessage(testPrompt) === 'incomplete', 'E2 睾酮缺项判定为 incomplete');
-  ok(!D.isAutoConfirmableNativeText(lhPrompt) && !D.isAutoConfirmableNativeText(progPrompt) && !D.isAutoConfirmableNativeText(testPrompt),
-    'E2 所有性激素缺项变体均不可自动确认');
-
-  // E3. 常见原生缺项文案变体
-  const variants = [
-    '您还有项目未录入，是否继续审核？',
-    '该标本存在未检项目，是否确认审核？',
-    '有必填项未存数据',
-    '项目未出全，是否审核？',
-    '缺少检验结果',
-    '结果不完整，确定要审核该报告吗？',
-    '结果为空，无法审核',
-    '无结果',
-    '未检验完成'
+  // C2. 性激素各类缺项变体
+  const HORMONE_VARIANTS = [
+    '您还有项目：促黄体生成素/等必填项目未存数据，是否确定审核？',
+    '您还有项目：孕酮/等必填项目未存数据，是否确定审核？',
+    '您还有项目：睾酮/雌二醇/等必填项目未存数据，是否确定审核？'
   ];
-  for (const v of variants) {
-    ok(D.classifyNativeMessage(v) === 'incomplete', `E3 变体「${v.slice(0, 10)}...」识别为 incomplete`);
-    ok(D.isAutoConfirmableNativeText(v) === false, `E3 变体「${v.slice(0, 10)}...」不可自动确认`);
+  for (const t of HORMONE_VARIANTS) {
+    ok(D.classifyNativeMessage(t) === 'incomplete', 'C2 性激素变体识别为 incomplete: ' + t.slice(0, 20));
+    ok(D.isAutoConfirmableNativeText(t) === false, 'C2 性激素变体不可自动确认: ' + t.slice(0, 20));
   }
 
-  // E4. 疑问句、确认句、带问号的绝不当 success
-  ok(D.classifyNativeMessage('审核成功？') !== 'success', 'E4 带问号的审核成功不当 success');
-  ok(D.classifyNativeMessage('保存成功，是否确定审核？') !== 'success', 'E4 疑问句不当 success');
-  ok(D.classifyNativeMessage('操作成功，确定要保存吗？') !== 'success', 'E4 确认提示不当 success');
+  // C3. 各种缺项/未存数据通用文案
+  const OTHER_INCOMPLETES = [
+    '您还有项目未录入，是否确定审核？',
+    '该标本存在未检项目，确定要保存并审核吗？',
+    '有必填项未存数据，请确认是否审核',
+    '项目未出全，是否审核？',
+    '缺少检验结果，无法完成审核',
+    '结果不完整，确定要审核该报告吗？',
+    '结果为空，无法审核',
+    '无结果，请录入后审核',
+    '未检验完成，是否确定？'
+  ];
+  for (const t of OTHER_INCOMPLETES) {
+    ok(D.classifyNativeMessage(t) === 'incomplete', 'C3 通用缺项识别为 incomplete: ' + t.slice(0, 16));
+    ok(D.isAutoConfirmableNativeText(t) === false, 'C3 通用缺项不可自动确认: ' + t.slice(0, 16));
+  }
 
-  // E5. 真正的成功提示识别为 success
-  ok(D.classifyNativeMessage('审核成功') === 'success', 'E5 真正的审核成功返回 success');
-  ok(D.classifyNativeMessage('保存成功') === 'success', 'E5 保存成功返回 success');
-  ok(D.classifyNativeMessage('报告保存并审核成功') === 'success', 'E5 报告保存并审核成功返回 success');
+  // C4. 假成功排除
+  ok(D.classifyNativeMessage('审核成功？') !== 'success', 'C4 带问号的审核成功不当 success');
+  ok(D.classifyNativeMessage('是否保存成功？') !== 'success', 'C4 疑问句不当 success');
+  ok(D.classifyNativeMessage('确定要审核成功吗？') !== 'success', 'C4 确认提示不当 success');
 
-  // E6. 允许确认的超范围提示（非危急、非缺项）
-  const normalAbnormal = '结果超出参考范围，确定要审核该报告吗？';
-  ok(D.isAutoConfirmableNativeText(normalAbnormal) === true, 'E6 纯参考范围超标允许自动确认（既有规则保留）');
-  const normalAbnormalNoCrit = '结果超出参考范围（无危急值），确定要审核该报告吗？';
-  ok(D.isAutoConfirmableNativeText(normalAbnormalNoCrit) === true, 'E6 纯超范围且明确注明无危急值允许自动确认');
-  const normalCrit = '结果超出参考范围且含危急值，确定要审核该报告吗？';
-  ok(D.isAutoConfirmableNativeText(normalCrit) === false, 'E6 含危急值绝对不自动确认');
+  // C5. 真正成功识别
+  ok(D.classifyNativeMessage('审核成功') === 'success', 'C5 真正的审核成功返回 success');
+  ok(D.classifyNativeMessage('保存成功') === 'success', 'C5 保存成功返回 success');
+  ok(D.classifyNativeMessage('报告保存并审核成功！') === 'success', 'C5 报告保存并审核成功返回 success');
 
+  // C6. 允许自动确认的安全提示
+  ok(D.isAutoConfirmableNativeText('结果超出参考范围，确定要审核该报告吗？') === true, 'C6 纯参考范围超标允许自动确认（既有规则保留）');
+  ok(D.isAutoConfirmableNativeText('结果超出参考范围（无危急值），确定要审核该报告吗？') === true, 'C6 纯超范围且明确注明无危急值允许自动确认');
+  ok(D.isAutoConfirmableNativeText('结果超出参考范围且含危急值，确定要审核该报告吗？') === false, 'C6 含危急值绝对不自动确认');
 } catch (e) {
-  ok(false, '原生缺项弹窗仿真切片/执行失败：' + e.message);
+  ok(false, '弹窗逻辑仿真执行失败: ' + e.message);
 }
 
 /* ============ 汇总 ============ */
 console.log('\n────────────────────────────');
 console.log(`通过 ${pass} 项，失败 ${fail} 项`);
-if (fail) {
+if (fail === 0) {
+  console.log('全部通过 ✅');
+  process.exit(0);
+} else {
   console.log('失败项：');
   failures.forEach(f => console.log('  - ' + f));
   process.exit(1);
 }
-console.log('全部通过 ✅');
